@@ -1010,6 +1010,8 @@ def test_compile_mixed_dtensor_shard_tensor_1d(distributed_mesh):
         as_ = scatter_tensor(a, 0, distributed_mesh, (Shard(1),))
         out = compile_fn(lambda x, a: x * (1.0 - a) + token * a)(xs, as_)
         out.square().sum().backward()
+        # FSDP2 requires a DTensor parameter's grad to be a plain DTensor.
+        assert type(token.grad) is DTensor, type(token.grad)
         return out.full_tensor(), xs.grad.full_tensor(), token.grad.full_tensor()
 
     torch._dynamo.reset()
@@ -1017,3 +1019,61 @@ def test_compile_mixed_dtensor_shard_tensor_1d(distributed_mesh):
     compiled = run(lambda f: torch.compile(f, backend="aot_eager", dynamic=False))
     for e, c in zip(eager, compiled):
         torch.testing.assert_close(c, e)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("compiled", [False, True])
+def test_shard_dtensor_param_grad_type_1d(distributed_mesh, compiled):
+    r"""A ``Shard(1)`` DTensor parameter (the recipe's pre-sharded ``pos_embed``)
+    added to ``Shard(1)`` tokens: its grad must be a plain DTensor, which FSDP2
+    requires for the reduce-scatter."""
+    from torch.distributed.tensor import distribute_tensor
+
+    dm = DistributedManager()
+    n = 4 * distributed_mesh.size(0)  # even, as for a static pos_embed
+    torch.manual_seed(4)
+    x = torch.randn(1, n, 16, device=dm.device)
+    pos = torch.randn(1, n, 16, device=dm.device)
+
+    pos_embed = torch.nn.Parameter(distribute_tensor(pos, distributed_mesh, [Shard(1)]))
+    xs = scatter_tensor(x, 0, distributed_mesh, (Shard(1),), requires_grad=True)
+
+    torch._dynamo.reset()
+    fn = lambda t: (t + pos_embed).square().sum()  # noqa: E731
+    if compiled:
+        fn = torch.compile(fn, backend="aot_eager", dynamic=False)
+    fn(xs).backward()
+
+    assert type(pos_embed.grad) is DTensor, type(pos_embed.grad)
+    assert pos_embed.grad.placements == (Shard(1),)
+    torch.testing.assert_close(pos_embed.grad.full_tensor(), 2 * (x + pos))
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("compiled", [False, True])
+def test_plain_param_grad_reduced_1d(distributed_mesh, compiled):
+    r"""A plain parameter meeting ``Shard(1)`` tokens gets a plain, fully
+    reduced gradient (the domain sum), eager and compiled. Under compile it
+    used to keep an unreduced ``ShardTensor(Partial)`` grad, which FSDP2
+    rejects (the DiT's modulation weights and mask tokens)."""
+    dm = DistributedManager()
+    n = 4 * distributed_mesh.size(0) + 1  # uneven
+    torch.manual_seed(5)
+    x = torch.randn(1, n, 16, device=dm.device)
+    w = torch.randn(1, 1, 16, device=dm.device)
+
+    param = torch.nn.Parameter(w.clone())
+    xs = scatter_tensor(x, 0, distributed_mesh, (Shard(1),), requires_grad=True)
+
+    torch._dynamo.reset()
+    fn = lambda t: (t * param).square().sum()  # noqa: E731
+    if compiled:
+        fn = torch.compile(fn, backend="aot_eager", dynamic=False)
+    fn(xs).backward()
+
+    ref = w.clone().requires_grad_(True)
+    (x * ref).square().sum().backward()
+    assert type(param.grad) is torch.Tensor, type(param.grad)
+    torch.testing.assert_close(param.grad, ref.grad)
