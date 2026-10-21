@@ -984,3 +984,36 @@ def run_construct_shard_tensor_inside_compiled_fn(mesh):
 @pytest.mark.timeout(300)
 def test_construct_shard_tensor_inside_compiled_fn_1d(distributed_mesh):
     run_construct_shard_tensor_inside_compiled_fn(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_compile_mixed_dtensor_shard_tensor_1d(distributed_mesh):
+    r"""A Replicate DTensor parameter meeting ShardTensors under compile (issue
+    #1986 #3): the DiT mask-token splice ``x * (1 - a) + token * a``.
+    Fwd + bwd match eager, including the DTensor parameter's gradient."""
+    from torch.distributed.tensor import distribute_tensor
+
+    dm = DistributedManager()
+    n = 4 * distributed_mesh.size(0) + 1  # uneven
+    torch.manual_seed(3)
+    x = torch.randn(1, n, 16, device=dm.device)
+    a = (torch.rand(1, n, 1, device=dm.device) > 0.5).float()
+
+    def run(compile_fn):
+        token = torch.nn.Parameter(
+            distribute_tensor(
+                torch.ones(1, 1, 16, device=dm.device), distributed_mesh, [Replicate()]
+            )
+        )
+        xs = scatter_tensor(x, 0, distributed_mesh, (Shard(1),), requires_grad=True)
+        as_ = scatter_tensor(a, 0, distributed_mesh, (Shard(1),))
+        out = compile_fn(lambda x, a: x * (1.0 - a) + token * a)(xs, as_)
+        out.square().sum().backward()
+        return out.full_tensor(), xs.grad.full_tensor(), token.grad.full_tensor()
+
+    torch._dynamo.reset()
+    eager = run(lambda f: f)
+    compiled = run(lambda f: torch.compile(f, backend="aot_eager", dynamic=False))
+    for e, c in zip(eager, compiled):
+        torch.testing.assert_close(c, e)
