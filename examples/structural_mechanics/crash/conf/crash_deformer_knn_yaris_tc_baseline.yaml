@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Physical-loss time-conditional control with the training-mean displacement at
+# each future frame as an output baseline: the network predicts the residual on
+# top of the mean deformation of the 69 training designs. Needs the baseline
+# prepared once: yaris_full_prepare.py --config-name crash_deformer_knn_yaris_tc_baseline.
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-MeanBaseline
+
+datapipe:
+  mean_displacement_baseline: true

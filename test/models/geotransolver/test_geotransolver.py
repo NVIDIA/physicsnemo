@@ -1063,6 +1063,38 @@ def test_geotransolver_checkpoint(device):
     )
 
 
+def test_geotransolver_fpp_checkpoint(device):
+    """GeoTransolver persists the FLARE++ backend and its dynamic projections."""
+
+    def make_model():
+        return GeoTransolver(
+            functional_dim=16,
+            out_dim=3,
+            geometry_dim=3,
+            global_dim=4,
+            n_layers=2,
+            n_hidden=32,
+            n_head=4,
+            mlp_ratio=2,
+            slice_num=6,
+            use_te=False,
+            attention_type="GALE_FPP",
+        ).to(device)
+
+    model_1 = make_model()
+    model_2 = make_model()
+    local_embedding = torch.randn(2, 23, 16, device=device)
+    local_positions = local_embedding[..., :3]
+    global_embedding = torch.randn(2, 2, 4, device=device)
+    geometry = torch.randn(2, 31, 3, device=device)
+
+    assert validate_checkpoint(
+        model_1,
+        model_2,
+        (local_embedding, local_positions, global_embedding, geometry),
+    )
+
+
 def test_geotransolver_checkpoint_tuple(device):
     """Test GeoTransolver checkpoint save/load with tuple inputs."""
     torch.manual_seed(42)
@@ -1140,6 +1172,72 @@ def test_geotransolver_invalid_hidden_head_dims():
         )
 
 
+def test_geotransolver_attention_scale_contract():
+    """Only FLARE-family backends accept an explicit attention scale."""
+    with pytest.raises(ValueError, match="only supported"):
+        GeoTransolver(
+            functional_dim=8,
+            out_dim=2,
+            n_hidden=32,
+            n_head=4,
+            use_te=False,
+            attention_type="GALE",
+            attn_scale=1.0,
+        )
+
+    model = GeoTransolver(
+        functional_dim=8,
+        out_dim=2,
+        n_layers=1,
+        n_hidden=32,
+        n_head=4,
+        use_te=False,
+        attention_type="GALE_FPP",
+    )
+    assert model.blocks[0].Attn.scale == pytest.approx(8**-0.5)
+
+
+@pytest.mark.parametrize("attention_type", ["GALE_FA", "GALE_FPP"])
+def test_geotransolver_explicit_flare_scale(attention_type):
+    """Both canonical backends preserve explicit checkpoint scale overrides."""
+    kwargs = dict(
+        functional_dim=4,
+        out_dim=3,
+        n_hidden=32,
+        n_head=4,
+        n_layers=2,
+        attention_type=attention_type,
+    )
+    model = GeoTransolver(**kwargs, attn_scale=0.125)
+    assert all(block.Attn.scale == 0.125 for block in model.blocks)
+    for bad_scale in (0, -1, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="attn_scale"):
+            GeoTransolver(**kwargs, attn_scale=bad_scale)
+
+
+def test_geotransolver_flare_backend_validation():
+    """GeoTransolver validates backend names and TE compatibility eagerly."""
+    with pytest.raises(ValueError, match="Invalid attention_type"):
+        GeoTransolver(
+            functional_dim=8,
+            out_dim=2,
+            n_hidden=32,
+            n_head=4,
+            use_te=False,
+            attention_type="not-a-backend",
+        )
+
+    with pytest.raises(ValueError, match="does not support Transformer Engine"):
+        GeoTransolver(
+            functional_dim=8,
+            out_dim=2,
+            n_hidden=32,
+            n_head=4,
+            use_te=True,
+            attention_type="GALE_FPP",
+        )
+
+
 def test_geotransolver_mismatched_functional_out_dims():
     """Test that GeoTransolver raises error for mismatched functional/out dim lengths."""
     with pytest.raises(
@@ -1196,6 +1294,33 @@ def test_geotransolver_structured_2d_forward(device):
 
     y_none = model(x4)
     assert y_none.shape == (B, H, W, 2)
+
+
+@pytest.mark.parametrize("attention_type", ["GALE_FA", "GALE_FPP"])
+def test_geotransolver_structured_flare_backends(device, attention_type):
+    """FLARE-family backends support flattened structured token layouts."""
+    torch.manual_seed(3)
+    model = GeoTransolver(
+        functional_dim=3,
+        out_dim=2,
+        structured_shape=(4, 4),
+        geometry_dim=2,
+        global_dim=4,
+        n_layers=2,
+        n_hidden=32,
+        n_head=4,
+        slice_num=6,
+        use_te=False,
+        attention_type=attention_type,
+    ).to(device)
+    x = torch.randn(2, 4, 4, 3, device=device)
+    geometry = torch.randn(2, 4, 4, 2, device=device)
+    global_embedding = torch.randn(2, 1, 4, device=device)
+
+    output = model(x, geometry=geometry, global_embedding=global_embedding)
+
+    assert output.shape == (2, 4, 4, 2)
+    assert torch.isfinite(output).all()
 
 
 def test_geotransolver_structured_3d_forward(device):

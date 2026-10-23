@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Surface contact v2 plus a non-penetration penalty on the final prediction: the
+# crossing-aware surface search (10 mm reference clearance, 5 mm band) runs on the
+# predicted frame and each node's deepest overlap or crossing beyond 0.5 mm is
+# penalised in the units of the physical position loss (scale 10 mm), ramped in
+# over epochs 4-10. Hybrid data-driven training with a physical constraint.
+defaults:
+  - crash_deformer_knn_yaris_tc_contact_surface_v2
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Contact-Surface-v2-Penalty
+
+training:
+  penetration_loss:
+    tolerance_mm: 0.5
+    length_scale_mm: 10.0
+    max_weight: 1.0
+    warmup_epochs: 3
+    ramp_epochs: 7

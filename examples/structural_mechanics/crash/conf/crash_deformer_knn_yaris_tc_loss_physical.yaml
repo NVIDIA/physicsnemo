@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Loss in a common physical length scale (control for the loss sweep).
+# Base: crash_deformer_knn_yaris_time_conditional (TC kNN attention v2, Euclidean
+# k=32, 60 epochs, validation RMSE 9.06 mm with the per-axis standardized MSE).
+# MSE of the error in millimetres over one scale for all three axes (10 mm),
+# instead of per-axis standardization that weights x:y:z errors about 1:3.6:9.6.
+defaults:
+  - crash_deformer_knn_yaris_time_conditional
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Loss-Physical
+
+training:
+  loss: mse
+  loss_space: physical
+  loss_scale_mm: 10.0

@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Physical-loss time-conditional control with regularisation on the local path:
+# learned concrete dropout on every kNN attention block's residual update
+# (initial 0.1, entropy weight 1e-4) and the position loss on a random half of
+# the nodes per step. Complements crash_deformer_knn_yaris_tc_concrete_dropout
+# (FLARE blocks only).
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-LocalDropout
+
+model:
+  local_dropout: 0.1
+  local_concrete_dropout: true
+
+training:
+  concrete_dropout_lambda: 1.0e-4
+  loss_node_fraction: 0.5

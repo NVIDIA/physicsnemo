@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Ablation of the two-stage split: the same time-conditional DeFormer (kNN
+# attention v2) with one two-layer post stack and a single gated head, no
+# provisional position head, no independent refinement copy and no auxiliary
+# coarse loss. Same depth of post processing as the control (stage A + stage B),
+# fewer parameters (one head, one FiLM adapter). Everything else matches
+# crash_deformer_knn_time_conditional; stop it early with
+# ++training.max_epochs_this_run to compare at matched epochs on the same
+# 100-epoch schedule.
+defaults:
+  - crash_deformer_knn_time_conditional
+  - _self_
+
+experiment_name: Crash-DeFormer-KNNAttention-TimeConditional-SingleStage
+
+training:
+  coarse_loss_weight: 0.0
+
+model:
+  two_stage: false
+  num_post_processor_layers: 2

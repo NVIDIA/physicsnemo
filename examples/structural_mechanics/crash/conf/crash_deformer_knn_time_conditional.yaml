@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Time-conditional DeFormer with static kNN neighborhood attention (second
+# design) before and after FLARE. Same data split, backbone, time code and
+# training budget as crash_geoflare_time_conditional; adds the provisional
+# position loss (weight 0.1) and the structural-graph datapipe with kNN
+# neighborhoods.
+defaults:
+  - crash_geoflare_time_conditional
+  - override datapipe: graph
+  - override model: deformer_time_conditional
+  - _self_
+
+experiment_name: Crash-DeFormer-KNNAttention-TimeConditional
+
+training:
+  coarse_loss_weight: 0.1
+
+datapipe:
+  sample_type: one_time_step
+  initial_history_steps: 1
+  local_knn_k: ${model.local_knn_k}
+  local_knn_metric: ${model.local_neighborhood}
+  local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache

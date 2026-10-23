@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Euclidean kNN attention with the 8 design variables as a global token.
+# Base: crash_deformer_knn_yaris_tc_loss_physical (TC kNN attention v2, Euclidean
+# k=32, 60 epochs, MSE in millimetres over one common scale).
+# global_dim = 32 (time code) + 9 (8 scaled deviations + known flag).
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Euclidean-Attention-DOE
+
+datapipe:
+  design_variables: true
+
+model:
+  global_dim: 41

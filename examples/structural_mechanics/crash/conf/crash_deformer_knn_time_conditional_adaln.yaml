@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Time-conditional DeFormer (kNN attention v2) with GenCast-style norm
+# conditioning: every LayerNorm of the network takes its scale and offset from
+# the Fourier time code through a zero-initialised projection (adaLN-zero), so
+# time modulates every layer instead of only the node inputs and the global
+# token. Everything else (data, split, backbone, optimizer, 100-epoch budget)
+# matches crash_deformer_knn_time_conditional, its matched control.
+defaults:
+  - crash_deformer_knn_time_conditional
+  - _self_
+
+experiment_name: Crash-DeFormer-KNNAttention-TimeConditional-AdaLN
+
+model:
+  norm_conditioning: time
+
+training:
+  # The modulation projections start at zero; keep them on AdamW as in GenCast
+  # and DiT rather than Muon's RMS-matched orthogonalised updates.
+  muon_exclude_patterns: [modulation]

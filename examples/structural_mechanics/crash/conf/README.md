@@ -1,28 +1,154 @@
-<!-- markdownlint-disable -->
-# Configuration Layout
+# Configuration layout
 
-## Start here: experiment configs
+Every experiment is a Hydra recipe at the top of `conf/` that composes the
+shared groups (`reader/`, `datapipe/`, `model/`, `training/`, `inference/`) and
+overrides what the experiment changes. Print any recipe without starting
+training with `python train.py --config-name=<recipe> --cfg job`.
 
-**Each YAML file in `conf/` is a self-contained experiment config.** Run training or inference by selecting one:
+## DeFormer on the Yaris dataset
 
-```bash
-python train.py --config-name=bumper_geotransolver_oneshot
-python train.py --config-name=crash_geotransolver_oneshot
-python inference.py --config-name=crash_geotransolver_oneshot
-```
+| Recipe | Model | What it trains |
+| --- | --- | --- |
+| `yaris_deformer` | `model/deformer_time_conditional.yaml` (`time_conditional.MeshGeoFLARETimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
+| `yaris_deformer_corrector` | `model/mgn_corrector.yaml` (`residual_model.ResidualTimeConditional` around `mgn_corrector.MeshGraphNetCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
+| `yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
 
-To add a new experiment, copy an existing file in `conf/` and edit data paths, model, and features.
+`yaris_deformer` is self-contained (reader `yaris_full`, datapipe `yaris_full`,
+training defaults plus the keys below); the other two inherit it. The four
+required paths are the `yaris.*` keys; everything else has a value.
 
----
+### Keys of `yaris_deformer`
 
-## Component configs (advanced)
+| Key | Value | Meaning |
+| --- | --- | --- |
+| `yaris.data_root`, `yaris.split_manifest`, `yaris.outlier_mask`, `yaris.work_dir` | required | stores, `splits.csv`, `outlier_nodes.npz` (or `null`), run directory |
+| `yaris.stride` | 5 | every fifth 1 ms frame (5 ms); `model.dt` and `reader.raw_dt * stride` must agree |
+| `training.trainer_class` | `yaris_full_trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
+| `training.num_training_samples` / `num_validation_samples` | 69 / 20 | the manifest's split sizes |
+| `training.num_time_steps` | 31 | frame bound per case (`ceil(152 / 5)`); the time label `k / 30` is normalized by it |
+| `training.optimizer`, `muon_min_dim` | `muon`, 9 | Muon for matrices, AdamW for vectors and matrices narrower than 9 |
+| `training.start_lr`, `end_lr`, `epochs` | 2e-4, 1e-6, 60 | cosine schedule per epoch |
+| `training.lr_warmup_epochs` | 0 | linear per-step warm-up before the cosine (the corrector uses 1) |
+| `training.amp`, `amp_dtype`, `manual_gradient_allreduce` | true, bfloat16, true | bf16 autocast; gradients averaged after backward |
+| `training.seed`, `sampler_seed`, `reproducible_sampling` | 42, 0, true | paired seeds: `training.seed=43 training.sampler_seed=1` |
+| `training.loss`, `loss_space`, `loss_scale_mm` | `mse`, `physical`, 10 | MSE of the position error in millimetres over one 10 mm scale (`training.loss=relative_l2` is the documented alternative) |
+| `training.coarse_loss_weight` | 0.1 | weight of the position loss on the provisional head |
+| `training.validation_freq`, `save_checkpoint_freq` | 5, 5 | epochs |
+| `datapipe.sample_type`, `initial_history_steps` | `one_time_step`, 1 | one (case, future frame) pair per sample, from the initial frame |
+| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | from the model, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash |
+| `datapipe.contact_surface`, `mesh_edges`, `frame_pairs`, `rigid_wall_position` | false, false, false, null | graph attachments the corrector and the metrics need (see below) |
 
-The subfolders (`model/`, `datapipe/`, `reader/`, `training/`, `inference/`) contain configs referenced by experiments. You rarely need to edit them unless customizing models, readers, or training defaults.
+### Keys of `model/deformer_time_conditional.yaml`
 
-| Path           | Purpose                                      |
-|----------------|----------------------------------------------|
-| `model/`       | Model architectures (selected via experiment) |
-| `datapipe/`    | Dataset and feature configs                  |
-| `reader/`      | Data format readers (VTP, Zarr)               |
-| `training/`    | Training hyperparameters                      |
-| `inference/`   | Inference options                            |
+| Key | Value | Meaning |
+| --- | --- | --- |
+| `functional_dim`, `out_dim`, `global_dim` | 36, 3, 32 | coords + thickness + 32-channel time code; the time code as the global token |
+| `n_hidden`, `n_head`, `n_layers`, `slice_num`, `attention_type` | 256, 8, 6, 128, `GALE_FA` | the FLARE backbone (original FLARE, not FLARE++) |
+| `time_embedding`, `time_fourier_bands`, `time_dim`, `time_as_global` | `fourier`, 8, 32, true | the learned Fourier time code |
+| `num_time_steps`, `dt` | `${training.num_time_steps}`, 0.005 | frame bound and frame interval (the datapipe reads `dt`) |
+| `mesh_hidden_dim`, `num_pre_processor_layers`, `num_post_processor_layers` | 256, 1, 1 | width and depth of the local stages (stage B is an independent copy of stage A) |
+| `mesh_pre_residual_gate_init`, `mesh_post_residual_gate_init`, `mesh_context_fusion` | 0, 1, `pre_post` | residual gates and FiLM conditioning on the mesh context |
+| `local_processor`, `local_neighborhood`, `local_knn_k` | `knn_attention`, `euclidean`, 32 | static kNN neighbourhood attention; the Yaris store edges cover shells only, so Euclidean neighbours |
+| `local_num_heads`, `local_mlp_ratio`, `local_edge_dim`, `local_activation` | 8, 2, 32, `gelu` | attention block |
+| `local_attention_fused`, `local_attention_backend` | true, `auto` | the fused kernel (Triton on CUDA) |
+| `local_value_norm`, `local_difference_values`, `local_update`, `local_bias_fp32`, `local_split_key_value` | false, true, `concat_mlp`, true, true | the second kNN-attention design (difference values, concatenate-then-MLP update, float32 geometric bias) |
+| `activation_checkpointing`, `checkpointing_ratio`, `activation_checkpointing_components`, `num_*_processor_checkpoint_segments` | true, 1.0, `[blocks, context]`, 1 | memory policy of the 1.48M-node forward |
+| `clamp_to_wall`, `wall_axis`, `wall_sign` | false, 0, 1 | evaluation-time rigid-wall clamp (needs `datapipe.rigid_wall_position`) |
+| `penetration_projection_*` | iterations 0 | evaluation-time envelope projection (band, clearance, damping, tolerance, crossed-only, symmetric side test, search backend and budget) |
+
+The body-in-white recipe `crash_deformer_knn_time_conditional` uses the same
+model file with `local_neighborhood=geodesic`, no activation checkpointing and
+`dt=null`.
+
+### Keys of `yaris_deformer_corrector` and `model/mgn_corrector.yaml`
+
+| Key | Value | Meaning |
+| --- | --- | --- |
+| `model.teacher` | `model/deformer_time_conditional.yaml` | the network's architecture (frozen, weights from `teacher_weights`) |
+| `model.teacher_weights` | required | the network's `.mdlus` checkpoint |
+| `model.functional_dim` | 39 | coords + thickness + time code + the network's displacement (45 with `teacher_window`) |
+| `model.teacher_window` | false | also feed the displacement one frame earlier and later (as differences) |
+| `model.hidden_dim`, `processor_size`, `aggregation`, `num_processor_checkpoint_segments` | 128, 8, `sum`, 8 | the MeshGraphNet processor |
+| `model.use_contact`, `contact_activation_distance`, `contact_reference_clearance`, `node_contact_radius` | true, 5, 10, 10 | contact edges from the crossing-aware search on the predicted shape: 5 mm band, 10 mm reference clearance, features over 10 mm |
+| `model.contact_side_from_reference`, `contact_side_symmetric`, `contact_crossing_radius`, `contact_clearance_approach_only` | true, false, null, false | the side test and its corrections (see `physicsnemo.nn.functional.ShellContactSearch`) |
+| `model.contact_bidirectional`, `contact_search_implementation`, `contact_surface_max_pairs` | true, `warp`, 8e6 | both message directions; search backend and budget |
+| `model.dt`, `local_knn_k`, `local_neighborhood` | 0.005, 32, `euclidean` | read by the datapipe (the network's neighbourhoods) |
+| `model.final_clamp_to_wall`, `wall_axis`, `wall_sign` | true (recipe), 0, 1 | wall clamp of the corrected shape at evaluation |
+| `model.final_projection_*` | iterations 0 | envelope projection of the corrected shape at evaluation |
+| `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | true, true, 100 | shell facets and exclusions, mesh edges, the Yaris barrier plane |
+| `training.epochs`, `lr_warmup_epochs`, `validation_freq`, `save_checkpoint_freq` | 30, 1, 2, 1 | the corrector's budget |
+| `training.coarse_loss_weight` | 0 | no provisional head |
+| `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm | target-relative penetration metrics in the validation record |
+| `datapipe.frame_pairs`, `training.increment_loss_weight` | false, 0 | optional loss on the change between consecutive frames |
+
+`yaris_geotransolver` sets the point model's time code, width and memory policy
+to the network's and the datapipe's neighbourhood keys explicitly (the point
+model has none); it ignores the neighbourhoods.
+
+### Evaluation keys (`evaluate_yaris_tc.py`)
+
+| Override | Effect |
+| --- | --- |
+| `+training.validation_output_dir=<dir>` | where the record goes (required; the run's own records are never written) |
+| `training.ckpt_path=<run>/checkpoints`, `+training.load_epoch=<E>` | the checkpoint to score |
+| `datapipe.contact_surface=true` | shell facets for the penetration metrics of a contact-free model |
+| `++training.validation_penetration.wall_position_mm=100` | wall family for models whose recipe has no `rigid_wall_position` |
+| `+training.validation_node_errors=true` | per-node RMSE map and per-region translational share |
+| `+training.validation_kinematics=true` | temporal smoothness and per-part kinematics (Kabsch fits per part) |
+| `training.validation_region_bounds=[-2000,-1000]` | reference-x bounds of the regions |
+| `+training.warm_start_model=<file>.mdlus` | score a model-only checkpoint (no `checkpoint.0.<E>.pt` next to it); `training.ckpt_path` may then be an empty directory |
+| `model.penetration_projection_iterations=4 model.penetration_projection_damping=0.5` | evaluate the network with the envelope projection |
+
+The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
+
+### Training-loop keys (`training/default.yaml`)
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `training.restore_rng` | true | restore the checkpoint's RNG states on resume; false after a change of the GPU count |
+| `training.data_startup_timeout_seconds` | 3600 | how long the ranks wait while rank 0 prepares statistics and caches at startup |
+| `training.increment_loss_weight` | 0 | loss on the change between consecutive frames (with `datapipe.frame_pairs=true`) |
+| `training.num_training_samples`, `num_validation_samples` | 69, 20 | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
+
+Re-running a training command resumes from `<work_dir>/checkpoints`.
+`yaris_full_prepare.py` reads the environment variable `YARIS_STATS_WORKERS`
+(default 8) for its statistics workers.
+
+## Body-in-white (VTP) recipes
+
+| Recipe | Model | Purpose |
+| --- | --- | --- |
+| `crash_geoflare_time_conditional` | GeoTransolver, Fourier time code | time-conditional baseline (26 frames, 100 epochs, Muon) |
+| `crash_deformer_knn_time_conditional` | DeFormer network | the network on the body-in-white data (geodesic neighbourhoods) |
+| `crash_geoflare_autoregressive` | GeoTransolver + original FLARE | autoregressive baseline, BPTT-4, 500 epochs |
+| `crash_deformer_autoregressive` | DeFormer with MeshGraphNet stages | autoregressive, no contact |
+| `crash_deformer_contact_autoregressive` | the same + predictive node-to-face contact with reference-geodesic exclusions | autoregressive with contact |
+| `crash_deformer_knn_autoregressive` | DeFormer with static kNN attention | autoregressive, no contact |
+| `crash_deformer_knn_yaris_autoregressive` | the same on the Yaris mesh | autoregressive on the full mesh |
+| `crash_geoflare_oneshot`, `crash_geotransolver_oneshot`, `bumper_*` | one-shot and time-conditional point models | the original crash and bumper examples |
+
+Overrides of the autoregressive contact recipe:
+
+| Override | Effect |
+| --- | --- |
+| `model.include_position_features=true` | add normalized current XYZ to DeFormer node inputs (default `false`) |
+| `datapipe.contact_surface_exclusion=incidence` / `one_ring` | replace the geodesic filter |
+| `datapipe.contact_geodesic_gap_min=0.0` | remove the 5 mm gap floor |
+| `model.checkpoint_offloading=false` | disable host-memory activation offloading |
+| `model.enable_contact=false` | disable messages while preserving contact parameters |
+| `+model.contact_surface_area_weighting=true`, `+model.contact_surface_reference_area=78.54` | face-area quadrature on the contact weights |
+| `model.local_neighborhood=geodesic` / `euclidean`, `model.local_knn_k=16` | neighbourhood metric and size of the kNN recipes |
+
+`evaluate_biw_tc.py` scores a body-in-white time-conditional checkpoint with
+the Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
+++datapipe.rigid_wall_position=-29.8`, kinematics over the connected components).
+
+## Shared components
+
+| Directory | Purpose |
+| --- | --- |
+| `model/` | architecture defaults (`deformer_time_conditional`, `mgn_corrector`, `geotransolver_time_conditional`, the autoregressive and one-shot models) |
+| `datapipe/` | `yaris_full` (Zarr, full mesh), `graph` and `point_cloud` (VTP) |
+| `reader/` | `yaris_full` (Zarr stores with a shared mesh; `include_solid_edges`, `connect_isolated_k` for geodesic neighbourhoods), `vtp`, `zarr` |
+| `training/` | optimizer, schedule and checkpoint defaults |
+| `inference/` | evaluation and VTP export defaults |

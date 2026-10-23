@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Surface contact v2 with a wider activation band: the provisional shape carries
+# errors of the order of 10 mm, so true contacts can appear 10-15 mm apart on it.
+# Band 15 mm (feature scale 20 mm) and a 20 mm reference clearance.
+defaults:
+  - crash_deformer_knn_yaris_tc_contact_surface_v2
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Contact-Surface-v2-Band15
+
+model:
+  contact_activation_distance: 15.0
+  node_contact_radius: 20.0
+  contact_reference_clearance: 20.0

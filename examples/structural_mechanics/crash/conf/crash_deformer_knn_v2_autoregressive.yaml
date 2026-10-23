@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# kNN neighborhood attention, second design: same static neighborhoods, data,
+# backbone, gates and training budget as crash_deformer_knn_autoregressive, with
+# the local block changed where the first design could not act like a message
+# passing step: values are projected from the raw residual stream and returned as
+# attention-weighted neighbor DIFFERENCES, the node update concatenates the
+# latent with the aggregated messages and the attention log-sum-exp before one
+# MLP (MeshGraphNet node-block form), the geometric logit bias stays in float32,
+# key and value projections are separate matrices, and 2-D parameters narrower
+# than 9 are optimized by AdamW instead of Muon.
+defaults:
+  - crash_deformer_knn_autoregressive
+  - _self_
+
+experiment_name: Crash-DeFormer-KNNAttentionV2-Autoregressive
+
+training:
+  muon_min_dim: 9
+
+model:
+  local_attention_fused: true
+  local_value_norm: false
+  local_difference_values: true
+  local_update: concat_mlp
+  local_bias_fp32: true
+  local_split_key_value: true

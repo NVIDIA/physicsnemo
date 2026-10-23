@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Analytic rigid-wall contact (plane x = 100 mm) with output projection.
+# Base: crash_deformer_knn_yaris_tc_loss_physical (TC kNN attention v2, Euclidean
+# k=32, 60 epochs, MSE in millimetres). Contact is discovered on the provisional
+# (stage-A) shape and its gated messages enter stage B; the backbone and the
+# provisional head never see it.
+# Obstacle edges for nodes within 5 mm shell clearance of the barrier; the final
+# prediction is clamped to the admissible side of the wall.
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Contact-Wall
+
+datapipe:
+  rigid_wall_position: 100.0
+
+model:
+  use_contact: true
+  contact_source: wall
+  contact_dim: 8
+  contact_gate_init: 1.0e-3
+  contact_aggregation: mean
+  contact_search_implementation: warp
+  contact_surface_max_pairs: 16000000
+  contact_activation_distance: 5.0
+  node_contact_radius: 10.0
+  contact_normal_epsilon: 0.1
+  contact_surface_material_fan: true
+  contact_include_velocity: false
+  contact_surface_predictive: false
+  wall_axis: 0
+  wall_sign: 1.0
+  clamp_to_wall: true

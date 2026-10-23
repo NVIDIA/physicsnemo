@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Physical-loss time-conditional control with design mixup: half of the training
+# samples blend two cases at the same future frame (lambda ~ Beta(1, 1)) over the
+# thickness features and the target positions, creating pseudo-designs between
+# the 69 training designs. Valid as long as the response is near-linear in the
+# thickness band (the control's per-case error is 74% linear in the deviations).
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Mixup
+
+datapipe:
+  mixup_alpha: 1.0
+  mixup_prob: 0.5

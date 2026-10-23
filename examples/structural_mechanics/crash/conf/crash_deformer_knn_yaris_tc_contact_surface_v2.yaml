@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Surface contact v2 on the provisional shape. Same search as the surface arm plus
+# crossing-aware signed gaps (the side of each facet in the reference configuration
+# decides whether a node has passed through the shell: negative gap, flipped
+# direction) and new-contact-only pairs (pairs assembled within 10 mm of each other
+# in the reference, such as flanges and in-plane neighbours, are dropped; the kNN
+# operators already connect them).
+defaults:
+  - crash_deformer_knn_yaris_tc_contact_surface
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Contact-Surface-v2
+
+model:
+  contact_side_from_reference: true
+  contact_reference_clearance: 10.0
+
+# validation diagnostic (never affects training): crossing-aware penetration
+# statistics of the predicted and the true frames with the same search settings
+training:
+  validation_penetration:
+    enabled: true
+    tolerance_mm: 0.5
+    activation_distance_mm: 5.0
+    reference_clearance_mm: 10.0
+    feature_scale_mm: 10.0

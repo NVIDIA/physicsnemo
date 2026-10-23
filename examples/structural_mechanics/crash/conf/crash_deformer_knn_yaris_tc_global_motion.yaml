@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Physical-loss time-conditional control plus a global rigid-motion head: one
+# translation and one small rotation per graph from the pooled stage-A latent and
+# the time code, zero-initialised. Targets the per-frame translational error of
+# whole regions (half of the held-out squared error of the control).
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-GlobalMotion
+
+model:
+  global_motion: true
+  global_motion_scale_mm: 10.0
+  global_motion_lever_mm: 2000.0

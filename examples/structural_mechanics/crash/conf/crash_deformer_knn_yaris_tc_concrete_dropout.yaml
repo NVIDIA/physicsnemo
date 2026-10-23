@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Physical-loss time-conditional control with concrete dropout in the FLARE
+# blocks (learned per-layer rates, initial 0.1) and the entropy regulariser
+# weighted 1e-4, as in the external-aerodynamics GeoTransolver recipe. Aims at
+# the train/validation gap (1.7 vs 7.6 mm) of the control.
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-ConcreteDropout
+
+model:
+  dropout: 0.1
+  concrete_dropout: true
+
+training:
+  concrete_dropout_lambda: 1.0e-4

@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Fine-tune the converged physical-loss model (60 epochs, 7.58 mm) with surface
+# contact v2 switched on: pass training.warm_start_model=<that run's final .mdlus>.
+# The contact block starts zero-gated, so epoch 0 reproduces the control; ten
+# epochs at 2e-5 -> 1e-6 then show what contact adds to a converged model.
+# Compare with crash_deformer_knn_yaris_tc_loss_physical_ft (same schedule, no contact).
+defaults:
+  - crash_deformer_knn_yaris_tc_contact_surface_v2
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Contact-Surface-v2-FineTune
+
+training:
+  epochs: 10
+  start_lr: 2.0e-5
+  end_lr: 1.0e-6
+  validation_freq: 2
+  save_checkpoint_freq: 2
+  warm_start_model: null

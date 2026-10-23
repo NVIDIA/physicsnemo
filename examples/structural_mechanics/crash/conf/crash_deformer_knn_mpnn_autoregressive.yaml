@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Control for the kNN-attention study: DeFormer's unchanged MeshGraphNet
+# processors (edge MLP on [edge, source, destination], summed messages, node MLP
+# on [aggregate, self]) run on the static geodesic k=8 neighborhood slots instead
+# of the finite-element edges. Same data, backbone, gates and budget as the kNN
+# recipe. It separates the two things the attention variant changed at once: the
+# local operator and the stencil. Memory scales with N x (k+1) edges, about twice
+# the structural edge count at k=8.
+defaults:
+  - crash_deformer_knn_autoregressive
+  - _self_
+
+experiment_name: Crash-DeFormer-KNNMessagePassing-Autoregressive
+
+model:
+  local_processor: knn_mpnn
+  local_neighborhood: geodesic
+  local_knn_k: 8

@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Matched control for the contact fine-tune: the converged physical-loss model
+# trained ten more epochs at 2e-5 -> 1e-6 without contact, on the contact-enabled
+# datapipe so the validation penetration probe scores it the same way.
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Loss-Physical-FineTune
+
+datapipe:
+  contact_surface: true
+
+training:
+  epochs: 10
+  start_lr: 2.0e-5
+  end_lr: 1.0e-6
+  validation_freq: 2
+  save_checkpoint_freq: 2
+  warm_start_model: null
+  validation_penetration:
+    enabled: true
+    tolerance_mm: 0.5
+    activation_distance_mm: 5.0
+    reference_clearance_mm: 10.0
+    feature_scale_mm: 10.0

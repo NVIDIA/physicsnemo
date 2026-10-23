@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `QuantileRegressionScore`, and `AuxScale`. Custom scores subclass
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
+- Adds experimental DeFormer mesh/attention hybrids and autoregressive crash
+  recipes with predictive node-to-face contact, differentiable surface features,
+  optional reference-geodesic exclusions, and resumable truncated BPTT.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside

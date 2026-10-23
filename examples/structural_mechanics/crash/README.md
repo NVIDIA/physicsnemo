@@ -7,9 +7,140 @@ Automotive crashworthiness assessment is a critical step in vehicle design. Trad
 
 Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling rapid prediction of deformation histories across thousands of design candidates.
 
-In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, and FIGConvUNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
+In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, FIGConvUNet, MeshTransolver, MeshGeoTransolver, and MeshGeoFLARE architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
-For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). DeFormer adds structural mesh message passing around a geometry-aware FLARE backbone, with optional predictive node-to-face contact for closed-loop autoregressive dynamics.
+
+### DeFormer with geodesic-filtered surface contact
+
+The reference contact configuration is
+`crash_deformer_contact_autoregressive`.
+It combines the corrected latent-space mesh processor with original point-space
+FLARE (`GALE_FA`), predictive node-to-face messages, reference-geodesic exclusions,
+and fixed four-step truncated BPTT. Its default budget is 500 epochs without
+teacher forcing or early stopping; validation rolls out all 24 predicted steps
+after two observed frames. Node inputs are velocity and thickness, with position
+used by the geometry and contact pathways. The paired baselines are
+`crash_deformer_autoregressive` (no contact) and `crash_geoflare_autoregressive`
+(no structural or contact message passing).
+
+See [reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md).
+The 5 mm geodesic gap floor is an explicit modeling assumption, separate from
+the message-activation band, not a recovered solver-deck setting. Dataset paths
+and splits must be supplied by the user; no proprietary datasets or trained
+checkpoints are included.
+
+The code retains the historical names `MeshGeoFLARE` (reusable model) and
+`MeshGeoFLAREAutoregressive` (crash rollout wrapper) for checkpoint and Hydra
+compatibility. These implement the two **DeFormer** experiments above; the
+GeoFLARE baseline uses `GeoTransolverAutoregressive`. All three configs explicitly
+select original FLARE (`GALE_FA`), not FLARE++.
+Other hybrid classes, nearest-node/legacy contact backends, and analytic bumper
+obstacle options are compatibility interfaces, not alternative reference recipes.
+They are not used by the surface-contact experiment.
+
+### Experimental: DeFormer with static kNN neighborhood attention
+
+`crash_deformer_knn_autoregressive` replaces DeFormer's two MeshGraphNet
+processors with attention over a **static reference neighborhood**: each node
+attends to itself plus its `k` nearest neighbors selected once on the initial
+mesh, with reference displacement/distance entering the attention logits and
+values. Everything else is the no-contact DeFormer recipe (FLARE backbone,
+zero-initialized residual gates, FiLM conditioning, BPTT-4, Muon, 500 epochs),
+so the comparison isolates the local operator. Contact is off in this entry
+point; the contact block is unchanged and can be re-enabled later.
+
+Two neighbor metrics share one switch, resolved by the datapipe and checked by
+the model:
+
+```bash
+# Geodesic: shortest path along structural edges, weighted by reference lengths.
+torchrun --nproc_per_node=<NUM_GPUS> train.py \
+  --config-name=crash_deformer_knn_autoregressive \
+  model.local_neighborhood=geodesic hydra.run.dir=./outputs/deformer_knn_geodesic \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+
+# Euclidean: straight-line reference distance; can connect stacked, unconnected shells.
+torchrun --nproc_per_node=<NUM_GPUS> train.py \
+  --config-name=crash_deformer_knn_autoregressive \
+  model.local_neighborhood=euclidean hydra.run.dir=./outputs/deformer_knn_euclidean \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+```
+
+Neighborhoods are computed from the frozen physical initial geometry (never a
+sampled window or future frame), once per distinct initial mesh, and cached under
+`datapipe.local_knn_cache_dir` by a content hash of geometry, topology, `k`,
+metric and algorithm source. Geodesic selection runs a bounded Dijkstra per node
+in Python (minutes for a 385k-node mesh); Euclidean selection uses a KD-tree.
+Features are standardized with train-only statistics (`knn_edge_stats.json`),
+like structural edges. Checkpoints from the kNN variant, the MPNN DeFormer and
+the two metrics are not interchangeable. Peak memory per block scales with
+`N x (k+1) x width`; `model.local_knn_k=16` halves it.
+
+Suggested protocol: compare the full 24-step validation MSE at matched epochs
+against `crash_deformer_autoregressive` trained under the same world size and
+seed, and record seconds per update and peak memory. This is an experimental
+option with no accuracy claim; it does not alter the validated reference recipes.
+
+`crash_deformer_knn_v2_autoregressive` is the second design of that block
+(un-normalized difference values, concatenate-then-MLP update with the
+attention log-sum-exp, float32 geometric bias, split key/value, small matrices
+on AdamW); see `conf/README.md` for the key table. It exists because the first
+design tracked the MPNN DeFormer until epoch 300 and then plateaued near
+1.0e-3 while the MPNN reached 6.7e-4.
+
+### Experimental: time-conditional DeFormer
+
+`crash_deformer_knn_time_conditional` predicts each future frame independently
+from the initial mesh with the kNN-attention local processors before and after
+FLARE, a Fourier time code (node inputs and a global token), a zero-initialized
+provisional position head after post stage A and an independent post stage B
+for the final correction (`time_conditional.py`). Its matched baseline is
+`crash_geoflare_time_conditional`; see `conf/README.md`.
+`crash_deformer_knn_time_conditional_adaln` adds time-conditioned LayerNorms
+throughout the network (GenCast norm conditioning, adaLN-zero): function
+preserving at initialisation, so it isolates the value of letting the time code
+modulate every layer. `crash_deformer_knn_time_conditional_contact` discovers
+surface contact on the provisional shape from stage A and feeds its gated
+messages to stage B, giving the time-conditional model the contact mechanism of
+the autoregressive DeFormer without a rollout.
+
+### Experimental: full-resolution Yaris with kNN neighborhood attention
+
+`crash_deformer_knn_yaris_autoregressive` runs the kNN-attention DeFormer on the
+1.48M-node Yaris Zarr stores at full resolution, without mesh coarsening and
+without contact. The `yaris_full` reader/datapipe pair reads one window per
+access (no trajectory preloading), uses the dataset creator's `splits.csv` as
+the split authority, and drops the nodes flagged in an outlier mask (rigid-wall
+nodes and fly-away nodes) from inputs, targets and neighborhoods. All stores
+share one reference mesh, so the Euclidean neighborhoods, their standardized
+features and the frozen TRAIN statistics (per-axis position std, normalized
+velocity/acceleration moments, thickness) are built once. Because the store
+edge list covers shells only, `model.local_neighborhood=euclidean` is the
+default; geodesic selection would isolate every solid and beam node.
+
+Memory policy: FLARE blocks and the geometry context are activation
+checkpointed (`model.activation_checkpointing=true`) inside each checkpointed
+rollout step, so one block's activations are live at a time. Prepare the
+statistics and caches on a CPU node, then train:
+
+```bash
+python yaris_full_prepare.py --config-name=crash_deformer_knn_yaris_autoregressive \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_knn
+
+torchrun --nproc_per_node=<NUM_GPUS> train.py \
+  --config-name=crash_deformer_knn_yaris_autoregressive \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_knn
+```
+
+The frozen statistics carry an identity (split manifest, outlier mask, kept
+node count, stride, dt); a changed mask or split invalidates them. Validation
+uses the generic normalized-MSE path over every remaining transition of each
+held-out case.
 
 ### Body-in-White Crash Modeling
 
@@ -50,6 +181,17 @@ pip install "nvidia-physicsnemo[gnns]"
 # or with uv:
 uv sync --extra gnns
 ```
+
+Reference-geodesic preprocessing also requires SciPy, declared in the existing
+`nn-extras` optional dependency group. Install that extra, or install SciPy
+directly in an existing graph-model environment:
+
+```bash
+pip install scipy
+```
+
+SciPy is loaded only when reference-geodesic preprocessing is called; unrelated
+models and contact geometry remain importable without it.
 
 ## Data Preprocessing
 
@@ -148,33 +290,20 @@ The main script is `train.py`.
 
 ### Config Structure
 
-```
-conf/
-├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
-├── bumper_geotransolver_time_conditional.yaml
-├── crash_geotransolver_oneshot.yaml
-├── bumper_geoflare_oneshot.yaml
-├── crash_geoflare_oneshot.yaml
-├── datapipe/                              # dataset configs (generic defaults)
-│   ├── graph.yaml
-│   └── point_cloud.yaml
-├── model/                                 # model configs
-│   ├── geotransolver_one_shot.yaml
-│   ├── geotransolver_autoregressive_rollout_training.yaml
-│   ├── geotransolver_one_step_rollout.yaml
-│   ├── geotransolver_time_conditional.yaml
-│   ├── transolver_one_shot.yaml
-│   ├── figconvunet_one_shot.yaml
-│   ├── mgn_one_shot.yaml
-│   └── ...
-├── reader/                                # reader configs
-│   ├── vtp.yaml
-│   └── zarr.yaml
-├── training/default.yaml                  # generic training hyperparameters
-└── inference/default.yaml                 # generic inference options
-```
+The existing bumper and body-in-white one-shot/time-conditional experiments remain
+available. This contribution adds three autoregressive entry points:
 
-Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file.
+| Experiment | Model |
+|------------|-------|
+| `crash_geoflare_autoregressive` | GeoTransolver with original point-space FLARE |
+| `crash_deformer_autoregressive` | DeFormer without contact |
+| `crash_deformer_contact_autoregressive` | DeFormer with predictive geodesic-filtered surface contact |
+
+The DeFormer experiment inherits the GeoFLARE data/training recipe and switches to
+a graph datapipe and mesh model. The contact experiment inherits DeFormer and adds
+contact, reproducible sampling, and memory settings. Two model definitions live in
+`conf/model/`; reader, datapipe, training, and inference defaults are shared with
+the existing examples. See [configuration layout](conf/README.md) for overrides.
 
 ### Launch Training
 
@@ -189,6 +318,123 @@ Multi-GPU (Distributed Data Parallel):
 ```bash
 torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
+
+### DeFormer autoregressive comparison
+
+Run one of the three entry points with your dataset paths:
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py \
+  --config-name=crash_deformer_contact_autoregressive \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+```
+
+Replace the config name with `crash_deformer_autoregressive` or
+`crash_geoflare_autoregressive` for the baselines. These are fresh model runs,
+not interchangeable checkpoints. Use separate output directories when launching
+comparisons concurrently, for example `hydra.run.dir=./outputs/deformer_contact`.
+
+The reference defaults assume 127 training cases, 8 validation cases, and 26
+frames spaced 5 ms apart. By default, all models use velocity and thickness inputs,
+predict acceleration, and train with random four-transition closed-loop BPTT windows.
+The two initial observed frames initialize velocity; validation and inference
+roll out the remaining 24 transitions. The common budget is 500 epochs with
+Muon, BF16, a cosine learning-rate schedule from `2e-4` to `1e-6`, and no
+teacher forcing or early stopping. Supply sample counts and time-step settings
+appropriate for a different dataset.
+
+DeFormer can optionally include current XYZ alongside velocity and thickness:
+
+```bash
+python train.py --config-name=crash_deformer_contact_autoregressive \
+  model.include_position_features=true \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+```
+
+This switch defaults to `false` and also works with `crash_deformer_autoregressive`.
+When enabled, the input order is **normalized current XYZ, normalized velocity XYZ,
+normalized thickness**. The wrapper automatically expands the input projection
+from four to seven channels; leave `model.functional_dim=4` and
+`model.node_input_mode=velocity` unchanged. XYZ is the observed current position
+at initialization and the model's own predicted position during subsequent
+closed-loop steps, never a future target. Geometry context, physical-unit contact,
+and the residual velocity/position integration are unchanged.
+
+Use the same switch for training and inference, and a separate checkpoint/output
+directory for each mode: four- and seven-channel checkpoints are not interchangeable.
+Legacy explicit `node_input_mode=position_velocity` with `functional_dim=7`
+remains supported with the new switch disabled; do not combine both mechanisms.
+
+Penetration regularization is a separate, default-off training option:
+
+```bash
+python train.py --config-name=crash_deformer_contact_penetration_autoregressive \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+```
+
+This inherits the reference contact architecture and training settings, adding
+loss-only initial physical geometry and a soft shell-overlap penalty. For each
+node, the loss penalizes its largest excess overlap with a nonexcluded face,
+after subtracting that pair's initial overlap and a 0.25 mm tolerance. Squared
+excess is normalized by a 1 mm length scale, averaged over all nodes and rollout
+steps, and added to position MSE. The weight is zero for the first 50 epochs,
+ramps linearly for 50 epochs, and then stays at `1e-5`. Geometry is evaluated in
+physical units, with gradients through all predicted BPTT steps. Validation
+remains position MSE. These are experimental settings, not a solver contact law.
+
+Add `model.include_position_features=true` to combine both options. The ordinary
+contact recipe has neither penetration metadata nor penetration-loss evaluation.
+The penalty adds no network parameters and is not needed for inference. It is
+an endpoint regularizer, so it cannot guarantee nonpenetration or detect a full
+crossing between saved frames. Use fresh output directories when changing the
+objective: resume guards reject mismatched penetration settings.
+
+The contact recipe requires valid triangle/quad connectivity and nodal shell
+thickness in physical units (mm for the reference data). It rebuilds live
+node-to-face contact from the predicted geometry, uses barycentric surface
+features rather than face centroids, and retains gradients through the selected
+geometry and contact messages. Candidate membership is discrete. The geometry is
+denormalized before contact computation; reference-geodesic exclusions use
+initial physical geometry. This is solver-inspired learned messaging, not a
+contact-force solver or a nonpenetration guarantee.
+
+Optional face-area quadrature (default off) multiplies each active pair's
+activation weight by the face's center-fan area over a reference area, the
+activation-band disk `pi * 5^2` mm^2 unless overridden. It makes the contact
+aggregate and its activation total approximately independent of mesh
+resolution, which matters when training on meshes with different element sizes
+or on coarsened meshes. Enable it with `+model.contact_surface_area_weighting=true`
+(optionally `+model.contact_surface_reference_area=<mm^2>`); it changes the
+learned function, so use a fresh output directory and compare against the
+reference recipe.
+
+The contact recipe additionally enables deterministic sampling, RNG-isolated
+contact initialization, nested contact checkpointing, and activation offloading.
+Those execution/reproducibility settings are explicit; they are not silently
+assumed identical to the historical no-contact recipe.
+
+Small ablations are overrides instead of separate YAML files:
+
+```bash
+# Incidence-only exclusions; keep the same model and training budget.
+python train.py --config-name=crash_deformer_contact_autoregressive \
+  datapipe.contact_surface_exclusion=incidence \
+  training.raw_data_dir=/data/crash/train \
+  training.raw_data_dir_validation=/data/crash/validation
+
+# Print the recipe without starting training.
+python train.py --config-name=crash_deformer_contact_autoregressive --cfg job
+```
+
+Use `model.checkpoint_offloading=false` for an execution-only memory tradeoff.
+Use `model.enable_contact=false` to disable contact messages while retaining the
+contact parameters and initialization. The dedicated no-contact DeFormer
+experiment omits the contact module entirely. See
+[reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md) for filter,
+gap-floor, and cache options.
 
 ## Inference
 
@@ -282,7 +528,7 @@ falls outside the calibrated training envelope.  Warnings do not halt inference.
 
 ## Experiments
 
-Each experiment is a self-contained YAML file in `conf/`. Each config file includes all defaults and experiment-specific settings.
+Each YAML entry point in `conf/` selects shared component defaults and any experiment-specific overrides. The autoregressive comparison recipes inherit common settings rather than copying them.
 
 ### Anatomy of an experiment config
 
@@ -347,26 +593,34 @@ datapipe:
 | `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
 | `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
+| `crash_geoflare_autoregressive.yaml` | Full-car crash (VTP) | GeoFLARE BPTT-4 baseline | `python train.py --config-name=crash_geoflare_autoregressive` |
+| `crash_deformer_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, no contact | `python train.py --config-name=crash_deformer_autoregressive` |
+| `crash_deformer_contact_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, geodesic surface contact | `python train.py --config-name=crash_deformer_contact_autoregressive` |
+| `crash_deformer_knn_autoregressive.yaml` | Full-car crash (VTP) | Experimental DeFormer BPTT-4, static kNN neighborhood attention instead of MPNNs, no contact | `python train.py --config-name=crash_deformer_knn_autoregressive` |
 
 ### Choosing a time scheme
 
-Two rollout schemes are supported, selected by the experiment config (model + datapipe):
+Three rollout schemes have premade experiment configurations:
 
 | Scheme | Model | Datapipe `sample_type` | Behavior |
 |--------|-------|------------------------|----------|
 | **One-shot** | `geotransolver_one_shot` | `all_time_steps` | One sample per run. Model predicts the full trajectory `[N, T-1, Fo]` from t0 in a single forward pass. Lower training cost, competitive accuracy. |
 | **Time-conditional** | `geotransolver_time_conditional` | `one_time_step` | One sample per run per timestep. Model predicts a single step `[N, Fo]` conditioned on normalized time `t/(T-1)`. Best accuracy for long horizons; higher training cost. Inference always rolls out the full trajectory. |
+| **Autoregressive** | `geoflare_autoregressive` / `deformer_autoregressive` | `random_time_window` | Closed-loop BPTT during training; full-trajectory validation and inference. The contact experiment additionally rebuilds contact from predicted geometry. |
 
-Use **one-shot** when you need fast iteration or have limited compute. Use **time-conditional** when validation quality matters most. See [Development tips](#development-tips) for a comparison table.
-
-Two additional schemes are available in the rollout (`geotransolver_autoregressive_rollout_training`, `geotransolver_one_step_rollout`) but are not provided as premade experiment configs. You can enable them by selecting the corresponding model in `conf/model/` and configuring the datapipe accordingly.
+Use **one-shot** when you need fast iteration or have limited compute. Use
+**time-conditional** when validation quality matters most. Use **autoregressive
+contact** when deployment requires closed-loop dynamics and geometry-dependent
+interactions. Legacy `geotransolver_autoregressive_rollout_training` and
+`geotransolver_one_step_rollout` components also remain available for custom
+experiments. See [Development tips](#development-tips) for the legacy comparison.
 
 ### Adding a new experiment
 
 1. Create `conf/<my_experiment>.yaml` following the template above.
 2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
 3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
-4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot, `one_time_step` for time-conditional.
+4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot or autoregressive rollout, `one_time_step` for time-conditional.
 5. If using global features, set `global_features_filepath`; otherwise use `null`.
 6. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
 7. Run: `python train.py --config-name=<my_experiment>`
@@ -447,13 +701,16 @@ To disable global features entirely, omit `global_features_filepath` (or leave i
 
 #### How the datapipe and model consume global features
 
-At `__getitem__` time, the datapipe converts the selected scalars to a dict of scalar tensors and attaches them to the `SimSample`:
+Training computes mean and standard deviation from the training split and saves them
+with the other dataset statistics. Validation, test, and inference reuse those values
+without recomputing them. At `__getitem__` time, the datapipe standardizes each
+selected scalar and attaches it to the `SimSample`:
 
 ```python
 sample.global_features = {
-    "velocity_x": tensor(-5.0),
-    "thickness_scale": tensor(1.0),
-    "rwall_origin_y": tensor(0.0),
+    "velocity_x": tensor(z_velocity_x),
+    "thickness_scale": tensor(z_thickness_scale),
+    "rwall_origin_y": tensor(z_rwall_origin_y),
 }
 ```
 
@@ -464,7 +721,10 @@ In the model forward pass, these are stacked into a single global embedding vect
 global_dim: 3   # must match len(datapipe.global_features)
 ```
 
-If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShot` uses global features; other models ignore them).
+If `global_features` is `null`, `sample.global_features` is `None` and the selected
+model must support unconditioned execution. GeoTransolver and the geometry-aware
+mesh hybrids consume the global token directly; the mesh-attention crash wrappers
+also broadcast configured global values into their node inputs.
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
@@ -707,7 +967,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 
 ## TODO
 
-- [ ] **Normalize global features**: Global features (e.g., velocity_x, thickness_scale, rwall_origin_y) are currently passed to the model without normalization. Add support for computing and applying per-feature mean/std (or similar) so global inputs are normalized consistently with node features and positions.
+- [x] **Normalize global features**: Training-only mean/std statistics are saved and reused for validation, test, inference, and physical-value reconstruction during autoregressive rollout.
 - [ ] **Normalize dynamic targets**: Dynamic targets (e.g., effective_plastic_strain, stress_vm) are currently passed in the target `y` without normalization, while positions are normalized. Add per-target mean/std and denormalize at inference when exporting to VTP.
 - [ ] **Support batch_size > 1**: The pipeline currently uses `batch_size=1` due to variable node counts per sample. Add padding or batching logic to enable larger batch sizes for improved throughput.
 
@@ -728,6 +988,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 ## References
 
 - [Automotive Crash Dynamics Modeling Accelerated with Machine Learning](https://arxiv.org/pdf/2510.15201)
-- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)]
+- [Crash Assessment via Mesh-Based Graph Neural Networks and Physics-Aware Attention](https://arxiv.org/pdf/2605.11784)
+- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)
 - [Transolver: A Fast Transformer Solver for PDEs on General Geometries](https://arxiv.org/pdf/2402.02366)
 - [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/pdf/2010.03409)

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Euclidean kNN-MPNN (k=8) with the physical-scale loss.
+# Base: crash_deformer_knn_yaris_tc_loss_physical (TC kNN attention v2, Euclidean
+# k=32, 60 epochs, MSE in millimetres over one common scale).
+# Operator comparison against the physical-loss attention control; work dir work_k8_mpnn.
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Euclidean-KNNMPNN
+
+model:
+  local_processor: knn_mpnn
+  local_knn_k: 8

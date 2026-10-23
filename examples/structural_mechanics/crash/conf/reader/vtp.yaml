@@ -16,3 +16,4 @@
 
 _target_: vtp_reader.Reader
 _convert_: all
+cache_dir: null

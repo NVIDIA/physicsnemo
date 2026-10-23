@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Geodesic kNN attention on the full Yaris mesh.
+# Base: crash_deformer_knn_yaris_tc_loss_physical (TC kNN attention v2, Euclidean
+# k=32, 60 epochs, MSE in millimetres over one common scale).
+# Neighbors by shortest path along shell + solid-element edges (edge-less nodes
+# linked to their 8 nearest neighbors). Needs its own work dir (stats + caches).
+defaults:
+  - crash_deformer_knn_yaris_tc_loss_physical
+  - _self_
+
+experiment_name: Crash-DeFormer-Yaris-TC-Geodesic-Attention
+
+reader:
+  include_solid_edges: true
+  connect_isolated_k: 8
+
+model:
+  local_neighborhood: geodesic

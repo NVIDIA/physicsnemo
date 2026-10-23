@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Experimental DeFormer variant: static reference kNN neighborhood attention in
+# place of both MeshGraphNet processors. Inherits the complete no-contact
+# DeFormer recipe (data split, FLARE backbone, gates, FiLM, BPTT-4, Muon, 500
+# epochs); only the local operator and its neighborhood inputs change.
+# Select the neighbor metric with model.local_neighborhood=geodesic|euclidean;
+# the datapipe builds the matching neighborhoods and the model checks them.
+defaults:
+  - crash_deformer_autoregressive
+  - _self_
+
+experiment_name: Crash-DeFormer-KNNAttention-Autoregressive
+
+datapipe:
+  local_knn_k: ${model.local_knn_k}
+  local_knn_metric: ${model.local_neighborhood}
+  local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
+
+model:
+  local_processor: knn_attention
+  local_neighborhood: geodesic  # or euclidean; same k, same features
+  local_knn_k: 32               # neighbors per node, excluding the node itself
+  local_num_heads: 8
+  local_mlp_ratio: 2
+  local_edge_dim: 32
+  local_activation: gelu
+  # Fused neighborhood attention kernel (same math, no gathered key/value
+  # tensors): enable with model.local_attention_fused=true. Backend auto picks
+  # Triton on CUDA; torch is the portable reference implementation.
+  local_attention_fused: false
+  local_attention_backend: auto
