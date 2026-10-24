@@ -33,7 +33,7 @@ Choose the score by what your model outputs:
 For tensor inputs, ``aux`` maps each key to a tensor; for ``TensorDict``
 inputs, it maps each field name to such a mapping.
 
-:class:`AuxDifficulty` is an optional per-point scale for the functional
+:class:`AuxScale` is an optional per-point scale for the functional
 band calibrator.
 """
 
@@ -48,7 +48,7 @@ from ._utils import cast_directed, check_real, clamp_min_floor, positive_finite_
 
 __all__ = [
     "AbsoluteErrorScore",
-    "AuxDifficulty",
+    "AuxScale",
     "NonconformityScore",
     "NormalizedErrorScore",
     "QuantileRegressionScore",
@@ -135,7 +135,7 @@ class NonconformityScore:
     scale_aux_keys : tuple[str, ...]
         ``aux`` entries the score divides by, as ``NormalizedErrorScore``
         divides by ``"sigma"``. Calibrators reject an
-        :class:`~physicsnemo.experimental.uq.conformal.AuxDifficulty` that
+        :class:`~physicsnemo.experimental.uq.conformal.AuxScale` that
         reads one of them, since the interval would scale by it twice.
 
     Examples
@@ -252,8 +252,8 @@ class NonconformityScore:
         threshold : torch.Tensor
             Fitted threshold, broadcastable against ``prediction``: one value
             per element of shape :math:`(*\text{dims})` for the pointwise
-            calibrator, or a scalar (already multiplied by the
-            ``AuxDifficulty`` scale, if any) for the functional band
+            calibrator, or a scalar (already multiplied by the per-point
+            ``AuxScale`` value, if any) for the functional band
             calibrator.
         aux : Mapping[str, torch.Tensor], optional
             The same ``aux`` entries that :meth:`score` needs.
@@ -614,7 +614,7 @@ class QuantileRegressionScore(NonconformityScore):
         return lo, hi
 
 
-class AuxDifficulty:
+class AuxScale:
     r"""Per-point scale read from ``aux`` that widens the band where it is large.
 
     Use it with
@@ -623,7 +623,7 @@ class AuxDifficulty:
     MC-dropout or ensemble spread). The fitted threshold is multiplied by the
     scale :math:`s(x)`, which is read at each point, so point sets may differ
     between samples. Pass the same ``aux`` entry at calibration and at
-    prediction. Without an ``AuxDifficulty`` (:math:`s = 1`), coverage still
+    prediction. Without an ``AuxScale`` (:math:`s = 1`), coverage still
     holds, but bands can be wider than needed.
 
     For an entry of shape :math:`(n_{\text{points}}, C)` or with more
@@ -640,11 +640,11 @@ class AuxDifficulty:
 
     Notes
     -----
-    Do not pair ``AuxDifficulty("sigma")`` with
+    Do not pair ``AuxScale("sigma")`` with
     :class:`~physicsnemo.experimental.uq.conformal.NormalizedErrorScore`: the
     score already divides by sigma, so intervals would scale by sigma twice.
     Calibrators and predictors raise ``ValueError`` on that pair; use
-    ``AbsoluteErrorScore`` with ``AuxDifficulty``, or ``NormalizedErrorScore``
+    ``AbsoluteErrorScore`` with ``AuxScale``, or ``NormalizedErrorScore``
     without it.
 
     Whatever produces the scale must not see the calibration samples: fit it
@@ -657,11 +657,11 @@ class AuxDifficulty:
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.uq.conformal import AuxDifficulty
+    >>> from physicsnemo.experimental.uq.conformal import AuxScale
     >>> _ = torch.manual_seed(0)
-    >>> difficulty = AuxDifficulty("sigma")
+    >>> scale = AuxScale("sigma")
     >>> sigma = torch.rand(50, 3) + 0.1
-    >>> difficulty(aux={"sigma": sigma}).shape
+    >>> scale(aux={"sigma": sigma}).shape
     torch.Size([50])
     """
 
@@ -710,16 +710,16 @@ class AuxDifficulty:
         """``__call__`` that appends the finiteness flag to ``pending`` if given."""
         if not isinstance(aux, Mapping) or self.key not in aux:
             raise ValueError(
-                f"AuxDifficulty requires aux entry '{self.key}' at every call; "
+                f"AuxScale requires aux entry '{self.key}' at every call; "
                 f"pass aux={{'{self.key}': tensor}}."
             )
         s = aux[self.key]
         if not isinstance(s, Tensor):
             raise TypeError(
-                f"AuxDifficulty aux '{self.key}' must be a torch.Tensor, got "
+                f"AuxScale aux '{self.key}' must be a torch.Tensor, got "
                 f"{type(s).__name__}."
             )
-        check_real(self.key, "AuxDifficulty input", s, pending)
+        check_real(self.key, "AuxScale input", s, pending)
         if s.ndim >= 2:
             # One scale per point, large enough for every channel.
             s = s.amax(dim=tuple(range(1, s.ndim)))
@@ -727,22 +727,22 @@ class AuxDifficulty:
 
 
 def _check_no_double_scale(
-    score: NonconformityScore, difficulty: AuxDifficulty | None
+    score: NonconformityScore, scale: AuxScale | None
 ) -> None:
-    """Raise ``ValueError`` if ``difficulty`` reads a key the score divides by."""
-    if difficulty is not None and difficulty.key in score.scale_aux_keys:
+    """Raise ``ValueError`` if ``scale`` reads a key the score divides by."""
+    if scale is not None and scale.key in score.scale_aux_keys:
         raise ValueError(
             f"{type(score).__name__} already divides by aux "
-            f"'{difficulty.key}', so AuxDifficulty('{difficulty.key}') would "
-            "scale by it twice. Use AbsoluteErrorScore with AuxDifficulty, or "
-            "drop difficulty."
+            f"'{scale.key}', so AuxScale('{scale.key}') would "
+            "scale by it twice. Use AbsoluteErrorScore with AuxScale, or "
+            "drop scale=."
         )
 
 
-_DIFFICULTY_REGISTRY: dict[str, type[AuxDifficulty]] = {
-    AuxDifficulty._kind: AuxDifficulty
+_SCALE_REGISTRY: dict[str, type[AuxScale]] = {
+    AuxScale._kind: AuxScale
 }
-"""Serialization names of the built-in difficulty types."""
+"""Serialization names of the built-in scale types."""
 
 
 def _strategy_kind(strategy: object, registry: Mapping[str, type]) -> str | None:

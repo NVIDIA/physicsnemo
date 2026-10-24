@@ -407,13 +407,13 @@ def clamp_min_floor(t: Tensor, eps: float) -> Tensor:
     return t.clamp_min(floor)
 
 
-def broadcast_difficulty(t: Tensor, ref: Tensor, key: str) -> Tensor:
+def broadcast_scale(t: Tensor, ref: Tensor, key: str) -> Tensor:
     """Reshape per-point scales to ``(n_points, 1, ...)`` to broadcast on ``ref``."""
     if t.ndim == 0:
         return t
     if ref.shape[0] != t.shape[0]:
         raise ValueError(
-            f"{_field_label(key)}: AuxDifficulty gave {t.shape[0]} scales, but "
+            f"{_field_label(key)}: AuxScale gave {t.shape[0]} scales, but "
             f"the field has {ref.shape[0]} points (leading dimension)."
         )
     return t.reshape(t.shape[0], *([1] * (ref.ndim - 1)))

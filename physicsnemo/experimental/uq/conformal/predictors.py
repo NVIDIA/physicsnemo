@@ -31,7 +31,7 @@ from ._utils import (
     TIERS,
     Tier,
     _field_label,
-    broadcast_difficulty,
+    broadcast_scale,
     check_aux,
     check_point_alignment,
     check_points,
@@ -50,9 +50,9 @@ from ._utils import (
 from .artifacts import _parse_artifact, _save_artifact
 from .diagnostics import CoverageAccumulator
 from .scores import (
-    _DIFFICULTY_REGISTRY,
+    _SCALE_REGISTRY,
     _SCORE_REGISTRY,
-    AuxDifficulty,
+    AuxScale,
     NonconformityScore,
     _check_no_double_scale,
     _snapshot_strategy,
@@ -115,7 +115,7 @@ class ConformalPredictor:
     pointwise predictor works only on the calibration output shape and, if
     calibration used ``points``, only on the calibration mesh (same
     coordinates, dtype, and point order). A functional predictor accepts any
-    mesh and may widen intervals per point with an ``AuxDifficulty``.
+    mesh and may widen intervals per point with an ``AuxScale``.
 
     Parameters
     ----------
@@ -138,7 +138,7 @@ class ConformalPredictor:
         Other tiers: one scalar per field, stored in float64. Values must be
         finite, and nonnegative unless ``score`` is a
         :class:`~physicsnemo.experimental.uq.conformal.QuantileRegressionScore`.
-    difficulty : AuxDifficulty, optional
+    scale : AuxScale, optional
         Per-point scale applied to the threshold at prediction time
         (functional tier only).
     points : torch.Tensor, optional
@@ -156,7 +156,7 @@ class ConformalPredictor:
         - ``tier`` is not one of the two names above.
         - :math:`n_{cal} < (1 - \alpha) / \alpha`: collect more samples or
           raise ``alpha``.
-        - ``tier="pointwise"`` with ``difficulty``.
+        - ``tier="pointwise"`` with ``scale``.
         - Another tier with ``points``.
         - ``points`` is empty, not 2-D, or not finite.
         - A threshold is not finite; with ``points``, a pointwise threshold's
@@ -164,9 +164,9 @@ class ConformalPredictor:
           threshold is not a scalar.
         - A threshold is negative and ``score`` is not
           ``QuantileRegressionScore``.
-        - ``difficulty`` reads the aux key that ``score`` divides by.
+        - ``scale`` reads the aux key that ``score`` divides by.
     TypeError
-        If ``score`` or ``difficulty`` is not a built-in class, or a
+        If ``score`` or ``scale`` is not a built-in class, or a
         threshold is not floating point.
 
     Examples
@@ -193,7 +193,7 @@ class ConformalPredictor:
         alpha: float,
         n_cal: int,
         thresholds: Float[Tensor, "*dims"] | Float[Tensor, ""] | TensorDict,
-        difficulty: AuxDifficulty | None = None,
+        scale: AuxScale | None = None,
         points: Float[Tensor, "n_points n_spatial_dims"] | None = None,
     ) -> None:
         self._init(
@@ -202,7 +202,7 @@ class ConformalPredictor:
             alpha=alpha,
             n_cal=n_cal,
             thresholds=thresholds,
-            difficulty=difficulty,
+            scale=scale,
             mesh_fingerprint=None if points is None else points_fingerprint(points),
         )
 
@@ -221,7 +221,7 @@ class ConformalPredictor:
         alpha: float,
         n_cal: int,
         thresholds: Tensor | TensorDict,
-        difficulty: AuxDifficulty | None = None,
+        scale: AuxScale | None = None,
         mesh_fingerprint: str | None = None,
         provenance: Mapping | None = None,
     ) -> None:
@@ -232,12 +232,12 @@ class ConformalPredictor:
         score_snapshot = _snapshot_strategy(score, _SCORE_REGISTRY, "score")
 
         if tier == "pointwise":
-            if difficulty is not None:
+            if scale is not None:
                 raise ValueError(
-                    "A pointwise predictor does not take difficulty=; only "
-                    "functional predictors use AuxDifficulty."
+                    "A pointwise predictor does not take scale=; only "
+                    "functional predictors use AuxScale."
                 )
-            difficulty_snapshot = None
+            scale_snapshot = None
             mesh_snapshot = (
                 None
                 if mesh_fingerprint is None
@@ -249,12 +249,12 @@ class ConformalPredictor:
                     f"A {tier} predictor does not take points=; only pointwise "
                     "predictors use points."
                 )
-            difficulty_snapshot = (
+            scale_snapshot = (
                 None
-                if difficulty is None
-                else _snapshot_strategy(difficulty, _DIFFICULTY_REGISTRY, "difficulty")
+                if scale is None
+                else _snapshot_strategy(scale, _SCALE_REGISTRY, "scale")
             )
-            _check_no_double_scale(score_snapshot, difficulty_snapshot)
+            _check_no_double_scale(score_snapshot, scale_snapshot)
             mesh_snapshot = None
 
         self._tier = tier
@@ -273,7 +273,7 @@ class ConformalPredictor:
                         f"{tuple(threshold.shape)} must have one leading entry "
                         f"per mesh point ({n_points})."
                     )
-        self._difficulty = difficulty_snapshot
+        self._scale = scale_snapshot
         self._mesh_fingerprint = mesh_snapshot
         self._provenance = {} if provenance is None else validate_provenance(provenance)
 
@@ -302,9 +302,9 @@ class ConformalPredictor:
         return copy.deepcopy(self._score)
 
     @property
-    def difficulty(self) -> AuxDifficulty | None:
-        r"""A copy of the ``AuxDifficulty``, or ``None`` if intervals are not scaled."""
-        return copy.deepcopy(self._difficulty)
+    def scale(self) -> AuxScale | None:
+        r"""A copy of the ``AuxScale``, or ``None`` if intervals are not scaled."""
+        return copy.deepcopy(self._scale)
 
     @property
     def provenance(self) -> dict:
@@ -369,19 +369,19 @@ class ConformalPredictor:
                 )
             return threshold
 
-        if self._difficulty is None:
+        if self._scale is None:
             return threshold
-        difficulty = self._difficulty._scales(aux, pending).to(
+        scale = self._scale._scales(aux, pending).to(
             device=prediction.device, dtype=torch.float64
         )
-        scaled = threshold * broadcast_difficulty(difficulty, prediction, key)
+        scaled = threshold * broadcast_scale(scale, prediction, key)
         finite = torch.isfinite(scaled).all()
         if pending is not None:
             pending.append(finite)
         elif not finite:
             raise ValueError(
-                f"{_field_label(key)}: threshold times the AuxDifficulty scale "
-                "overflows float64; rescale the difficulty values."
+                f"{_field_label(key)}: threshold times the per-point scale "
+                "overflows float64; rescale the aux entry the AuxScale reads."
             )
         return scaled
 
@@ -447,12 +447,12 @@ class ConformalPredictor:
             must equal the calibration shape. When ``points`` is given, the
             leading dimension must be :math:`n_{\text{points}}`.
         aux : Mapping[str, torch.Tensor] | Mapping[str, Mapping], optional
-            Extra tensors the score or ``AuxDifficulty`` reads, each with the
+            Extra tensors the score or ``AuxScale`` reads, each with the
             shape of the prediction: ``"sigma"`` for
             :class:`~physicsnemo.experimental.uq.conformal.NormalizedErrorScore`,
             ``"lo"`` and ``"hi"`` for
             :class:`~physicsnemo.experimental.uq.conformal.QuantileRegressionScore`,
-            and the ``key`` of an ``AuxDifficulty``. For ``TensorDict``
+            and the ``key`` of an ``AuxScale``. For ``TensorDict``
             inputs, nest by field name, for example
             ``aux={"pressure": {"sigma": s}}``.
         points : torch.Tensor, optional
@@ -564,7 +564,7 @@ class ConformalPredictor:
             "alpha": self._alpha,
             "n_cal": self._n_cal,
             "thresholds": self._thresholds_by_key,
-            "difficulty": self._difficulty,
+            "scale": self._scale,
             "mesh_fingerprint": self._mesh_fingerprint,
             "provenance": self._provenance if provenance is None else provenance,
         }

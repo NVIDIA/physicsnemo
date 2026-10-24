@@ -37,9 +37,9 @@ Pick the calibrator by the guarantee you need:
   probability at least :math:`1 - \alpha`. Point sets may differ between
   samples. One threshold serves the whole field; the width at a point is
   that threshold times the per-point scale from the score (``aux["sigma"]``
-  for ``NormalizedErrorScore``) or from an ``AuxDifficulty``, and is
+  for ``NormalizedErrorScore``) or from an ``AuxScale``, and is
   constant across the field with ``AbsoluteErrorScore`` and no
-  ``AuxDifficulty``.
+  ``AuxScale``.
 
 Pick the score by what the model outputs:
 :class:`~physicsnemo.experimental.uq.conformal.AbsoluteErrorScore` for a
@@ -52,7 +52,7 @@ subclass :class:`~physicsnemo.experimental.uq.conformal.NonconformityScore`
 and register it with
 :func:`~physicsnemo.experimental.uq.conformal.register_score`. The
 functional band calibrator also accepts an
-:class:`~physicsnemo.experimental.uq.conformal.AuxDifficulty` to widen the
+:class:`~physicsnemo.experimental.uq.conformal.AuxScale` to widen the
 band where a per-point uncertainty estimate is large.
 
 All calibrators accept plain tensors or ``TensorDict`` containers of fields.
@@ -103,7 +103,7 @@ from .diagnostics import CoverageAccumulator
 from .predictors import ConformalPredictor
 from .scores import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     NonconformityScore,
     NormalizedErrorScore,
     QuantileRegressionScore,
@@ -113,7 +113,7 @@ from .scores import (
 
 __all__ = [
     "AbsoluteErrorScore",
-    "AuxDifficulty",
+    "AuxScale",
     "ConformalPredictor",
     "CoverageAccumulator",
     "FunctionalBandCalibrator",

@@ -25,7 +25,7 @@ from tensordict import TensorDict
 import physicsnemo.experimental.uq.conformal as conformal
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     ConformalPredictor,
     PointwiseCalibrator,
     QuantileRegressionScore,
@@ -34,10 +34,10 @@ from physicsnemo.experimental.uq.conformal._utils import points_fingerprint
 from test.experimental.uq.conformal._helpers import count_syncs, fit, make_predictor
 
 
-def test_nonfinite_deployment_difficulty_is_rejected():
+def test_nonfinite_deployment_scale_is_rejected():
     predictor, _ = fit(
         "functional",
-        difficulty=AuxDifficulty(key="spread"),
+        scale=AuxScale(key="spread"),
         n_samples=10,
         shape=(20,),
         aux_factory=lambda p, g: {"spread": torch.rand(p.shape, generator=g) + 0.5},
@@ -58,8 +58,8 @@ def _sigma(prediction, generator):
 )
 def test_predict_interval_syncs_once(monkeypatch, tier, fields):
     """All value checks, including the mesh checksum, share one host sync."""
-    difficulty = None if tier == "pointwise" else AuxDifficulty()
-    kwargs = dict(difficulty=difficulty, shape=(20,), fields=fields, n_samples=10)
+    scale = None if tier == "pointwise" else AuxScale()
+    kwargs = dict(scale=scale, shape=(20,), fields=fields, n_samples=10)
     predictor, points = fit(tier, aux_factory=_sigma, **kwargs)
     aux = {"sigma": torch.rand(20) + 0.5}
     prediction = torch.randn(20)
@@ -139,7 +139,7 @@ class _CustomScore(AbsoluteErrorScore):
     pass
 
 
-class _CustomDifficulty(AuxDifficulty):
+class _CustomScale(AuxScale):
     pass
 
 
@@ -147,9 +147,9 @@ _CELL = {"tier": "pointwise", "thresholds": torch.ones(2), "points": torch.ones(
 # fmt: off
 CONSTRUCTOR_REJECTIONS = [  # (id, make_predictor overrides, error, match)
     ("custom-score", {**_CELL, "score": _CustomScore()}, TypeError, "a subclass needs its own registration"),
-    ("pointwise-with-difficulty", {**_CELL, "difficulty": AuxDifficulty()}, ValueError, "does not take difficulty="),
+    ("pointwise-with-scale", {**_CELL, "scale": AuxScale()}, ValueError, "does not take scale="),
     ("pointwise-scalar-threshold", {**_CELL, "thresholds": torch.tensor(1.0)}, ValueError, "one leading entry per mesh point"),
-    ("custom-difficulty", {"tier": "functional", "difficulty": _CustomDifficulty()}, TypeError, "Subclasses are not supported"),
+    ("custom-scale", {"tier": "functional", "scale": _CustomScale()}, TypeError, "Subclasses are not supported"),
     ("functional-with-points", {"points": torch.ones(2, 1)}, ValueError, "does not take points="),
     ("dict-thresholds", {"thresholds": {"pressure": torch.tensor(1.0)}}, TypeError, "Tensor or TensorDict"),
     ("empty-tensordict-thresholds", {"thresholds": TensorDict({})}, ValueError, "at least one"),
@@ -176,7 +176,7 @@ def test_constructor_tier_invariants_and_threshold_guards(overrides, error, matc
 def test_public_api_exports():
     expected = {
         "AbsoluteErrorScore",
-        "AuxDifficulty",
+        "AuxScale",
         "PointwiseCalibrator",
         "ConformalPredictor",
         "CoverageAccumulator",
@@ -251,7 +251,7 @@ def test_scaled_threshold_overflow_raises_instead_of_nan_bounds():
         alpha=0.5,
         n_cal=3,
         thresholds=torch.tensor(-1e300, dtype=torch.float64),
-        difficulty=AuxDifficulty("sigma"),
+        scale=AuxScale("sigma"),
     )
     f64 = torch.float64
     aux = {

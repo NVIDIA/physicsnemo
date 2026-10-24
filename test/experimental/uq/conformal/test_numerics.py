@@ -31,7 +31,7 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     ConformalPredictor,
     FunctionalBandCalibrator,
     NormalizedErrorScore,
@@ -120,11 +120,11 @@ def test_conformal_rank_nextafter_boundaries(base_alpha, n_cal):
 
 @pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
 def test_normalization_underflow_handled_exactly(cls):
-    """A huge constant difficulty must not zero the fitted statistic: the
+    """A huge constant scale must not zero the fitted statistic: the
     float64 policy preserves it and the identical population is covered."""
     target = torch.full((4,), 1e-10)
     aux = {"s": torch.full((4,), 1e38)}
-    calibrator = cls(AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s"))
+    calibrator = cls(AbsoluteErrorScore(), alpha=0.5, scale=AuxScale("s"))
     for _ in range(3):
         calibrator.update(torch.zeros(4), target, aux=aux)
     predictor = calibrator.finalize()
@@ -146,7 +146,7 @@ def test_normalization_rejects_subnormal_and_underflowed_scores(cls, score, magn
     prediction = torch.zeros(1, dtype=_F64)
     target = torch.full_like(prediction, magnitude)
     aux = {"s": torch.full_like(prediction, 1e308), "lo": prediction, "hi": 2 * target}
-    calibrator = cls(score, alpha=0.5, difficulty=AuxDifficulty("s"))
+    calibrator = cls(score, alpha=0.5, scale=AuxScale("s"))
     with pytest.raises(ValueError, match="float64.*Rescale"):
         calibrator.update(prediction, target, aux=aux)
     assert calibrator.n_cal == 0
@@ -164,7 +164,7 @@ def test_normalization_normal_boundary_and_true_zero(cls, signed):
     for magnitude in (below, 1.0, math.nextafter(1.0, math.inf), 0.0):
         target = torch.full_like(prediction, magnitude)
         aux = {"s": scale, "lo": prediction, "hi": 2 * target}
-        calibrator = cls(score, alpha=0.5, difficulty=AuxDifficulty("s"))
+        calibrator = cls(score, alpha=0.5, scale=AuxScale("s"))
         if magnitude == below:
             with pytest.raises(ValueError, match="float64.*Rescale"):
                 calibrator.update(prediction, target, aux=aux)
@@ -181,7 +181,7 @@ def test_normalization_normal_boundary_and_true_zero(cls, signed):
 def test_normalization_overflow_rejected():
     """A quotient that overflows even float64 is rejected at update time."""
     calibrator = FunctionalBandCalibrator(
-        AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
+        AbsoluteErrorScore(), alpha=0.5, scale=AuxScale("s")
     )
     with pytest.raises(ValueError, match="non-finite"):
         calibrator.update(
@@ -193,14 +193,14 @@ def test_normalization_overflow_rejected():
 
 
 @pytest.mark.parametrize("persist", [False, True], ids=["in_memory", "save_load"])
-def test_aux_difficulty_is_stable_across_default_dtype_changes(
+def test_aux_scale_is_stable_across_default_dtype_changes(
     persist, default_dtype, tmp_path
 ):
-    """The same difficulty scale applies at calibration and deployment even
+    """The same per-point scale applies at calibration and deployment even
     when the ambient default dtype changes in between (and across save/load)."""
     torch.set_default_dtype(_F32)
     calibrator = FunctionalBandCalibrator(
-        AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
+        AbsoluteErrorScore(), alpha=0.5, scale=AuxScale("s")
     )
     prediction = torch.zeros(1, dtype=_F64)
     target = torch.ones(1, dtype=_F64)
@@ -403,14 +403,14 @@ def test_cast_directed_fp16_bf16_and_narrowing(device):
     assert torch.equal(cast_directed(t16, _F64, up=True), t16.to(_F64))
 
 
-def test_adaptive_difficulty_keeps_float64_radius():
-    """A float32 difficulty vector must not demote the float64 threshold
+def test_adaptive_scale_keeps_float64_radius():
+    """A float32 scale vector must not demote the float64 threshold
     (PyTorch scalar promotion); containment holds through the adaptive path."""
     generator = torch.Generator().manual_seed(31)
     predictor, _ = fit(
         "functional",
         generator=generator,
-        difficulty=AuxDifficulty(key="sigma"),
+        scale=AuxScale(key="sigma"),
         n_samples=20,
         shape=(100,),
         aux_factory=lambda p, g: {"sigma": torch.rand(p.shape, generator=g) + 0.5},
