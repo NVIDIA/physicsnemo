@@ -22,7 +22,7 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     ConformalPredictor,
     FunctionalBandCalibrator,
     NormalizedErrorScore,
@@ -233,13 +233,13 @@ def test_functional_band_uses_scalar_rank_across_varying_meshes():
     assert lo.shape == query.shape == hi.shape
 
 
-def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
+def test_scale_adaptation_and_strategy_snapshot_are_fixed():
     """Calibrators and predictors hold snapshots of their strategies: neither
     caller-side mutation, accessor mutation, nor threshold mutation reaches
     the fitted rule, and semantic properties are read-only."""
     score = NormalizedErrorScore(eps=1.0)
-    shared = AuxDifficulty("scale")
-    calibrator = FunctionalBandCalibrator(score, alpha=0.5, difficulty=shared)
+    shared = AuxScale("scale")
+    calibrator = FunctionalBandCalibrator(score, alpha=0.5, scale=shared)
     target = torch.ones(4, dtype=torch.float64)
     zeros = torch.zeros_like(target)
     aux = {"scale": torch.full((4,), 2.0, dtype=torch.float64), "sigma": zeros}
@@ -256,16 +256,16 @@ def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
     predictor = calibrator.finalize()
     # sigma=0 clamps to eps=1: score |1 - 0| / 1 = 1, normalized by scale 2.
     assert float(predictor.thresholds) == 0.5
-    assert predictor.difficulty.key == "scale"
+    assert predictor.scale.key == "scale"
     assert predictor.score.eps == 1.0
-    calibrator.difficulty.key = "mutated"  # accessors are defensive copies
-    assert calibrator.difficulty.key == "scale"
+    calibrator.scale.key = "mutated"  # accessors are defensive copies
+    assert calibrator.scale.key == "scale"
 
     lo, hi = predictor.predict_interval(zeros, aux=aux)
     torch.testing.assert_close(hi, torch.ones(4, dtype=torch.float64))
     predictor.thresholds.mul_(1e6)
     predictor.score.__dict__["eps"] = 123.0
-    predictor.difficulty.key = "mutated"
+    predictor.scale.key = "mutated"
     lo_again, hi_again = predictor.predict_interval(zeros, aux=aux)
     assert torch.equal(lo, lo_again) and torch.equal(hi, hi_again)
     for name, value in [
@@ -273,7 +273,7 @@ def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
         ("alpha", 0.1),
         ("n_cal", 1),
         ("score", AbsoluteErrorScore()),
-        ("difficulty", AuxDifficulty()),
+        ("scale", AuxScale()),
     ]:
         with pytest.raises(AttributeError, match="no setter"):
             setattr(predictor, name, value)
@@ -463,23 +463,23 @@ def test_scaled_tiers_reject_points_that_contradict_the_point_axis(calibrator_cl
 
 # fmt: off
 DOUBLE_SCALING_BOUNDARIES = [
-    pytest.param(lambda s, d: FunctionalBandCalibrator(s, alpha=0.5, difficulty=d), id="functional"),
-    pytest.param(lambda s, d: RiskControlCalibrator(s, alpha=0.5, difficulty=d), id="risk_control"),
-    pytest.param(lambda s, d: make_predictor(tier="functional", score=s, difficulty=d), id="direct_predictor"),
+    pytest.param(lambda s, d: FunctionalBandCalibrator(s, alpha=0.5, scale=d), id="functional"),
+    pytest.param(lambda s, d: RiskControlCalibrator(s, alpha=0.5, scale=d), id="risk_control"),
+    pytest.param(lambda s, d: make_predictor(tier="functional", score=s, scale=d), id="direct_predictor"),
 ]
 # fmt: on
 
 
 @pytest.mark.parametrize("build", DOUBLE_SCALING_BOUNDARIES)
 def test_double_scaling_pairing_is_rejected_everywhere(build):
-    """NormalizedErrorScore already divides by sigma; an AuxDifficulty('sigma')
+    """NormalizedErrorScore already divides by sigma; an AuxScale('sigma')
     would scale intervals by ~sigma**2. Every construction boundary must
     reject it, and must keep allowing additive-aux pairings."""
     with pytest.raises(ValueError, match="twice"):
-        build(NormalizedErrorScore(), AuxDifficulty("sigma"))
+        build(NormalizedErrorScore(), AuxScale("sigma"))
     # Positive controls: reading a key is not dividing by it.
-    build(AbsoluteErrorScore(), AuxDifficulty("spread"))
-    build(QuantileRegressionScore(), AuxDifficulty("lo"))
+    build(AbsoluteErrorScore(), AuxScale("spread"))
+    build(QuantileRegressionScore(), AuxScale("lo"))
 
 
 def test_keys_subset_round_trips_through_predict_save_and_diagnostics(tmp_path):
@@ -522,7 +522,7 @@ class _CustomScore(AbsoluteErrorScore):
     pass
 
 
-class _CustomDifficulty(AuxDifficulty):
+class _CustomScale(AuxScale):
     pass
 
 
@@ -530,9 +530,7 @@ def test_unregistered_strategy_subclasses_are_rejected():
     with pytest.raises(TypeError, match="a subclass needs its own registration"):
         RiskControlCalibrator(_CustomScore(), alpha=0.5)
     with pytest.raises(TypeError, match="Subclasses are not supported"):
-        RiskControlCalibrator(
-            AbsoluteErrorScore(), alpha=0.5, difficulty=_CustomDifficulty()
-        )
+        RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5, scale=_CustomScale())
     # Every shipped score remains constructible.
     PointwiseCalibrator(NormalizedErrorScore(), alpha=0.5)
 

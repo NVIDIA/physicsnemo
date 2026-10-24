@@ -14,14 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Nonconformity-score and difficulty-field unit tests."""
+"""Nonconformity-score and scale-field unit tests."""
 
 import pytest
 import torch
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     NormalizedErrorScore,
     QuantileRegressionScore,
 )
@@ -97,43 +97,41 @@ def test_interval_endpoints_invert_score(score, aux, device):
         )
 
 
-def test_aux_difficulty_channel_max_clamp_and_trailing_reduction():
-    difficulty = AuxDifficulty(key="sigma", eps=torch.tensor(1e-2))
-    assert type(difficulty.eps) is float  # configuration is stored as primitives
+def test_aux_scale_channel_max_clamp_and_trailing_reduction():
+    scale = AuxScale(key="sigma", eps=torch.tensor(1e-2))
+    assert type(scale.eps) is float  # configuration is stored as primitives
     assert type(NormalizedErrorScore(torch.tensor(1e-3)).eps) is float
     sigma = torch.tensor([[0.5, 1.5], [0.0, 0.0]])
-    torch.testing.assert_close(
-        difficulty(aux={"sigma": sigma}), torch.tensor([1.5, 1e-2])
-    )
+    torch.testing.assert_close(scale(aux={"sigma": sigma}), torch.tensor([1.5, 1e-2]))
     # A (points, time, channels) aux reduces to one scale per point.
-    assert difficulty({"sigma": torch.rand(2, 3, 4) + 0.5}).shape == (2,)
+    assert scale({"sigma": torch.rand(2, 3, 4) + 0.5}).shape == (2,)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float64], ids=str)
-def test_aux_difficulty_floors_finite_nonpositive_values(dtype):
-    difficulty = AuxDifficulty("spread")
+def test_aux_scale_floors_finite_nonpositive_values(dtype):
+    scale = AuxScale("spread")
     raw = torch.tensor([[[-2.0, -1.0]], [[-1.0, 0.0]], [[0.5, 1.5]]], dtype=dtype)
-    floor = max(difficulty.eps, torch.finfo(dtype).tiny)
+    floor = max(scale.eps, torch.finfo(dtype).tiny)
     torch.testing.assert_close(
-        difficulty(aux={"spread": raw}),
+        scale(aux={"spread": raw}),
         torch.tensor([floor, floor, 1.5], dtype=dtype),
         rtol=0,
         atol=0,
     )
 
 
-def test_aux_difficulty_rejects_eps_unrepresentable_in_aux_dtype():
+def test_aux_scale_rejects_eps_unrepresentable_in_aux_dtype():
     sigma = {"sigma": torch.ones(3, dtype=torch.float16)}
     with pytest.raises(ValueError, match="torch.float16"):
-        AuxDifficulty("sigma", eps=1e6)(aux=sigma)
-    difficulty = AuxDifficulty("sigma")
-    difficulty.eps = float("nan")
+        AuxScale("sigma", eps=1e6)(aux=sigma)
+    scale = AuxScale("sigma")
+    scale.eps = float("nan")
     with pytest.raises(ValueError, match="eps must be finite"):
-        difficulty(aux=sigma)
+        scale(aux=sigma)
 
 
 # fmt: off
-RAW_DIFFICULTY_REJECTIONS = [
+RAW_SCALE_REJECTIONS = [
     pytest.param(None, TypeError, "must be a torch.Tensor", id="none"),
     pytest.param(torch.ones(1, dtype=torch.int64), TypeError, "floating", id="int"),
     pytest.param(torch.tensor([float("-inf")]), ValueError, "non-finite", id="negative-inf-clamp"),
@@ -143,10 +141,10 @@ RAW_DIFFICULTY_REJECTIONS = [
 # fmt: on
 
 
-@pytest.mark.parametrize("raw,error,match", RAW_DIFFICULTY_REJECTIONS)
-def test_aux_difficulty_validates_raw_input(raw, error, match):
+@pytest.mark.parametrize("raw,error,match", RAW_SCALE_REJECTIONS)
+def test_aux_scale_validates_raw_input(raw, error, match):
     with pytest.raises(error, match=match) as exc:
-        AuxDifficulty("spread")(aux={"spread": raw})
+        AuxScale("spread")(aux={"spread": raw})
     assert "spread" in str(exc.value)
 
 
@@ -158,7 +156,7 @@ def test_unused_aux_can_be_omitted(tier):
     for aux in (None, {}, {"spread": None}):
         calibrator.update(pred, target, aux=aux, points=points)
     predictor = calibrator.finalize()
-    assert predictor.difficulty is None
+    assert predictor.scale is None
     for aux in (None, {}, {"spread": None}):
         lo, hi = predictor.predict_interval(pred, aux=aux, points=points)
         assert ((lo <= target) & (target <= hi)).all()
@@ -223,16 +221,16 @@ def test_normalized_mixed_dtype_score_boundary_is_contained(
     assert_admitted_covered(score, pred, target, threshold, aux)
 
 
-_D = AuxDifficulty(key="sigma")
+_D = AuxScale(key="sigma")
 _S = NormalizedErrorScore()
 _Z2, _O2 = torch.zeros(2), torch.ones(2)
 # fmt: off
 STRATEGY_REJECTIONS = [  # (id, thunk, error, match)
-    ("difficulty-missing-aux-key", lambda: _D(torch.rand(2, 2)), ValueError, "sigma"),
-    ("difficulty-aux-not-mapping", lambda: _D(aux=[_O2]), ValueError, "requires aux entry"),
+    ("scale-missing-aux-key", lambda: _D(torch.rand(2, 2)), ValueError, "sigma"),
+    ("scale-aux-not-mapping", lambda: _D(aux=[_O2]), ValueError, "requires aux entry"),
     ("score-missing-sigma", lambda: _S.score(_Z2, _O2), ValueError, "sigma"),
     ("score-aux-not-mapping", lambda: _S.score(_Z2, _O2, aux=[_O2]), ValueError, "requires aux entries"),
-    ("key-int", lambda: AuxDifficulty(key=7), TypeError, "key must be a string"),
+    ("key-int", lambda: AuxScale(key=7), TypeError, "key must be a string"),
 ]
 # fmt: on
 

@@ -63,7 +63,7 @@ from torch import Tensor
 
 from ._utils import (
     _field_label,
-    broadcast_difficulty,
+    broadcast_scale,
     check_aux,
     check_exact_shape,
     check_finite,
@@ -84,9 +84,9 @@ from ._utils import (
 )
 from .predictors import ConformalPredictor
 from .scores import (
-    _DIFFICULTY_REGISTRY,
+    _SCALE_REGISTRY,
     _SCORE_REGISTRY,
-    AuxDifficulty,
+    AuxScale,
     NonconformityScore,
     _check_no_double_scale,
     _inversion_message,
@@ -104,20 +104,20 @@ __all__ = [
 _Stage = Callable[[str, Tensor, Tensor, Mapping[str, Tensor] | None], object]
 
 
-def _normalized_scores(raw: Tensor, difficulty: Tensor | None, key: str) -> Tensor:
-    """Divide scores by the difficulty in float64; reject non-finite or tiny results."""
+def _normalized_scores(raw: Tensor, scale: Tensor | None, key: str) -> Tensor:
+    """Divide scores by the scale in float64; reject non-finite or tiny results."""
     raw64 = raw.to(torch.float64)
-    if difficulty is None:
+    if scale is None:
         return raw64
-    difficulty64 = broadcast_difficulty(difficulty, raw, key).to(torch.float64)
-    normalized = raw64 / difficulty64
-    check_finite(key, "the scores divided by the AuxDifficulty scale", normalized)
+    scale64 = broadcast_scale(scale, raw, key).to(torch.float64)
+    normalized = raw64 / scale64
+    check_finite(key, "the scores divided by the per-point scale", normalized)
     underflow = (raw64 != 0) & (normalized.abs() < torch.finfo(torch.float64).tiny)
     if bool(underflow.any()):
         raise ValueError(
             f"{_field_label(key)}: {int(underflow.sum())} score(s) divided by "
-            "the AuxDifficulty scale are too small for float64. Rescale the "
-            "data or the difficulty aux entry."
+            "the per-point scale are too small for float64. Rescale the "
+            "data or the aux entry the AuxScale reads."
         )
     return normalized
 
@@ -475,7 +475,7 @@ class PointwiseCalibrator(_SplitCalibratorBase):
 
 
 class _ScaledCalibratorBase(_SplitCalibratorBase):
-    """Shared ``update`` and scaled scores for calibrators with an ``AuxDifficulty``."""
+    """Shared ``update`` and scaled scores for calibrators with an ``AuxScale``."""
 
     _reduce: Callable[[Tensor], Tensor]
 
@@ -484,21 +484,21 @@ class _ScaledCalibratorBase(_SplitCalibratorBase):
         score: NonconformityScore,
         alpha: float,
         *,
-        difficulty: AuxDifficulty | None = None,
+        scale: AuxScale | None = None,
         keys: Sequence[str] | None = None,
     ) -> None:
         super().__init__(score, alpha, keys=keys)
-        self._difficulty = (
+        self._scale = (
             None
-            if difficulty is None
-            else _snapshot_strategy(difficulty, _DIFFICULTY_REGISTRY, "difficulty")
+            if scale is None
+            else _snapshot_strategy(scale, _SCALE_REGISTRY, "scale")
         )
-        _check_no_double_scale(self._score, self._difficulty)
+        _check_no_double_scale(self._score, self._scale)
 
     @property
-    def difficulty(self) -> AuxDifficulty | None:
-        r"""Copy of the ``AuxDifficulty`` set at construction, or ``None``."""
-        return copy.deepcopy(self._difficulty)
+    def scale(self) -> AuxScale | None:
+        r"""Copy of the ``AuxScale`` set at construction, or ``None``."""
+        return copy.deepcopy(self._scale)
 
     def update(
         self,
@@ -515,13 +515,13 @@ class _ScaledCalibratorBase(_SplitCalibratorBase):
         prediction : torch.Tensor | TensorDict
             Model output of shape :math:`(n_{\text{points}}, *\text{dims})`
             (any shape :math:`(*\text{dims})` when neither ``points`` nor
-            ``difficulty`` is used), or a field container of such tensors.
+            ``scale`` is used), or a field container of such tensors.
         target : torch.Tensor | TensorDict
             Observed values, same shape and container type as ``prediction``.
         aux : Mapping[str, torch.Tensor] | Mapping[str, Mapping], optional
-            Extra tensors read by the score or ``AuxDifficulty``, each the
+            Extra tensors read by the score or ``AuxScale``, each the
             same shape as ``prediction``, such as ``{"sigma": ...}`` for
-            ``AuxDifficulty("sigma")``. For ``TensorDict`` inputs, nest by
+            ``AuxScale("sigma")``. For ``TensorDict`` inputs, nest by
             field name, as in ``{"pressure": {"sigma": ...}}``.
         points : torch.Tensor, optional
             Mesh coordinates of shape
@@ -565,14 +565,14 @@ class _ScaledCalibratorBase(_SplitCalibratorBase):
         target: Tensor,
         aux: Mapping[str, Tensor] | None,
     ) -> Tensor:
-        """One field's finite scores divided by the ``AuxDifficulty`` scale, in float64."""
-        difficulty = None if self._difficulty is None else self._difficulty(aux)
+        """One field's finite scores divided by the per-point scale, in float64."""
+        scale = None if self._scale is None else self._scale(aux)
         raw = check_finite(
             key,
             "the nonconformity scores",
             self._score.score(prediction, target, aux=aux),
         )
-        return _normalized_scores(raw, difficulty, key)
+        return _normalized_scores(raw, scale, key)
 
 
 class FunctionalBandCalibrator(_ScaledCalibratorBase):
@@ -582,8 +582,8 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
     at the same time, for example to bound the worst-case error over a mesh.
     Meshes may differ between calibration and deployment. At point
     :math:`x` the score turns :math:`\text{threshold} \cdot s(x)` into the
-    band, where :math:`s` is the optional ``AuxDifficulty`` scale. Without
-    one the width is whatever the score gives: constant for
+    band, where :math:`s` is the per-point scale from the optional
+    ``AuxScale``. Without one the width is whatever the score gives: constant for
     ``AbsoluteErrorScore``, proportional to ``aux["sigma"]`` for
     ``NormalizedErrorScore``, and following the quantile heads for
     ``QuantileRegressionScore``. If bounding the expected fraction of missed
@@ -607,7 +607,7 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
         The calibrator keeps a copy.
     alpha : float
         Target miscoverage level in :math:`(0, 1)`.
-    difficulty : AuxDifficulty, optional
+    scale : AuxScale, optional
         Per-point scale :math:`s(x)` that widens the band where it is large.
         With ``None`` the score sets the width, for example constant for
         ``AbsoluteErrorScore`` and proportional to ``aux["sigma"]`` for
@@ -620,7 +620,7 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
     Raises
     ------
     ValueError
-        If ``score`` already divides by the aux key ``difficulty`` reads.
+        If ``score`` already divides by the aux key ``scale`` reads.
 
     Notes
     -----
@@ -670,7 +670,7 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
             A functional
             :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor`
             with one float64 scalar threshold per field. It applies the same
-            ``AuxDifficulty``, so pass the same ``aux`` keys at prediction.
+            ``AuxScale``, so pass the same ``aux`` keys at prediction.
 
         Raises
         ------
@@ -689,7 +689,7 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
             "functional",
             self._conformal_thresholds(alpha),
             alpha=alpha,
-            difficulty=self._difficulty,
+            scale=self._scale,
         )
 
 
@@ -823,7 +823,7 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
         The calibrator keeps a copy.
     alpha : float
         Target expected fraction of missed points, in :math:`(0, 1)`.
-    difficulty : AuxDifficulty, optional
+    scale : AuxScale, optional
         Per-point scale :math:`s(x)` that widens the band where it is large.
         Without one the width is whatever the score gives: constant for
         ``AbsoluteErrorScore``, proportional to ``aux["sigma"]`` for
@@ -837,7 +837,7 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
     Raises
     ------
     ValueError
-        If ``score`` already divides by the aux key ``difficulty`` reads.
+        If ``score`` already divides by the aux key ``scale`` reads.
 
     Notes
     -----
@@ -853,11 +853,11 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
     --------
     >>> import torch
     >>> from physicsnemo.experimental.uq.conformal import (
-    ...     AbsoluteErrorScore, AuxDifficulty, RiskControlCalibrator,
+    ...     AbsoluteErrorScore, AuxScale, RiskControlCalibrator,
     ... )
     >>> _ = torch.manual_seed(0)
     >>> calibrator = RiskControlCalibrator(
-    ...     AbsoluteErrorScore(), alpha=0.1, difficulty=AuxDifficulty("sigma")
+    ...     AbsoluteErrorScore(), alpha=0.1, scale=AuxScale("sigma")
     ... )
     >>> for n_points in range(40, 60):
     ...     prediction = torch.randn(n_points, 2)
@@ -879,10 +879,10 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
         score: NonconformityScore,
         alpha: float,
         *,
-        difficulty: AuxDifficulty | None = None,
+        scale: AuxScale | None = None,
         keys: Sequence[str] | None = None,
     ) -> None:
-        super().__init__(score, alpha, difficulty=difficulty, keys=keys)
+        super().__init__(score, alpha, scale=scale, keys=keys)
         self._weighted = False
 
     def update(
@@ -901,14 +901,14 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
         prediction : torch.Tensor | TensorDict
             Model output of shape :math:`(n_{\text{points}}, *\text{dims})`
             (any shape :math:`(*\text{dims})` when none of ``points``,
-            ``difficulty``, and ``weights`` is used), or a field container of
+            ``scale``, and ``weights`` is used), or a field container of
             such tensors.
         target : torch.Tensor | TensorDict
             Observed values, same shape and container type as ``prediction``.
         aux : Mapping[str, torch.Tensor] | Mapping[str, Mapping], optional
-            Extra tensors read by the score or ``AuxDifficulty``, each the
+            Extra tensors read by the score or ``AuxScale``, each the
             same shape as ``prediction``, such as ``{"sigma": ...}`` for
-            ``AuxDifficulty("sigma")``. For ``TensorDict`` inputs, nest by
+            ``AuxScale("sigma")``. For ``TensorDict`` inputs, nest by
             field name, as in ``{"pressure": {"sigma": ...}}``.
         points : torch.Tensor, optional
             Mesh coordinates of shape
@@ -993,7 +993,7 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
             A risk-control
             :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor`
             with one float64 scalar threshold per field. It applies the same
-            ``AuxDifficulty``, so pass the same ``aux`` keys at prediction.
+            ``AuxScale``, so pass the same ``aux`` keys at prediction.
 
         Raises
         ------
@@ -1016,5 +1016,5 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
             "risk_control",
             pack_fields(thresholds),
             alpha=alpha,
-            difficulty=self._difficulty,
+            scale=self._scale,
         )

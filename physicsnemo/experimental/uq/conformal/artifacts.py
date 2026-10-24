@@ -27,7 +27,7 @@ from torch import Tensor
 
 from ._utils import pack_fields, validate_provenance
 from .scores import (
-    _DIFFICULTY_REGISTRY,
+    _SCALE_REGISTRY,
     _SCORE_REGISTRY,
     _check_config_value,
     _strategy_kind,
@@ -43,7 +43,7 @@ _SCHEMA_KEYS = {
     "alpha",
     "n_cal",
     "thresholds",
-    "difficulty",
+    "scale",
     "mesh_fingerprint",
     "provenance",
 }
@@ -65,7 +65,7 @@ def _check_exact_keys(value: object, expected: set[str], where: str) -> Mapping:
 
 
 def _strategy_spec(strategy: object, registry: Mapping) -> dict:
-    """Encode a registered score or difficulty as ``{"kind", "kwargs"}``."""
+    """Encode a registered score or scale as ``{"kind", "kwargs"}``."""
     return {
         "kind": _strategy_kind(strategy, registry),
         "kwargs": {
@@ -75,7 +75,7 @@ def _strategy_spec(strategy: object, registry: Mapping) -> dict:
 
 
 def _resolve_strategy(spec: object, registry: Mapping, what: str):
-    """Rebuild a registered score or difficulty from its saved spec."""
+    """Rebuild a registered score or scale from its saved spec."""
     spec = _check_exact_keys(spec, {"kind", "kwargs"}, f"Artifact {what} spec")
     kind = spec["kind"]
     if type(kind) is not str or kind not in registry:
@@ -140,11 +140,11 @@ def _parse_artifact(payload: object) -> dict:
         )
     payload = _check_exact_keys(payload, _SCHEMA_KEYS, "Conformal artifact")
     score = _resolve_strategy(payload["score"], _SCORE_REGISTRY, "score")
-    difficulty = (
+    scale = (
         None
-        if payload["difficulty"] is None
+        if payload["scale"] is None
         else _resolve_strategy(
-            payload["difficulty"], _DIFFICULTY_REGISTRY, "difficulty"
+            payload["scale"], _SCALE_REGISTRY, "scale"
         )
     )
     return {
@@ -153,7 +153,7 @@ def _parse_artifact(payload: object) -> dict:
         "alpha": payload["alpha"],
         "n_cal": payload["n_cal"],
         "thresholds": _wire_thresholds(payload["thresholds"]),
-        "difficulty": difficulty,
+        "scale": scale,
         "mesh_fingerprint": payload["mesh_fingerprint"],
         "provenance": payload["provenance"],
     }
@@ -161,7 +161,7 @@ def _parse_artifact(payload: object) -> dict:
 
 def _artifact_payload(state: Mapping) -> dict:
     """Encode predictor state, thresholds keyed by field, for ``torch.save``."""
-    difficulty = state["difficulty"]
+    scale = state["scale"]
     return {
         "format": _ARTIFACT_FORMAT,
         "version": _ARTIFACT_VERSION,
@@ -172,10 +172,10 @@ def _artifact_payload(state: Mapping) -> dict:
         "thresholds": {
             key: value.detach().cpu() for key, value in state["thresholds"].items()
         },
-        "difficulty": (
+        "scale": (
             None
-            if difficulty is None
-            else _strategy_spec(difficulty, _DIFFICULTY_REGISTRY)
+            if scale is None
+            else _strategy_spec(scale, _SCALE_REGISTRY)
         ),
         "mesh_fingerprint": state["mesh_fingerprint"],
         "provenance": validate_provenance(state["provenance"]),
