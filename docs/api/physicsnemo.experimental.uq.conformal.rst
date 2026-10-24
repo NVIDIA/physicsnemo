@@ -87,7 +87,7 @@ whether every sample uses the same mesh.
    * - :class:`FunctionalBandCalibrator`
      - The whole field is covered at once with probability at least 90%.
      - One threshold times the per-point scale from the score (sigma for
-       ``NormalizedErrorScore``) or from an ``AuxDifficulty``; constant
+       ``NormalizedErrorScore``) or from an ``AuxScale``; constant
        across the field with ``AbsoluteErrorScore`` alone.
      - May differ.
    * - :class:`RiskControlCalibrator`
@@ -204,9 +204,9 @@ Pass ``sigma`` the same way at calibration and at prediction:
     lo, hi = predictor.predict_interval(new_prediction, aux={"sigma": new_std})
 
 :class:`FunctionalBandCalibrator` and :class:`RiskControlCalibrator` also
-accept an :class:`AuxDifficulty` as ``difficulty=``, which scales the
+accept an :class:`AuxScale` as ``scale=``, which scales the
 threshold by a per-point uncertainty read from ``aux``. Pair it with
-:class:`AbsoluteErrorScore`. Pairing ``AuxDifficulty("sigma")`` with
+:class:`AbsoluteErrorScore`. Pairing ``AuxScale("sigma")`` with
 :class:`NormalizedErrorScore` would scale by :math:`\sigma` twice, so the
 calibrators reject that pair.
 
@@ -218,7 +218,7 @@ Write a custom score when no built-in score gives the interval shape you
 need, for example a band proportional to the prediction. You do not need
 one to widen the band where the model is uncertain:
 :class:`NormalizedErrorScore` divides the error by a predicted ``sigma``,
-and ``difficulty=AuxDifficulty(key)`` scales a functional or risk-control
+and ``scale=AuxScale(key)`` multiplies a functional or risk-control
 band by any per-point ``aux`` entry without a new score. A custom score
 scales each element, not each point, and works with every calibrator.
 
@@ -296,7 +296,7 @@ score. All default to empty or ``False``.
        negative threshold shrinks the band.
    * - ``scale_aux_keys``
      - The ``aux`` entries the score divides by. Calibrators reject an
-       :class:`AuxDifficulty` that reads one of them, since the band would
+       :class:`AuxScale` that reads one of them, since the band would
        scale by it twice.
      - ``bounds`` multiplies the threshold by an ``aux`` entry.
 
@@ -466,7 +466,7 @@ Practical Notes
     inputs do not break the guarantee.
 
 **Separate data for the uncertainty estimate.**
-    Whatever produces ``sigma`` or the ``AuxDifficulty`` scale must not see
+    Whatever produces ``sigma`` or the ``AuxScale`` values must not see
     the calibration samples: fit it on training data or a separate split.
 
 
@@ -519,7 +519,7 @@ Scores
 .. autoclass:: physicsnemo.experimental.uq.conformal.QuantileRegressionScore
     :members: score, interval
 
-.. autoclass:: physicsnemo.experimental.uq.conformal.AuxDifficulty
+.. autoclass:: physicsnemo.experimental.uq.conformal.AuxScale
     :members: __call__
 
 Custom Score API
