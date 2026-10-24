@@ -271,3 +271,62 @@ def test_uint64_connectivity_under_fullgraph_compile(backend):
     overflow = torch.tensor([[0, 1, 2**64 - 1]], dtype=torch.uint64)
     with pytest.raises(RuntimeError, match="uint64 indices.*int64"):
         compiled(points, overflow)
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("cells_dtype", [torch.int64, torch.int32])
+@pytest.mark.parametrize(
+    "points, cells",
+    [
+        pytest.param(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            [[0, 1, 2], [1, 3, 2]],
+            id="triangles",
+        ),
+        pytest.param(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            + [[1.0, 1.0, 1.0]],
+            [[0, 1, 2, 3], [1, 2, 3, 4]],
+            id="tetrahedra",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "method", ["point_to_points_adjacency", "facet_mesh", "boundary_mesh"]
+)
+def test_facet_extraction_under_dynamic_fullgraph_compile(
+    method, points, cells, cells_dtype, device
+):
+    """Facet extraction compiles with symbolic shapes and matches eager mode.
+
+    Regression test for NVIDIA/physicsnemo#2138, where ``dynamic=True`` made
+    the cell width symbolic and ``itertools.combinations`` could not trace it.
+    """
+    points = torch.tensor(points, device=device)
+    cells = torch.tensor(cells, dtype=cells_dtype, device=device)
+
+    def fn(p: torch.Tensor, c: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        mesh = Mesh(points=p, cells=c)
+        if method == "point_to_points_adjacency":
+            adjacency = mesh.get_point_to_points_adjacency()
+            return adjacency.offsets, adjacency.indices
+        return (getattr(mesh, f"get_{method}")().cells,)
+
+    expected = fn(points, cells)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)(
+        points, cells
+    )
+
+    for actual, reference in zip(compiled, expected, strict=True):
+        torch.testing.assert_close(actual, reference)
