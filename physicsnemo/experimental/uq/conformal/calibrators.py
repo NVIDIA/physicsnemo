@@ -19,7 +19,8 @@ r"""Calibrators that turn held-out model errors into conformal intervals.
 Choose a calibrator by the guarantee you need:
 
 - :class:`~physicsnemo.experimental.uq.conformal.PointwiseCalibrator`: an
-  interval for each output element, when every sample uses the same mesh.
+  interval for each output element, when every sample has the same output
+  layout.
 - :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`:
   a functional band that contains every point of a field at once; meshes
   may vary.
@@ -35,9 +36,11 @@ samples must match. A sample that fails a check raises and leaves the
 calibrator unchanged, so you can skip it and continue.
 
 Calibration does not communicate across ranks. Predictions may come from
-many GPUs, but send every calibration sample to the process that calls
-``finalize``: a threshold fit on part of the samples has no guarantee for
-the full set.
+many GPUs, but gather every calibration sample onto the process that calls
+``finalize``, so there is one threshold. A rank that calibrates on its own
+share keeps a valid guarantee only if that share was chosen independently
+of the data, and then from fewer samples and with a different threshold on
+every rank.
 
 The split conformal construction follows `Distribution-Free Predictive
 Inference for Regression <https://arxiv.org/abs/1604.04173>`_ (Lei et al.,
@@ -250,8 +253,11 @@ class _SplitCalibratorBase:
         if self._n == 0:
             raise RuntimeError("No calibration samples collected.")
 
-    def _conformal_thresholds(self) -> Tensor | TensorDict:
-        k = conformal_quantile_index(self._n, self._alpha)
+    def _resolve_alpha(self, alpha: float | None) -> float:
+        return self._alpha if alpha is None else validate_alpha(alpha)
+
+    def _conformal_thresholds(self, alpha: float) -> Tensor | TensorDict:
+        k = conformal_quantile_index(self._n, alpha)
         return pack_fields(
             {
                 key: kth_smallest_of_samples(per_sample, k)
@@ -260,12 +266,12 @@ class _SplitCalibratorBase:
         )
 
     def _build_predictor(
-        self, tier: str, thresholds: Tensor | TensorDict, **state
+        self, tier: str, thresholds: Tensor | TensorDict, *, alpha: float, **state
     ) -> ConformalPredictor:
         return ConformalPredictor._from_state(
             tier=tier,
             score=self._score,
-            alpha=self._alpha,
+            alpha=alpha,
             n_cal=self._n,
             thresholds=thresholds,
             **state,
@@ -426,8 +432,18 @@ class PointwiseCalibrator(_SplitCalibratorBase):
         self._collect(prediction, target, aux, points, stage)
         self._mesh_fingerprint = fingerprint
 
-    def finalize(self) -> ConformalPredictor:
+    def finalize(self, *, alpha: float | None = None) -> ConformalPredictor:
         r"""Fit the per-element thresholds and return the predictor.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Miscoverage level for this predictor, in :math:`(0, 1)`. Defaults
+            to the constructor's ``alpha``. The stored calibration scores are
+            reused, so one calibrator can produce predictors at several
+            levels from one pass over the calibration set. Choose the levels
+            before looking at the fitted intervals: picking ``alpha`` from
+            the results weakens the guarantee.
 
         Returns
         -------
@@ -441,14 +457,19 @@ class PointwiseCalibrator(_SplitCalibratorBase):
         ------
         RuntimeError
             If no samples were collected.
+        TypeError
+            If ``alpha`` is not a real number.
         ValueError
-            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            If ``alpha`` is outside :math:`(0, 1)`, or if
+            :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
             than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
         """
+        alpha = self._resolve_alpha(alpha)
         self._require_finalizable()
         return self._build_predictor(
             "pointwise",
-            self._conformal_thresholds(),
+            self._conformal_thresholds(alpha),
+            alpha=alpha,
             mesh_fingerprint=self._mesh_fingerprint,
         )
 
@@ -559,15 +580,24 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
 
     Use this calibrator when a single band must cover every point of a field
     at the same time, for example to bound the worst-case error over a mesh.
-    Meshes may differ between calibration and deployment. The band's
-    half-width at point :math:`x` is :math:`\text{threshold} \cdot s(x)`,
-    where :math:`s` is the optional ``AuxDifficulty`` scale; without one the
-    width is constant. If bounding the expected fraction of missed points is
-    enough, :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`
+    Meshes may differ between calibration and deployment. At point
+    :math:`x` the score turns :math:`\text{threshold} \cdot s(x)` into the
+    band, where :math:`s` is the optional ``AuxDifficulty`` scale. Without
+    one the width is whatever the score gives: constant for
+    ``AbsoluteErrorScore``, proportional to ``aux["sigma"]`` for
+    ``NormalizedErrorScore``, and following the quantile heads for
+    ``QuantileRegressionScore``. If bounding the expected fraction of missed
+    points is enough,
+    :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`
     gives tighter bands.
 
     Guarantee: a new field lies inside the band at every point with
-    probability at least :math:`1 - \alpha`.
+    probability at least :math:`1 - \alpha`. For a field of shape
+    :math:`(n_{\text{points}}, C)` the band covers all points and all
+    :math:`C` channels at the same time, because each sample's score is its
+    maximum over every element. Each ``TensorDict`` field gets its own
+    threshold and its own guarantee; there is no joint guarantee across
+    fields.
 
     Parameters
     ----------
@@ -579,7 +609,9 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
         Target miscoverage level in :math:`(0, 1)`.
     difficulty : AuxDifficulty, optional
         Per-point scale :math:`s(x)` that widens the band where it is large.
-        ``None`` gives a constant width.
+        With ``None`` the score sets the width, for example constant for
+        ``AbsoluteErrorScore`` and proportional to ``aux["sigma"]`` for
+        ``NormalizedErrorScore``.
     keys : Sequence[str], optional
         Names of the ``TensorDict`` fields to calibrate (see
         :class:`~physicsnemo.experimental.uq.conformal.PointwiseCalibrator`).
@@ -619,8 +651,18 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
 
     _reduce = staticmethod(lambda normalized: normalized.amax().detach().cpu())
 
-    def finalize(self) -> ConformalPredictor:
+    def finalize(self, *, alpha: float | None = None) -> ConformalPredictor:
         r"""Fit the band threshold and return the predictor.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Miscoverage level for this predictor, in :math:`(0, 1)`. Defaults
+            to the constructor's ``alpha``. The stored per-sample maxima are
+            reused, so one calibrator can produce predictors at several
+            levels from one pass over the calibration set. Choose the levels
+            before looking at the fitted bands: picking ``alpha`` from the
+            results weakens the guarantee.
 
         Returns
         -------
@@ -634,14 +676,19 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
         ------
         RuntimeError
             If no samples were collected.
+        TypeError
+            If ``alpha`` is not a real number.
         ValueError
-            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            If ``alpha`` is outside :math:`(0, 1)`, or if
+            :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
             than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
         """
+        alpha = self._resolve_alpha(alpha)
         self._require_finalizable()
         return self._build_predictor(
             "functional",
-            self._conformal_thresholds(),
+            self._conformal_thresholds(alpha),
+            alpha=alpha,
             difficulty=self._difficulty,
         )
 
@@ -927,8 +974,18 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
         self._collect(prediction, target, aux, points, stage)
         self._weighted = weights is not None
 
-    def finalize(self) -> ConformalPredictor:
+    def finalize(self, *, alpha: float | None = None) -> ConformalPredictor:
         r"""Fit the CRC threshold and return the predictor.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Risk level for this predictor, in :math:`(0, 1)`. Defaults to
+            the constructor's ``alpha``. The stored per-point scores are
+            reused, so one calibrator can produce predictors at several
+            levels from one pass over the calibration set. Choose the levels
+            before looking at the fitted bands: picking ``alpha`` from the
+            results weakens the guarantee.
 
         Returns
         -------
@@ -942,16 +999,22 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
         ------
         RuntimeError
             If no samples were collected.
+        TypeError
+            If ``alpha`` is not a real number.
         ValueError
-            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            If ``alpha`` is outside :math:`(0, 1)`, or if
+            :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
             than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
         """
-        alpha = self._alpha
+        alpha = self._resolve_alpha(alpha)
         self._require_finalizable()
         thresholds = {
             key: torch.tensor(_crc_threshold(samples, alpha), dtype=torch.float64)
             for key, samples in self._scores.items()
         }
         return self._build_predictor(
-            "risk_control", pack_fields(thresholds), difficulty=self._difficulty
+            "risk_control",
+            pack_fields(thresholds),
+            alpha=alpha,
+            difficulty=self._difficulty,
         )

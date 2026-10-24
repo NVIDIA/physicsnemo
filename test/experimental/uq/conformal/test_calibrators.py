@@ -33,6 +33,7 @@ from physicsnemo.experimental.uq.conformal import (
 from physicsnemo.experimental.uq.conformal._utils import TENSOR_KEY, points_fingerprint
 from test.experimental.uq.conformal._helpers import (
     CALIBRATOR_CLASSES,
+    CALIBRATORS,
     TIERS,
     fit,
     make_predictor,
@@ -539,6 +540,44 @@ def test_unregistered_strategy_subclasses_are_rejected():
 def test_finalize_without_samples_fails_closed():
     with pytest.raises(RuntimeError, match="No calibration samples"):
         RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5).finalize()
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_finalize_alpha_reuses_the_collected_scores(tier):
+    calibrator = CALIBRATORS[tier](AbsoluteErrorScore(), alpha=0.1)
+    points = torch.arange(4.0).reshape(4, 1) if tier == "pointwise" else None
+    generator = torch.Generator().manual_seed(3)
+    for _ in range(20):
+        target = torch.randn(4, 2, generator=generator)
+        calibrator.update(torch.zeros(4, 2), target, points=points)
+    strict, loose = calibrator.finalize(alpha=0.05), calibrator.finalize(alpha=0.25)
+    assert (strict.alpha, loose.alpha) == (0.05, 0.25)
+    assert bool((strict.thresholds >= loose.thresholds).all())
+    torch.testing.assert_close(
+        calibrator.finalize().thresholds,
+        calibrator.finalize(alpha=0.1).thresholds,
+        rtol=0,
+        atol=0,
+    )
+    assert calibrator.alpha == 0.1 and calibrator.n_cal == 20
+
+
+@pytest.mark.parametrize(
+    "alpha,error,match",
+    [
+        (1.5, ValueError, r"in \(0, 1\)"),
+        ("0.1", TypeError, "real number"),
+        (True, TypeError, "real number"),
+        (0.1, ValueError, "needs at least 9 calibration samples"),
+    ],
+)
+def test_finalize_rejects_bad_alpha_and_stays_usable(alpha, error, match):
+    calibrator = PointwiseCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    for _ in range(3):
+        calibrator.update(torch.zeros(2), torch.ones(2))
+    with pytest.raises(error, match=match):
+        calibrator.finalize(alpha=alpha)
+    assert calibrator.finalize().alpha == 0.5
 
 
 @pytest.mark.parametrize("tier", TIERS)
