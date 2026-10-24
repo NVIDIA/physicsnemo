@@ -538,13 +538,21 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
 
     Use this calibrator when a single band must cover every point of a field
     at the same time, for example to bound the worst-case error over a mesh.
-    Meshes may differ between calibration and deployment. The band's
-    half-width at point :math:`x` is :math:`\text{threshold} \cdot s(x)`,
-    where :math:`s` is the optional ``AuxDifficulty`` scale; without one the
-    width is constant.
+    Meshes may differ between calibration and deployment. At point
+    :math:`x` the score turns :math:`\text{threshold} \cdot s(x)` into the
+    band, where :math:`s` is the optional ``AuxDifficulty`` scale. Without
+    one the width is whatever the score gives: constant for
+    ``AbsoluteErrorScore``, proportional to ``aux["sigma"]`` for
+    ``NormalizedErrorScore``, and following the quantile heads for
+    ``QuantileRegressionScore``.
 
     Guarantee: a new field lies inside the band at every point with
-    probability at least :math:`1 - \alpha`.
+    probability at least :math:`1 - \alpha`. For a field of shape
+    :math:`(n_{\text{points}}, C)` the band covers all points and all
+    :math:`C` channels at the same time, because each sample's score is its
+    maximum over every element. Each ``TensorDict`` field gets its own
+    threshold and its own guarantee; there is no joint guarantee across
+    fields.
 
     Parameters
     ----------
@@ -556,7 +564,9 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
         Target miscoverage level in :math:`(0, 1)`.
     difficulty : AuxDifficulty, optional
         Per-point scale :math:`s(x)` that widens the band where it is large.
-        ``None`` gives a constant width.
+        With ``None`` the score sets the width, for example constant for
+        ``AbsoluteErrorScore`` and proportional to ``aux["sigma"]`` for
+        ``NormalizedErrorScore``.
     keys : Sequence[str], optional
         Names of the ``TensorDict`` fields to calibrate (see
         :class:`~physicsnemo.experimental.uq.conformal.PointwiseCalibrator`).
