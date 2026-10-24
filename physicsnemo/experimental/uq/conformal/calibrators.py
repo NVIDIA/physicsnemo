@@ -19,7 +19,8 @@ r"""Calibrators that turn held-out model errors into conformal intervals.
 Choose a calibrator by the guarantee you need:
 
 - :class:`~physicsnemo.experimental.uq.conformal.PointwiseCalibrator`: an
-  interval for each output element, when every sample uses the same mesh.
+  interval for each output element, when every sample has the same output
+  layout.
 - :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`:
   a functional band that contains every point of a field at once; meshes
   may vary.
@@ -32,9 +33,11 @@ samples must match. A sample that fails a check raises and leaves the
 calibrator unchanged, so you can skip it and continue.
 
 Calibration does not communicate across ranks. Predictions may come from
-many GPUs, but send every calibration sample to the process that calls
-``finalize``: a threshold fit on part of the samples has no guarantee for
-the full set.
+many GPUs, but gather every calibration sample onto the process that calls
+``finalize``, so there is one threshold. A rank that calibrates on its own
+share keeps a valid guarantee only if that share was chosen independently
+of the data, and then from fewer samples and with a different threshold on
+every rank.
 
 The split conformal construction follows `Distribution-Free Predictive
 Inference for Regression <https://arxiv.org/abs/1604.04173>`_ (Lei et al.,
