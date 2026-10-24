@@ -339,6 +339,32 @@ def run_test_distributed_graph(
                     assert torch.allclose(grad_local, torch.ones_like(local_edge_feat))
 
 
+def test_partition_graph_with_id_mapping_local_graph():
+    """Each rank keeps the incoming edges of its destination nodes, in CSC order,
+    and its local graph points at the right source nodes."""
+    from physicsnemo.nn.module.gnn_layers import partition_graph_with_id_mapping
+
+    num_src_nodes, num_dst_nodes, partition_size = 50, 40, 3
+    degree = torch.randint(0, 4, (num_dst_nodes,))  # some nodes have no edges
+    offsets = torch.cat([torch.zeros(1, dtype=torch.int64), degree.cumsum(0)])
+    indices = torch.randint(0, num_src_nodes, (int(offsets[-1]),))
+    src_ranks = torch.arange(num_src_nodes) % partition_size
+    dst_ranks = torch.randint(0, partition_size, (num_dst_nodes,))
+    dst_ranks[:partition_size] = torch.arange(partition_size)
+    for rank in range(partition_size):
+        partition = partition_graph_with_id_mapping(
+            offsets, indices, src_ranks, dst_ranks, partition_size, rank, "cpu"
+        )
+        dst = partition.map_partitioned_dst_ids_to_global
+        edges = torch.cat([torch.arange(offsets[d], offsets[d + 1]) for d in dst])
+        assert torch.equal(partition.map_partitioned_edge_ids_to_global, edges)
+        assert torch.equal(partition.local_offsets.diff(), degree[dst])
+        # local source IDs number the source nodes by owning rank, then by ID
+        src = indices[edges].unique()
+        src = src[torch.argsort(src_ranks[src], stable=True)]
+        assert torch.equal(src[partition.local_indices], indices[edges])
+
+
 @pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("partition_scheme", ["lat_lon_bbox", "default"])
 def test_distributed_graph(partition_scheme, pytestconfig):

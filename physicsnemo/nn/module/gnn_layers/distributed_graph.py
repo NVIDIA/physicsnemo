@@ -305,17 +305,13 @@ def partition_graph_with_id_mapping(
             ]
         )
 
-        partitioned_edge_ids = torch.cat(
-            [
-                torch.arange(
-                    start=offset_start[i],
-                    end=offset_end[i],
-                    dtype=dtype,
-                    device=input_device,
-                )
-                for i in range(len(offset_start))
-            ]
-        )
+        # local edge j belongs to the destination node i with
+        # local_offsets[i] <= j < local_offsets[i + 1], and is its global edge
+        # offset_start[i] + j - local_offsets[i]
+        partitioned_edge_ids = (
+            torch.repeat_interleave(offset_start - local_offsets[:-1], degree)
+            + torch.arange(local_offsets[-1], device=input_device)
+        ).to(dtype)
 
         ids = partitioned_edge_ids
         mapped_ids = torch.arange(
@@ -328,12 +324,7 @@ def partition_graph_with_id_mapping(
         graph_partition.map_concatenated_local_edge_ids_to_global[mapped_ids] = ids
         _edge_id_offset += ids.numel()
 
-        partitioned_src_ids = torch.cat(
-            [
-                global_indices[offset_start[i] : offset_end[i]].clone()
-                for i in range(len(offset_start))
-            ]
-        )
+        partitioned_src_ids = global_indices[partitioned_edge_ids]
 
         global_src_ids_on_rank, inverse_mapping = partitioned_src_ids.unique(
             sorted=True, return_inverse=True
