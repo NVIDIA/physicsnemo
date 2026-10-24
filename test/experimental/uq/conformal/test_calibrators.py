@@ -22,7 +22,7 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     ConformalPredictor,
     FunctionalBandCalibrator,
     NormalizedErrorScore,
@@ -33,6 +33,7 @@ from physicsnemo.experimental.uq.conformal import (
 from physicsnemo.experimental.uq.conformal._utils import TENSOR_KEY, points_fingerprint
 from test.experimental.uq.conformal._helpers import (
     CALIBRATOR_CLASSES,
+    CALIBRATORS,
     TIERS,
     fit,
     make_predictor,
@@ -232,13 +233,13 @@ def test_functional_band_uses_scalar_rank_across_varying_meshes():
     assert lo.shape == query.shape == hi.shape
 
 
-def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
+def test_scale_adaptation_and_strategy_snapshot_are_fixed():
     """Calibrators and predictors hold snapshots of their strategies: neither
     caller-side mutation, accessor mutation, nor threshold mutation reaches
     the fitted rule, and semantic properties are read-only."""
     score = NormalizedErrorScore(eps=1.0)
-    shared = AuxDifficulty("scale")
-    calibrator = FunctionalBandCalibrator(score, alpha=0.5, difficulty=shared)
+    shared = AuxScale("scale")
+    calibrator = FunctionalBandCalibrator(score, alpha=0.5, scale=shared)
     target = torch.ones(4, dtype=torch.float64)
     zeros = torch.zeros_like(target)
     aux = {"scale": torch.full((4,), 2.0, dtype=torch.float64), "sigma": zeros}
@@ -255,16 +256,16 @@ def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
     predictor = calibrator.finalize()
     # sigma=0 clamps to eps=1: score |1 - 0| / 1 = 1, normalized by scale 2.
     assert float(predictor.thresholds) == 0.5
-    assert predictor.difficulty.key == "scale"
+    assert predictor.scale.key == "scale"
     assert predictor.score.eps == 1.0
-    calibrator.difficulty.key = "mutated"  # accessors are defensive copies
-    assert calibrator.difficulty.key == "scale"
+    calibrator.scale.key = "mutated"  # accessors are defensive copies
+    assert calibrator.scale.key == "scale"
 
     lo, hi = predictor.predict_interval(zeros, aux=aux)
     torch.testing.assert_close(hi, torch.ones(4, dtype=torch.float64))
     predictor.thresholds.mul_(1e6)
     predictor.score.__dict__["eps"] = 123.0
-    predictor.difficulty.key = "mutated"
+    predictor.scale.key = "mutated"
     lo_again, hi_again = predictor.predict_interval(zeros, aux=aux)
     assert torch.equal(lo, lo_again) and torch.equal(hi, hi_again)
     for name, value in [
@@ -272,7 +273,7 @@ def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
         ("alpha", 0.1),
         ("n_cal", 1),
         ("score", AbsoluteErrorScore()),
-        ("difficulty", AuxDifficulty()),
+        ("scale", AuxScale()),
     ]:
         with pytest.raises(AttributeError, match="no setter"):
             setattr(predictor, name, value)
@@ -313,6 +314,133 @@ def test_crc_accepts_varying_mesh_sizes_and_tensordict():
     assert float(predictor.thresholds["v"]) == 1.0
 
 
+@pytest.mark.parametrize("constant", [1.0, 3.5, 1e-3])
+def test_crc_uniform_weights_reproduce_the_unweighted_threshold_bit_for_bit(
+    constant, device
+):
+    """Equal weights of any size give the unweighted loss; weights may live on
+    another device than the fields."""
+    generator = torch.Generator(device=device).manual_seed(3)
+    unweighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.2)
+    weighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.2)
+    for n_points in range(20, 35):
+        prediction = torch.randn(n_points, 2, generator=generator, device=device)
+        noise = torch.randn(n_points, 2, generator=generator, device=device)
+        target = prediction + 0.3 * noise
+        weights_device = device if n_points % 2 else "cpu"
+        unweighted.update(prediction, target)
+        weighted.update(
+            prediction,
+            target,
+            weights=torch.full((n_points,), constant, device=weights_device),
+        )
+    assert torch.equal(weighted.finalize().thresholds, unweighted.finalize().thresholds)
+
+
+def test_crc_weighted_threshold_is_conservative_at_the_exact_bound():
+    """Weighted tail masses carry a rounding margin, so a total risk that sits
+    exactly on the CRC bound passes unweighted but not weighted."""
+    unweighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    weighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    for values in ([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], [0.0] * 4):
+        target = torch.tensor(values)
+        unweighted.update(torch.zeros(4), target)
+        weighted.update(torch.zeros(4), target, weights=torch.ones(4))
+    # At lambda=0 the exact risk is (1/2 + 1/2 + 0 + 1) / 4 = alpha.
+    assert float(unweighted.finalize().thresholds) == 0.0
+    assert float(weighted.finalize().thresholds) == 1.0
+
+
+@pytest.mark.parametrize(
+    "weights,expected",
+    [([0.1, 0.1, 0.8], 3.0), ([0.8, 0.1, 0.1], 1.0), (None, 2.0)],
+    ids=["heavy_tail", "heavy_head", "unweighted"],
+)
+def test_crc_weights_move_the_threshold_predictably(weights, expected):
+    """Three samples with scores [1, 2, 3] at alpha=0.5 may total a risk of 1:
+    a 0.8-weight point at score 3 forces lambda=3, at score 1 it allows
+    lambda=1 (risk 3 * 0.2), and unweighted lands at 2 (risk 3 * 1/3)."""
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    prediction = _td(a=torch.zeros(3), b=torch.zeros(3, 2))
+    target = _td(
+        a=torch.tensor([1.0, 2.0, 3.0]),
+        b=torch.tensor([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]),
+    )
+    kwargs = {} if weights is None else {"weights": torch.tensor(weights)}
+    for _ in range(3):
+        calibrator.update(prediction, target, **kwargs)
+    thresholds = calibrator.finalize().thresholds
+    assert float(thresholds["a"]) == float(thresholds["b"]) == expected
+
+
+def test_crc_weighted_records_hold_sorted_scores_and_tail_mass_on_the_cpu(device):
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    target = torch.tensor([3.0, 1.0, 2.0], device=device)
+    weights = torch.tensor([1.0, 2.0, 7.0], device=device)
+    calibrator.update(torch.zeros(3, device=device), target, weights=weights)
+    scores, tail = calibrator._scores[TENSOR_KEY][0]
+    assert scores.device.type == tail.device.type == "cpu"
+    assert torch.equal(scores, torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64))
+    # Weights in score order are [2, 7, 1] / 10; tail[j] sums ranks >= j.
+    torch.testing.assert_close(tail, torch.tensor([1.0, 0.8, 0.1], dtype=torch.float64))
+
+
+_W3 = torch.ones(3)
+# fmt: off
+WEIGHT_REJECTIONS = [  # (id, weights, error, match)
+    ("2d", torch.ones(3, 1), ValueError, r"shape \(n_points,\)"),
+    ("wrong-length", torch.ones(4), ValueError, r"\(prediction\).*weights has 4"),
+    ("negative", torch.tensor([1.0, -1.0, 1.0]), ValueError, "nonnegative"),
+    ("nan", torch.tensor([1.0, torch.nan, 1.0]), ValueError, "non-finite"),
+    ("inf", torch.tensor([1.0, torch.inf, 1.0]), ValueError, "non-finite"),
+    ("all-zero", torch.zeros(3), ValueError, "all zero"),
+    ("integer", torch.ones(3, dtype=torch.int64), TypeError, "floating-point"),
+    ("not-a-tensor", [1.0, 1.0, 1.0], TypeError, "torch.Tensor"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize(
+    "weights,error,match",
+    [pytest.param(*row[1:], id=row[0]) for row in WEIGHT_REJECTIONS],
+)
+def test_crc_rejects_bad_weights_transactionally(weights, error, match):
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    calibrator.update(torch.zeros(3), torch.zeros(3), weights=_W3)
+    with pytest.raises(error, match=match):
+        calibrator.update(torch.zeros(3), torch.ones(3), weights=weights)
+    assert calibrator.n_cal == 1
+
+
+@pytest.mark.parametrize(
+    "first_weighted", [True, False], ids=["weighted-first", "unweighted-first"]
+)
+def test_crc_weights_are_all_or_none_across_calls(first_weighted):
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    weighted, plain = {"weights": _W3}, {}
+    first, second = (weighted, plain) if first_weighted else (plain, weighted)
+    calibrator.update(torch.zeros(3), torch.zeros(3), **first)
+    had = "had" if first_weighted else "did not have"
+    with pytest.raises(TypeError, match=f"first calibration sample {had} weights="):
+        calibrator.update(torch.zeros(3), torch.zeros(3), **second)
+    assert calibrator.n_cal == 1
+
+
+def test_crc_weights_must_align_with_every_tensordict_field():
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    prediction = _td(a=torch.zeros(3), b=torch.zeros(4, 2))
+    with pytest.raises(ValueError, match=r"Field 'b' \(prediction\).*weights has 3"):
+        calibrator.update(prediction, prediction.clone(), weights=_W3)
+    assert calibrator.n_cal == 0
+
+
+def test_functional_band_does_not_take_weights():
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    with pytest.raises(TypeError, match="weights"):
+        calibrator.update(torch.zeros(3), torch.zeros(3), weights=_W3)
+    assert calibrator.n_cal == 0
+
+
 @pytest.mark.parametrize(
     "calibrator_cls", [FunctionalBandCalibrator, RiskControlCalibrator]
 )
@@ -335,23 +463,23 @@ def test_scaled_tiers_reject_points_that_contradict_the_point_axis(calibrator_cl
 
 # fmt: off
 DOUBLE_SCALING_BOUNDARIES = [
-    pytest.param(lambda s, d: FunctionalBandCalibrator(s, alpha=0.5, difficulty=d), id="functional"),
-    pytest.param(lambda s, d: RiskControlCalibrator(s, alpha=0.5, difficulty=d), id="risk_control"),
-    pytest.param(lambda s, d: make_predictor(tier="functional", score=s, difficulty=d), id="direct_predictor"),
+    pytest.param(lambda s, d: FunctionalBandCalibrator(s, alpha=0.5, scale=d), id="functional"),
+    pytest.param(lambda s, d: RiskControlCalibrator(s, alpha=0.5, scale=d), id="risk_control"),
+    pytest.param(lambda s, d: make_predictor(tier="functional", score=s, scale=d), id="direct_predictor"),
 ]
 # fmt: on
 
 
 @pytest.mark.parametrize("build", DOUBLE_SCALING_BOUNDARIES)
 def test_double_scaling_pairing_is_rejected_everywhere(build):
-    """NormalizedErrorScore already divides by sigma; an AuxDifficulty('sigma')
+    """NormalizedErrorScore already divides by sigma; an AuxScale('sigma')
     would scale intervals by ~sigma**2. Every construction boundary must
     reject it, and must keep allowing additive-aux pairings."""
     with pytest.raises(ValueError, match="twice"):
-        build(NormalizedErrorScore(), AuxDifficulty("sigma"))
+        build(NormalizedErrorScore(), AuxScale("sigma"))
     # Positive controls: reading a key is not dividing by it.
-    build(AbsoluteErrorScore(), AuxDifficulty("spread"))
-    build(QuantileRegressionScore(), AuxDifficulty("lo"))
+    build(AbsoluteErrorScore(), AuxScale("spread"))
+    build(QuantileRegressionScore(), AuxScale("lo"))
 
 
 def test_keys_subset_round_trips_through_predict_save_and_diagnostics(tmp_path):
@@ -394,7 +522,7 @@ class _CustomScore(AbsoluteErrorScore):
     pass
 
 
-class _CustomDifficulty(AuxDifficulty):
+class _CustomScale(AuxScale):
     pass
 
 
@@ -402,9 +530,7 @@ def test_unregistered_strategy_subclasses_are_rejected():
     with pytest.raises(TypeError, match="a subclass needs its own registration"):
         RiskControlCalibrator(_CustomScore(), alpha=0.5)
     with pytest.raises(TypeError, match="Subclasses are not supported"):
-        RiskControlCalibrator(
-            AbsoluteErrorScore(), alpha=0.5, difficulty=_CustomDifficulty()
-        )
+        RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5, scale=_CustomScale())
     # Every shipped score remains constructible.
     PointwiseCalibrator(NormalizedErrorScore(), alpha=0.5)
 
@@ -412,6 +538,44 @@ def test_unregistered_strategy_subclasses_are_rejected():
 def test_finalize_without_samples_fails_closed():
     with pytest.raises(RuntimeError, match="No calibration samples"):
         RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5).finalize()
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_finalize_alpha_reuses_the_collected_scores(tier):
+    calibrator = CALIBRATORS[tier](AbsoluteErrorScore(), alpha=0.1)
+    points = torch.arange(4.0).reshape(4, 1) if tier == "pointwise" else None
+    generator = torch.Generator().manual_seed(3)
+    for _ in range(20):
+        target = torch.randn(4, 2, generator=generator)
+        calibrator.update(torch.zeros(4, 2), target, points=points)
+    strict, loose = calibrator.finalize(alpha=0.05), calibrator.finalize(alpha=0.25)
+    assert (strict.alpha, loose.alpha) == (0.05, 0.25)
+    assert bool((strict.thresholds >= loose.thresholds).all())
+    torch.testing.assert_close(
+        calibrator.finalize().thresholds,
+        calibrator.finalize(alpha=0.1).thresholds,
+        rtol=0,
+        atol=0,
+    )
+    assert calibrator.alpha == 0.1 and calibrator.n_cal == 20
+
+
+@pytest.mark.parametrize(
+    "alpha,error,match",
+    [
+        (1.5, ValueError, r"in \(0, 1\)"),
+        ("0.1", TypeError, "real number"),
+        (True, TypeError, "real number"),
+        (0.1, ValueError, "needs at least 9 calibration samples"),
+    ],
+)
+def test_finalize_rejects_bad_alpha_and_stays_usable(alpha, error, match):
+    calibrator = PointwiseCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    for _ in range(3):
+        calibrator.update(torch.zeros(2), torch.ones(2))
+    with pytest.raises(error, match=match):
+        calibrator.finalize(alpha=alpha)
+    assert calibrator.finalize().alpha == 0.5
 
 
 @pytest.mark.parametrize("tier", TIERS)

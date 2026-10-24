@@ -29,14 +29,23 @@ Pick the calibrator by the guarantee you need:
   Every sample must have the same output layout: the same mesh, with the
   same points in the same order, or a fixed set of outputs such as scalar
   observables. For a mesh, pass the coordinates as ``points=`` on every
-  call to check it.
+  call to check it. The width varies element by element: each element's
+  width is fitted from its own calibration errors, so the band follows the
+  model's local error.
 - :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`:
   a functional band contains every point of a field at once with
   probability at least :math:`1 - \alpha`. Point sets may differ between
-  samples.
+  samples. One threshold serves the whole field; the width at a point is
+  that threshold times the per-point scale from the score (``aux["sigma"]``
+  for ``NormalizedErrorScore``) or from an ``AuxScale``, and is
+  constant across the field with ``AbsoluteErrorScore`` and no
+  ``AuxScale``.
 - :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`: the
   expected fraction of points outside the band is at most :math:`\alpha`.
-  Point sets may differ between samples.
+  Point sets may differ between samples. The width is built like the
+  functional band's and is narrower, since only the average fraction of
+  missed points is controlled. ``weights=`` counts each point by its cell
+  area or volume.
 
 Pick the score by what the model outputs:
 :class:`~physicsnemo.experimental.uq.conformal.AbsoluteErrorScore` for a
@@ -49,19 +58,32 @@ subclass :class:`~physicsnemo.experimental.uq.conformal.NonconformityScore`
 and register it with
 :func:`~physicsnemo.experimental.uq.conformal.register_score`. The
 functional band and risk-control calibrators also accept an
-:class:`~physicsnemo.experimental.uq.conformal.AuxDifficulty` to widen the
+:class:`~physicsnemo.experimental.uq.conformal.AuxScale` to widen the
 band where a per-point uncertainty estimate is large.
 
 All calibrators accept plain tensors or ``TensorDict`` containers of fields.
 
 Typical usage::
 
-    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.1)
+    calibrator = PointwiseCalibrator(AbsoluteErrorScore(), alpha=0.1)
+    for pred, target in calibration_set:
+        calibrator.update(pred, target, points=points)
+    predictor = calibrator.finalize()
+
+    lo, hi = predictor.predict_interval(model_output, points=points)
+
+For meshes that change between samples, use a mesh-free calibrator and drop
+``points=``::
+
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.1)
     for pred, target in calibration_set:
         calibrator.update(pred, target)
     predictor = calibrator.finalize()
 
     lo, hi = predictor.predict_interval(model_output)
+
+``RiskControlCalibrator`` has the same interface and gives narrower bands
+when controlling the average fraction of missed points is enough.
 
 Save a fitted predictor, load it elsewhere (the file loads with
 ``weights_only=True``), and check its coverage on held-out data. The
@@ -72,7 +94,7 @@ coverage report measures the same quantity the calibrator guarantees::
 
     accumulator = predictor.coverage_accumulator()
     for pred, target in held_out_set:
-        lo, hi = predictor.predict_interval(pred)
+        lo, hi = predictor.predict_interval(pred, points=points)
         accumulator.update(lo, hi, target)
     report = accumulator.finalize()
 
@@ -91,7 +113,7 @@ from .diagnostics import CoverageAccumulator
 from .predictors import ConformalPredictor
 from .scores import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     NonconformityScore,
     NormalizedErrorScore,
     QuantileRegressionScore,
@@ -101,7 +123,7 @@ from .scores import (
 
 __all__ = [
     "AbsoluteErrorScore",
-    "AuxDifficulty",
+    "AuxScale",
     "ConformalPredictor",
     "CoverageAccumulator",
     "FunctionalBandCalibrator",

@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for spatio-temporal fields with `PointwiseCalibrator`,
   `FunctionalBandCalibrator`, `RiskControlCalibrator`, `ConformalPredictor`,
   `CoverageAccumulator`, `AbsoluteErrorScore`, `NormalizedErrorScore`,
-  `QuantileRegressionScore`, and `AuxDifficulty`. Custom scores subclass
+  `QuantileRegressionScore`, and `AuxScale`. Custom scores subclass
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
 

@@ -32,7 +32,9 @@ from ._utils import (
     _field_label,
     alpha_as_fraction,
     check_exact_shape,
+    check_point_alignment,
     check_real,
+    check_weights,
     fetch_ints,
     field_items,
     normalize_keys,
@@ -92,7 +94,8 @@ class CoverageAccumulator:
     - ``"functional"`` (``FunctionalBandCalibrator``): how often a sample
       lies inside its band at every point.
     - ``"risk_control"`` (``RiskControlCalibrator``): the mean fraction of
-      points per sample that fall outside the band.
+      points per sample that fall outside the band, weighted when
+      :meth:`update` receives ``weights``.
 
     Call :meth:`update` once per held-out sample, then :meth:`finalize` for
     the report.
@@ -158,12 +161,15 @@ class CoverageAccumulator:
         field_keys = (TENSOR_KEY,) if self._keys is None else self._keys
         self._counters = {key: _FieldCounters() for key in field_keys}
         self._element_hits: dict[str, Tensor] = {}
+        self._weighted: bool | None = None
 
     def update(
         self,
         lo: Float[Tensor, "*dims"] | TensorDict,
         hi: Float[Tensor, "*dims"] | TensorDict,
         target: Float[Tensor, "*dims"] | TensorDict,
+        *,
+        weights: Float[Tensor, "n_points"] | None = None,
     ) -> None:
         r"""Add one held-out sample to the statistics.
 
@@ -181,6 +187,18 @@ class CoverageAccumulator:
             Upper bounds, same shape and container type as ``lo``.
         target : torch.Tensor | TensorDict
             Observed values, same shape and container type as ``lo``.
+        weights : torch.Tensor, optional
+            Per-point weights of shape :math:`(n_{\text{points}},)` for the
+            ``"risk_control"`` tier only: floating point, finite,
+            nonnegative, not all zero, on any device; for example cell areas
+            or volumes on a non-uniform mesh (with :mod:`physicsnemo.mesh`,
+            :func:`~physicsnemo.mesh.calculus.point_measures`). The sample's
+            coverage becomes its weighted fraction of covered points,
+            normalized by the sum of the weights, matching a
+            :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`
+            calibrated with ``weights``. One vector applies to every
+            calibrated field, so each field's leading dimension must equal
+            ``len(weights)``. Pass ``weights`` on every call or on none.
 
         Returns
         -------
@@ -191,13 +209,16 @@ class CoverageAccumulator:
         TypeError
             If the inputs are plain tensors for a predictor calibrated on
             ``TensorDict`` fields (or the reverse), or use a non-floating
-            dtype.
+            dtype; if ``weights`` is passed on another tier, on some calls
+            but not others, or is not a floating-point tensor.
         KeyError
             If a ``TensorDict`` lacks a calibrated field.
         ValueError
             If ``target`` is empty, shapes differ, a value is NaN or
-            infinite, a width or the running width sum overflows float64, or
-            (pointwise) the sample shape differs from earlier samples.
+            infinite, a width or the running width sum overflows float64,
+            (pointwise) the sample shape differs from earlier samples, or
+            ``weights`` has the wrong shape, a negative entry, or no positive
+            entry.
 
         Notes
         -----
@@ -212,6 +233,16 @@ class CoverageAccumulator:
         overflow float64, rescale ``lo``, ``hi``, and ``target`` by the same
         factor and start a new accumulator.
         """
+        if weights is not None and self._tier != "risk_control":
+            raise TypeError(
+                f"weights= applies only to the risk_control tier, not {self._tier!r}."
+            )
+        if self._weighted is not None and (weights is not None) != self._weighted:
+            first = "had" if self._weighted else "did not have"
+            raise TypeError(
+                f"The first held-out sample {first} weights=; pass weights= on "
+                "every call or on none."
+            )
         # field_items with self._keys returns the same keys as self._counters.
         inputs = (("lo", lo), ("hi", hi), ("target", target))
         for name, value in inputs:
@@ -222,10 +253,10 @@ class CoverageAccumulator:
             name: dict(field_items(value, self._keys)) for name, value in inputs
         }
         pending: list[Tensor] = []
-        staged = self._stage(containers, pending)
+        staged = self._stage(containers, weights, pending)
         if not all(fetch_ints(pending)):
             # Repeat with one sync per check to raise the first error.
-            staged = self._stage(containers, None)
+            staged = self._stage(containers, weights, None)
 
         for key, coverage, width_total, width_count in staged:
             counters = self._counters[key]
@@ -239,14 +270,20 @@ class CoverageAccumulator:
                 previous += coverage.to(device=previous.device)
             else:
                 self._element_hits[key] = coverage
+        self._weighted = weights is not None
 
     def _stage(
-        self, containers: dict[str, dict[str, Tensor]], pending: list[Tensor] | None
+        self,
+        containers: dict[str, dict[str, Tensor]],
+        weights: Tensor | None,
+        pending: list[Tensor] | None,
     ) -> list[tuple[str, Tensor, Tensor, int]]:
         """Check one sample and compute its updates without committing them.
 
         ``pending`` works as in ``check_finite``.
         """
+        if weights is not None:
+            check_weights(weights, pending)
         staged = []
         for key in self._counters:
             # Detach so the running totals never keep the model's autograd graph.
@@ -257,6 +294,8 @@ class CoverageAccumulator:
                 raise ValueError(f"{_field_label(key)}: empty target tensor.")
             check_exact_shape(key, "lo", lo_field, "target", target_field)
             check_exact_shape(key, "hi", hi_field, "target", target_field)
+            if weights is not None:
+                check_point_alignment(key, target_field, weights, "target", "weights")
             check_real(key, "lo", lo_field, pending)
             check_real(key, "hi", hi_field, pending)
             check_real(key, "target", target_field, pending)
@@ -294,7 +333,12 @@ class CoverageAccumulator:
                 case "risk_control":
                     points = torch.atleast_1d(element_covered)
                     point_covered = points.reshape(points.shape[0], -1).all(dim=1)
-                    coverage = point_covered.to(torch.float64).mean()
+                    covered = point_covered.to(torch.float64)
+                    if weights is None:
+                        coverage = covered.mean()
+                    else:
+                        w = weights.to(device=covered.device, dtype=torch.float64)
+                        coverage = (covered * w).sum() / w.sum()
 
             staged.append((key, coverage, width_total, widths.numel()))
         return staged
@@ -349,8 +393,9 @@ class CoverageAccumulator:
               fraction of elements whose coverage is at least the target).
             - functional: ``whole_field_coverage``, the fraction of samples
               inside the band at every point.
-            - risk control: ``empirical_mean_risk``, the mean fraction of
-              points per sample with any value outside the interval.
+            - risk control: ``empirical_mean_risk``, the mean over samples of
+              the fraction of points with any value outside the interval
+              (weighted, when :meth:`update` received ``weights``).
 
             Statistics are ``None`` before the first :meth:`update`.
         """

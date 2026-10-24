@@ -23,10 +23,12 @@ import pytest
 import torch
 
 from physicsnemo.experimental.uq.conformal import (
-    AuxDifficulty,
+    AbsoluteErrorScore,
+    AuxScale,
     ConformalPredictor,
     NormalizedErrorScore,
     QuantileRegressionScore,
+    RiskControlCalibrator,
 )
 from physicsnemo.experimental.uq.conformal._utils import points_fingerprint
 from test.experimental.uq.conformal._helpers import (
@@ -38,6 +40,18 @@ from test.experimental.uq.conformal._helpers import (
 
 _MESH_POINTS = torch.arange(12, dtype=torch.float32).reshape(6, 2)
 _MESH = points_fingerprint(_MESH_POINTS)
+_ARTIFACT_KEYS = {
+    "format",
+    "version",
+    "tier",
+    "score",
+    "alpha",
+    "n_cal",
+    "thresholds",
+    "scale",
+    "mesh_fingerprint",
+    "provenance",
+}
 
 
 @pytest.mark.parametrize("tier", TIERS)
@@ -70,23 +84,12 @@ def test_artifact_has_one_exact_schema_and_pointwise_load_requires_the_mesh(tmp_
     ).save(path, provenance=provenance)
     payload = torch.load(path, weights_only=True)
 
-    assert set(payload) == {
-        "format",
-        "version",
-        "tier",
-        "score",
-        "alpha",
-        "n_cal",
-        "thresholds",
-        "difficulty",
-        "mesh_fingerprint",
-        "provenance",
-    }
+    assert set(payload) == _ARTIFACT_KEYS
     assert payload["format"] == "physicsnemo.uq.conformal"
     assert payload["version"] == 1
     assert payload["tier"] == "pointwise"
     assert payload["score"] == {"kind": "absolute_error", "kwargs": {}}
-    assert payload["difficulty"] is None
+    assert payload["scale"] is None
     assert payload["mesh_fingerprint"] == _MESH
     assert payload["provenance"] == provenance
     assert set(payload["thresholds"]) == {"__tensor__"}
@@ -100,6 +103,29 @@ def test_artifact_has_one_exact_schema_and_pointwise_load_requires_the_mesh(tmp_
             loaded.predict_interval(prediction, points=changed)
     lo, hi = loaded.predict_interval(prediction, points=_MESH_POINTS.clone())
     assert lo.shape == hi.shape == prediction.shape
+
+
+def test_weighted_risk_control_predictor_round_trips_in_the_same_schema(tmp_path):
+    """Weights change only the fitted scalar, so the artifact format is unchanged."""
+    generator = torch.Generator().manual_seed(5)
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.25)
+    for n_points in range(8, 16):
+        prediction = torch.randn(n_points, 3, generator=generator)
+        target = prediction + 0.3 * torch.randn(n_points, 3, generator=generator)
+        weights = torch.rand(n_points, generator=generator) + 0.1
+        calibrator.update(prediction, target, weights=weights)
+    predictor = calibrator.finalize()
+    prediction = torch.randn(6, 3, generator=generator)
+    lo_ref, hi_ref = predictor.predict_interval(prediction)
+
+    path = tmp_path / "weighted.pt"
+    predictor.save(path)
+    payload = torch.load(path, weights_only=True)
+    assert set(payload) == _ARTIFACT_KEYS and payload["version"] == 1
+    loaded = ConformalPredictor.load(path)
+    assert torch.equal(loaded.thresholds, predictor.thresholds)
+    lo, hi = loaded.predict_interval(prediction)
+    assert torch.equal(lo, lo_ref) and torch.equal(hi, hi_ref)
 
 
 def test_constructor_and_threshold_access_snapshot_storage(tmp_path):
@@ -167,7 +193,7 @@ STANDALONE_STRATEGIES = [  # (id, make_predictor overrides, aux, spec section, e
     ("absolute_error", {"tier": "functional"}, None, "score", {"kind": "absolute_error", "kwargs": {}}),
     ("normalized_error", {"tier": "functional", "score": NormalizedErrorScore(eps=1e-4)}, {"sigma": torch.full((3,), 0.7)}, "score", {"kind": "normalized_error", "kwargs": {"eps": 1e-4}}),
     ("quantile_regression", {"tier": "functional", "score": QuantileRegressionScore()}, {"lo": -torch.ones(3), "hi": torch.ones(3)}, "score", {"kind": "quantile_regression", "kwargs": {}}),
-    ("aux_difficulty", {"difficulty": AuxDifficulty(key="spread", eps=1e-4)}, {"spread": torch.tensor([0.5, 0.7, 0.9])}, "difficulty", {"kind": "aux", "kwargs": {"key": "spread", "eps": 1e-4}}),
+    ("aux_scale", {"scale": AuxScale(key="spread", eps=1e-4)}, {"spread": torch.tensor([0.5, 0.7, 0.9])}, "scale", {"kind": "aux", "kwargs": {"key": "spread", "eps": 1e-4}}),
 ]
 # fmt: on
 
@@ -195,7 +221,7 @@ BASES = {
     "normalized": lambda: make_predictor(
         tier="functional", score=NormalizedErrorScore()
     ),
-    "aux": lambda: make_predictor(difficulty=AuxDifficulty(key="spread", eps=1e-4)),
+    "aux": lambda: make_predictor(scale=AuxScale(key="spread", eps=1e-4)),
     "pointwise": lambda: make_predictor(
         tier="pointwise", thresholds=torch.ones(6, 3), points=_MESH_POINTS
     ),
@@ -227,21 +253,21 @@ CORRUPTIONS = {
     "empty_thresholds": (_set("thresholds", {}), "at least one field"),
     "named_key_beside_sentinel": (_set_in("thresholds", "pressure", torch.tensor(1.0)), "reserved field name"),
     "non_string_threshold_key": (_set_in("thresholds", 7, torch.tensor(1.0)), "keys must be strings"),
-    "missing_difficulty": (_delete("difficulty"), "schema is invalid: missing"),
+    "missing_scale": (_delete("scale"), "schema is invalid: missing"),
     "extra_top_level_key": (_set("duplicate_state", {}), "schema is invalid: unexpected"),
     "unknown_score_kind": (_set_in("score", "kind", "bogus"), "Unknown score kind"),
     "extra_score_key": (_set_in("score", "class", "AbsoluteErrorScore"), "score spec schema is invalid"),
-    "unknown_difficulty_kind": (_set("difficulty", {"kind": "bogus", "kwargs": {}}), "Unknown difficulty kind"),
-    "extra_difficulty_key": (_set("difficulty", {"kind": "aux", "kwargs": {"key": "s", "eps": 1e-8}, "class": "X"}), "difficulty spec schema is invalid"),
-    "non_mapping_difficulty": (_set("difficulty", "aux"), "difficulty spec schema is invalid"),
+    "unknown_scale_kind": (_set("scale", {"kind": "bogus", "kwargs": {}}), "Unknown scale kind"),
+    "extra_scale_key": (_set("scale", {"kind": "aux", "kwargs": {"key": "s", "eps": 1e-8}, "class": "X"}), "scale spec schema is invalid"),
+    "non_mapping_scale": (_set("scale", "aux"), "scale spec schema is invalid"),
     "non_json_provenance": (_set("provenance", {"tags": ("x",)}), "strict-JSON"),
     # Strategy kwargs: exact key sets, primitive wire types, and exact round trips.
-    "aux_missing_key": (_set_in("difficulty", "kwargs", {"eps": 1e-4}), "kwargs schema is invalid", "aux"),
-    "aux_string_eps": (_set_in("difficulty", "kwargs", {"key": "spread", "eps": "0.1"}), "constructor stores", "aux"),
-    "aux_list_key": (_set_in("difficulty", "kwargs", {"key": ["spread"], "eps": 1e-4}), "must be a bool, int, float, or str", "aux"),
+    "aux_missing_key": (_set_in("scale", "kwargs", {"eps": 1e-4}), "kwargs schema is invalid", "aux"),
+    "aux_string_eps": (_set_in("scale", "kwargs", {"key": "spread", "eps": "0.1"}), "constructor stores", "aux"),
+    "aux_list_key": (_set_in("scale", "kwargs", {"key": ["spread"], "eps": 1e-4}), "must be a bool, int, float, or str", "aux"),
     # Wire-valid (exact float) but semantically invalid eps is still rejected at load.
     "normalized_negative_eps": (_set_in("score", "kwargs", {"eps": -1.0}), _CTOR, "normalized"),
-    "aux_negative_eps": (_set_in("difficulty", "kwargs", {"key": "spread", "eps": -1.0}), _CTOR, "aux"),
+    "aux_negative_eps": (_set_in("scale", "kwargs", {"key": "spread", "eps": -1.0}), _CTOR, "aux"),
     # Pointwise artifacts need a well-formed mesh fingerprint.
     "pointwise_malformed_mesh": (_set("mesh_fingerprint", "not-a-digest"), "mesh_fingerprint must be", "pointwise"),
     "pointwise_uppercase_mesh": (_set("mesh_fingerprint", "float32-3x1-" + "A" * 32), "mesh_fingerprint must be", "pointwise"),

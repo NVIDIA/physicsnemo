@@ -34,7 +34,7 @@ from physicsnemo.experimental.uq.conformal import (
 )
 from physicsnemo.experimental.uq.conformal._utils import (
     TENSOR_KEY,
-    broadcast_difficulty,
+    broadcast_scale,
     check_aux,
     check_exact_shape,
     check_points,
@@ -78,7 +78,7 @@ VALIDATOR_CASES = [
     ("check_aux-integer", lambda: check_aux("k", _N, _F, {"sigma": _I64}), (TypeError, "floating")),
     ("check_aux-nonfinite", lambda: check_aux("k", _N, _F, {"sigma": _INF3}), (ValueError, "non-finite")),
     ("check_aux-plain-label", lambda: check_aux(TENSOR_KEY, _N, _F, {"sigma": 1.0}), (TypeError, "^Plain tensor: aux")),
-    ("broadcast_difficulty-plain-label", lambda: broadcast_difficulty(torch.ones(2), _F, TENSOR_KEY), (ValueError, "^Plain tensor: AuxDifficulty gave")),
+    ("broadcast_scale-plain-label", lambda: broadcast_scale(torch.ones(2), _F, TENSOR_KEY), (ValueError, "^Plain tensor: AuxScale gave")),
     ("keys-bare-string", lambda: normalize_keys("pressure"), (TypeError, "not the string")),
     ("keys-order-preserved", lambda: normalize_keys(["b", "a"]), ("b", "a")),
     ("keys-none", lambda: normalize_keys(None), None),

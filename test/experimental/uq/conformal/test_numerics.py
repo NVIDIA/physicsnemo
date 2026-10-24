@@ -33,7 +33,7 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    AuxDifficulty,
+    AuxScale,
     ConformalPredictor,
     FunctionalBandCalibrator,
     NormalizedErrorScore,
@@ -49,7 +49,10 @@ from physicsnemo.experimental.uq.conformal._utils import (
     pack_fields,
     slice_aux,
 )
-from physicsnemo.experimental.uq.conformal.calibrators import _crc_threshold
+from physicsnemo.experimental.uq.conformal.calibrators import (
+    _crc_threshold,
+    _sorted_point_scores,
+)
 from test.experimental.uq.conformal._helpers import (
     CALIBRATOR_CLASSES,
     TIERS,
@@ -133,6 +136,45 @@ def test_crc_threshold_parity_with_oracle_on_random_samples(seed, lengths):
     for alpha in (2 / (n + 1), 0.25, 0.5, 0.9):
         lam = _crc_threshold([t.sort().values for t in tensors], alpha)
         assert lam == _crc_oracle(tensors, alpha)[0]
+
+
+def _weighted_crc_oracle(per_sample_scores, per_sample_weights, alpha):
+    """Exact reference with weighted losses: a sample's miss mass is the sum of
+    its exact float weights above the candidate over the sum of all of them."""
+    n = len(per_sample_scores)
+    alpha_exact = Fraction(Decimal(str(alpha)))
+    samples = [
+        [(float(v), Fraction(float(w))) for v, w in zip(s.double(), ws.double())]
+        for s, ws in zip(per_sample_scores, per_sample_weights)
+    ]
+
+    def g(lam):
+        total = Fraction()
+        for sample in samples:
+            above = sum((w for v, w in sample if v > lam), start=Fraction())
+            total += above / sum((w for _, w in sample), start=Fraction())
+        return (total + 1) / (n + 1)
+
+    candidates = sorted({v for sample in samples for v, _ in sample})
+    feasible = [c for c in candidates if g(c) <= alpha_exact]
+    assert feasible, "oracle: infeasible input"
+    return feasible[0], g(feasible[0])
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_weighted_crc_threshold_parity_with_oracle_on_random_samples(seed):
+    """Random point weights: the float64 tail masses plus their rounding
+    margin select the same candidate as exact rational arithmetic."""
+    g = torch.Generator().manual_seed(seed)
+    n = int(torch.randint(3, 9, (1,), generator=g))
+    sizes = torch.randint(1, 8, (n,), generator=g)
+    tensors = [(torch.randn(int(m), generator=g) * 2).round() / 2 for m in sizes]
+    weights = [torch.rand(int(m), generator=g) + 0.01 for m in sizes]
+    records = [_sorted_point_scores(t.double(), w) for t, w in zip(tensors, weights)]
+    for alpha in (2 / (n + 1), 0.25, 0.5, 0.9):
+        expected, corrected = _weighted_crc_oracle(tensors, weights, alpha)
+        assert _crc_threshold(records, alpha) == expected
+        assert corrected <= Fraction(Decimal(str(alpha)))
 
 
 def test_crc_threshold_compares_against_declared_decimal_alpha_exactly():
@@ -241,11 +283,11 @@ def test_conformal_rank_nextafter_boundaries(base_alpha, n_cal):
 
 @pytest.mark.parametrize("cls", [FunctionalBandCalibrator, RiskControlCalibrator])
 def test_normalization_underflow_handled_exactly(cls):
-    """A huge constant difficulty must not zero the fitted statistic: the
+    """A huge constant scale must not zero the fitted statistic: the
     float64 policy preserves it and the identical population is covered."""
     target = torch.full((4,), 1e-10)
     aux = {"s": torch.full((4,), 1e38)}
-    calibrator = cls(AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s"))
+    calibrator = cls(AbsoluteErrorScore(), alpha=0.5, scale=AuxScale("s"))
     for _ in range(3):
         calibrator.update(torch.zeros(4), target, aux=aux)
     predictor = calibrator.finalize()
@@ -267,7 +309,7 @@ def test_normalization_rejects_subnormal_and_underflowed_scores(cls, score, magn
     prediction = torch.zeros(1, dtype=_F64)
     target = torch.full_like(prediction, magnitude)
     aux = {"s": torch.full_like(prediction, 1e308), "lo": prediction, "hi": 2 * target}
-    calibrator = cls(score, alpha=0.5, difficulty=AuxDifficulty("s"))
+    calibrator = cls(score, alpha=0.5, scale=AuxScale("s"))
     with pytest.raises(ValueError, match="float64.*Rescale"):
         calibrator.update(prediction, target, aux=aux)
     assert calibrator.n_cal == 0
@@ -285,7 +327,7 @@ def test_normalization_normal_boundary_and_true_zero(cls, signed):
     for magnitude in (below, 1.0, math.nextafter(1.0, math.inf), 0.0):
         target = torch.full_like(prediction, magnitude)
         aux = {"s": scale, "lo": prediction, "hi": 2 * target}
-        calibrator = cls(score, alpha=0.5, difficulty=AuxDifficulty("s"))
+        calibrator = cls(score, alpha=0.5, scale=AuxScale("s"))
         if magnitude == below:
             with pytest.raises(ValueError, match="float64.*Rescale"):
                 calibrator.update(prediction, target, aux=aux)
@@ -302,7 +344,7 @@ def test_normalization_normal_boundary_and_true_zero(cls, signed):
 def test_normalization_overflow_rejected():
     """A quotient that overflows even float64 is rejected at update time."""
     calibrator = RiskControlCalibrator(
-        AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
+        AbsoluteErrorScore(), alpha=0.5, scale=AuxScale("s")
     )
     with pytest.raises(ValueError, match="non-finite"):
         calibrator.update(
@@ -314,14 +356,14 @@ def test_normalization_overflow_rejected():
 
 
 @pytest.mark.parametrize("persist", [False, True], ids=["in_memory", "save_load"])
-def test_aux_difficulty_is_stable_across_default_dtype_changes(
+def test_aux_scale_is_stable_across_default_dtype_changes(
     persist, default_dtype, tmp_path
 ):
-    """The same difficulty scale applies at calibration and deployment even
+    """The same per-point scale applies at calibration and deployment even
     when the ambient default dtype changes in between (and across save/load)."""
     torch.set_default_dtype(_F32)
     calibrator = FunctionalBandCalibrator(
-        AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
+        AbsoluteErrorScore(), alpha=0.5, scale=AuxScale("s")
     )
     prediction = torch.zeros(1, dtype=_F64)
     target = torch.ones(1, dtype=_F64)
@@ -524,14 +566,14 @@ def test_cast_directed_fp16_bf16_and_narrowing(device):
     assert torch.equal(cast_directed(t16, _F64, up=True), t16.to(_F64))
 
 
-def test_adaptive_difficulty_keeps_float64_radius():
-    """A float32 difficulty vector must not demote the float64 threshold
+def test_adaptive_scale_keeps_float64_radius():
+    """A float32 scale vector must not demote the float64 threshold
     (PyTorch scalar promotion); containment holds through the adaptive path."""
     generator = torch.Generator().manual_seed(31)
     predictor, _ = fit(
         "risk_control",
         generator=generator,
-        difficulty=AuxDifficulty(key="sigma"),
+        scale=AuxScale(key="sigma"),
         n_samples=20,
         shape=(100,),
         aux_factory=lambda p, g: {"sigma": torch.rand(p.shape, generator=g) + 0.5},
