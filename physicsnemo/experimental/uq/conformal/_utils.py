@@ -378,15 +378,45 @@ def require_mesh(
 
 
 def check_point_alignment(
-    key: str, tensor: Tensor, points: Tensor, name: str = "prediction"
+    key: str,
+    tensor: Tensor,
+    points: Tensor,
+    name: str = "prediction",
+    what: str = "points",
 ) -> Tensor:
-    """Require one leading entry of ``tensor`` per mesh point."""
+    """Require one leading entry of ``tensor`` per mesh point (or per weight)."""
     if tensor.ndim == 0 or tensor.shape[0] != points.shape[0]:
         raise ValueError(
             f"{_field_label(key)} ({name}): shape {tuple(tensor.shape)} must have "
-            f"one leading entry per point (points has {points.shape[0]})."
+            f"one leading entry per point ({what} has {points.shape[0]})."
         )
     return tensor
+
+
+def check_weights(weights: Tensor, pending: list[Tensor] | None = None) -> Tensor:
+    """Require finite, nonnegative, not all zero ``weights`` of shape ``(n_points,)``.
+
+    With ``pending``, append the value flags there instead of syncing.
+    """
+    if not isinstance(weights, Tensor):
+        raise TypeError(f"weights must be a torch.Tensor, got {type(weights).__name__}.")
+    if weights.ndim != 1 or weights.shape[0] == 0:
+        raise ValueError(
+            f"weights must have non-empty shape (n_points,), got {tuple(weights.shape)}."
+        )
+    if not weights.is_floating_point():
+        raise TypeError(f"weights must use a floating-point dtype, got {weights.dtype}.")
+    checks = (
+        (torch.isfinite(weights).all(), "weights contains non-finite value(s)."),
+        ((weights >= 0).all(), "weights must be nonnegative."),
+        ((weights > 0).any(), "weights must not be all zero."),
+    )
+    for ok, problem in checks:
+        if pending is not None:
+            pending.append(ok)
+        elif not ok:
+            raise ValueError(problem)
+    return weights
 
 
 def clamp_min_floor(t: Tensor, eps: float) -> Tensor:

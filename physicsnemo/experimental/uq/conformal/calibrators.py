@@ -67,6 +67,7 @@ from ._utils import (
     check_point_alignment,
     check_points,
     check_real,
+    check_weights,
     conformal_quantile_index,
     field_items,
     kth_smallest_of_samples,
@@ -453,7 +454,7 @@ class PointwiseCalibrator(_SplitCalibratorBase):
 
 
 class _ScaledCalibratorBase(_SplitCalibratorBase):
-    """Shared ``update`` for calibrators with an optional ``AuxDifficulty``."""
+    """Shared ``update`` and scaled scores for calibrators with an ``AuxDifficulty``."""
 
     _reduce: Callable[[Tensor], Tensor]
 
@@ -528,19 +529,29 @@ class _ScaledCalibratorBase(_SplitCalibratorBase):
         """
 
         def stage(key, prediction_field, target_field, aux_field):
-            difficulty = (
-                None if self._difficulty is None else self._difficulty(aux_field)
+            return self._reduce(
+                self._scaled_scores(key, prediction_field, target_field, aux_field)
             )
-            raw = check_finite(
-                key,
-                "the nonconformity scores",
-                self._score.score(prediction_field, target_field, aux=aux_field),
-            )
-            return self._reduce(_normalized_scores(raw, difficulty, key))
 
         if points is not None:
             check_points(points)
         self._collect(prediction, target, aux, points, stage)
+
+    def _scaled_scores(
+        self,
+        key: str,
+        prediction: Tensor,
+        target: Tensor,
+        aux: Mapping[str, Tensor] | None,
+    ) -> Tensor:
+        """One field's finite scores divided by the ``AuxDifficulty`` scale, in float64."""
+        difficulty = None if self._difficulty is None else self._difficulty(aux)
+        raw = check_finite(
+            key,
+            "the nonconformity scores",
+            self._score.score(prediction, target, aux=aux),
+        )
+        return _normalized_scores(raw, difficulty, key)
 
 
 class FunctionalBandCalibrator(_ScaledCalibratorBase):
@@ -647,29 +658,66 @@ def _from_ordered_bits(i: int) -> float:
     return struct.unpack("<d", struct.pack("<q", bits))[0]
 
 
-def _crc_threshold(sorted_scores: list[Tensor], alpha: float) -> float:
+def _crc_threshold(
+    sorted_scores: list[Tensor | tuple[Tensor, Tensor]], alpha: float
+) -> float:
     """Smallest observed ``lambda`` with ``(R(lambda) + 1) / (n + 1) <= alpha``.
 
+    Each entry is one sample's sorted per-point scores, or a ``(scores, tail)``
+    pair from :func:`_sorted_point_scores` for a weighted sample, where
+    ``tail[j]`` is the normalized weight of the points of sorted rank ``j`` or
+    above.
+
     ``R`` only drops at observed scores, so the smallest float64 that meets the
-    bound is an observed score. Bisecting over float64 bit patterns finds it in
-    at most 64 probes of one binary search per sample, without sorting the
-    pooled scores.
+    bound is an observed score. The search bisects over float64 bit patterns
+    rather than numeric midpoints or sorted pooled candidates:
+
+    - Ordered bit patterns are a total order over every float64, signed zeros
+      included, so bisecting them lands exactly on an observed score in at
+      most 64 probes.
+    - Numeric midpoints can stall when ``lo`` and ``hi`` are adjacent floats,
+      and need thousands of halvings to cross a range such as 1e-300 to 1e300.
+    - Sorting the pooled candidates would materialize and sort
+      ``n_cal * n_points`` scores (56 million for 140 samples of 400,000
+      points); bit bisection needs only each sample's already-sorted scores
+      and one ``searchsorted`` per sample per probe.
+
+    An unweighted sample's miss fraction is an exact ``Fraction`` of its point
+    count. A weighted sample's tail mass comes from a float64 normalization and
+    cumulative sum, whose rounding moves it by at most ``numel * 2**-52``, so
+    that margin is added: rounding can only raise the estimated risk, never
+    lower it, and the threshold stays valid.
     """
     n = len(sorted_scores)
     alpha_exact = require_feasible_alpha(n, alpha)
-    scores64 = [scores.to(torch.float64) for scores in sorted_scores]
+    samples = [
+        (record.to(torch.float64), None)
+        if isinstance(record, Tensor)
+        else (record[0].to(torch.float64), record[1])
+        for record in sorted_scores
+    ]
+
+    def mass_above(scores: Tensor, tail: Tensor | None, rank: int) -> Fraction:
+        numel = scores.numel()
+        if tail is None:
+            return Fraction(numel - rank, numel)
+        if rank == 0:
+            return Fraction(1)
+        if rank == numel:
+            return Fraction(0)
+        return Fraction(float(tail[rank])) + Fraction(numel, 2**52)
 
     def within_budget(candidate: float) -> bool:
         probe = torch.tensor(candidate, dtype=torch.float64)
         total_loss = Fraction()
-        for scores in scores64:
-            exceed = scores.numel() - int(torch.searchsorted(scores, probe, right=True))
-            total_loss += Fraction(exceed, scores.numel())
+        for scores, tail in samples:
+            rank = int(torch.searchsorted(scores, probe, right=True))
+            total_loss += mass_above(scores, tail, rank)
         return (total_loss + 1) / (n + 1) <= alpha_exact
 
     # Below the smallest score every point is missed; at the largest none is.
-    lo = _ordered_bits(min(float(scores[0]) for scores in scores64)) - 1
-    hi = _ordered_bits(max(float(scores[-1]) for scores in scores64))
+    lo = _ordered_bits(min(float(scores[0]) for scores, _ in samples)) - 1
+    hi = _ordered_bits(max(float(scores[-1]) for scores, _ in samples))
     while hi - lo > 1:
         mid = (lo + hi) // 2
         if within_budget(_from_ordered_bits(mid)):
@@ -679,12 +727,23 @@ def _crc_threshold(sorted_scores: list[Tensor], alpha: float) -> float:
     return _from_ordered_bits(hi)
 
 
-def _sorted_point_scores(normalized: Tensor) -> Tensor:
-    """Max over trailing dims to get one score per point, sorted before the CPU copy."""
+def _sorted_point_scores(
+    normalized: Tensor, weights: Tensor | None = None
+) -> Tensor | tuple[Tensor, Tensor]:
+    """Max over trailing dims to get one score per point, sorted before the CPU copy.
+
+    With ``weights``, also return the normalized weights' tail mass in score
+    order: ``tail[j]`` is the weight of the points of sorted rank ``j`` or above.
+    """
     if normalized.ndim > 1:
         normalized = normalized.amax(dim=tuple(range(1, normalized.ndim)))
-    point_scores = normalized.reshape(-1)
-    return point_scores.detach().sort().values.cpu()
+    point_scores = normalized.reshape(-1).detach()
+    if weights is None:
+        return point_scores.sort().values.cpu()
+    sorted_scores, perm = point_scores.sort()
+    w = weights.to(device=point_scores.device, dtype=torch.float64)
+    tail = (w / w.sum())[perm].flip(0).cumsum(0).flip(0)
+    return sorted_scores.cpu(), tail.cpu()
 
 
 class RiskControlCalibrator(_ScaledCalibratorBase):
@@ -695,14 +754,19 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
     cover every point at once. It gives much tighter bands than
     :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`
     in exchange for this weaker guarantee. A point counts as missed when any
-    of its components (trailing dimensions) falls outside the band. Every
-    sample has equal weight, whatever its point count. The threshold comes
+    of its trailing components is outside the band, for example any channel
+    of an :math:`(n_{\text{points}}, C)` field. Every sample has equal
+    weight, whatever its point count; within a sample, ``weights=`` on
+    :meth:`update` weights the points, for example by cell area or volume on
+    a non-uniform mesh. Separate ``TensorDict`` fields get separate
+    thresholds and separate guarantees, not a joint one. The threshold comes
     from conformal risk control (CRC), `Conformal Risk Control
     <https://arxiv.org/abs/2208.02814>`_ (Angelopoulos, Bates, Fisch, Lei
     and Schuster, 2022).
 
     Guarantee: the expected fraction of missed points in a new sample is at
-    most :math:`\alpha`.
+    most :math:`\alpha`; with ``weights``, the expected weighted fraction of
+    missed points is at most :math:`\alpha`.
 
     Parameters
     ----------
@@ -714,7 +778,10 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
         Target expected fraction of missed points, in :math:`(0, 1)`.
     difficulty : AuxDifficulty, optional
         Per-point scale :math:`s(x)` that widens the band where it is large.
-        ``None`` gives a constant width.
+        Without one the width is whatever the score gives: constant for
+        ``AbsoluteErrorScore``, proportional to ``aux["sigma"]`` for
+        ``NormalizedErrorScore``, and following the quantile heads for
+        ``QuantileRegressionScore``.
     keys : Sequence[str], optional
         Names of the ``TensorDict`` fields to calibrate (see
         :class:`~physicsnemo.experimental.uq.conformal.PointwiseCalibrator`).
@@ -733,7 +800,7 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
 
     The calibrator keeps every sample's per-point scores on the CPU until
     :meth:`finalize`, so memory grows with the total number of calibration
-    points.
+    points; with ``weights`` it doubles, one float64 tail mass per point.
 
     Examples
     --------
@@ -749,7 +816,10 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
     ...     prediction = torch.randn(n_points, 2)
     ...     sigma = torch.rand(n_points, 2) + 0.5
     ...     target = prediction + sigma * torch.randn(n_points, 2)
-    ...     calibrator.update(prediction, target, aux={"sigma": sigma})
+    ...     cell_areas = torch.rand(n_points) + 0.5
+    ...     calibrator.update(
+    ...         prediction, target, aux={"sigma": sigma}, weights=cell_areas
+    ...     )
     >>> predictor = calibrator.finalize()
     >>> sigma = torch.rand(30, 2) + 0.5
     >>> lo, hi = predictor.predict_interval(torch.randn(30, 2), aux={"sigma": sigma})
@@ -757,7 +827,105 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
     torch.Size([30, 2])
     """
 
-    _reduce = staticmethod(_sorted_point_scores)
+    def __init__(
+        self,
+        score: NonconformityScore,
+        alpha: float,
+        *,
+        difficulty: AuxDifficulty | None = None,
+        keys: Sequence[str] | None = None,
+    ) -> None:
+        super().__init__(score, alpha, difficulty=difficulty, keys=keys)
+        self._weighted = False
+
+    def update(
+        self,
+        prediction: Float[Tensor, "*dims"] | TensorDict,
+        target: Float[Tensor, "*dims"] | TensorDict,
+        *,
+        aux: Mapping[str, Float[Tensor, "*dims"]] | Mapping[str, Mapping] | None = None,
+        points: Float[Tensor, "n_points n_spatial_dims"] | None = None,
+        weights: Float[Tensor, "n_points"] | None = None,
+    ) -> None:
+        r"""Add one calibration sample; its point count may differ from other samples.
+
+        Parameters
+        ----------
+        prediction : torch.Tensor | TensorDict
+            Model output of shape :math:`(n_{\text{points}}, *\text{dims})`
+            (any shape :math:`(*\text{dims})` when none of ``points``,
+            ``difficulty``, and ``weights`` is used), or a field container of
+            such tensors.
+        target : torch.Tensor | TensorDict
+            Observed values, same shape and container type as ``prediction``.
+        aux : Mapping[str, torch.Tensor] | Mapping[str, Mapping], optional
+            Extra tensors read by the score or ``AuxDifficulty``, each the
+            same shape as ``prediction``, such as ``{"sigma": ...}`` for
+            ``AuxDifficulty("sigma")``. For ``TensorDict`` inputs, nest by
+            field name, as in ``{"pressure": {"sigma": ...}}``.
+        points : torch.Tensor, optional
+            Mesh coordinates of shape
+            :math:`(n_{\text{points}}, n_{\text{spatial\_dims}})`; may differ
+            between samples. Only checks that each field has one leading
+            entry per point; it does not change the band.
+        weights : torch.Tensor, optional
+            Per-point weights of shape :math:`(n_{\text{points}},)`: floating
+            point, finite, nonnegative, not all zero, on any device. For
+            example cell areas or volumes on a non-uniform mesh (with
+            :mod:`physicsnemo.mesh`,
+            :func:`~physicsnemo.mesh.calculus.point_measures`). The sample's
+            loss becomes its weighted fraction of missed points, normalized by
+            the sum of the weights, and the guarantee becomes "the expected
+            weighted fraction of missed points is at most :math:`\alpha`".
+            For ``TensorDict`` inputs one vector applies to every calibrated
+            field, so each field's leading dimension must equal
+            ``len(weights)``. Pass ``weights`` on every call or on none.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If ``prediction`` and ``target`` shapes differ, if any value,
+            scale, or weight is non-finite, if a score divided by its scale
+            is too small for float64, or if ``weights`` has the wrong shape,
+            a negative entry, or no positive entry.
+        TypeError
+            If plain tensors and ``TensorDict`` inputs are mixed, if
+            ``weights`` is passed on some calls but not others, or if it is
+            not a floating-point tensor.
+        KeyError
+            If the set of fields differs from the first sample.
+
+        Notes
+        -----
+        A sample that raises is not stored.
+        """
+        if self._n and (weights is not None) != self._weighted:
+            first = "had" if self._weighted else "did not have"
+            raise TypeError(
+                f"The first calibration sample {first} weights=; pass weights= "
+                "on every call or on none."
+            )
+        if points is not None:
+            check_points(points)
+        if weights is not None:
+            check_weights(weights)
+
+        def stage(key, prediction_field, target_field, aux_field):
+            if weights is not None:
+                check_point_alignment(
+                    key, prediction_field, weights, "prediction", "weights"
+                )
+            return _sorted_point_scores(
+                self._scaled_scores(key, prediction_field, target_field, aux_field),
+                weights,
+            )
+
+        self._collect(prediction, target, aux, points, stage)
+        self._weighted = weights is not None
 
     def finalize(self) -> ConformalPredictor:
         r"""Fit the CRC threshold and return the predictor.
@@ -778,12 +946,10 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
             If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
             than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
         """
+        alpha = self._alpha
         self._require_finalizable()
         thresholds = {
-            key: torch.tensor(
-                _crc_threshold(samples, self._alpha),
-                dtype=torch.float64,
-            )
+            key: torch.tensor(_crc_threshold(samples, alpha), dtype=torch.float64)
             for key, samples in self._scores.items()
         }
         return self._build_predictor(

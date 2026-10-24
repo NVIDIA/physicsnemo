@@ -313,6 +313,133 @@ def test_crc_accepts_varying_mesh_sizes_and_tensordict():
     assert float(predictor.thresholds["v"]) == 1.0
 
 
+@pytest.mark.parametrize("constant", [1.0, 3.5, 1e-3])
+def test_crc_uniform_weights_reproduce_the_unweighted_threshold_bit_for_bit(
+    constant, device
+):
+    """Equal weights of any size give the unweighted loss; weights may live on
+    another device than the fields."""
+    generator = torch.Generator(device=device).manual_seed(3)
+    unweighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.2)
+    weighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.2)
+    for n_points in range(20, 35):
+        prediction = torch.randn(n_points, 2, generator=generator, device=device)
+        noise = torch.randn(n_points, 2, generator=generator, device=device)
+        target = prediction + 0.3 * noise
+        weights_device = device if n_points % 2 else "cpu"
+        unweighted.update(prediction, target)
+        weighted.update(
+            prediction,
+            target,
+            weights=torch.full((n_points,), constant, device=weights_device),
+        )
+    assert torch.equal(weighted.finalize().thresholds, unweighted.finalize().thresholds)
+
+
+def test_crc_weighted_threshold_is_conservative_at_the_exact_bound():
+    """Weighted tail masses carry a rounding margin, so a total risk that sits
+    exactly on the CRC bound passes unweighted but not weighted."""
+    unweighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    weighted = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    for values in ([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], [0.0] * 4):
+        target = torch.tensor(values)
+        unweighted.update(torch.zeros(4), target)
+        weighted.update(torch.zeros(4), target, weights=torch.ones(4))
+    # At lambda=0 the exact risk is (1/2 + 1/2 + 0 + 1) / 4 = alpha.
+    assert float(unweighted.finalize().thresholds) == 0.0
+    assert float(weighted.finalize().thresholds) == 1.0
+
+
+@pytest.mark.parametrize(
+    "weights,expected",
+    [([0.1, 0.1, 0.8], 3.0), ([0.8, 0.1, 0.1], 1.0), (None, 2.0)],
+    ids=["heavy_tail", "heavy_head", "unweighted"],
+)
+def test_crc_weights_move_the_threshold_predictably(weights, expected):
+    """Three samples with scores [1, 2, 3] at alpha=0.5 may total a risk of 1:
+    a 0.8-weight point at score 3 forces lambda=3, at score 1 it allows
+    lambda=1 (risk 3 * 0.2), and unweighted lands at 2 (risk 3 * 1/3)."""
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    prediction = _td(a=torch.zeros(3), b=torch.zeros(3, 2))
+    target = _td(
+        a=torch.tensor([1.0, 2.0, 3.0]),
+        b=torch.tensor([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]),
+    )
+    kwargs = {} if weights is None else {"weights": torch.tensor(weights)}
+    for _ in range(3):
+        calibrator.update(prediction, target, **kwargs)
+    thresholds = calibrator.finalize().thresholds
+    assert float(thresholds["a"]) == float(thresholds["b"]) == expected
+
+
+def test_crc_weighted_records_hold_sorted_scores_and_tail_mass_on_the_cpu(device):
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    target = torch.tensor([3.0, 1.0, 2.0], device=device)
+    weights = torch.tensor([1.0, 2.0, 7.0], device=device)
+    calibrator.update(torch.zeros(3, device=device), target, weights=weights)
+    scores, tail = calibrator._scores[TENSOR_KEY][0]
+    assert scores.device.type == tail.device.type == "cpu"
+    assert torch.equal(scores, torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64))
+    # Weights in score order are [2, 7, 1] / 10; tail[j] sums ranks >= j.
+    torch.testing.assert_close(tail, torch.tensor([1.0, 0.8, 0.1], dtype=torch.float64))
+
+
+_W3 = torch.ones(3)
+# fmt: off
+WEIGHT_REJECTIONS = [  # (id, weights, error, match)
+    ("2d", torch.ones(3, 1), ValueError, r"shape \(n_points,\)"),
+    ("wrong-length", torch.ones(4), ValueError, r"\(prediction\).*weights has 4"),
+    ("negative", torch.tensor([1.0, -1.0, 1.0]), ValueError, "nonnegative"),
+    ("nan", torch.tensor([1.0, torch.nan, 1.0]), ValueError, "non-finite"),
+    ("inf", torch.tensor([1.0, torch.inf, 1.0]), ValueError, "non-finite"),
+    ("all-zero", torch.zeros(3), ValueError, "all zero"),
+    ("integer", torch.ones(3, dtype=torch.int64), TypeError, "floating-point"),
+    ("not-a-tensor", [1.0, 1.0, 1.0], TypeError, "torch.Tensor"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize(
+    "weights,error,match",
+    [pytest.param(*row[1:], id=row[0]) for row in WEIGHT_REJECTIONS],
+)
+def test_crc_rejects_bad_weights_transactionally(weights, error, match):
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    calibrator.update(torch.zeros(3), torch.zeros(3), weights=_W3)
+    with pytest.raises(error, match=match):
+        calibrator.update(torch.zeros(3), torch.ones(3), weights=weights)
+    assert calibrator.n_cal == 1
+
+
+@pytest.mark.parametrize(
+    "first_weighted", [True, False], ids=["weighted-first", "unweighted-first"]
+)
+def test_crc_weights_are_all_or_none_across_calls(first_weighted):
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    weighted, plain = {"weights": _W3}, {}
+    first, second = (weighted, plain) if first_weighted else (plain, weighted)
+    calibrator.update(torch.zeros(3), torch.zeros(3), **first)
+    had = "had" if first_weighted else "did not have"
+    with pytest.raises(TypeError, match=f"first calibration sample {had} weights="):
+        calibrator.update(torch.zeros(3), torch.zeros(3), **second)
+    assert calibrator.n_cal == 1
+
+
+def test_crc_weights_must_align_with_every_tensordict_field():
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    prediction = _td(a=torch.zeros(3), b=torch.zeros(4, 2))
+    with pytest.raises(ValueError, match=r"Field 'b' \(prediction\).*weights has 3"):
+        calibrator.update(prediction, prediction.clone(), weights=_W3)
+    assert calibrator.n_cal == 0
+
+
+def test_functional_band_does_not_take_weights():
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    with pytest.raises(TypeError, match="weights"):
+        calibrator.update(torch.zeros(3), torch.zeros(3), weights=_W3)
+    assert calibrator.n_cal == 0
+
+
 @pytest.mark.parametrize(
     "calibrator_cls", [FunctionalBandCalibrator, RiskControlCalibrator]
 )

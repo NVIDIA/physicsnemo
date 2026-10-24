@@ -80,6 +80,16 @@ def test_risk_report_averages_each_sample_point_event_equally():
     json.dumps(report, allow_nan=False)
 
 
+def test_weighted_risk_report_uses_the_normalized_weighted_fraction():
+    accumulator = _accumulator()
+    accumulator.update(*_interval_sample(3, 2), weights=torch.tensor([1.0, 2.0, 7.0]))
+    accumulator.update(*_interval_sample(2, 1), weights=torch.tensor([1.0, 3.0]))
+    # Missed masses 7/10 and 3/4; unweighted they would be 1/3 and 1/2.
+    report = accumulator.finalize()["fields"]["tensor"]
+    assert report["n_samples"] == 2
+    assert report["empirical_mean_risk"] == pytest.approx(0.725)
+
+
 def test_risk_coverage_reduces_trailing_components_to_point_events():
     accumulator = _accumulator(shape=(3, 3))
     lo = torch.full((2, 2, 3), -1.0)
@@ -268,6 +278,54 @@ def test_update_rejections_are_transactional(
             )
 
 
+@pytest.mark.parametrize("tier", ["pointwise", "functional"])
+def test_weights_are_rejected_on_coverage_tiers(tier):
+    accumulator = _accumulator(tier)
+    with pytest.raises(TypeError, match="only to the risk_control tier"):
+        accumulator.update(*_PLAIN, weights=_ONES3)
+    assert accumulator.finalize()["fields"]["tensor"]["n_samples"] == 0
+
+
+@pytest.mark.parametrize(
+    "first_weighted", [True, False], ids=["weighted-first", "unweighted-first"]
+)
+def test_accumulator_weights_are_all_or_none_across_calls(first_weighted):
+    accumulator = _accumulator()
+    weighted, plain = {"weights": _ONES3}, {}
+    first, second = (weighted, plain) if first_weighted else (plain, weighted)
+    accumulator.update(*_PLAIN, **first)
+    before = accumulator.finalize()
+    had = "had" if first_weighted else "did not have"
+    with pytest.raises(TypeError, match=f"first held-out sample {had} weights="):
+        accumulator.update(*_PLAIN, **second)
+    assert accumulator.finalize() == before
+
+
+# fmt: off
+WEIGHT_REJECTIONS = [  # (id, weights, error, match)
+    ("nan", torch.tensor([1.0, torch.nan, 1.0]), ValueError, "non-finite"),
+    ("negative", torch.tensor([1.0, -1.0, 1.0]), ValueError, "nonnegative"),
+    ("all-zero", torch.zeros(3), ValueError, "all zero"),
+    ("wrong-length", torch.ones(4), ValueError, r"Field 'a' \(target\).*weights has 4"),
+    ("2d", torch.ones(3, 1), ValueError, r"shape \(n_points,\)"),
+    ("integer", torch.ones(3, dtype=torch.int64), TypeError, "floating-point"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize(
+    "weights,error,match",
+    [pytest.param(*row[1:], id=row[0]) for row in WEIGHT_REJECTIONS],
+)
+def test_weighted_update_rejections_are_transactional(weights, error, match):
+    accumulator = _accumulator(fields=["a", "b"])
+    accumulator.update(_LO3, _HI3, _T3, weights=_ONES3)
+    before = accumulator.finalize()
+    with pytest.raises(error, match=match):
+        accumulator.update(_LO3, _HI3, _T3, weights=weights)
+    assert accumulator.finalize() == before
+
+
 def test_infinite_prediction_bounds_require_recomputing_in_wider_dtype():
     """Conservative fp16 bounds can overflow; upcast before predicting again."""
     predictor, points = fit("pointwise", n_samples=3, alpha=0.5, shape=(1,))
@@ -312,6 +370,28 @@ def test_update_syncs_once_and_accepts_a_second_device(monkeypatch, device, tier
     for sample in samples:
         reference.update(*sample)
     assert accumulator.finalize() == reference.finalize()
+
+
+def test_weighted_update_syncs_once_and_accepts_a_second_device(monkeypatch, device):
+    """The weight checks join the one host sync; weights follow the fields."""
+    accumulator = _accumulator(fields=["a", "b"])
+    reference = _accumulator(fields=["a", "b"])
+    weights = torch.tensor([1.0, 2.0, 7.0])
+    samples = [
+        tuple(_td(a=t, b=2 * t) for t in _interval_sample(3, n_covered))
+        for n_covered in (3, 1)
+    ]
+    calls = count_syncs(monkeypatch)
+    accumulator.update(*(t.to(device) for t in samples[0]), weights=weights.to(device))
+    assert calls == ["tolist"]
+    accumulator.update(*samples[1], weights=weights)
+    monkeypatch.undo()
+    for sample in samples:
+        reference.update(*sample, weights=weights)
+    report = accumulator.finalize()
+    assert report == reference.finalize()
+    # The second sample covers only the 0.1-mass point: risks 0 and 0.9.
+    assert report["fields"]["a"]["empirical_mean_risk"] == pytest.approx(0.45)
 
 
 def test_update_does_not_keep_the_autograd_graph():

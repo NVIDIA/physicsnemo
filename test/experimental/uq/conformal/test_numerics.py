@@ -49,7 +49,10 @@ from physicsnemo.experimental.uq.conformal._utils import (
     pack_fields,
     slice_aux,
 )
-from physicsnemo.experimental.uq.conformal.calibrators import _crc_threshold
+from physicsnemo.experimental.uq.conformal.calibrators import (
+    _crc_threshold,
+    _sorted_point_scores,
+)
 from test.experimental.uq.conformal._helpers import (
     CALIBRATOR_CLASSES,
     TIERS,
@@ -133,6 +136,45 @@ def test_crc_threshold_parity_with_oracle_on_random_samples(seed, lengths):
     for alpha in (2 / (n + 1), 0.25, 0.5, 0.9):
         lam = _crc_threshold([t.sort().values for t in tensors], alpha)
         assert lam == _crc_oracle(tensors, alpha)[0]
+
+
+def _weighted_crc_oracle(per_sample_scores, per_sample_weights, alpha):
+    """Exact reference with weighted losses: a sample's miss mass is the sum of
+    its exact float weights above the candidate over the sum of all of them."""
+    n = len(per_sample_scores)
+    alpha_exact = Fraction(Decimal(str(alpha)))
+    samples = [
+        [(float(v), Fraction(float(w))) for v, w in zip(s.double(), ws.double())]
+        for s, ws in zip(per_sample_scores, per_sample_weights)
+    ]
+
+    def g(lam):
+        total = Fraction()
+        for sample in samples:
+            above = sum((w for v, w in sample if v > lam), start=Fraction())
+            total += above / sum((w for _, w in sample), start=Fraction())
+        return (total + 1) / (n + 1)
+
+    candidates = sorted({v for sample in samples for v, _ in sample})
+    feasible = [c for c in candidates if g(c) <= alpha_exact]
+    assert feasible, "oracle: infeasible input"
+    return feasible[0], g(feasible[0])
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_weighted_crc_threshold_parity_with_oracle_on_random_samples(seed):
+    """Random point weights: the float64 tail masses plus their rounding
+    margin select the same candidate as exact rational arithmetic."""
+    g = torch.Generator().manual_seed(seed)
+    n = int(torch.randint(3, 9, (1,), generator=g))
+    sizes = torch.randint(1, 8, (n,), generator=g)
+    tensors = [(torch.randn(int(m), generator=g) * 2).round() / 2 for m in sizes]
+    weights = [torch.rand(int(m), generator=g) + 0.01 for m in sizes]
+    records = [_sorted_point_scores(t.double(), w) for t, w in zip(tensors, weights)]
+    for alpha in (2 / (n + 1), 0.25, 0.5, 0.9):
+        expected, corrected = _weighted_crc_oracle(tensors, weights, alpha)
+        assert _crc_threshold(records, alpha) == expected
+        assert corrected <= Fraction(Decimal(str(alpha)))
 
 
 def test_crc_threshold_compares_against_declared_decimal_alpha_exactly():
