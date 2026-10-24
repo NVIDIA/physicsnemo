@@ -99,6 +99,9 @@ def create_dataloader(
         file_list (list of str): List of paths to .h5 files.
         mean (np.ndarray): Global mean for normalization.
         std (np.ndarray): Global standard deviation for normalization.
+        sampler (Sampler or None): Sampler passed to the DataLoader. Use None for
+            the default sequential order.
+        nan_to_0 (bool): If True, NaNs in the loaded arrays are replaced with 0.
         batch_size (int): Number of samples per batch.
         num_workers (int): Number of worker processes for data loading.
         pin_memory (bool): If True, the data loader will copy tensors into CUDA pinned memory.
@@ -134,7 +137,7 @@ if __name__ == "__main__":
 
     # Create DataLoader
     dataloader = create_dataloader(
-        file_list, mean, std, nan_to_0=True, batch_size=2, num_workers=1
+        file_list, mean, std, sampler=None, nan_to_0=True, batch_size=2, num_workers=1
     )
 
     # Example usage
