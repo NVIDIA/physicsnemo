@@ -71,10 +71,10 @@ def run_test_distributed_meshgraphnet(rank, world_size, partition_scheme):
     ).to(device)
     model_dist = mark_module_as_shared(copy.deepcopy(model), "graph_partition")
 
-    # 3 to 6 incoming edges per node, in random order to exercise edge_perm
+    # 3 to 6 incoming edges per node, in random order to exercise edge_perm, and
+    # no outgoing edges from the last 5 nodes
     dst = torch.repeat_interleave(torch.randint(3, 7, (n,)))
-    src = torch.randint(0, n, dst.shape)
-    src[-1] = n - 1  # default partitioning infers the node count from the edges
+    src = torch.randint(0, n - 5, dst.shape)
     edge_index = torch.stack([src, dst])[:, torch.randperm(dst.numel())]
     nfeat = torch.randn(n, 32, device=device, requires_grad=True)
     efeat = torch.randn(edge_index.size(1), 32, device=device)
@@ -96,7 +96,13 @@ def run_test_distributed_meshgraphnet(rank, world_size, partition_scheme):
     else:  # default partitioning, with the process group passed directly
         group_name, process_group = None, manager.group("graph_partition")
     graph = DistributedGraph(
-        offsets, indices, world_size, group_name, partition, process_group
+        offsets,
+        indices,
+        world_size,
+        group_name,
+        partition,
+        process_group,
+        num_src_nodes=n,
     )
 
     out = model(nfeat, efeat, Data(edge_index=edge_index, num_nodes=n).to(device))
@@ -106,6 +112,13 @@ def run_test_distributed_meshgraphnet(rank, world_size, partition_scheme):
     efeat_dist = graph.get_edge_features_in_partition(efeat[edge_perm])
     out_dist = model_dist(nfeat_dist, efeat_dist, graph)
     out_dist.sum().backward()
+    if partition_scheme == "process_group":
+        # without the node count, source and destination partitions differ
+        graph_short = DistributedGraph(
+            offsets, indices, world_size, None, None, process_group
+        )
+        with pytest.raises(ValueError, match="same partition"):
+            model_dist(nfeat_dist, efeat_dist, graph_short)
 
     out_expected = graph.get_dst_node_features_in_partition(out.detach())
     torch.testing.assert_close(out_dist, out_expected, atol=1e-4, rtol=1e-5)

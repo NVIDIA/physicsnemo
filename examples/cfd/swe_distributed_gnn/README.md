@@ -201,6 +201,7 @@ graph = DistributedGraph(
     indices,
     partition_size=graph_partition_pg_size,
     graph_partition_group_name=graph_partition_pg_name,
+    num_src_nodes=num_src_nodes,
 )
 
 ...

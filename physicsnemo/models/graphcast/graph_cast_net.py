@@ -30,7 +30,6 @@ from physicsnemo.nn.module.gnn_layers.distributed_graph import (
     DistributedGraph,
     edge_index_to_csc,
     partition_graph_by_coordinate_bbox,
-    partition_graph_nodewise,
 )
 from physicsnemo.nn.module.gnn_layers.embedder import (
     GraphCastDecoderEmbedder,
@@ -77,20 +76,16 @@ def get_lat_lon_partition_separators(
         lat_bin_width = 180.0 / num_lat_chunks
         lon_bin_width = 360.0 / num_lon_chunks
 
-        lat_ranges = []
-        lon_ranges = []
+        # leave the outer bins open, so that every lat-lon point is in a bin
+        def _bins(num_chunks, width, start):
+            edges = [start + width * i for i in range(num_chunks + 1)]
+            edges[0] = edges[-1] = None
+            return list(zip(edges[:-1], edges[1:]))
 
-        for p_lat in range(num_lat_chunks):
-            for p_lon in range(num_lon_chunks):
-                lat_ranges += [
-                    (lat_bin_width * p_lat - 90.0, lat_bin_width * (p_lat + 1) - 90.0)
-                ]
-                lon_ranges += [
-                    (lon_bin_width * p_lon - 180.0, lon_bin_width * (p_lon + 1) - 180.0)
-                ]
-
-        lat_ranges[-1] = (lat_ranges[-1][0], None)
-        lon_ranges[-1] = (lon_ranges[-1][0], None)
+        lat_bins = _bins(num_lat_chunks, lat_bin_width, -90.0)
+        lon_bins = _bins(num_lon_chunks, lon_bin_width, -180.0)
+        lat_ranges = [lat for lat in lat_bins for _ in lon_bins]
+        lon_ranges = [lon for _ in lat_bins for lon in lon_bins]
 
         return lat_ranges, lon_ranges
 
@@ -132,9 +127,9 @@ def _partition_graph(
     r"""Splits a graph across the ranks of a process group, and returns it with
     this rank's edge features. Lat-lon coordinates are in degrees."""
     offsets, indices, edge_perm = edge_index_to_csc(edge_index, dst_lat_lon.size(0))
-    dist_manager = DistributedManager()
-    rank, device = dist_manager.group_rank(partition_group_name), dist_manager.device
+    graph_partition = None
     if use_lat_lon_partitioning:
+        dist_manager = DistributedManager()
         graph_partition = partition_graph_by_coordinate_bbox(
             offsets,
             indices,
@@ -142,21 +137,17 @@ def _partition_graph(
             dst_lat_lon,
             *get_lat_lon_partition_separators(partition_size),
             partition_size,
-            rank,
-            device,
+            dist_manager.group_rank(partition_group_name),
+            dist_manager.device,
         )
-    else:
-        # Pass the node count: m2g may give the last mesh nodes no edges.
-        graph_partition = partition_graph_nodewise(
-            offsets,
-            indices,
-            partition_size,
-            rank,
-            device,
-            num_src_nodes=len(src_lat_lon),
-        )
+    # Pass the source node count: m2g may give the last mesh nodes no edges.
     graph = DistributedGraph(
-        offsets, indices, partition_size, partition_group_name, graph_partition
+        offsets,
+        indices,
+        partition_size,
+        partition_group_name,
+        graph_partition,
+        num_src_nodes=len(src_lat_lon),
     )
     return graph, graph.get_edge_features_in_partition(edge_features[edge_perm])
 

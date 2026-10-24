@@ -853,14 +853,9 @@ def partition_graph_by_coordinate_bbox(
     num_global_src_nodes = src_coordinates.size(0)
     num_global_dst_nodes = global_offsets.size(0) - 1
 
-    mapping_dst_ids_to_ranks = torch.zeros(
-        num_global_dst_nodes, dtype=global_offsets.dtype, device=global_offsets.device
-    )
-    mapping_src_ids_to_ranks = torch.zeros(
-        num_global_src_nodes,
-        dtype=global_offsets.dtype,
-        device=global_offsets.device,
-    )
+    kwargs = {"dtype": global_offsets.dtype, "device": global_offsets.device}
+    mapping_dst_ids_to_ranks = torch.full((num_global_dst_nodes,), -1, **kwargs)
+    mapping_src_ids_to_ranks = torch.full((num_global_src_nodes,), -1, **kwargs)
 
     def _assign_ranks(mapping, coordinates):
         for p in range(partition_size):
@@ -875,6 +870,10 @@ def partition_graph_by_coordinate_bbox(
                 if max_val is not None:
                     mask = mask & (coordinates[:, d] < max_val)
             mapping[mask] = p
+        if (mapping < 0).any():
+            raise ValueError(
+                f"{int((mapping < 0).sum())} nodes lie outside every partition's box."
+            )
 
     _assign_ranks(mapping_src_ids_to_ranks, src_coordinates)
     _assign_ranks(mapping_dst_ids_to_ranks, dst_coordinates)
@@ -932,6 +931,7 @@ class DistributedGraph:
         graph_partition_group_name: str = None,
         graph_partition: Optional[GraphPartition] = None,
         process_group: Optional[dist.ProcessGroup] = None,
+        num_src_nodes: Optional[int] = None,
     ):  # pragma: no cover
         """
         Utility Class representing a distributed graph based on a given
@@ -962,6 +962,9 @@ class DistributedGraph:
             ``graph_partition_group_name`` for groups that ``DistributedManager``
             does not know. The graph then lives on the current CUDA device, if any,
             so call ``torch.cuda.set_device`` first.
+        num_src_nodes : int, optional
+            Number of source nodes, for the default partitioning. Defaults to the
+            largest source ID plus one; see ``partition_graph_nodewise``.
         """
 
         if process_group is None:
@@ -991,6 +994,7 @@ class DistributedGraph:
                 self.partition_size,
                 self.partition_rank,
                 self.device,
+                num_src_nodes=num_src_nodes,
             )
 
         else:
@@ -1015,6 +1019,16 @@ class DistributedGraph:
         print(msg)
 
         dist.barrier(self.process_group)
+
+    @cached_property
+    def same_src_and_dst_partition(self) -> bool:
+        r"""Whether this rank holds the same nodes, in the same order, as source and
+        as destination nodes, as message passing with one node-feature tensor needs."""
+        partition = self.graph_partition
+        return partition.matrix_decomp or torch.equal(
+            partition.map_partitioned_src_ids_to_global,
+            partition.map_partitioned_dst_ids_to_global,
+        )
 
     @cached_property
     def local_graph(self) -> graph_types.GraphType:

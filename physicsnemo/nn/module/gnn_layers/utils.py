@@ -91,7 +91,15 @@ if PYG_AVAILABLE:
     ) -> Tuple[Tuple[Tensor, Tensor], PyGData]:
         r"""Fetches from other ranks the source node features that this rank's edges
         need. Returns the node features and graph for local message passing."""
-        src_feat, dst_feat = nfeat if isinstance(nfeat, tuple) else (nfeat, nfeat)
+        if isinstance(nfeat, tuple):
+            src_feat, dst_feat = nfeat
+        elif graph.same_src_and_dst_partition:
+            src_feat = dst_feat = nfeat
+        else:
+            raise ValueError(
+                "One node-feature tensor needs the same partition for source and "
+                "destination nodes. Pass num_src_nodes to DistributedGraph."
+            )
         src_feat = graph.get_src_node_features_in_local_graph(src_feat)
         return (src_feat, dst_feat), graph.local_graph
 

@@ -612,7 +612,7 @@ def main(cfg: DictConfig):
     if DistributedManager().distributed:
         torch.distributed.gather(max_mem, gather_list, dst=0)
     else:
-        max_mem = gather_list[0]
+        gather_list[0] = max_mem
 
     if dist_manager.rank == 0:
         if cfg.run_training:
