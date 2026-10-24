@@ -34,7 +34,10 @@ from physicsnemo.nn.functional.neighbors.knn._cuml_impl import knn_impl
 
 
 def ring_knn(
-    points: ShardTensor, queries: ShardTensor, k: int
+    points: ShardTensor,
+    queries: ShardTensor,
+    k: int,
+    local_knn: Callable = knn_impl,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     r"""Ring-based kNN implementation where points travel around a ring and queries stay local.
 
@@ -52,6 +55,9 @@ def ring_knn(
         Must be sharded on the same mesh as points.
     k : int
         Number of nearest neighbors to find for each query point.
+    local_knn : Callable, optional
+        kNN of plain local tensors, ``(points, queries, k) -> (indices,
+        distances)``. Defaults to the cuML implementation.
 
     Returns
     -------
@@ -134,13 +140,15 @@ def ring_knn(
             )
 
         # Compute the knn on the local tensors:
-        local_idx, local_distances = knn_impl(local_points, local_queries, k)
+        local_idx, local_distances = local_knn(local_points, local_queries, k)
 
         # The local_idx indexes into the _local_ tensor, but for
         # Correctness we need it to index into the _global_ tensor.
         # Make sure to index using the rank the points came from!
+        # Index -1 marks a missing neighbor (for example, the Warp backend's
+        # result for a non-finite query), so it stays -1.
         offset = points_strides_along_ring[source_rank]
-        local_idx = local_idx + offset
+        local_idx = torch.where(local_idx >= 0, local_idx + offset, local_idx)
 
         if current_dists is None:
             current_dists = local_distances
@@ -205,7 +213,8 @@ def knn_sharded_wrapper(
     Parameters
     ----------
     func : Callable
-        The function to dispatch.
+        The intercepted kNN op (cuML or Warp). It also computes the kNN of
+        the local tensors.
     types : Any
         The types of the inputs.
     args : tuple
@@ -244,12 +253,12 @@ def knn_sharded_wrapper(
 
     if points_placement.is_shard():
         # We need a ring
-        idx, distances = ring_knn(points, queries, k)
+        idx, distances = ring_knn(points, queries, k, local_knn=func)
     else:
         # No ring is needed.  Get the local tensors and compute directly:
         local_points = points.to_local()  # This is replicated, getting all of it
         local_queries = queries.to_local()  # This sharding doesn't matter!
-        idx, distances = knn_impl(local_points, local_queries, k)
+        idx, distances = func(local_points, local_queries, k)
 
     # The outputs only depend on the local queries shape
     input_queries_spec = queries._spec
@@ -280,6 +289,5 @@ def knn_sharded_wrapper(
     return shard_idx, shard_distances
 
 
-ShardTensor.register_named_function_handler(
-    "physicsnemo.knn_cuml.default", knn_sharded_wrapper
-)
+for _op_name in ("physicsnemo.knn_cuml.default", "physicsnemo.knn_warp.default"):
+    ShardTensor.register_named_function_handler(_op_name, knn_sharded_wrapper)

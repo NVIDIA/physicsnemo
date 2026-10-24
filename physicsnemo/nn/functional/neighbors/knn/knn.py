@@ -24,14 +24,18 @@ from physicsnemo.core.function_spec import FunctionSpec
 from ._cuml_impl import knn_impl as knn_cuml
 from ._scipy_impl import knn_impl as knn_scipy
 from ._torch_impl import knn_impl as knn_torch
+from ._warp_impl import knn_impl as knn_warp
 
 
 class KNN(FunctionSpec):
     """
     Perform a k-nearest neighbor search on torch tensors.  Can be done with
-    torch directly, or leverage RAPIDS cuML algorithm.
+    torch directly, or leverage RAPIDS cuML, SciPy, or an exact Warp BVH search.
 
-    Auto-dispatch selects the optimal version for the input tensor device.
+    Auto-dispatch selects the implementation from the inputs: Warp for CUDA
+    points of one to three dimensions in float32 or lower precision, cuML for
+    other CUDA points, and SciPy for CPU points. When the selected
+    implementation is not installed, it falls back to torch.
 
     Parameters
     ----------
@@ -41,10 +45,10 @@ class KNN(FunctionSpec):
         Tensor of shape (M, D) containing the points to search for.
     k : int
         Number of nearest neighbors to return for each query point.
-    implementation : {"cuml", "torch", "scipy"} or None
-        Implementation to use for the search. When ``None``, the preferred
-        implementation for the input device is selected and falls back to
-        torch when unavailable.
+    implementation : {"cuml", "torch", "scipy", "warp"} or None
+        Implementation to use for the search. When ``None``, it is selected
+        as described above. ``"warp"`` runs an exact Morton-order BVH search
+        in float32 on CPU or CUDA, for points of up to three dimensions.
 
     Returns
     -------
@@ -94,6 +98,17 @@ class KNN(FunctionSpec):
     ]:
         return knn_torch(points, queries, k)
 
+    @FunctionSpec.register(name="warp", required_imports=("warp>=1.17.0",), rank=3)
+    def warp_forward(
+        points: Float[torch.Tensor, "num_points dim"],
+        queries: Float[torch.Tensor, "num_queries dim"],
+        k: int,
+    ) -> tuple[
+        Int[torch.Tensor, "num_queries k"], Float[torch.Tensor, "num_queries k"]
+    ]:
+        """Exact Morton-order BVH search in Warp kernels (CPU or CUDA)."""
+        return knn_warp(points, queries, k)
+
     @classmethod
     def make_inputs_forward(cls, device: torch.device | str = "cpu"):
         device = torch.device(device)
@@ -128,7 +143,7 @@ class KNN(FunctionSpec):
         points: Float[torch.Tensor, "num_points dim"],
         queries: Float[torch.Tensor, "num_queries dim"],
         k: int,
-        implementation: Literal["cuml", "torch", "scipy"] | None = None,
+        implementation: Literal["cuml", "torch", "scipy", "warp"] | None = None,
     ) -> tuple[
         Int[torch.Tensor, "num_queries k"], Float[torch.Tensor, "num_queries k"]
     ]:
@@ -152,12 +167,8 @@ class KNN(FunctionSpec):
             # Execute the implementation.
             return impl.func(points, queries, k)
 
-        # Otherwise, auto-select an implementation based on device and availability.
-        # Prefer cuML on CUDA and SciPy on CPU when auto-selecting.
-        preferred_name = "cuml" if points.is_cuda else "scipy"
-
-        # Fetch the preferred implementation (if registered).
-        preferred = impls.get(preferred_name)
+        # Otherwise, auto-select an implementation from the inputs.
+        preferred = impls.get(cls._preferred_name(points))
 
         # Use the preferred implementation when it is available.
         impl = preferred if preferred is not None and preferred.available else None
@@ -172,6 +183,22 @@ class KNN(FunctionSpec):
 
         # Execute the selected implementation.
         return impl.func(points, queries, k)
+
+    @staticmethod
+    def _preferred_name(points: torch.Tensor) -> str:
+        """Return the implementation auto-dispatch prefers for ``points``.
+
+        Warp computes in float32, so float64 and integer CUDA points keep cuML.
+        """
+        if not points.is_cuda:
+            return "scipy"
+        if 1 <= points.shape[-1] <= 3 and points.dtype in (
+            torch.float32,
+            torch.float16,
+            torch.bfloat16,
+        ):
+            return "warp"
+        return "cuml"
 
 
 knn = KNN.make_function("knn")
