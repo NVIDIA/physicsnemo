@@ -209,8 +209,11 @@ class _SplitCalibratorBase:
         if self._n == 0:
             raise RuntimeError("No calibration samples collected.")
 
-    def _conformal_thresholds(self) -> Tensor | TensorDict:
-        k = conformal_quantile_index(self._n, self._alpha)
+    def _resolve_alpha(self, alpha: float | None) -> float:
+        return self._alpha if alpha is None else validate_alpha(alpha)
+
+    def _conformal_thresholds(self, alpha: float) -> Tensor | TensorDict:
+        k = conformal_quantile_index(self._n, alpha)
         return pack_fields(
             {
                 key: kth_smallest_of_samples(per_sample, k)
@@ -219,12 +222,12 @@ class _SplitCalibratorBase:
         )
 
     def _build_predictor(
-        self, tier: str, thresholds: Tensor | TensorDict, **state
+        self, tier: str, thresholds: Tensor | TensorDict, *, alpha: float, **state
     ) -> ConformalPredictor:
         return ConformalPredictor._from_state(
             tier=tier,
             score=self._score,
-            alpha=self._alpha,
+            alpha=alpha,
             n_cal=self._n,
             thresholds=thresholds,
             **state,
@@ -383,8 +386,18 @@ class PointwiseCalibrator(_SplitCalibratorBase):
         self._collect(prediction, target, aux, points, stage)
         self._mesh_fingerprint = fingerprint
 
-    def finalize(self) -> ConformalPredictor:
+    def finalize(self, *, alpha: float | None = None) -> ConformalPredictor:
         r"""Fit the per-element thresholds and return the predictor.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Miscoverage level for this predictor, in :math:`(0, 1)`. Defaults
+            to the constructor's ``alpha``. The stored calibration scores are
+            reused, so one calibrator can produce predictors at several
+            levels from one pass over the calibration set. Choose the levels
+            before looking at the fitted intervals: picking ``alpha`` from
+            the results weakens the guarantee.
 
         Returns
         -------
@@ -398,13 +411,18 @@ class PointwiseCalibrator(_SplitCalibratorBase):
         ------
         RuntimeError
             If no samples were collected.
+        TypeError
+            If ``alpha`` is not a real number.
         ValueError
-            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            If ``alpha`` is outside :math:`(0, 1)`, or if
+            :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
             than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
         """
+        alpha = self._resolve_alpha(alpha)
         self._require_finalizable()
         return self._build_predictor(
             "pointwise",
-            self._conformal_thresholds(),
+            self._conformal_thresholds(alpha),
+            alpha=alpha,
             mesh_fingerprint=self._mesh_fingerprint,
         )
