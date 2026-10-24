@@ -324,7 +324,9 @@ def test_facet_extraction_under_dynamic_fullgraph_compile(
         return (getattr(mesh, f"get_{method}")().cells,)
 
     expected = fn(points, cells)
-    compiled = torch.compile(fn, fullgraph=True, dynamic=True)(points, cells)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)(
+        points, cells
+    )
 
     for actual, reference in zip(compiled, expected, strict=True):
         torch.testing.assert_close(actual, reference)
