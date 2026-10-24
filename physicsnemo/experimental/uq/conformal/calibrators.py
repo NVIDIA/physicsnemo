@@ -624,8 +624,18 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
 
     _reduce = staticmethod(lambda normalized: normalized.amax().detach().cpu())
 
-    def finalize(self) -> ConformalPredictor:
+    def finalize(self, *, alpha: float | None = None) -> ConformalPredictor:
         r"""Fit the band threshold and return the predictor.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Miscoverage level for this predictor, in :math:`(0, 1)`. Defaults
+            to the constructor's ``alpha``. The stored per-sample maxima are
+            reused, so one calibrator can produce predictors at several
+            levels from one pass over the calibration set. Choose the levels
+            before looking at the fitted bands: picking ``alpha`` from the
+            results weakens the guarantee.
 
         Returns
         -------
@@ -639,13 +649,18 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
         ------
         RuntimeError
             If no samples were collected.
+        TypeError
+            If ``alpha`` is not a real number.
         ValueError
-            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            If ``alpha`` is outside :math:`(0, 1)`, or if
+            :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
             than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
         """
+        alpha = self._resolve_alpha(alpha)
         self._require_finalizable()
         return self._build_predictor(
             "functional",
-            self._conformal_thresholds(),
+            self._conformal_thresholds(alpha),
+            alpha=alpha,
             difficulty=self._difficulty,
         )
