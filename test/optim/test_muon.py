@@ -16,6 +16,7 @@
 
 import copy
 import io
+import pickle
 
 import pytest
 import torch
@@ -274,6 +275,30 @@ def test_cuda_graph_rejects_tensor_lr():
     opt.step()  # eager: creates the momentum buffers
     with pytest.raises(ValueError, match="float learning rates"):
         opt.step()
+
+
+@pytest.mark.parametrize(
+    "cuda_graph", [False, pytest.param(True, marks=_requires_cuda)]
+)
+def test_copy_and_pickle(cuda_graph):
+    """deepcopy and pickle round trips keep cuda_graph and step as the original
+    does; a copy of a graphed optimizer captures a graph of its own."""
+    device = "cuda" if cuda_graph else "cpu"
+    params = _make_params(_GRAPH_SHAPES[:5], device, seed=8)
+    opt = Muon(params, lr=0.02, cuda_graph=cuda_graph)
+    for step in range(2):  # the second step captures the graph
+        _set_grads(params, seed=step)
+        opt.step()
+    copies = [copy.deepcopy(opt), pickle.loads(pickle.dumps(opt))]  # noqa: S301
+    for o in [opt, *copies]:
+        _set_grads(o.param_groups[0]["params"], seed=2)
+        o.step()
+    for copied in copies:
+        assert copied.cuda_graph is cuda_graph
+        assert (copied._graph is not None) == cuda_graph
+        assert copied._graph is None or copied._graph is not opt._graph
+        for p, pc in zip(params, copied.param_groups[0]["params"]):
+            assert torch.equal(p, pc)
 
 
 def test_cuda_graph_refuses_cpu_params():

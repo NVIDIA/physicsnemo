@@ -230,6 +230,15 @@ class Muon(_TorchMuon):
         self.cuda_graph = cuda_graph
         self._graph = self._graph_key = self._graph_grads = None
 
+    def __getstate__(self) -> dict:
+        return {**super().__getstate__(), "cuda_graph": self.cuda_graph}
+
+    def __setstate__(self, state: dict) -> None:
+        super().__setstate__(state)
+        # A graph cannot be copied, so a copy captures its own.
+        self.cuda_graph = state.get("cuda_graph", False)
+        self._graph = self._graph_key = self._graph_grads = None
+
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
         """Perform a single optimization step (see :meth:`_step`).
