@@ -1456,3 +1456,278 @@ def test_point_plan_is_cheaper_than_the_dual_plan_for_sparse_targets(device):
     )
     assert point_plan.n_near + point_plan.n_far < dual.n_near + dual.n_nf + dual.n_fn
     assert (_point_plan_counts(point_plan, tree, 1500, 2000) == 1).all()
+
+
+# ---------------------------------------------------------------------------
+# Warp build and grouped build
+# ---------------------------------------------------------------------------
+
+_TREE_FIELDS = (
+    "node_aabb_min",
+    "node_aabb_max",
+    "node_diameter_sq",
+    "node_left_child",
+    "node_right_child",
+    "leaf_start",
+    "leaf_count",
+    "node_range_start",
+    "node_range_count",
+    "node_total_area",
+    "sorted_source_order",
+    "source_points",
+    "max_depth",
+    "root_ids",
+)
+
+
+def _bitwise(a, b):
+    """Same dtype, shape and bits (so NaNs and signed zeros compare too)."""
+    if a.dtype != b.dtype or a.shape != b.shape:
+        return False
+    if a.is_floating_point():
+        ints = {8: torch.int64, 4: torch.int32, 2: torch.int16}[a.element_size()]
+        a, b = a.contiguous().view(ints), b.contiguous().view(ints)
+    return torch.equal(a, b)
+
+
+def _tree_differences(a, b):
+    """The fields in which two trees differ in any bit."""
+    return [k for k in _TREE_FIELDS if not _bitwise(getattr(a, k), getattr(b, k))]
+
+
+def _build_cases(n_dims, device, dtype):
+    """A random cloud, the same with half its points on one point (equal Morton
+    codes, midpoint splits), and tiny ones (one point, no larger than a leaf)."""
+    points = _points(1500, n_dims, device, seed=21, dtype=dtype)
+    areas = _areas(1500, device, seed=22, dtype=dtype)
+    duplicates = points.clone()
+    duplicates[:700] = duplicates[0]
+    yield points, areas
+    yield duplicates, None
+    for n in (1, 3, 9, 40):
+        yield points[:n], areas[:n]
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
+)
+@pytest.mark.parametrize("n_dims", [2, 3])
+def test_warp_build_is_the_torch_build(device, n_dims, dtype):
+    """The Warp build (on Warp's CPU backend for CPU points) gives the torch
+    build's tree in every bit and every field, at three leaf sizes."""
+    for points, areas in _build_cases(n_dims, device, dtype):
+        for leaf_size in (1, 4, 8):
+            trees = [
+                ClusterTree.from_points(
+                    points, leaf_size=leaf_size, areas=areas, implementation=impl
+                )
+                for impl in ("torch", "warp")
+            ]
+            assert not _tree_differences(*trees), (points.shape[0], leaf_size)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("n_dims", [2, 3])
+def test_warp_build_is_the_torch_build_under_autocast(device, n_dims, dtype):
+    """Under bfloat16 autocast the Warp build follows the precision the torch
+    build computes in (CUDA's autocast runs ``pow`` and ``sum`` in float32)."""
+    for points, areas in _build_cases(n_dims, device, dtype):
+        with torch.autocast(torch.device(device).type, dtype=torch.bfloat16):
+            trees = [
+                ClusterTree.from_points(
+                    points, leaf_size=4, areas=areas, implementation=impl
+                )
+                for impl in ("torch", "warp")
+            ]
+        assert not _tree_differences(*trees), points.shape[0]
+
+
+def _group_case(device, n_dims=3, seed=23):
+    """Points in groups 0..6: group 3 empty, group 5 one point, group 6 half on
+    one point."""
+    n = 800
+    points = _points(n, n_dims, device, seed=seed)
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    groups = torch.randint(0, 5, (n,), generator=g)
+    groups[groups == 3] = 4
+    groups[7] = 5
+    groups[100:180] = 6
+    points[100:140] = points[100]
+    groups = groups.to(device)
+    return points, groups, _areas(n, device, seed=seed + 1), 7
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("leaf_size", [1, 4])
+@pytest.mark.parametrize("n_dims", [2, 3])
+def test_point_groups_are_the_per_group_trees_and_their_merge(
+    device, implementation, leaf_size, n_dims
+):
+    """``trees[g]`` is ``from_points`` of group ``g`` in every bit (an empty tree
+    for an empty group), and the forest is their merge in every bit, except
+    that its order indexes the caller's points."""
+    points, groups, areas, n_groups = _group_case(device, n_dims)
+    for a in (areas, None):
+        forest, trees = ClusterTree.from_point_groups(
+            points,
+            groups,
+            n_groups=n_groups,
+            leaf_size=leaf_size,
+            areas=a,
+            implementation=implementation,
+        )
+        assert len(trees) == n_groups
+        for k, tree in enumerate(trees):
+            mask = groups == k
+            ref = ClusterTree.from_points(
+                points[mask],
+                leaf_size=leaf_size,
+                areas=None if a is None else a[mask],
+                implementation="torch",
+            )
+            assert not _tree_differences(tree, ref), k
+        assert trees[3].n_nodes == 0
+        merged = ClusterTree.merge(trees)
+        assert set(_tree_differences(forest, merged)) == {
+            "sorted_source_order",
+            "source_points",
+        }
+        assert _bitwise(forest.source_points, points)
+        by_group = torch.argsort(groups, stable=True)
+        assert torch.equal(
+            forest.sorted_source_order, by_group[merged.sorted_source_order]
+        )
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+def test_point_groups_of_one_group_and_of_no_points(device, implementation):
+    """One group is one tree: ``from_points``' own; no points give empty trees."""
+    points = _points(300, 3, device, seed=25)
+    forest, trees = ClusterTree.from_point_groups(
+        points,
+        torch.zeros(300, dtype=torch.long, device=device),
+        n_groups=1,
+        leaf_size=4,
+        implementation=implementation,
+    )
+    ref = ClusterTree.from_points(points, leaf_size=4, implementation="torch")
+    assert not _tree_differences(forest, ref)
+    assert len(trees) == 1 and not _tree_differences(trees[0], ref)
+    forest, trees = ClusterTree.from_point_groups(
+        points[:0],
+        torch.zeros(0, dtype=torch.long, device=device),
+        n_groups=2,
+        implementation=implementation,
+    )
+    assert forest.n_nodes == 0 and forest.root_ids.numel() == 0
+    assert [t.n_nodes for t in trees] == [0, 0]
+
+
+def test_build_implementation_resolution(monkeypatch):
+    """``None`` builds with torch on CPU and with Warp on CUDA when Warp is
+    available and the points fit; a forced name is kept and an unknown one
+    refused."""
+    from types import SimpleNamespace
+
+    import physicsnemo.mesh.spatial.cluster_tree as ct
+
+    cpu = torch.zeros(10, 3)
+    cuda = SimpleNamespace(is_cuda=True, shape=(10, 3), device=torch.device("cuda"))
+    assert ct._resolve_build(None, cpu) == "torch"
+    assert ct._resolve_build("warp", cpu) == "warp"
+    assert ct._resolve_build(None, cuda) == "warp"
+    with pytest.raises(ValueError, match="implementation must be"):
+        ct._resolve_build("gpu", cpu)
+    monkeypatch.setattr(ct, "_warp_available", lambda: False)
+    assert ct._resolve_build(None, cuda) == "torch"
+    monkeypatch.setattr(ct, "_warp_available", lambda: True)
+    monkeypatch.setattr(ct, "_WARP_MAX_ELEMENTS", 10)
+    assert ct._resolve_build(None, cuda) == "torch"
+    with pytest.raises(ValueError, match="fewer than 2\\*\\*31"):
+        ct._resolve_build("warp", cpu)
+
+    ### On CPU, ``None`` never reaches the Warp build.
+    def no_warp(*args, **kwargs):
+        raise AssertionError("the Warp build ran")
+
+    monkeypatch.setattr(ct.ClusterTree, "_from_point_groups_warp", no_warp)
+    ClusterTree.from_points(_points(50, 3, "cpu"))
+    ClusterTree.from_point_groups(
+        _points(50, 3, "cpu"), torch.zeros(50, dtype=torch.long), n_groups=1
+    )
+
+
+def test_warp_build_refuses_or_falls_back_where_it_cannot_build(monkeypatch):
+    """A forced Warp build refuses the midpoint split and a forest too deep
+    for its node keys; under ``None`` such a forest is built by torch."""
+    import physicsnemo.mesh.spatial._lbvh_warp as lbvh_warp
+    import physicsnemo.mesh.spatial.cluster_tree as ct
+
+    points = _points(300, 3, "cpu", seed=26)
+    with pytest.raises(ValueError, match="midpoint"):
+        ClusterTree.from_points(points, split="midpoint", implementation="warp")
+    with pytest.raises(TypeError, match="integer"):
+        ClusterTree.from_point_groups(points, torch.zeros(300), n_groups=1)
+    ref = ClusterTree.from_points(points, leaf_size=4, implementation="torch")
+    groups = (points[:, 0] > 0).long()
+    ref_forest, _ = ClusterTree.from_point_groups(
+        points, groups, n_groups=2, leaf_size=4, implementation="torch"
+    )
+    monkeypatch.setattr(lbvh_warp, "_DEPTH_BINS", 4)
+    with pytest.raises(ValueError, match="too deep"):
+        ClusterTree.from_points(points, leaf_size=4, implementation="warp")
+    monkeypatch.setattr(ct, "_resolve_build", lambda *args: "warp")
+    tree = ClusterTree.from_points(points, leaf_size=4)
+    assert not _tree_differences(tree, ref)
+    forest, _ = ClusterTree.from_point_groups(points, groups, n_groups=2, leaf_size=4)
+    assert not _tree_differences(forest, ref_forest)
+
+
+@pytest.mark.cuda
+def test_warp_build_on_cuda_is_the_default_and_the_torch_build():
+    """On CUDA, ``None`` builds with Warp, which gives the torch build's tree."""
+    import physicsnemo.mesh.spatial.cluster_tree as ct
+
+    points = _points(5000, 3, "cuda", seed=27)
+    assert ct._resolve_build(None, points) == "warp"
+    trees = [
+        ClusterTree.from_points(points, leaf_size=8, implementation=impl)
+        for impl in (None, "torch")
+    ]
+    assert not _tree_differences(*trees)
+
+
+@pytest.mark.cuda
+def test_warp_build_non_default_cuda_stream():
+    """The Warp build runs on torch's current, non-default CUDA stream."""
+    points, groups, areas, n_groups = _group_case("cuda")
+    baseline, _ = ClusterTree.from_point_groups(
+        points, groups, n_groups=n_groups, areas=areas, implementation="torch"
+    )
+    torch.cuda.synchronize()
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        torch.cuda._sleep(int(1e8))  # ~100 ms hazard window on the stream
+        points, groups, areas, n_groups = _group_case("cuda")
+        forest, _ = ClusterTree.from_point_groups(
+            points, groups, n_groups=n_groups, areas=areas, implementation="warp"
+        )
+        forest = forest.clone()
+    torch.cuda.current_stream().wait_stream(stream)
+    assert not _tree_differences(forest, baseline)
+
+
+def test_importing_the_package_registers_no_warp_tree_kernels():
+    """The Warp modules are imported on first use, not with the package."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, physicsnemo.mesh.spatial; "
+        "print(any(m.startswith('physicsnemo.mesh.spatial._') and m.endswith('_warp') "
+        "for m in sys.modules))"
+    )
+    out = subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "False"

@@ -58,6 +58,8 @@ fields (diameter, subtree ranges, total areas) needed for the opening
 criterion, dual-tree traversal, and far-field monopole approximation.
 """
 
+import functools
+import importlib.util
 import logging
 from typing import Literal, NamedTuple, Sequence
 
@@ -79,6 +81,50 @@ logger = logging.getLogger("mesh.spatial.cluster_tree")
 
 #: Minimum child size, as a divisor of the parent size, for ``split="morton"``.
 _MORTON_BALANCE = 4
+#: Warp refuses arrays of this many elements or more, and its thread ids are int32.
+_WARP_MAX_ELEMENTS = 2**31
+
+_LOGGED: set[tuple[str, ...]] = set()
+
+
+def _log_once(key: tuple[str, ...], message: str, *args) -> None:
+    """Log ``message`` at info level the first time ``key`` is seen."""
+    if key not in _LOGGED and not torch.compiler.is_compiling():
+        _LOGGED.add(key)
+        logger.info(message, *args)
+
+
+@functools.cache
+def _warp_available() -> bool:
+    """Whether Warp can be imported (checked without importing it)."""
+    return importlib.util.find_spec("warp") is not None
+
+
+def _resolve_build(
+    implementation: Literal["torch", "warp"] | None, points: torch.Tensor
+) -> Literal["torch", "warp"]:
+    """The tree build to run: a forced name is kept (``"warp"`` raises for
+    inputs it cannot take); ``None`` picks Warp for CUDA points when Warp is
+    available and the points fit, and torch otherwise."""
+    if implementation not in (None, "torch", "warp"):
+        raise ValueError(
+            f"implementation must be 'torch', 'warp' or None, got {implementation=!r}"
+        )
+    fits = points.shape[0] < _WARP_MAX_ELEMENTS
+    if implementation == "warp" and not fits:
+        raise ValueError(
+            f"the Warp build takes fewer than 2**31 points, got {points.shape[0]}"
+        )
+    if implementation is not None:
+        return implementation
+    chosen = "warp" if points.is_cuda and fits and _warp_available() else "torch"
+    _log_once(
+        ("build", points.device.type, chosen),
+        "ClusterTree build implementation=None resolved to %r on %s",
+        chosen,
+        points.device.type,
+    )
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -775,6 +821,7 @@ class ClusterTree(TensorClass):
         leaf_size: int = 1,
         areas: Float[torch.Tensor, " n_points"] | None = None,
         split: Literal["morton", "midpoint"] = "morton",
+        implementation: Literal["torch", "warp"] | None = None,
     ) -> "ClusterTree":
         r"""Build a cluster tree from a set of points via morton-code LBVH.
 
@@ -804,6 +851,16 @@ class ClusterTree(TensorClass):
             kernels that depend nonlinearly on normals; the
             ``source_admissible`` mask of :meth:`find_dual_interaction_pairs`
             handles such bodies in any orientation.
+        implementation : {"torch", "warp"} or None, optional, default=None
+            How the ``split="morton"`` topology is built; the tree is the same
+            in every bit either way. The torch build synchronizes with the
+            host once per tree level; ``"warp"`` builds it in Warp kernels
+            with one synchronization, on CPU or CUDA, for fewer than 2**31
+            points, and raises where it cannot. ``None`` picks Warp for CUDA
+            points and torch otherwise, and falls back to torch where Warp
+            cannot build the tree. ``split="midpoint"`` is always built by
+            torch (its topology is computed on the host without
+            synchronizing), so it refuses ``"warp"``.
 
         Returns
         -------
@@ -814,6 +871,20 @@ class ClusterTree(TensorClass):
             raise ValueError(f"leaf_size must be >= 1, got {leaf_size=!r}")
         if split not in ("morton", "midpoint"):
             raise ValueError(f"split must be 'morton' or 'midpoint', got {split=!r}")
+        if split == "midpoint" and implementation not in (None, "torch"):
+            raise ValueError(
+                f"split='midpoint' is built by torch, got {implementation=!r}"
+            )
+        if (
+            split == "morton"
+            and _resolve_build(implementation, points) == "warp"
+            and points.shape[0] > 0
+        ):
+            built = cls._from_point_groups_warp(
+                points, None, 1, leaf_size, areas, forced=implementation == "warp"
+            )
+            if built is not None:
+                return built[0]
 
         n_points = points.shape[0]
         D = points.shape[1]
@@ -903,6 +974,263 @@ class ClusterTree(TensorClass):
             root_ids=torch.zeros(1, dtype=torch.long, device=device),
             batch_size=torch.Size([]),
         )
+
+    @classmethod
+    def from_point_groups(
+        cls,
+        points: Float[torch.Tensor, "n_points n_spatial_dims"],
+        groups: Int[torch.Tensor, " n_points"],
+        *,
+        n_groups: int,
+        leaf_size: int = 1,
+        areas: Float[torch.Tensor, " n_points"] | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> tuple["ClusterTree", list["ClusterTree"]]:
+        r"""Build one tree per group of points, and the forest of them.
+
+        ``trees[g]`` is ``from_points(points[groups == g], leaf_size=leaf_size,
+        areas=areas[groups == g])`` in every bit, an empty tree for an empty
+        group. ``forest`` is :meth:`merge` of ``trees`` in every bit, except
+        that its ``sorted_source_order`` indexes ``points`` itself and its
+        ``source_points`` is ``points``, so the plans of a traversal of the
+        forest index the caller's points. With Warp, every tree is built in
+        one pass with one host synchronization.
+
+        Parameters
+        ----------
+        points : Float[torch.Tensor, "n_points n_spatial_dims"]
+            Point coordinates, shape :math:`(N, D)`.
+        groups : Int[torch.Tensor, "n_points"]
+            Group of each point, integers in ``[0, n_groups)``, shape
+            :math:`(N,)`. Values are not checked.
+        n_groups : int
+            Number of groups (``>= 1``), given so that finding it needs no
+            host synchronization.
+        leaf_size : int
+            Maximum points per leaf node, as in :meth:`from_points`.
+        areas : Float[torch.Tensor, "n_points"] or None
+            Per-point area weights, as in :meth:`from_points`.
+        implementation : {"torch", "warp"} or None, optional, default=None
+            As in :meth:`from_points`; the torch build calls
+            :meth:`from_points` once per group.
+
+        Returns
+        -------
+        tuple[ClusterTree, list[ClusterTree]]
+            ``(forest, trees)``, with ``len(trees) == n_groups``.
+
+        Examples
+        --------
+        >>> points = torch.rand(50, 3)
+        >>> groups = (points[:, 0] > 0.5).long()
+        >>> forest, trees = ClusterTree.from_point_groups(points, groups, n_groups=2)
+        >>> forest.n_sources, [t.n_sources for t in trees] == groups.bincount().tolist()
+        (50, True)
+        """
+        if leaf_size < 1:
+            raise ValueError(f"leaf_size must be >= 1, got {leaf_size=!r}")
+        if n_groups < 1:
+            raise ValueError(f"n_groups must be >= 1, got {n_groups=!r}")
+        if groups.shape != points.shape[:1]:
+            raise ValueError(
+                f"groups must have shape ({points.shape[0]},), got {tuple(groups.shape)}"
+            )
+        if (
+            groups.is_floating_point()
+            or groups.is_complex()
+            or groups.dtype == torch.bool
+        ):
+            raise TypeError(f"groups must be an integer tensor, got {groups.dtype=!r}")
+        groups = groups.long()
+        if _resolve_build(implementation, points) == "warp" and points.shape[0] > 0:
+            built = cls._from_point_groups_warp(
+                points,
+                groups,
+                n_groups,
+                leaf_size,
+                areas,
+                forced=implementation == "warp",
+            )
+            if built is not None:
+                return built
+
+        by_group = torch.argsort(groups, stable=True)
+        counts = torch.zeros(n_groups, dtype=torch.long, device=points.device)
+        counts = counts.index_add_(0, groups, torch.ones_like(groups)).tolist()
+        group_areas = (
+            [None] * n_groups if areas is None else areas[by_group].split(counts)
+        )
+        trees = [
+            cls.from_points(
+                group_points, leaf_size=leaf_size, areas=a, implementation="torch"
+            )
+            for group_points, a in zip(points[by_group].split(counts), group_areas)
+        ]
+        forest = cls.merge(trees)
+        forest.sorted_source_order = by_group[forest.sorted_source_order]
+        forest.source_points = points.detach()
+        return forest, trees
+
+    @classmethod
+    def _from_point_groups_warp(
+        cls,
+        points: torch.Tensor,
+        groups: torch.Tensor | None,
+        n_groups: int,
+        leaf_size: int,
+        areas: torch.Tensor | None,
+        *,
+        forced: bool,
+    ) -> tuple["ClusterTree", list["ClusterTree"]] | None:
+        """The Warp build of :meth:`from_point_groups` (``groups`` may be
+        ``None`` for one group) for at least one point. ``None`` where Warp
+        cannot build the forest and ``forced`` is False."""
+        from physicsnemo.mesh.spatial._lbvh_warp import build_morton_forest_topology
+
+        n_points = points.shape[0]
+        device = points.device
+        dtype = points.dtype
+        grouped = n_groups > 1
+        points = points.detach()
+        if areas is None:
+            areas = torch.ones(n_points, device=device, dtype=dtype)
+
+        ### Points by group, then code, then index: each group's sorted order,
+        ### the groups end to end.
+        with record_function("cluster_tree::morton_sort"):
+            codes = _compute_morton_codes(
+                points,
+                isotropic=True,
+                groups=groups if grouped else None,
+                n_groups=n_groups,
+            )
+            sorted_codes, order = codes.sort(stable=True)
+            if grouped:
+                by_group = torch.argsort(groups[order], stable=True)
+                order, sorted_codes = order[by_group], sorted_codes[by_group]
+                tree = groups[order]
+                tree_counts = torch.zeros(n_groups, dtype=torch.long, device=device)
+                tree_counts.index_add_(0, groups, torch.ones_like(groups))
+            else:
+                tree = torch.zeros(n_points, dtype=torch.long, device=device)
+                tree_counts = torch.full((1,), n_points, device=device)
+
+        with record_function("cluster_tree::top_down_build"):
+            built = build_morton_forest_topology(
+                sorted_codes, tree, tree_counts, leaf_size, balance=_MORTON_BALANCE
+            )
+        if built is None:
+            reason = "the forest is too deep or has too many groups for the Warp build"
+            if forced:
+                raise ValueError(reason)
+            _log_once(
+                ("build fallback", device.type),
+                "ClusterTree build falls back to torch: %s",
+                reason,
+            )
+            return None
+        topo = built.topology
+
+        with record_function("cluster_tree::node_boxes"):
+            aabb_min, aabb_max = _node_boxes(topo, points[order], leaf_size)
+            diameter_sq = (aabb_max - aabb_min).pow(2).sum(dim=-1)
+
+        ### Total area per node: the range sums of its tree's own prefix sum,
+        ### as from_points makes it; the prefix sums laid end to end, each with
+        ### its leading zero.
+        sorted_areas = areas.detach()[order].double()
+        prefixes, end = [], 0
+        for count in built.tree_items:
+            if count:
+                prefix = torch.cumsum(sorted_areas[end : end + count], dim=0)
+                prefixes.append(F.pad(prefix, (1, 0)))
+            end += count
+        area_prefix = torch.cat(prefixes)
+        nonempty = (tree_counts > 0).long()
+        starts = topo.range_start + (nonempty.cumsum(0) - nonempty)[built.node_tree]
+        total_area = (area_prefix[starts + topo.range_count] - area_prefix[starts]).to(
+            dtype
+        )
+
+        forest = cls(
+            node_aabb_min=aabb_min,
+            node_aabb_max=aabb_max,
+            node_diameter_sq=diameter_sq,
+            node_left_child=topo.left_child,
+            node_right_child=topo.right_child,
+            leaf_start=topo.leaf_start,
+            leaf_count=topo.leaf_count,
+            node_range_start=topo.range_start,
+            node_range_count=topo.range_count,
+            node_total_area=total_area,
+            sorted_source_order=order,
+            source_points=points,
+            max_depth=torch.full((), topo.max_depth, dtype=torch.long, device=device),
+            root_ids=built.root_ids,
+            batch_size=torch.Size([]),
+        )
+        logger.debug(
+            "ClusterTree (Warp build): %d points in %d groups -> %d nodes, depth %d",
+            n_points,
+            n_groups,
+            topo.node_count,
+            topo.max_depth,
+        )
+        if not grouped:
+            return forest, [forest]
+
+        ### Each group's tree: its rows of the forest's tables, with its own
+        ### node and point ids.
+        is_leaf = topo.left_child < 0
+        tree_start = torch.cumsum(tree_counts, 0) - tree_counts
+        node_offset = built.node_offset[built.node_tree]
+        point_offset = tree_start[built.node_tree]
+        left = torch.where(is_leaf, -1, topo.left_child - node_offset)
+        right = torch.where(is_leaf, -1, topo.right_child - node_offset)
+        leaf_start = torch.where(is_leaf, topo.leaf_start - point_offset, -1)
+        range_start = topo.range_start - point_offset
+        by_group = torch.argsort(groups, stable=True)
+        rank = torch.empty_like(by_group)
+        rank[by_group] = (
+            torch.arange(n_points, device=device) - tree_start[groups[by_group]]
+        )
+        local_order = rank[order]
+        group_points = points[by_group]
+        trees = []
+        a = m = 0
+        for g in range(n_groups):
+            c = built.tree_items[g]
+            if c == 0:
+                trees.append(
+                    cls.from_points(
+                        points[:0], leaf_size=leaf_size, implementation="torch"
+                    )
+                )
+                continue
+            b, mb = a + c, m + built.tree_nodes[g]
+            trees.append(
+                cls(
+                    node_aabb_min=aabb_min[m:mb],
+                    node_aabb_max=aabb_max[m:mb],
+                    node_diameter_sq=diameter_sq[m:mb],
+                    node_left_child=left[m:mb],
+                    node_right_child=right[m:mb],
+                    leaf_start=leaf_start[m:mb],
+                    leaf_count=topo.leaf_count[m:mb],
+                    node_range_start=range_start[m:mb],
+                    node_range_count=topo.range_count[m:mb],
+                    node_total_area=total_area[m:mb],
+                    sorted_source_order=local_order[a:b],
+                    source_points=group_points[a:b],
+                    max_depth=torch.full(
+                        (), built.tree_depths[g], dtype=torch.long, device=device
+                    ),
+                    root_ids=torch.zeros(1, dtype=torch.long, device=device),
+                    batch_size=torch.Size([]),
+                )
+            )
+            a, m = b, mb
+        return forest, trees
 
     @classmethod
     def merge(cls, trees: Sequence["ClusterTree"]) -> "ClusterTree":

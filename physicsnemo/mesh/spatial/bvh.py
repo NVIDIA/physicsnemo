@@ -69,6 +69,8 @@ def _compute_morton_codes(
     centroids: Float[torch.Tensor, "n_centroids n_spatial_dims"],
     *,
     isotropic: bool = False,
+    groups: Int[torch.Tensor, " n_centroids"] | None = None,
+    n_groups: int = 1,
 ) -> Int[torch.Tensor, " n_centroids"]:
     """Compute morton codes (Z-order curve) for a set of points.
 
@@ -87,6 +89,12 @@ def _compute_morton_codes(
         extent), so the Morton grid's cells are cubes. If ``False``, each axis
         is stretched to the full grid independently, so the cells inherit the
         aspect ratio of the bounding box.
+    groups : torch.Tensor or None, optional, default=None
+        Group of each point, int64 in ``[0, n_groups)``. Each group is
+        quantized over its own bounding box, so a point's code is the one it
+        gets among the points of its group alone.
+    n_groups : int, optional, default=1
+        Number of groups, used with ``groups``.
 
     Returns
     -------
@@ -125,14 +133,22 @@ def _compute_morton_codes(
         torch.float64 if centroids.dtype == torch.float64 else torch.float32
     )
     quantization_points = centroids.to(quantization_dtype)
-    cmin = quantization_points.min(dim=0).values  # (D,)
-    cmax = quantization_points.max(dim=0).values  # (D,)
+    if groups is None:
+        cmin = quantization_points.min(dim=0).values  # (D,)
+        cmax = quantization_points.max(dim=0).values  # (D,)
+    else:
+        index = groups[:, None].expand(-1, D)
+        bound = quantization_points.new_full((n_groups, D), float("inf"))
+        cmin = bound.scatter_reduce(0, index, quantization_points, "amin")
+        cmax = (-bound).scatter_reduce(0, index, quantization_points, "amax")
     extent = cmax - cmin
     if isotropic:
-        extent = extent.amax().expand(D)
+        extent = extent.amax(dim=-1, keepdim=True).expand_as(extent)
     # Preserve every representable nonzero extent. Constant axes have a zero
     # numerator, so replacing only their zero denominator maps them to zero.
     safe_extent = torch.where(extent != 0, extent, torch.ones_like(extent))
+    if groups is not None:
+        cmin, safe_extent = cmin[groups], safe_extent[groups]
     coords = (
         ((quantization_points - cmin) / safe_extent * max_val).long().clamp(0, max_val)
     )  # (N, D)
