@@ -153,8 +153,18 @@ _requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA graphs need CUDA"
 )
 
-# Repeated, wide and tall shapes: three Newton-Schulz shape groups.
-_GRAPH_SHAPES = [(8, 8), (8, 8), (8, 8), (8, 32), (32, 8)]
+# Repeated, wide and tall shapes, plus a larger group for realistic cuBLAS
+# GEMMs: four Newton-Schulz shape groups.
+_GRAPH_SHAPES = [
+    (8, 8),
+    (8, 8),
+    (8, 8),
+    (8, 32),
+    (32, 8),
+    (256, 1024),
+    (256, 1024),
+    (1024, 256),
+]
 
 
 def _set_grads(params, seed):
