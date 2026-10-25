@@ -339,6 +339,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_boundary_mesh()` compile with `torch.compile(fullgraph=True, dynamic=True)`.
   Facet extraction now specializes on the cell width instead of passing a
   symbolic size to `itertools.combinations`.
+- Compiled code that reads `Mesh` geometric properties, such as `cell_areas`
+  or curvatures, no longer recompiles when the input mesh's cache differs, and
+  no longer writes into that cache. `set_cell_measures` stores a copy of the
+  cached `cell_areas`, so a measure never aliases it.
 - GraphCast and MeshGraphNet run on graphs partitioned across GPUs again
   (`partition_size > 1`, or a `DistributedGraph` in place of the PyG graph),
   so the distributed shallow-water example works. This broke when the DGL

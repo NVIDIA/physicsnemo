@@ -45,6 +45,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
 ### Fixtures ###
 
@@ -330,3 +331,39 @@ def test_facet_extraction_under_dynamic_fullgraph_compile(
 
     for actual, reference in zip(compiled, expected, strict=True):
         torch.testing.assert_close(actual, reference)
+
+
+@pytest.mark.parametrize(
+    "property_name",
+    [
+        "cell_centroids",
+        "cell_areas",
+        "cell_normals",
+        "point_normals",
+        "gaussian_curvature_vertices",
+    ],
+)
+def test_geometric_property_ignores_cache_under_compile(property_name: str) -> None:
+    """Compiled geometric properties neither guard on nor write into ``_cache``.
+
+    A warm and a cold input mesh share one graph, and the compiled call leaves
+    the input mesh's cache keys unchanged.
+    """
+    cold = sphere_icosahedral.load(subdivisions=1)
+    warm = Mesh(points=cold.points * 2.0, cells=cold.cells)
+    getattr(warm, property_name)  # eager read fills the cache
+    other_cold = Mesh(points=cold.points * 3.0, cells=cold.cells)
+
+    torch._dynamo.reset()
+    compiled = torch.compile(
+        lambda mesh: getattr(mesh, property_name),
+        backend="eager",
+        fullgraph=True,
+        dynamic=True,
+    )
+    with torch._dynamo.config.patch(error_on_recompile=True):
+        for mesh in (cold, warm, other_cold):
+            keys = set(mesh._cache.keys(True, True))
+            actual = compiled(mesh)
+            assert set(mesh._cache.keys(True, True)) == keys
+            torch.testing.assert_close(actual, getattr(mesh, property_name))

@@ -99,8 +99,19 @@ def point_measures(mesh: "Mesh") -> torch.Tensor:
 
 
 def set_cell_measures(mesh: "Mesh", values: torch.Tensor) -> None:
-    """Set complete per-cell measures in place, without changing geometry."""
-    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = _validate_measures(mesh, values, "cells")
+    """Set complete per-cell measures in place, without changing geometry.
+
+    The cached ``cell_areas`` tensor is stored as a copy, so the measure never
+    aliases the cache.
+    """
+    values = _validate_measures(mesh, values, "cells")
+    # Under compile, reading _cache would guard on it; cell_measures then never
+    # returns the cached tensor anyway.
+    if not torch.compiler.is_compiling() and values is mesh._cache.get(
+        ("cell", "areas"), None
+    ):
+        values = values.clone()
+    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = values
 
 
 def set_point_measures(mesh: "Mesh", values: torch.Tensor, *, dimension: int) -> None:
