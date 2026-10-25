@@ -298,6 +298,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified external aero recipe: each step also logs `iter_time_s`, the true
   time per iteration, since `step_time_s` misses queued device work. Epoch
   summaries record `epoch_seconds` and, on GPU, `peak_memory_gib`.
+- Unified external aero recipe: training loads the next batch while the GPU
+  runs the backward, instead of at the start of the next step, so the GPU no
+  longer waits for the loader's host-side work. Samples and order are unchanged.
 
 ### Deprecated
 

@@ -356,8 +356,19 @@ def _run_epoch(
     with grad_ctx:
         step_t0 = time.perf_counter()
         iter_t0 = step_t0
-        for i, batch in enumerate(dataloader):
-            batch = recursive_to_device(batch, dist_manager.device)
+        ### Iterated by hand: a train step fetches the next batch during its
+        ### backward (below). Under cfg.profile, stop after step
+        ### _PROFILE_MAX_STEPS.
+        batches = iter(dataloader)
+        next_batch = None
+        stop = min(num_steps, _PROFILE_MAX_STEPS + 1) if cfg.profile else num_steps
+
+        def load():
+            return recursive_to_device(next(batches), dist_manager.device)
+
+        for i in range(stop):
+            batch = load() if next_batch is None else next_batch
+            next_batch = None
 
             loss, losses, metrics = forward_pass(
                 batch,
@@ -373,10 +384,18 @@ def _run_epoch(
                 optimizer.zero_grad()
                 if precision == "float16" and scaler is not None:
                     scaler.scale(loss).backward()
+                    if i + 1 < stop:
+                        next_batch = load()
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
+                    ### Load the next batch now, while the GPU still runs this
+                    ### backward, so the loader's host-side work overlaps GPU
+                    ### work instead of leaving the GPU idle at the start of the
+                    ### next step. Same samples, same order.
+                    if i + 1 < stop:
+                        next_batch = load()
                     optimizer.step()
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
@@ -508,8 +527,6 @@ def _run_epoch(
                         }
                     )
 
-            if cfg.profile and i >= _PROFILE_MAX_STEPS:
-                break
             step_t0 = time.perf_counter()
 
     epoch_dt = time.perf_counter() - epoch_t0
