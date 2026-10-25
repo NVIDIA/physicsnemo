@@ -86,6 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`implementation=`), with one host synchronization instead of one per tree
   level; the trees are the same in every bit. `ClusterTree.from_point_groups`
   builds one tree per group of points, and their forest, in one such pass.
+- `ClusterTree.find_point_interaction_pairs` walks CUDA targets in Warp kernels
+  by default (`implementation=`), with one host synchronization, and can count
+  each target's entries without making the plan (`count_only=True`). Its
+  streams are grouped by target, so each target's entries are contiguous.
 - `radius_search` accepts points with 1 or 2 coordinates, as well as 3, with
   both backends. The torch backend accepts any number of coordinates, and
   points with more than 3 use it by default.

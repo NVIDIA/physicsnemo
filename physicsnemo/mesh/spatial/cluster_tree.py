@@ -127,6 +127,57 @@ def _resolve_build(
     return chosen
 
 
+def _resolve_walk(
+    implementation: Literal["torch", "warp"] | None,
+    tree: "ClusterTree",
+    targets: torch.Tensor,
+) -> Literal["torch", "warp"]:
+    """The point walk to run: a forced name is kept (``"warp"`` raises for a
+    walk it cannot take); ``None`` picks Warp for CUDA targets when Warp is
+    available and can take the walk, except in float64, and torch otherwise.
+    Walks too deep for Warp's stack or past its array limit are found only
+    during the walk."""
+    if implementation not in (None, "torch", "warp"):
+        raise ValueError(
+            f"implementation must be 'torch', 'warp' or None, got {implementation=!r}"
+        )
+    n_dims = tree.n_spatial_dims
+    dtypes = (
+        tree.node_aabb_min.dtype,
+        tree.node_aabb_max.dtype,
+        tree.node_diameter_sq.dtype,
+    )
+    warp_dtypes = (torch.float32, torch.float64, torch.bfloat16, torch.float16)
+    fits = (
+        n_dims in (2, 3)
+        and all(dtype in warp_dtypes for dtype in dtypes)
+        and targets.shape[0] * max(n_dims, tree.root_ids.shape[0]) < _WARP_MAX_ELEMENTS
+        and tree.n_nodes * n_dims < _WARP_MAX_ELEMENTS
+    )
+    if implementation == "warp" and not fits:
+        raise ValueError(
+            "the Warp walk takes 2-D or 3-D trees with floating-point boxes and "
+            f"arrays of fewer than 2**31 entries, got a {n_dims}-D tree with "
+            f"{dtypes} boxes and diameters, {tree.n_nodes} nodes, "
+            f"{tree.root_ids.shape[0]} roots and {targets.shape[0]} targets"
+        )
+    if implementation is not None:
+        return implementation
+    ### Float64 rule: Warp's float64 walk was measured slower than torch's at
+    ### 800k and 1.6M targets, so float64 walks stay with torch until a rule
+    ### is measured.
+    float64 = torch.float64 in dtypes
+    use_warp = targets.is_cuda and fits and not float64 and _warp_available()
+    chosen = "warp" if use_warp else "torch"
+    _log_once(
+        ("walk", targets.device.type, chosen),
+        "ClusterTree point walk implementation=None resolved to %r on %s",
+        chosen,
+        targets.device.type,
+    )
+    return chosen
+
+
 # ---------------------------------------------------------------------------
 # InteractionPlan: the output of tree traversal
 # ---------------------------------------------------------------------------
@@ -288,8 +339,9 @@ class PointInteractionPlan(TensorClass):
     ``(target_point, source_centroid)`` using the source node's aggregates;
     there is no target-side approximation of any kind.
 
-    Both streams are in traversal order; the entries of one target are not
-    contiguous. All index tensors are ``int64`` on the same device as the tree.
+    Both streams are grouped by target, in ascending target id, in the order
+    that :meth:`ClusterTree.find_point_interaction_pairs` documents. All index
+    tensors are ``int64`` on the same device as the tree.
     """
 
     near_target_ids: Int[torch.Tensor, " n_near"]
@@ -1995,7 +2047,9 @@ class ClusterTree(TensorClass):
         *,
         validate: bool = True,
         source_admissible: torch.Tensor | None = None,
-    ) -> PointInteractionPlan:
+        implementation: Literal["torch", "warp"] | None = None,
+        count_only: bool = False,
+    ) -> PointInteractionPlan | tuple[torch.Tensor, torch.Tensor]:
         r"""Find near-field pairs and far-field (point, node) pairs for individual
         target points by a single-tree walk.
 
@@ -2017,6 +2071,15 @@ class ClusterTree(TensorClass):
         car with 200k volume points the dual plan held 1.6e9 pairs at
         ``theta=0.5`` and the point plan holds 1.5e8.
 
+        Both streams of the plan are grouped by target, in ascending target id;
+        a target's entries by root, in ``root_ids`` order; and a root's entries
+        in the order of its walk: level by level from the root, each level the
+        left children of the nodes opened at the level above, then their right
+        children, and each leaf's sources in ``sorted_source_order``. This is
+        the order of one walk per tree, each tree's plan joined to the others'
+        target by target. At ``theta = 0`` each target lists every source, in
+        index order.
+
         Parameters
         ----------
         targets : Float[torch.Tensor, "n_targets n_dims"]
@@ -2031,12 +2094,26 @@ class ClusterTree(TensorClass):
             :meth:`find_dual_interaction_pairs`: a source node whose entry is
             ``False`` is never replaced by its aggregate; the point descends
             into it instead.
+        implementation : {"torch", "warp"} or None, optional, default=None
+            How the walk runs; the plan is the same either way, entry for
+            entry. The torch walk synchronizes with the host once per tree
+            level. ``"warp"`` walks in two Warp kernels, one thread per target
+            and root, with one synchronization, on CPU or CUDA, for 2-D and
+            3-D trees with floating-point boxes, and raises where it cannot (a
+            tree more than about 95 levels deep, or a stream of ``2**31``
+            entries or more). ``None`` picks Warp for CUDA targets where it
+            can walk, except in float64, and torch otherwise.
+        count_only : bool, optional, default=False
+            Return only each target's numbers of near and far entries, without
+            making the plan; their cumulative sums are the offsets of each
+            target's entries in the plan's streams.
 
         Returns
         -------
-        PointInteractionPlan
+        PointInteractionPlan or tuple[torch.Tensor, torch.Tensor]
             Near-field individual pairs and far-field (point, node) pairs, in
-            traversal order.
+            the order above; with ``count_only``, ``(n_near, n_far)``, each
+            int64 of shape ``(n_targets,)``.
         """
         device = self.node_aabb_min.device
         n_targets = targets.shape[0]
@@ -2044,6 +2121,9 @@ class ClusterTree(TensorClass):
         empty = torch.empty(0, dtype=torch.long, device=device)
 
         if self.n_nodes == 0 or n_targets == 0:
+            if count_only:
+                zeros = torch.zeros(n_targets, dtype=torch.long, device=device)
+                return zeros, zeros.clone()
             return PointInteractionPlan(
                 near_target_ids=empty,
                 near_source_ids=empty.clone(),
@@ -2053,6 +2133,11 @@ class ClusterTree(TensorClass):
 
         if theta == 0:
             n_s = self.n_sources
+            if count_only:
+                return (
+                    torch.full((n_targets,), n_s, device=device),
+                    torch.zeros(n_targets, dtype=torch.long, device=device),
+                )
             plan = PointInteractionPlan(
                 near_target_ids=torch.arange(
                     n_targets, device=device
@@ -2065,24 +2150,56 @@ class ClusterTree(TensorClass):
                 plan.validate()
             return plan
 
+        if _resolve_walk(implementation, self, targets) == "warp":
+            from physicsnemo.mesh.spatial._point_walk_warp import point_walk
+
+            with record_function("cluster_tree::point_walk_warp"):
+                walked = point_walk(
+                    self,
+                    targets,
+                    theta,
+                    source_admissible,
+                    count_only=count_only,
+                    max_elements=_WARP_MAX_ELEMENTS,
+                )
+            if walked is not None and count_only:
+                return walked
+            if walked is not None:
+                plan = PointInteractionPlan(
+                    near_target_ids=walked[0],
+                    near_source_ids=walked[1],
+                    far_target_ids=walked[2],
+                    far_source_node_ids=walked[3],
+                )
+                if validate and not torch.compiler.is_compiling():
+                    plan.validate()
+                return plan
+            reason = "a walk is too deep for its stack or a stream has 2**31 entries"
+            if implementation == "warp":
+                raise ValueError(f"the Warp walk cannot run: {reason}")
+            _log_once(
+                ("walk fallback", device.type),
+                "ClusterTree point walk falls back to torch: %s",
+                reason,
+            )
+
         with record_function("cluster_tree::point_traversal"):
             n_dims = self.n_spatial_dims
             box, kids = _traversal_tables(self)
             points = targets.detach().to(box.dtype).t().contiguous()  # (D, M)
 
-            ### Every target starts at every root, target-major. Outputs follow
+            ### Every target starts at every root, target-major; each (target,
+            ### root) walk is keyed ``target * n_roots + root``. Outputs follow
             ### the dual traversal's deferred-compaction protocol:
             ### per-iteration tensors with validity masks, one compaction per
             ### stream after the loop, one readback for the sizes.
             n_roots = self.root_ids.shape[0]
-            active_t = torch.arange(n_targets, device=device).repeat_interleave(
-                n_roots, output_size=n_targets * n_roots
-            )
+            active_k = torch.arange(n_targets * n_roots, device=device)
             active_s = self.root_ids.repeat(n_targets)
-            far_t_list: list[torch.Tensor] = []
+            far_k_list: list[torch.Tensor] = []
             far_s_list: list[torch.Tensor] = []
             far_validity_list: list[torch.Tensor] = []
-            leaf_t_list: list[torch.Tensor] = []
+            leaf_k_list: list[torch.Tensor] = []
             leaf_s_list: list[torch.Tensor] = []
             leaf_validity_list: list[torch.Tensor] = []
 
@@ -2090,11 +2207,11 @@ class ClusterTree(TensorClass):
             max_iters = n_levels + 4 + 64
             depth = 0
             for depth in range(max_iters):
-                if active_t.numel() == 0:
+                if active_k.numel() == 0:
                     break
                 bS = box.index_select(1, active_s)
                 kS = kids.index_select(1, active_s)
-                p = points.index_select(1, active_t)
+                p = points.index_select(1, active_k // n_roots)
                 gap = torch.clamp(
                     torch.maximum(p - bS[n_dims : 2 * n_dims], bS[:n_dims] - p), min=0
                 )
@@ -2108,29 +2225,39 @@ class ClusterTree(TensorClass):
                 leaf_hit = (~is_far) & is_leaf
                 need_split = (~is_far) & (~is_leaf)
 
-                far_t_list.append(active_t)
+                far_k_list.append(active_k)
                 far_s_list.append(active_s)
                 far_validity_list.append(is_far)
-                leaf_t_list.append(active_t)
+                leaf_k_list.append(active_k)
                 leaf_s_list.append(active_s)
                 leaf_validity_list.append(leaf_hit)
 
                 ### Next level: both children of every opened internal node.
                 ### One boolean compaction (sync) per iteration.
                 keep_idx = torch.cat([need_split, need_split]).nonzero(as_tuple=True)[0]
-                active_t = torch.cat([active_t, active_t])[keep_idx]
+                active_k = torch.cat([active_k, active_k])[keep_idx]
                 active_s = torch.cat([kS[0], kS[1]])[keep_idx]
 
-            if active_t.numel() != 0:
+            if active_k.numel() != 0:
                 raise RuntimeError(
                     f"point traversal did not terminate in {max_iters} iterations "
-                    f"({active_t.numel()} (target, node) pairs still open)"
+                    f"({active_k.numel()} (target, node) pairs still open)"
                 )
 
             leaf_valid = torch.cat(leaf_validity_list)
             leaf_counts = torch.where(
                 leaf_valid, self.leaf_count[torch.cat(leaf_s_list)], 0
             )
+            if count_only:
+                zeros = torch.zeros(n_targets, dtype=torch.long, device=device)
+                return (
+                    zeros.index_add(0, torch.cat(leaf_k_list) // n_roots, leaf_counts),
+                    zeros.index_add(
+                        0,
+                        torch.cat(far_k_list) // n_roots,
+                        torch.cat(far_validity_list).long(),
+                    ),
+                )
             n_far, n_leaf, n_near = torch.stack(
                 [
                     torch.cat(far_validity_list).sum(),
@@ -2138,24 +2265,30 @@ class ClusterTree(TensorClass):
                     leaf_counts.sum(),
                 ]
             ).tolist()
-            far_t, far_s = _compact_deferred(
-                far_t_list,
+            far_k, far_s = _compact_deferred(
+                far_k_list,
                 far_s_list,
                 validity_list=far_validity_list,
                 device=device,
                 size=n_far,
             )
-            leaf_t, leaf_s = _compact_deferred(
-                leaf_t_list,
+            leaf_k, leaf_s = _compact_deferred(
+                leaf_k_list,
                 leaf_s_list,
                 validity_list=leaf_validity_list,
                 device=device,
                 size=n_leaf,
             )
+            ### Group both streams by (target, root), each walk's entries in
+            ### their traversal order.
+            far_k, perm = far_k.sort(stable=True)
+            far_t, far_s = far_k // n_roots, far_s[perm]
+            leaf_k, perm = leaf_k.sort(stable=True)
+            leaf_s = leaf_s[perm]
             positions, hit_ids = _ragged_arange(
                 self.leaf_start[leaf_s], self.leaf_count[leaf_s], total=n_near
             )
-            near_t = leaf_t[hit_ids]
+            near_t = (leaf_k // n_roots)[hit_ids]
             near_s = self.sorted_source_order[positions]
 
         plan = PointInteractionPlan(
