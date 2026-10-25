@@ -60,8 +60,9 @@ criterion, dual-tree traversal, and far-field monopole approximation.
 
 import functools
 import importlib.util
+import itertools
 import logging
-from typing import Literal, NamedTuple, Sequence
+from typing import Callable, Literal, NamedTuple, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -1035,7 +1036,7 @@ class ClusterTree(TensorClass):
         leaf_size: int = 1,
         areas: Float[torch.Tensor, " n_points"] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
-    ) -> tuple["ClusterTree", list["ClusterTree"]]:
+    ) -> tuple["ClusterTree", Sequence["ClusterTree"]]:
         r"""Build one tree per group of points, and the forest of them.
 
         ``trees[g]`` is ``from_points(points[groups == g], leaf_size=leaf_size,
@@ -1046,7 +1047,9 @@ class ClusterTree(TensorClass):
         forest index the caller's points. With Warp, every tree is built in
         one pass with one host synchronization; its boxes may differ from the
         torch build's in the signs of zeros and the payloads of NaNs, as in
-        :meth:`from_points`.
+        :meth:`from_points`. The Warp build slices each of ``trees`` from the
+        forest only when it is first accessed, so a caller that needs only
+        the forest pays nothing for them.
 
         Parameters
         ----------
@@ -1068,7 +1071,7 @@ class ClusterTree(TensorClass):
 
         Returns
         -------
-        tuple[ClusterTree, list[ClusterTree]]
+        tuple[ClusterTree, Sequence[ClusterTree]]
             ``(forest, trees)``, with ``len(trees) == n_groups``.
 
         Examples
@@ -1133,7 +1136,7 @@ class ClusterTree(TensorClass):
         areas: torch.Tensor | None,
         *,
         forced: bool,
-    ) -> tuple["ClusterTree", list["ClusterTree"]] | None:
+    ) -> tuple["ClusterTree", Sequence["ClusterTree"]] | None:
         """The Warp build of :meth:`from_point_groups` (``groups`` may be
         ``None`` for one group) for at least one point. ``None`` where Warp
         cannot build the forest and ``forced`` is False."""
@@ -1235,57 +1238,61 @@ class ClusterTree(TensorClass):
             return forest, [forest]
 
         ### Each group's tree: its rows of the forest's tables, with its own
-        ### node and point ids.
-        is_leaf = topo.left_child < 0
-        tree_start = torch.cumsum(tree_counts, 0) - tree_counts
-        node_offset = built.node_offset[built.node_tree]
-        point_offset = tree_start[built.node_tree]
-        left = torch.where(is_leaf, -1, topo.left_child - node_offset)
-        right = torch.where(is_leaf, -1, topo.right_child - node_offset)
-        leaf_start = torch.where(is_leaf, topo.leaf_start - point_offset, -1)
-        range_start = topo.range_start - point_offset
-        by_group = torch.argsort(groups, stable=True)
-        rank = torch.empty_like(by_group)
-        rank[by_group] = (
-            torch.arange(n_points, device=device) - tree_start[groups[by_group]]
-        )
-        local_order = rank[order]
-        group_points = points[by_group]
-        trees = []
-        a = m = 0
-        for g in range(n_groups):
-            c = built.tree_items[g]
-            if c == 0:
-                trees.append(
-                    cls.from_points(
-                        points[:0], leaf_size=leaf_size, implementation="torch"
-                    )
-                )
-                continue
-            b, mb = a + c, m + built.tree_nodes[g]
-            trees.append(
-                cls(
-                    node_aabb_min=aabb_min[m:mb],
-                    node_aabb_max=aabb_max[m:mb],
-                    node_diameter_sq=diameter_sq[m:mb],
-                    node_left_child=left[m:mb],
-                    node_right_child=right[m:mb],
-                    leaf_start=leaf_start[m:mb],
-                    leaf_count=topo.leaf_count[m:mb],
-                    node_range_start=range_start[m:mb],
-                    node_range_count=topo.range_count[m:mb],
-                    node_total_area=total_area[m:mb],
-                    sorted_source_order=local_order[a:b],
-                    source_points=group_points[a:b],
-                    max_depth=torch.full(
-                        (), built.tree_depths[g], dtype=torch.long, device=device
-                    ),
-                    root_ids=torch.zeros(1, dtype=torch.long, device=device),
-                    batch_size=torch.Size([]),
-                )
+        ### node and point ids, made when first accessed.
+        @functools.cache
+        def local_tables() -> tuple[torch.Tensor, ...]:
+            is_leaf = topo.left_child < 0
+            tree_start = torch.cumsum(tree_counts, 0) - tree_counts
+            node_offset = built.node_offset[built.node_tree]
+            point_offset = tree_start[built.node_tree]
+            by_group = torch.argsort(groups, stable=True)
+            rank = torch.empty_like(by_group)
+            rank[by_group] = (
+                torch.arange(n_points, device=device) - tree_start[groups[by_group]]
             )
-            a, m = b, mb
-        return forest, trees
+            return (
+                torch.where(is_leaf, -1, topo.left_child - node_offset),
+                torch.where(is_leaf, -1, topo.right_child - node_offset),
+                torch.where(is_leaf, topo.leaf_start - point_offset, -1),
+                topo.range_start - point_offset,
+                rank[order],
+                points[by_group],
+            )
+
+        item_start = list(itertools.accumulate(built.tree_items, initial=0))
+        node_start = list(itertools.accumulate(built.tree_nodes, initial=0))
+
+        def group_tree(g: int) -> "ClusterTree":
+            a, b = item_start[g], item_start[g + 1]
+            m, mb = node_start[g], node_start[g + 1]
+            if a == b:
+                return cls.from_points(
+                    points[:0], leaf_size=leaf_size, implementation="torch"
+                )
+            left, right, leaf_start, range_start, local_order, group_points = (
+                local_tables()
+            )
+            return cls(
+                node_aabb_min=aabb_min[m:mb],
+                node_aabb_max=aabb_max[m:mb],
+                node_diameter_sq=diameter_sq[m:mb],
+                node_left_child=left[m:mb],
+                node_right_child=right[m:mb],
+                leaf_start=leaf_start[m:mb],
+                leaf_count=topo.leaf_count[m:mb],
+                node_range_start=range_start[m:mb],
+                node_range_count=topo.range_count[m:mb],
+                node_total_area=total_area[m:mb],
+                sorted_source_order=local_order[a:b],
+                source_points=group_points[a:b],
+                max_depth=torch.full(
+                    (), built.tree_depths[g], dtype=torch.long, device=device
+                ),
+                root_ids=torch.zeros(1, dtype=torch.long, device=device),
+                batch_size=torch.Size([]),
+            )
+
+        return forest, _LazyTrees(group_tree, n_groups)
 
     @classmethod
     def merge(cls, trees: Sequence["ClusterTree"]) -> "ClusterTree":
@@ -2336,6 +2343,26 @@ class SourceAggregates(TensorClass):
 # ---------------------------------------------------------------------------
 # Internal helpers for tree construction
 # ---------------------------------------------------------------------------
+
+
+class _LazyTrees(Sequence["ClusterTree"]):
+    """A read-only sequence of ``n`` trees, each made by ``make(i)`` on its
+    first access and kept."""
+
+    def __init__(self, make: Callable[[int], "ClusterTree"], n: int) -> None:
+        self._make = make
+        self._trees: list[ClusterTree | None] = [None] * n
+
+    def __len__(self) -> int:
+        return len(self._trees)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return [self[j] for j in range(len(self))[i]]
+        i = range(len(self))[i]
+        if self._trees[i] is None:
+            self._trees[i] = self._make(i)
+        return self._trees[i]
 
 
 def _node_boxes(

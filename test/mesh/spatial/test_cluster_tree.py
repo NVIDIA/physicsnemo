@@ -1577,6 +1577,8 @@ def test_point_groups_are_the_per_group_trees_and_their_merge(
             implementation=implementation,
         )
         assert len(trees) == n_groups
+        assert trees[-1] is trees[n_groups - 1]
+        assert all(a is b for a, b in zip(trees[1:3], (trees[1], trees[2])))
         for k, tree in enumerate(trees):
             mask = groups == k
             ref = ClusterTree.from_points(
