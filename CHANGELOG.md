@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
+  a mesh's cells with probability proportional to their measure, with
+  Horvitz-Thompson weights for unbiased sums. The sample is spread over the
+  mesh, the same in every pose, bitwise reproducible on CPU and CUDA, and
+  compiles to one graph.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - Adds a Rotor37 compressor blade example with GeoTransolver
