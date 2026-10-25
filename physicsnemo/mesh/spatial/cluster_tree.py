@@ -1137,7 +1137,10 @@ class ClusterTree(TensorClass):
         """The Warp build of :meth:`from_point_groups` (``groups`` may be
         ``None`` for one group) for at least one point. ``None`` where Warp
         cannot build the forest and ``forced`` is False."""
-        from physicsnemo.mesh.spatial._lbvh_warp import build_morton_forest_topology
+        from physicsnemo.mesh.spatial._lbvh_warp import (
+            build_morton_forest_topology,
+            node_boxes,
+        )
 
         n_points = points.shape[0]
         device = points.device
@@ -1184,7 +1187,7 @@ class ClusterTree(TensorClass):
         topo = built.topology
 
         with record_function("cluster_tree::node_boxes"):
-            aabb_min, aabb_max = _node_boxes(topo, points[order], leaf_size)
+            aabb_min, aabb_max = node_boxes(topo, points[order])
             diameter_sq = (aabb_max - aabb_min).pow(2).sum(dim=-1)
 
         ### Total area per node: the range sums of its tree's own prefix sum,

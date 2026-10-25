@@ -2090,3 +2090,42 @@ def test_warp_walk_non_default_cuda_stream():
         ).clone()
     torch.cuda.current_stream().wait_stream(stream)
     assert _same_point_plans(plan, baseline)
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
+)
+@pytest.mark.parametrize("split", ["morton", "midpoint"])
+def test_warp_node_boxes_are_the_torch_node_boxes(device, split, dtype):
+    """The one-kernel bottom-up boxes are ``_node_boxes``' in every bit for
+    finite points, on both topologies and at three leaf sizes; a NaN point
+    makes the same boxes NaN."""
+    from physicsnemo.mesh.spatial._lbvh import (
+        build_lbvh_topology,
+        build_morton_topology,
+    )
+    from physicsnemo.mesh.spatial._lbvh_warp import node_boxes
+    from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
+    from physicsnemo.mesh.spatial.cluster_tree import _node_boxes
+
+    for n in (1, 2, 9, 700):
+        points = _points(n, 3, device, seed=62, dtype=dtype)
+        codes, order = _compute_morton_codes(points, isotropic=True).sort(stable=True)
+        sorted_points = points[order]
+        for leaf_size in (1, 4, 8):
+            if split == "morton":
+                topo = build_morton_topology(codes, leaf_size)
+            else:
+                topo = build_lbvh_topology(n, leaf_size, torch.device(device))
+            torch_boxes = _node_boxes(topo, sorted_points, leaf_size)
+            warp_boxes = node_boxes(topo, sorted_points)
+            assert all(map(_bitwise, torch_boxes, warp_boxes)), (n, leaf_size)
+            if n > 2:
+                with_nan = sorted_points.clone()
+                with_nan[n // 2, 1] = float("nan")
+                torch_boxes = _node_boxes(topo, with_nan, leaf_size)
+                warp_boxes = node_boxes(topo, with_nan)
+                for a, b in zip(torch_boxes, warp_boxes):
+                    assert torch.equal(a.isnan(), b.isnan())
+                    assert a.isnan().any()
+                    assert _bitwise(a.nan_to_num(), b.nan_to_num())

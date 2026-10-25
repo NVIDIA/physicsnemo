@@ -23,12 +23,13 @@ split at every node on its way, and emits the nodes whose range starts at it:
 a count pass, one readback, and a fill pass. A sort of the nodes by (tree,
 depth, first position) is the level-by-level numbering of the torch build, so
 the topology, which is integer arithmetic, is that build's exactly.
+:func:`node_boxes` fills the nodes' boxes bottom up in one kernel.
 
 Imported lazily by :class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree`,
 so importing :mod:`physicsnemo.mesh.spatial` registers no kernels.
 """
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import torch
 import warp as wp
@@ -305,3 +306,135 @@ def build_morton_forest_topology(
         tree_nodes=nodes_per_h,
         tree_depths=depth_per_h,
     )
+
+
+@wp.func_native(
+    """
+#if defined(__CUDA_ARCH__)
+    __threadfence();
+#endif
+"""
+)
+def _fence(): ...
+
+
+@wp.func
+def _min(a: Any, b: Any):
+    """The smaller of ``a`` and ``b``, NaN if either is, as ``torch.amin``."""
+    r = b
+    if wp.isnan(a) or a < b:
+        r = a
+    return r
+
+
+@wp.func
+def _max(a: Any, b: Any):
+    """The larger of ``a`` and ``b``, NaN if either is, as ``torch.amax``."""
+    r = b
+    if wp.isnan(a) or a > b:
+        r = a
+    return r
+
+
+@wp.kernel(enable_backward=False)
+def _node_boxes_kernel(
+    points: wp.array(dtype=Any),
+    leaf_node: wp.array(dtype=wp.int64),
+    leaf_start: wp.array(dtype=wp.int64),
+    leaf_size: wp.array(dtype=wp.int64),
+    parent: wp.array(dtype=wp.int64),
+    left: wp.array(dtype=wp.int64),
+    right: wp.array(dtype=wp.int64),
+    d: int,
+    arrivals: wp.array(dtype=wp.int32),
+    box_min: wp.array(dtype=Any),
+    box_max: wp.array(dtype=Any),
+):
+    """Thread ``tid``: the box of leaf ``tid`` from its points, then, for as long
+    as it is the second child to arrive at a parent, the parent's box from its
+    two children's (the first child to arrive stops)."""
+    i = wp.tid()
+    node = leaf_node[i]
+    s = leaf_start[i]
+    for k in range(d):
+        lo = points[s * wp.int64(d) + wp.int64(k)]
+        hi = lo
+        for j in range(1, int(leaf_size[i])):
+            x = points[(s + wp.int64(j)) * wp.int64(d) + wp.int64(k)]
+            lo = _min(lo, x)
+            hi = _max(hi, x)
+        box_min[node * wp.int64(d) + wp.int64(k)] = lo
+        box_max[node * wp.int64(d) + wp.int64(k)] = hi
+    p = parent[node]
+    while p >= wp.int64(0):
+        ### The boxes written so far are visible before the arrival is.
+        _fence()
+        if wp.atomic_add(arrivals, int(p), 1) == 0:
+            p = wp.int64(-1)
+        else:
+            a = left[p] * wp.int64(d)
+            b = right[p] * wp.int64(d)
+            for k in range(d):
+                kk = wp.int64(k)
+                box_min[p * wp.int64(d) + kk] = _min(box_min[a + kk], box_min[b + kk])
+                box_max[p * wp.int64(d) + kk] = _max(box_max[a + kk], box_max[b + kk])
+            p = parent[p]
+
+
+def node_boxes(
+    topo: LBVHTopology, sorted_points: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-node AABBs of ``topo`` over the Morton-sorted points, as
+    :func:`~physicsnemo.mesh.spatial.cluster_tree._node_boxes` makes them, in
+    one kernel launch: leaves from their points, then every internal node by
+    the second of its children to finish. Minima and maxima are exact, so the
+    boxes are that function's for finite points, whichever child finishes
+    first; half-precision points are widened to float32 and back exactly."""
+    n_nodes = topo.node_count
+    d = sorted_points.shape[1]
+    device = sorted_points.device
+    dtype = sorted_points.dtype
+    work = torch.float64 if dtype == torch.float64 else torch.float32
+    left = topo.left_child[:n_nodes]
+    right = topo.right_child[:n_nodes]
+    parent = torch.full((n_nodes,), -1, dtype=torch.long, device=device)
+    if topo.internal_nodes_per_level:
+        internal = torch.cat(topo.internal_nodes_per_level)
+        parent[left[internal]] = internal
+        parent[right[internal]] = internal
+    box_min = torch.empty((n_nodes, d), dtype=work, device=device)
+    box_max = torch.empty_like(box_min)
+    wtype = wp.dtype_from_torch(work)
+    wp_device, stream = FunctionSpec.warp_launch_context(sorted_points)
+    with FunctionSpec.warp_stream_scope(stream):
+        wp.init()
+        wp.launch(
+            _node_boxes_kernel,
+            dim=topo.leaf_node_ids.shape[0],
+            inputs=[
+                wp.from_torch(
+                    sorted_points.to(work).contiguous().view(-1), dtype=wtype
+                ),
+                *(
+                    wp.from_torch(x.contiguous(), dtype=wp.int64)
+                    for x in (
+                        topo.leaf_node_ids,
+                        topo.leaf_starts,
+                        topo.leaf_sizes,
+                        parent,
+                        left,
+                        right,
+                    )
+                ),
+                d,
+                wp.from_torch(
+                    torch.zeros(n_nodes, dtype=torch.int32, device=device),
+                    dtype=wp.int32,
+                ),
+                wp.from_torch(box_min.view(-1), dtype=wtype),
+                wp.from_torch(box_max.view(-1), dtype=wtype),
+            ],
+            device=wp_device,
+            stream=stream,
+        )
+    return box_min.to(dtype), box_max.to(dtype)
