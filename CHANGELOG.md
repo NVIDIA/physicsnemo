@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `physicsnemo.optim.Muon` takes an optional `cuda_graph` flag that replays
   its step as one CUDA graph, with the same result bit for bit, saving host
-  time when the step is launch-bound.
+  time when the step is launch-bound; the unified external-aero recipe exposes
+  it as `training.optimizer.muon_cuda_graph` (default off).
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - Adds a Rotor37 compressor blade example with GeoTransolver
