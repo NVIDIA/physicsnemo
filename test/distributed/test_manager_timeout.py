@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Timeout configuration and real NCCL initialization for DistributedManager."""
+"""Launcher configuration (timeouts, SLURM rendezvous host) and real NCCL
+initialization for DistributedManager."""
 
 import os
 import socket
@@ -26,6 +27,7 @@ import torch
 import torch.distributed as dist
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed.manager import _first_slurm_host
 
 _TIMEOUT_ENV = "PHYSICSNEMO_DIST_TIMEOUT_S"
 _LAUNCHER_ENV = {
@@ -35,6 +37,7 @@ _LAUNCHER_ENV = {
         "SLURM_NPROCS": "2",
         "SLURM_LOCALID": "0",
         "SLURM_LAUNCH_NODE_IPADDR": "localhost",
+        "SLURM_STEP_NODELIST": "localhost",
     },
     "OPENMPI": {
         "OMPI_COMM_WORLD_RANK": "0",
@@ -90,6 +93,33 @@ def _configure_launcher(monkeypatch, launcher, forced=False):
         monkeypatch.setenv(key, value)
     if forced:
         monkeypatch.setenv("PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD", launcher)
+
+
+@pytest.mark.parametrize(
+    ("nodelist", "host"),
+    [
+        ("node07", "node07"),
+        ("node07,node03", "node07"),
+        ("nvl72d037-T[12,18]", "nvl72d037-T12"),
+        ("gpu[03-05,07],cpu1", "gpu03"),
+        ("rack[2-3]-node[1-4]", "rack2-node1"),
+    ],
+)
+def test_first_slurm_host(nodelist, host):
+    """The first host of a Slurm host list, with ranges and several prefixes."""
+    assert _first_slurm_host(nodelist) == host
+
+
+def test_slurm_rendezvous_on_first_step_node(monkeypatch, mock_process_group):
+    """Rank 0, and so the rendezvous, runs on the step's first node (issue #2168).
+    That need not be the node that ran srun."""
+    _configure_launcher(monkeypatch, "SLURM")
+    monkeypatch.setenv("SLURM_LAUNCH_NODE_IPADDR", "10.0.0.18")
+    monkeypatch.setenv("SLURM_STEP_NODELIST", "node[12,18]")
+
+    DistributedManager.initialize()
+
+    assert os.environ["MASTER_ADDR"] == "node12"
 
 
 @pytest.mark.parametrize("launcher", ["ENV", "SLURM", "OPENMPI"])
