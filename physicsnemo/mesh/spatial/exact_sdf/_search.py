@@ -24,6 +24,7 @@ op; the offset from the closest point is then rebuilt differentiably.
 """
 
 import itertools
+import math
 
 import torch
 from jaxtyping import Float, Int
@@ -56,6 +57,35 @@ from physicsnemo.mesh.spatial.exact_sdf._winding import (
 )
 
 
+def _hull_candidates(cc: torch.Tensor, subsets: list[torch.Tensor]):
+    """The candidates of :func:`_min_norm_points` for the rows ``cc`` ``(n, K, d)``
+    on the subsets (one ``(S, m)`` tensor of indices per size ``m``): each subset's
+    least-norm affine point with non-negative weights ``(n, S, d)`` (infinite where
+    there is none), its norm where it meets the optimality condition to rounding,
+    and its duality gap where it separates the origin (each ``(n, S)``, infinite
+    elsewhere)."""
+    d = cc.shape[-1]
+    xs = []
+    for sub in subsets:
+        p = cc[:, sub]  # (n, S, m, d)
+        if sub.shape[1] == 2:
+            xs.append(0.5 * (p[:, :, 0] + p[:, :, 1]))
+            continue
+        ### (elementwise products, not matmuls: the matrices are 3 x 3)
+        gram = (p[..., :, None, :] * p[..., None, :, :]).sum(-1)
+        lam, info = torch.linalg.solve_ex(gram, p.new_ones(p.shape[:-1]))
+        ok = (info == 0) & torch.isfinite(lam).all(-1) & (lam >= 0).all(-1)
+        x = ((lam / lam.sum(-1, keepdim=True))[..., None] * p).sum(-2)
+        xs.append(torch.where(ok[..., None], x, torch.inf))
+    x = torch.cat(xs, 1)
+    ### Rounding of a d-term dot product of unit vectors, on each side.
+    slack = 2 * d * torch.finfo(cc.dtype).eps
+    low, sq = (cc[:, None] * x[:, :, None]).sum(-1).amin(-1), (x * x).sum(-1)
+    norm = torch.where(low >= sq - slack, x.norm(dim=-1), torch.inf)
+    gap = torch.where((low > slack) & torch.isfinite(sq), sq - low, torch.inf)
+    return x, norm, gap
+
+
 def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     """For each row of ``c`` ``(n, K, d)`` (``K`` distinct unit vectors), the point
     of their convex hull closest to the origin ``(n, d)``. It lies in the relative
@@ -70,41 +100,55 @@ def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     0`` for every ``k``; the least-norm point does): then the candidate with the
     least duality gap ``g = |x|^2 - min_k c_k . x`` (``|x - x*| <= sqrt(2 g)``),
     otherwise 0. ``c`` in a canonical order, so the result is a function of the
-    set. Chunked over the rows."""
+    set. Chunked over the rows; where one row's subsets and directions overflow a
+    chunk (a vertex shared by hundreds of cells), one row at a time over chunks of
+    its subsets, with the same result."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
-    subsets = [
-        torch.tensor(list(itertools.combinations(range(k), m)), device=c.device)
-        for m in range(2, min(k, d) + 1)
-    ]
-    chunk = max(1, _SEARCH_PAIRS // 8 // sum(s.shape[0] for s in subsets))
+    sizes, budget = range(2, min(k, d) + 1), _SEARCH_PAIRS // 8
+    total = sum(math.comb(k, m) for m in sizes)
+    if total * k <= budget:
+        subsets = [
+            torch.tensor(list(itertools.combinations(range(k), m)), device=c.device)
+            for m in sizes
+        ]
+        chunk = max(1, budget // total)
+        out = []
+        for s in range(0, n, chunk):
+            x, norm, gap = _hull_candidates(c[s : s + chunk], subsets)
+            certified = torch.isfinite(norm).any(1)
+            pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
+            best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
+            out.append(
+                torch.where(
+                    (certified | torch.isfinite(gap).any(1))[:, None], best, 0.0
+                )
+            )
+        return torch.cat(out)
+    ### The subsets are generated in the same order, a chunk at a time, and the first
+    ### least norm and the first least gap kept (a later chunk only when smaller).
     out = []
-    for s in range(0, n, chunk):
-        cc = c[s : s + chunk]
-        xs = []
-        for sub in subsets:
-            p = cc[:, sub]  # (n, S, m, d)
-            if sub.shape[1] == 2:
-                xs.append(0.5 * (p[:, :, 0] + p[:, :, 1]))
-                continue
-            ### (elementwise products, not matmuls: the matrices are 3 x 3)
-            gram = (p[..., :, None, :] * p[..., None, :, :]).sum(-1)
-            lam, info = torch.linalg.solve_ex(gram, p.new_ones(p.shape[:-1]))
-            ok = (info == 0) & torch.isfinite(lam).all(-1) & (lam >= 0).all(-1)
-            x = ((lam / lam.sum(-1, keepdim=True))[..., None] * p).sum(-2)
-            xs.append(torch.where(ok[..., None], x, torch.inf))
-        x = torch.cat(xs, 1)
-        ### Rounding of a d-term dot product of unit vectors, on each side.
-        slack = 2 * d * torch.finfo(c.dtype).eps
-        low, sq = (cc[:, None] * x[:, :, None]).sum(-1).amin(-1), (x * x).sum(-1)
-        norm = torch.where(low >= sq - slack, x.norm(dim=-1), torch.inf)
-        gap = torch.where((low > slack) & torch.isfinite(sq), sq - low, torch.inf)
-        certified = torch.isfinite(norm).any(1)
-        pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
-        best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
+    for cc in c.split(1):
+        least = [c.new_full((1,), torch.inf), c.new_full((1,), torch.inf)]
+        best = [c.new_zeros(1, d), c.new_zeros(1, d)]
+        for m in sizes:
+            subsets = itertools.combinations(range(k), m)
+            while sub := list(itertools.islice(subsets, max(1, budget // k))):
+                x, *scores = _hull_candidates(cc, [torch.tensor(sub, device=c.device)])
+                for j, score in enumerate(scores):
+                    i = score.argmin(1, keepdim=True)
+                    value = score.gather(1, i)[:, 0]
+                    smaller = value < least[j]
+                    least[j] = torch.where(smaller, value, least[j])
+                    point = x.gather(1, i[..., None].expand(-1, 1, d))[:, 0]
+                    best[j] = torch.where(smaller[:, None], point, best[j])
         out.append(
-            torch.where((certified | torch.isfinite(gap).any(1))[:, None], best, 0.0)
+            torch.where(
+                torch.isfinite(least[0])[:, None],
+                best[0],
+                torch.where(torch.isfinite(least[1])[:, None], best[1], 0.0),
+            )
         )
     return torch.cat(out)
 
