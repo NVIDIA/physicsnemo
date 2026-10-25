@@ -241,6 +241,25 @@ def test_cuda_graph_recaptures_on_key_change():
 
 
 @_requires_cuda
+def test_cuda_graph_under_torch_compile():
+    """Under torch.compile the graph step runs outside the compiled region, so
+    the graph is still captured and replayed, matching eager bit for bit."""
+    eager_params = _make_params(_GRAPH_SHAPES[:5], "cuda", seed=9)
+    graph_params = [torch.nn.Parameter(p.detach().clone()) for p in eager_params]
+    eager_opt = Muon(eager_params, lr=0.02)
+    graph_opt = Muon(graph_params, lr=0.02, cuda_graph=True)
+    compiled_step = torch.compile(graph_opt.step)
+    for step in range(3):
+        _set_grads(eager_params, seed=400 + step)
+        _set_grads(graph_params, seed=400 + step)
+        eager_opt.step()
+        compiled_step()
+    assert graph_opt._graph is not None
+    for pe, pg in zip(eager_params, graph_params):
+        assert torch.equal(pe, pg)
+
+
+@_requires_cuda
 def test_cuda_graph_capture_failure(monkeypatch):
     """A host sync inside the step fails the capture with a RuntimeError and
     leaves the user's gradients in place."""

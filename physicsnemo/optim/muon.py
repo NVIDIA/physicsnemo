@@ -163,8 +163,9 @@ class Muon(_TorchMuon):
         the state tensors (after loading a state dict) change, so a schedule
         that changes the learning rate every step recaptures every step and
         gains nothing. Needs CUDA parameters and float learning rates, and
-        holds a copy of the gradients and the graph's memory pool. Ignored
-        under ``torch.compile``. Default False.
+        holds a copy of the gradients and the graph's memory pool. Under
+        ``torch.compile`` the step runs outside the compiled region, so the
+        graph replaces compiling it. Default False.
 
     Forward
     -------
@@ -243,10 +244,8 @@ class Muon(_TorchMuon):
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
         """Perform a single optimization step (see :meth:`_step`).
 
-        With ``cuda_graph`` set, the step is replayed as a CUDA graph. It runs
-        eagerly with a closure, under ``torch.compile``, and while any parameter
-        with a gradient has no momentum buffer yet, so that no buffer is ever
-        initialized inside a capture.
+        With ``cuda_graph`` set and no closure, the step is replayed as a CUDA
+        graph (see :meth:`_graph_step`).
 
         Parameters
         ----------
@@ -259,8 +258,18 @@ class Muon(_TorchMuon):
         float or None
             The loss returned by *closure*, or ``None`` if no closure was given.
         """
-        if closure is not None or not self.cuda_graph or torch.compiler.is_compiling():
-            return self._step(closure)
+        if closure is None and self.cuda_graph:
+            return self._graph_step()
+        return self._step(closure)
+
+    @torch.compiler.disable
+    def _graph_step(self) -> None:
+        """Replay the step as a CUDA graph, capturing it first if needed.
+
+        It runs eagerly while any parameter with a gradient has no momentum
+        buffer yet, so that no buffer is ever initialized inside a capture.
+        Under ``torch.compile`` it runs outside the compiled region.
+        """
         params = [
             p for g in self.param_groups for p in g["params"] if p.grad is not None
         ]
