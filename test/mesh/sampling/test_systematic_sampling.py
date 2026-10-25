@@ -177,6 +177,24 @@ def test_equal_measures_with_a_share_of_the_count_are_kept_whole():
                 assert torch.equal(pi, torch.ones_like(a)), (value, n, share)
 
 
+def test_zero_measures_get_probability_zero():
+    """Zero measures get pi = 0, and the probabilities sum to the smaller of the share
+    and the positive count: [1, 0, 0] at 2 gives [1, 0, 0], and on random measures
+    with exact zeros a share above the positive count keeps every positive cell."""
+    one = pps_inclusion_probabilities(torch.tensor([1.0, 0.0, 0.0], dtype=D), 2.0)
+    assert torch.equal(one, torch.tensor([1.0, 0.0, 0.0], dtype=D))
+    g = torch.Generator().manual_seed(0)
+    a = torch.rand(1000, generator=g, dtype=D) ** 3
+    a[::4] = 0.0
+    zero = a == 0
+    pi = pps_inclusion_probabilities(a, 300.0)
+    assert bool((pi[zero] == 0).all())
+    assert float(pi.sum()) == pytest.approx(300.0, rel=1e-12)
+    pi = pps_inclusion_probabilities(a, 800.0)
+    assert bool((pi[zero] == 0).all()) and bool((pi[~zero] == 1).all())
+    assert float(pi.sum()) == 750.0
+
+
 def test_tiny_measures_keep_their_share():
     """100 cells of ordinary measure and 4,900 of 1e-17 in one group of share 260:
     the large cells are capped and the tiny ones share the rest, so the probabilities
@@ -356,6 +374,17 @@ def test_the_integer_search_is_the_search_for_the_hits():
         assert torch.equal(kept, order[systematic_sample(p[order], k, 0.5)].sort()[0])
 
 
+def test_half_and_single_probabilities_draw_as_double():
+    """float16 and float32 probabilities give bitwise the float64 draw: the line is
+    scaled in float64, where pi 2**Q does not overflow."""
+    g = torch.Generator().manual_seed(0)
+    random = (torch.rand(1000, generator=g, dtype=D) * 0.3).half().double()
+    for p, k in ((torch.full((4,), 0.5, dtype=D), 2), (random, int(random.sum()))):
+        ref = systematic_sample(p, k, 0.5)
+        for dtype in (torch.float16, torch.float32):
+            assert torch.equal(systematic_sample(p.to(dtype), k, 0.5), ref), dtype
+
+
 def test_the_grid_needs_a_python_int():
     """The line's grid is fixed by a Python int: another type for n_samples without
     max_n_samples, or n_samples above max_n_samples, is an error."""
@@ -470,6 +499,26 @@ def test_the_mesh_draw_keeps_min_cells_and_samples():
     empty = Mesh(points=torch.randn(4, 3), cells=torch.zeros(0, 3, dtype=torch.long))
     kept, w = sample_cells_systematic(empty, 10, 0.5)
     assert kept.shape == w.shape == (0,) and w.dtype == torch.float32
+
+
+def test_zero_area_cells_fill_the_count_at_weight_zero():
+    """A mesh with degenerate (zero-area) cells and more samples than positive cells
+    keeps min(n_cells, n_samples) distinct cells, every positive cell among them; the
+    zero cells fill the count at weight 0, so the weights sum to the area."""
+    mesh = _soup(500, effective=False)
+    points = mesh.points.reshape(500, 3, 3).clone()
+    points[::5] = points[::5, :1]  # every fifth triangle collapsed to a point
+    mesh = Mesh(points=points.reshape(-1, 3), cells=mesh.cells)
+    area = mesh.cell_areas
+    zero = area == 0
+    assert int(zero.sum()) == 100
+    for u in (0.0, 0.37, 0.999):
+        kept, w = sample_cells_systematic(mesh, 450, u)
+        assert kept.shape == (450,)
+        assert torch.equal(kept, kept.unique())
+        assert bool(torch.isin((~zero).nonzero()[:, 0], kept).all())
+        assert bool((w[zero[kept]] == 0).all())
+        assert float(w.sum()) == pytest.approx(float(area.sum()), rel=1e-12)
 
 
 def test_the_mesh_draw_validates_n_samples():

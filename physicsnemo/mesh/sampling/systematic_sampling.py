@@ -25,8 +25,9 @@ the whole mesh:
   :math:`\pi_i = \min(1, c\,a_i)`, with :math:`c` the one constant such that
   :math:`\sum_i \pi_i = b`. It is the capped fixed point of the iterative
   adjustment, found exactly from the sorted measures
-  (:func:`pps_inclusion_probabilities`). A size :math:`b` of at least the cell
-  count gives every :math:`\pi_i = 1`.
+  (:func:`pps_inclusion_probabilities`). A size :math:`b` of at least the count
+  of positive measures gives each of them :math:`\pi_i = 1`; a zero measure gets
+  :math:`\pi_i = 0`.
 - **Draw.** Systematic sampling (:func:`systematic_sample`): the cells are laid
   along a line, each cell an interval of length :math:`\pi_i`, and the cells hit
   by the points :math:`u + m`, :math:`m = 0, \dots, k - 1`, are kept. The
@@ -124,7 +125,9 @@ def pps_inclusion_probabilities(
     decreasing order), which is the fixed point of the iterative adjustment (cap,
     rescale the rest, repeat). The sort is stable, so ties resolve the same on
     every device, and the tail sums of the sorted measures are a fixed-order scan,
-    so the probabilities are bitwise the same on every device.
+    so the probabilities are bitwise the same on every device. Zero measures get
+    :math:`\pi_i = 0`, so the probabilities sum to the smaller of ``n_samples`` and
+    the count of positive measures.
 
     Parameters
     ----------
@@ -133,7 +136,8 @@ def pps_inclusion_probabilities(
         is recommended.
     n_samples : float | torch.Tensor
         The expected sample size :math:`b`, the sum of the probabilities. It may be
-        fractional. At least ``n_cells`` gives every :math:`\pi_i = 1` exactly.
+        fractional. At least the count of positive measures gives every cell of
+        positive measure :math:`\pi_i = 1` exactly.
 
     Returns
     -------
@@ -161,8 +165,10 @@ def pps_inclusion_probabilities(
     tail_m = tail.gather(0, m.clamp_max(n - 1).reshape(1))[0]
     c = (share - m) / tail_m.clamp_min(torch.finfo(a.dtype).tiny)
     pi = torch.where(rank < m, 1.0, (c * a).clamp(max=1.0))
-    ### share >= n keeps every cell: float tails can leave one a rounding below 1.
-    pi = torch.where(share >= n, 1.0, pi)
+    ### share >= n_pos keeps every positive cell, and no zero one: float tails can
+    ### leave one a rounding below 1, and the search caps the zeros at 1.
+    n_pos = (a > 0).sum()
+    pi = torch.where(share >= n_pos, (a > 0).to(pi.dtype), pi)
     return torch.empty_like(pi).scatter_(0, order, pi)
 
 
@@ -194,8 +200,10 @@ def systematic_sample(
     Parameters
     ----------
     inclusion_probabilities : torch.Tensor
-        The probabilities :math:`\pi_i \in [0, 1]`, shape ``(n_cells,)``, summing
-        to about ``n_samples`` (:func:`pps_inclusion_probabilities`).
+        The probabilities :math:`\pi_i \in [0, 1]`, shape ``(n_cells,)``, in any
+        floating dtype (scaled to the line in float64), summing to ``n_samples`` up
+        to the line's grid (:func:`pps_inclusion_probabilities`). Otherwise the hits
+        past the end of the line repeat the last cell.
     n_samples : int
         The number of hits :math:`k`. It may be a symbolic size under
         ``torch.compile`` when ``max_n_samples`` is given.
@@ -242,7 +250,7 @@ def systematic_sample(
     start = torch.as_tensor(start, dtype=torch.float64, device=pi.device)
     k = n_samples
     Q = 62 - budget.bit_length()
-    line = _cumsum((pi * 2.0**Q).round().to(torch.int64))
+    line = _cumsum((pi.double() * 2.0**Q).round().to(torch.int64))
     ### D = T - k 2**Q in shifts by Q and small integers only: Inductor folds an
     ### int64 constant times an index or size into an int32 Triton expression, which
     ### Triton rejects.
@@ -304,7 +312,10 @@ def sample_cells_systematic(
         The kept cells, shape ``(min(n_cells, n_samples),)``, int64, increasing.
     weights : torch.Tensor
         Their Horvitz-Thompson weights :math:`a_i / \pi_i`, shape
-        ``(min(n_cells, n_samples),)``, in the dtype of ``mesh.points``.
+        ``(min(n_cells, n_samples),)``, in the dtype of ``mesh.points``. Cells of
+        zero measure are drawn only to fill the count (when ``n_samples`` exceeds
+        the cells of positive measure), at weight 0, so weighted sums are
+        unchanged.
 
     Raises
     ------
@@ -361,6 +372,14 @@ def sample_cells_systematic(
         ### frame's ties).
         frame = canonical_frame(centroids, measure)
         pi = pps_inclusion_probabilities(measure, share)
+        ### More samples than positive-measure cells keeps every positive cell, and
+        ### the zero-measure cells fill the rest of the count equally, at
+        ### Horvitz-Thompson weight 0.
+        zero = measure == 0
+        n_pos = n_cells - zero.sum()
+        pi = torch.where(
+            zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
+        )
         ### Morton order of the centroids on cubic cells, ties broken by index.
         code = _compute_morton_codes(
             frame_coordinates(centroids, frame), isotropic=True
