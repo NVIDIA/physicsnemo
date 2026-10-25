@@ -236,8 +236,9 @@ class Muon(_TorchMuon):
 
     def __setstate__(self, state: dict) -> None:
         super().__setstate__(state)
+        # load_state_dict also lands here, with a state lacking cuda_graph.
+        self.__dict__.setdefault("cuda_graph", False)
         # A graph cannot be copied, so a copy captures its own.
-        self.cuda_graph = state.get("cuda_graph", False)
         self._graph = self._graph_key = self._graph_grads = None
 
     @torch.no_grad()

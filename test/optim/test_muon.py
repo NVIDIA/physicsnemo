@@ -205,6 +205,7 @@ def test_cuda_graph_matches_eager_bitwise():
         _set_grads(graph_params, seed=300 + step)
         eager_opt.step()
         graph_opt.step()
+        assert graph_opt.cuda_graph
         assert (graph_opt._graph is None) == (step == 0)
         for pe, pg in zip(eager_params, graph_params):
             assert torch.equal(pe, pg)
@@ -237,6 +238,7 @@ def test_cuda_graph_recaptures_on_key_change():
     assert step(4, with_grad=params[1:]) is not graph
     graph = opt._graph
     _reload(opt, opt.state_dict())
+    assert opt.cuda_graph
     assert step(5, with_grad=params[1:]) is not graph
 
 
