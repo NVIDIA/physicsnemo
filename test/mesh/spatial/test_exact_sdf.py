@@ -1261,6 +1261,68 @@ def test_exact_signed_distance_has_gradients_in_the_queries_and_the_mesh(dim):
     assert float(pts.grad.abs().sum()) > 0
 
 
+def _triangle_queries():
+    """A triangle and queries off it in its edge region (Greptile's example and a
+    generic one), a vertex region and its interior, each away from the regions'
+    boundaries."""
+    g = torch.Generator().manual_seed(3)
+    tri = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]], dtype=D)
+    generic = tri + 0.3 * torch.randn(3, 3, dtype=D, generator=g)
+    a, b, c = generic.unbind(0)
+    n = torch.linalg.cross(b - a, c - a)
+    n = n / n.norm()
+    out = torch.linalg.cross(b - a, n)  # in the plane, away from c
+    out = out / out.norm() * (1 if (out * (a - c)).sum() > 0 else -1)
+    return [
+        (tri, torch.tensor([0.5, -1.0, 0.0], dtype=D)),
+        (generic, a + 0.4 * (b - a) + 0.7 * out + 0.3 * n),
+        (generic, a + 0.5 * (a - b) + 0.5 * (a - c) - 0.4 * n),
+        (generic, (a + b + c) / 3 + 0.6 * n),
+    ]
+
+
+@pytest.mark.parametrize("case", range(4))
+def test_direction_gradient_matches_finite_differences(case):
+    """In float64 the gradients of u and d in the query and the vertices match
+    central finite differences off a triangle's edge (where the closest point slides
+    along it: before, u's gradient held the point fixed, du_x/dx_x = 1 instead of 0
+    at (0.5, -1, 0)), its vertex and its interior."""
+    tri, x = _triangle_queries()[case]
+    cells = torch.tensor([[0, 1, 2]])
+
+    def f(flat):
+        d, u = exact_signed_distance(
+            Mesh(points=flat[3:].reshape(3, 3), cells=cells), flat[None, :3]
+        )
+        return torch.cat([d, u[0]])
+
+    flat = torch.cat([x, tri.reshape(-1)])
+    jac = torch.autograd.functional.jacobian(f, flat)
+    h = 1e-6
+    fd = torch.stack(
+        [(f(flat + h * e) - f(flat - h * e)) / (2 * h) for e in torch.eye(12, dtype=D)],
+        1,
+    )
+    assert torch.allclose(jac, fd, atol=1e-7, rtol=0)
+
+
+def test_distance_and_direction_pass_gradcheck():
+    """On generic queries near a small closed mesh (closest points inside cells, on
+    edges and at vertices), d and u pass gradcheck in the queries and the vertices."""
+    ico = sphere_icosahedral.load(subdivisions=0)
+    points = ico.points.double()
+    g = torch.Generator().manual_seed(5)
+    q = torch.nn.functional.normalize(torch.randn(12, 3, dtype=D, generator=g), dim=-1)
+    q = q * (1.2 + 0.5 * torch.rand(12, 1, dtype=D, generator=g))
+
+    def f(q, points):
+        return exact_signed_distance(Mesh(points=points, cells=ico.cells), q)
+
+    on_cell = _search._closest_features(q, points, ico.cells)[1]
+    assert bool(on_cell.any()) and not bool(on_cell.all())
+    torch.autograd.gradcheck(f, (q.requires_grad_(), points.requires_grad_()))
+
+
 def _frozen_closest_point_weights(query, tri):
     """``physicsnemo.nn.functional.geometry.sdf._closest_point_weights`` as the
     rounding analysis of ``_ERICSON_K`` reads it (the same operations in the same
