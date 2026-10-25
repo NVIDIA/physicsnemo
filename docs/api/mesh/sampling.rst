@@ -3,11 +3,11 @@ Sampling and Interpolation
 
 .. currentmodule:: physicsnemo.mesh.sampling
 
-``physicsnemo.mesh.sampling`` draws random points on the cells of a mesh,
-draws cells in proportion to their measure, and interpolates mesh data at
-query points. Both jobs are also ``Mesh`` methods,
+``physicsnemo.mesh.sampling`` draws random points on the cells of a mesh and
+interpolates mesh data at query points. Both jobs are also ``Mesh`` methods,
 :meth:`~physicsnemo.mesh.mesh.Mesh.sample_random_points_on_cells` and
-:meth:`~physicsnemo.mesh.mesh.Mesh.sample_data_at_points`.
+:meth:`~physicsnemo.mesh.mesh.Mesh.sample_data_at_points`. It also draws cells
+in proportion to their measure.
 
 :bdg-success:`GPU` :bdg-info:`autograd` :bdg-secondary:`any dimension`
 
@@ -142,9 +142,10 @@ mesh:
 
 The draw is systematic sampling along the Morton order of the cell centroids
 in the mesh's own principal axes, so the sample is spread over the mesh and
-is the same in every pose of the mesh. It is bitwise reproducible on CPU and
-CUDA, and compiles to one graph with ``torch.compile``. Its building blocks
-are :func:`pps_inclusion_probabilities` and :func:`systematic_sample`.
+is the same in every pose of the mesh. It is bitwise the same from run to
+run, on CPU and on CUDA, and compiles to one graph with ``torch.compile``.
+Its building blocks are :func:`pps_inclusion_probabilities` and
+:func:`systematic_sample`.
 
 Choosing a Function
 -------------------

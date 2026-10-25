@@ -342,8 +342,9 @@ def sample_cells_systematic(
         ### Measures and centroids in float64 from the points as given, never the
         ### mesh's cached geometry, which is in the mesh's precision.
         verts = gather_rows(mesh.points.detach().double(), mesh.cells)
-        measure = mesh.cell_data.get(EFFECTIVE_MEASURE_KEY, None)
-        if measure is None:
+        if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+            measure = mesh.cell_data[EFFECTIVE_MEASURE_KEY]
+        else:
             measure = compute_cell_areas(verts[:, 1:] - verts[:, :1])
         measure = measure.detach().double()
         centroids = verts.mean(dim=1)
