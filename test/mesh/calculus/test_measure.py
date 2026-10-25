@@ -106,6 +106,26 @@ class TestSamplingWeights:
             cell_measures(sliced), sliced.cell_areas * torch.tensor([2.0, 5.0])
         )
 
+    def test_compiled_lookup_ignores_the_cell_data_key_order(self):
+        """The effective measure read under torch.compile must not guard on the
+        order of the cell_data keys: datasets add it at different stages."""
+
+        def mesh_with(order: list[str]) -> Mesh:
+            mesh = make_triangle_strip(4)
+            for key in order:
+                mesh.cell_data[key] = torch.arange(1.0, 5.0)
+            return mesh
+
+        torch._dynamo.reset()
+        compiled = torch.compile(cell_measures, backend="eager", fullgraph=True)
+        for i, order in enumerate(
+            [["bc", EFFECTIVE_MEASURE_KEY], [EFFECTIVE_MEASURE_KEY, "bc"]]
+        ):
+            with torch._dynamo.config.patch(error_on_recompile=i > 0):
+                torch.testing.assert_close(
+                    compiled(mesh_with(order)), torch.arange(1.0, 5.0)
+                )
+
 
 class TestWeightedIntegration:
     def test_integrate_cell_data_uses_effective_measure(self):
