@@ -508,6 +508,9 @@ def _ball_candidates_kernel(
     cap: wp.int64,
     count: wp.array(dtype=wp.int64),
     cells_out: wp.array(dtype=wp.int64),
+    overflow_query: wp.array(dtype=wp.int64),
+    overflow_cell: wp.array(dtype=wp.int64),
+    overflow_count: wp.array(dtype=wp.int64),
 ):
     """Every cell within ``radius`` of the query ``rows[tid]``: a stackless
     depth-first traversal of the BVH (``escape`` is the node after a node's
@@ -518,8 +521,9 @@ def _ball_candidates_kernel(
     bound on their distance rejects the far ones: the distance to the cell's plane
     and beyond its farthest edge, from the unit normals in ``planes`` (the plane's,
     then each edge's outward one in the plane, with their offsets), against
-    ``reach32``. Writes the first ``cap`` of them from
-    ``tid * cap`` on and counts them all."""
+    ``reach32``. Writes the first ``cap`` of them from ``tid * cap`` on, the
+    others as (query, cell) pairs to the overflow list while it has room (its
+    counter, shared by every thread, counts them all), and counts them all."""
     tid = wp.tid()
     q = rows[tid]
     x = query[q]
@@ -559,6 +563,11 @@ def _ball_candidates_kernel(
                 ):
                     if k < cap:
                         cells_out[wp.int64(tid) * cap + k] = c
+                    else:
+                        slot = wp.atomic_add(overflow_count, 0, wp.int64(1))
+                        if slot < overflow_query.shape[0]:
+                            overflow_query[slot] = q
+                            overflow_cell[slot] = c
                     k += wp.int64(1)
                 node = escape[node]
             else:
@@ -568,10 +577,11 @@ def _ball_candidates_kernel(
     count[tid] = k
 
 
-#: Candidate slots per query of the first pass of :func:`_ball_candidates`; a query
-#: with more is searched again with as many as it needs. That second pass takes about
-#: a whole traversal's time however few queries it holds (DrivAerML's surface: 45 ms
-#: for 360 queries of 200k at 16 slots; none overflow 64).
+#: Candidate slots per query of :func:`_ball_candidates`; a query with more writes
+#: the rest to an overflow list of one entry per query. Only when that list is full
+#: are the queries with more searched again with as many slots as they need, a
+#: second pass that takes about a whole traversal's time however few queries it holds
+#: (DrivAerML's surface: 45 ms for 360 queries of 200k at 16 slots; none overflow 64).
 _BALL_SLOTS = 64
 
 
@@ -588,8 +598,10 @@ def _ball_candidates(
     traversal of the BVH ``tree`` over the cells (:func:`_preorder_cell_tree`),
     with its boxes and the queries in float32 for the pruning (rounded outward and
     padded) and the distances to the cells in float64. One pass fills
-    ``_BALL_SLOTS`` slots per query; the queries that overflow are searched again
-    with as many slots as they need, so no candidate is dropped. The queries are
+    ``_BALL_SLOTS`` slots per query and an overflow list of ``Q`` pairs; when that
+    list is full, the queries that overflow their slots are searched again with as
+    many slots as they need, so no candidate is dropped. The pairs come in no
+    particular order (the caller sorts them). The queries are
     traversed in Morton order, so neighbouring threads visit neighbouring nodes.
     ``reach`` is the greatest norm of a vertex. The zero-area cells ``flat`` ``(F,)``
     (:func:`_zero_area`) have no plane, and the float64 distance is not defined on
@@ -652,6 +664,15 @@ def _ball_candidates(
         wp.from_torch(r32.contiguous(), dtype=wp.float32),
         wp.from_torch(reach32.contiguous(), dtype=wp.float32),
     ]
+    ### One overflow list for every launch, its counter atomic.
+    overflow_query, overflow_cell = (
+        torch.empty(query.shape[0], dtype=torch.int64, device=dev) for _ in range(2)
+    )
+    overflow_count = torch.zeros(1, dtype=torch.int64, device=dev)
+    overflow = [
+        wp.from_torch(t, dtype=wp.int64)
+        for t in (overflow_query, overflow_cell, overflow_count)
+    ]
 
     def search(rows, cap):
         count = torch.zeros(rows.shape[0], dtype=torch.int64, device=dev)
@@ -672,6 +693,7 @@ def _ball_candidates(
                         cap,
                         wp.from_torch(count[s:e], dtype=wp.int64),
                         wp.from_torch(out[s * cap : e * cap], dtype=wp.int64),
+                        *overflow,
                     ],
                     device=device,
                     stream=stream,
@@ -680,6 +702,14 @@ def _ball_candidates(
 
     rows = _compute_morton_codes(query).argsort()
     count, out = search(rows, _BALL_SLOTS)
+    n_overflow = int(overflow_count[0])
+    if n_overflow <= overflow_query.shape[0]:
+        keep = torch.arange(_BALL_SLOTS, device=dev) < count[:, None]
+        li, pk = rows[:, None].expand_as(out)[keep], out[keep]
+        return (
+            torch.cat([li, overflow_query[:n_overflow]]),
+            torch.cat([pk, overflow_cell[:n_overflow]]),
+        )
     over = count > _BALL_SLOTS
     keep = (torch.arange(_BALL_SLOTS, device=dev) < count[:, None]) & ~over[:, None]
     li, pk = rows[:, None].expand_as(out)[keep], out[keep]

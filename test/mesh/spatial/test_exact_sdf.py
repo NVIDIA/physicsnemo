@@ -1384,6 +1384,47 @@ def test_ball_search_in_blocks_of_rows_equals_one_launch():
         assert _equal(a, b)
 
 
+@pytest.mark.parametrize("case", ["list", "fallback"])
+def test_ball_search_overflow_list_and_its_fallback_equal_the_default_slots(case):
+    """With two candidate slots per query, the candidates past them go to the
+    overflow list (``list``: a sphere's queries, whose few extra candidates fit in
+    it) or, when it is full, to a second pass (``fallback``: a fan's hub queries,
+    94 extra candidates each, against a list of 450 entries); every output is
+    bitwise that of the default 64 slots."""
+    if case == "list":
+        q, mesh = _near_wall(3, 400, 15, band=0.5), _sphere(2)
+        points, cells = mesh.points, mesh.cells
+    else:
+        q, points, cells = _fan()
+    default = _run(q, points, cells)
+    caps, pairs = [], []
+    launch, ball = _cell_tree.wp.launch, _search._ball_candidates
+
+    def spy(k, dim, *args, **kwargs):
+        if k is _cell_tree._ball_candidates_kernel:
+            caps.append(kwargs["inputs"][14])
+        return launch(k, dim, *args, **kwargs)
+
+    def spy_ball(*args, **kwargs):
+        pairs.append(ball(*args, **kwargs))
+        return pairs[-1]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_cell_tree, "_BALL_SLOTS", 2)
+        mp.setattr(_cell_tree.wp, "launch", spy)
+        mp.setattr(_search, "_ball_candidates", spy_ball)
+        two = _run(q, points, cells)
+    per_query = torch.bincount(pairs[0][0], minlength=q.shape[0])
+    extra = int((per_query - 2).clamp_min(0).sum())
+    assert extra > 0
+    if case == "list":
+        assert extra <= q.shape[0] and caps == [2]
+    else:
+        assert extra > q.shape[0] and caps == [2, int(per_query.max())]
+    for a, b in zip(default, two):
+        assert _equal(a, b)
+
+
 @pytest.mark.cuda
 @pytest.mark.slow
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA")
