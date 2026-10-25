@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import copy
+import io
 
 import pytest
 import torch
@@ -146,3 +147,126 @@ def test_rejects_non_2d_params(device):
     param_1d = torch.nn.Parameter(torch.randn(8).to(device))
     with pytest.raises(ValueError, match="2D"):
         Muon([param_1d], lr=0.02)
+
+
+_requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA graphs need CUDA"
+)
+
+# Repeated, wide and tall shapes: three Newton-Schulz shape groups.
+_GRAPH_SHAPES = [(8, 8), (8, 8), (8, 8), (8, 32), (32, 8)]
+
+
+def _set_grads(params, seed):
+    """Give each parameter a fresh gradient, as a backward after set_to_none does."""
+    grads = _make_grads([p.shape for p in params], params[0].device, seed)
+    for p, g in zip(params, grads):
+        p.grad = g
+
+
+def _reload(opt, state_dict):
+    """Load *state_dict* through torch.save/torch.load, so its tensors are new."""
+    buffer = io.BytesIO()
+    torch.save(state_dict, buffer)
+    buffer.seek(0)
+    opt.load_state_dict(torch.load(buffer))
+
+
+@_requires_cuda
+def test_cuda_graph_matches_eager_bitwise():
+    """The graph replays the eager step bit for bit, also across an lr change
+    and a state_dict round trip (both of which recapture)."""
+    eager_params = _make_params(_GRAPH_SHAPES, "cuda", seed=4)
+    graph_params = [torch.nn.Parameter(p.detach().clone()) for p in eager_params]
+    kwargs = dict(lr=0.02, weight_decay=0.01, adjust_lr_fn="match_rms_adamw")
+    eager_opt = Muon(eager_params, **kwargs)
+    graph_opt = Muon(graph_params, cuda_graph=True, **kwargs)
+
+    for step in range(8):
+        if step == 4:
+            for opt in (eager_opt, graph_opt):
+                opt.param_groups[0]["lr"] *= 0.1
+        if step == 6:
+            state_dict = eager_opt.state_dict()
+            for opt in (eager_opt, graph_opt):
+                _reload(opt, state_dict)
+        _set_grads(eager_params, seed=300 + step)
+        _set_grads(graph_params, seed=300 + step)
+        eager_opt.step()
+        graph_opt.step()
+        assert (graph_opt._graph is None) == (step == 0)
+        for pe, pg in zip(eager_params, graph_params):
+            assert torch.equal(pe, pg)
+            assert torch.equal(
+                eager_opt.state[pe]["momentum_buffer"],
+                graph_opt.state[pg]["momentum_buffer"],
+            )
+
+
+@_requires_cuda
+def test_cuda_graph_recaptures_on_key_change():
+    """A new lr, set of parameters with gradients, or loaded state recaptures;
+    new gradients alone replay the same graph."""
+    params = _make_params(_GRAPH_SHAPES, "cuda", seed=5)
+    opt = Muon(params, lr=0.02, cuda_graph=True)
+
+    def step(seed, with_grad=params):
+        opt.zero_grad(set_to_none=True)
+        _set_grads(with_grad, seed)
+        opt.step()
+        return opt._graph
+
+    assert step(0) is None  # eager: creates the momentum buffers
+    graph = step(1)
+    assert graph is not None
+    assert step(2) is graph
+    opt.param_groups[0]["lr"] = 0.01
+    assert step(3) is not graph
+    graph = opt._graph
+    assert step(4, with_grad=params[1:]) is not graph
+    graph = opt._graph
+    _reload(opt, opt.state_dict())
+    assert step(5, with_grad=params[1:]) is not graph
+
+
+@_requires_cuda
+def test_cuda_graph_capture_failure(monkeypatch):
+    """A host sync inside the step fails the capture with a RuntimeError and
+    leaves the user's gradients in place."""
+    import physicsnemo.optim.muon as muon_module
+
+    params = _make_params(_GRAPH_SHAPES, "cuda", seed=6)
+    opt = Muon(params, lr=0.02, cuda_graph=True)
+    _set_grads(params, seed=0)
+    opt.step()
+
+    newton_schulz = muon_module._batched_newton_schulz
+
+    def syncing_newton_schulz(updates, *args):
+        updates.sum().item()
+        return newton_schulz(updates, *args)
+
+    monkeypatch.setattr(muon_module, "_batched_newton_schulz", syncing_newton_schulz)
+    _set_grads(params, seed=1)
+    grads = [p.grad for p in params]
+    with pytest.raises(RuntimeError, match="cuda_graph=False"):
+        opt.step()
+    assert all(p.grad is g for p, g in zip(params, grads))
+    assert opt._graph is None
+
+
+@_requires_cuda
+def test_cuda_graph_rejects_tensor_lr():
+    """A tensor lr would be baked into the graph, so capture refuses it."""
+    params = _make_params(_GRAPH_SHAPES, "cuda", seed=7)
+    opt = Muon(params, lr=torch.tensor(0.02), cuda_graph=True)
+    _set_grads(params, seed=0)
+    opt.step()  # eager: creates the momentum buffers
+    with pytest.raises(ValueError, match="float learning rates"):
+        opt.step()
+
+
+def test_cuda_graph_refuses_cpu_params():
+    """cuda_graph=True refuses parameters that are not on CUDA."""
+    with pytest.raises(ValueError, match="CUDA"):
+        Muon(_make_params([(8, 8)], "cpu"), cuda_graph=True)
