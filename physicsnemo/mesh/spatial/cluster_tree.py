@@ -111,10 +111,14 @@ def _resolve_build(
         raise ValueError(
             f"implementation must be 'torch', 'warp' or None, got {implementation=!r}"
         )
-    fits = points.shape[0] < _WARP_MAX_ELEMENTS
+    ### The node boxes, at most 2 * n_points * n_spatial_dims entries, are
+    ### the build's largest Warp arrays.
+    fits = 2 * points.shape[0] * points.shape[1] < _WARP_MAX_ELEMENTS
     if implementation == "warp" and not fits:
         raise ValueError(
-            f"the Warp build takes fewer than 2**31 points, got {points.shape[0]}"
+            "the Warp build takes fewer than 2**31 node box entries (about two per "
+            f"point coordinate), got {points.shape[0]} points of "
+            f"{points.shape[1]} coordinates"
         )
     if implementation is not None:
         return implementation
@@ -907,7 +911,7 @@ class ClusterTree(TensorClass):
             bound may carry another NaN payload. The torch build synchronizes
             with the host once per tree level; ``"warp"`` builds it in Warp
             kernels with one synchronization, on CPU or CUDA, for fewer than
-            2**31 points, and raises where it cannot. ``None`` picks Warp for
+            2**30 point coordinates, and raises where it cannot. ``None`` picks Warp for
             CUDA points and torch otherwise, and falls back to torch where Warp
             cannot build the tree. ``split="midpoint"`` is always built by
             torch (its topology is computed on the host without synchronizing),

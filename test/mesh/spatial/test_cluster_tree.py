@@ -1643,6 +1643,9 @@ def test_build_implementation_resolution(monkeypatch):
     monkeypatch.setattr(ct, "_warp_available", lambda: False)
     assert ct._resolve_build(None, cuda) == "torch"
     monkeypatch.setattr(ct, "_warp_available", lambda: True)
+    ### 10 points fit, but their node boxes (up to 2 * 10 * 3 entries) do not.
+    monkeypatch.setattr(ct, "_WARP_MAX_ELEMENTS", 50)
+    assert ct._resolve_build(None, cuda) == "torch"
     monkeypatch.setattr(ct, "_WARP_MAX_ELEMENTS", 10)
     assert ct._resolve_build(None, cuda) == "torch"
     with pytest.raises(ValueError, match="fewer than 2\\*\\*31"):
