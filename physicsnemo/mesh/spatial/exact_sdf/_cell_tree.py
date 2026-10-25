@@ -733,7 +733,9 @@ def _segment_candidates(
     over the segments, chunked over the queries."""
     a, b = points[cells[:, 0]][None], points[cells[:, 1]][None]
     chunk = max(1, _SEARCH_PAIRS // cells.shape[0])
-    li, pk = [], []
+    ### (seeded empty, so that zero queries give zero pairs)
+    li = [torch.empty(0, dtype=torch.long, device=query.device)]
+    pk = [torch.empty(0, dtype=torch.long, device=query.device)]
     for s in range(0, query.shape[0], chunk):
         d2 = _segment_distance2(query[s : s + chunk, None], a, b)
         reach = (

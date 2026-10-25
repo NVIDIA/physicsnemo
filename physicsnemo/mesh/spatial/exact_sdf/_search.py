@@ -693,8 +693,8 @@ def exact_signed_distance(
     ValueError
         If ``mesh`` is not of codimension one (``n_manifold_dims ==
         n_spatial_dims - 1``), if the last dimension of ``query_points`` is not
-        ``mesh.n_spatial_dims``, or if ``mesh`` and ``query_points`` are on
-        different devices.
+        ``mesh.n_spatial_dims``, if ``mesh`` has no cells, or if ``mesh`` and
+        ``query_points`` are on different devices.
     NotImplementedError
         If ``mesh.n_spatial_dims`` is not 2 or 3.
 
@@ -740,6 +740,10 @@ def exact_signed_distance(
         raise NotImplementedError(
             "exact_signed_distance is implemented in two and three dimensions, "
             f"but got {mesh.n_spatial_dims=}."
+        )
+    if mesh.n_cells == 0:
+        raise ValueError(
+            "mesh has no cells; there is no surface to measure distance to"
         )
     if mesh.points.device != query_points.device:
         raise ValueError(

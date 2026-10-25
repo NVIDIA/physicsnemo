@@ -431,6 +431,25 @@ def test_exact_geometry_refuses_other_dimensions():
         exact_sdf(pts, mesh.points, mesh.cells)
 
 
+@pytest.mark.parametrize("dim", [2, 3])
+def test_exact_geometry_refuses_a_mesh_with_no_cells(dim):
+    mesh = _circle(8) if dim == 2 else _sphere(0)
+    with pytest.raises(ValueError, match="no cells"):
+        exact_sdf(torch.zeros(4, dim, dtype=D), mesh.points, mesh.cells[:0])
+
+
+@pytest.mark.parametrize("dim", [2, 3])
+@pytest.mark.parametrize("lead", [(0,), (0, 5)])
+def test_no_queries_give_empty_outputs(dim, lead):
+    mesh = _circle(8) if dim == 2 else _sphere(0)
+    q = torch.zeros(*lead, dim, dtype=torch.float32, requires_grad=True)
+    d, u = _geometry(q, mesh)
+    assert d.shape == lead and u.shape == (*lead, dim)
+    assert d.dtype == u.dtype == q.dtype
+    (d.sum() + u.sum()).backward()
+    assert q.grad.shape == q.shape
+
+
 def _flipped(mesh: Mesh) -> Mesh:
     """``mesh`` with every cell's last two vertices swapped (each normal reversed)."""
     d = mesh.cells.shape[-1]
