@@ -573,7 +573,10 @@ def _closest_features(
         .norm(dim=-1)
         .to(dtype)
     )
-    face_n = torch.where(on_wall[:, None], n64[idx].to(dtype), all_n[idx])
+    ### (in half precision a small cell's cross product underflows to 0, so off the
+    ### surface too the normal comes from float64)
+    off_n = n64 if dtype in (torch.float16, torch.bfloat16) else all_n
+    face_n = torch.where(on_wall[:, None], n64[idx].to(dtype), off_n[idx].to(dtype))
     return (
         diff,
         on_cell,

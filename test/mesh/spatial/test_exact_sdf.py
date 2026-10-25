@@ -1231,6 +1231,22 @@ def test_exact_signed_distance_of_half_precision_queries(dtype):
     assert torch.allclose(u.float(), u32, atol=1e-2, rtol=0)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_half_precision_query_above_a_small_triangle(dtype):
+    """Above a triangle with edges of 1e-4, whose cross product underflows in
+    float16, the query keeps the float32 distance (to a unit of its dtype) and a unit
+    normal; before, float16 gave d = 0 and u = 0."""
+    points = torch.tensor([[0.0, 0.0, 0.0], [1e-4, 0.0, 0.0], [0.0, 1e-4, 0.0]])
+    mesh = Mesh(points=points.to(dtype), cells=torch.tensor([[0, 1, 2]]))
+    q = torch.tensor([[2.5e-5, 2.5e-5, 1e-3]], dtype=dtype)
+    d, u = exact_signed_distance(mesh, q)
+    rounded = Mesh(points=mesh.points.float(), cells=mesh.cells)
+    d32, u32 = exact_signed_distance(rounded, q.float())
+    eps = torch.finfo(dtype).eps
+    assert torch.allclose(d.float(), d32, atol=0, rtol=eps)
+    assert torch.equal(u.float(), u32) and float(u.float().norm()) == 1
+
+
 @pytest.mark.parametrize("dim", [2, 3])
 def test_exact_signed_distance_has_gradients_in_the_queries_and_the_mesh(dim):
     """Through the Mesh, the queries and the mesh's points receive the gradient of
