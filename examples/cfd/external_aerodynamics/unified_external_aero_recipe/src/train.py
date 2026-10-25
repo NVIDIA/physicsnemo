@@ -352,6 +352,9 @@ def _run_epoch(
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
+    ### Each summary's peak memory measures only its own epoch.
+    if torch.cuda.is_available() and dist_manager.device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(dist_manager.device)
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
@@ -548,8 +551,7 @@ def _run_epoch(
         f"({n_local} steps, {epoch_dt / n:.3f}s/step avg)"
     )
 
-    ### Peak device memory of the epoch, the maximum over ranks. The allocator
-    ### statistic is reset after the read so each epoch reports its own peak.
+    ### Peak device memory of the epoch, the maximum over ranks.
     peak_gib = None
     if torch.cuda.is_available() and dist_manager.device.type == "cuda":
         peak = torch.tensor(
@@ -559,7 +561,6 @@ def _run_epoch(
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(peak, op=dist.ReduceOp.MAX)
         peak_gib = float(peak.item())
-        torch.cuda.reset_peak_memory_stats(dist_manager.device)
 
     if is_rank0:
         _log_to_tensorboard(writer, avg_losses, "epoch", epoch)

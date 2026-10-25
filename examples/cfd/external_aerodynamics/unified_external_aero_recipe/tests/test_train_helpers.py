@@ -343,9 +343,12 @@ def test_iter_time_is_the_whole_iteration(monkeypatch, mode):
 )
 def test_summary_records_epoch_cost(monkeypatch, device):
     """The epoch summary carries ``epoch_seconds``, and ``peak_memory_gib``
-    on CUDA only."""
+    on CUDA only, measured from the start of the epoch."""
     model = torch.nn.Linear(1, 1, bias=False).to(device)
     _patch_forward(monkeypatch, model)
+    if device == "cuda":
+        ### A 256 MiB tensor, freed at once, before the epoch must not count.
+        torch.empty(2**28, dtype=torch.uint8, device=device)
     records = []
     _run_test_epoch(
         [{"k": k} for k in range(2)],
@@ -358,7 +361,7 @@ def test_summary_records_epoch_cost(monkeypatch, device):
     assert summary["epoch_seconds"] > 0
     assert ("peak_memory_gib" in summary) == (device == "cuda")
     if device == "cuda":
-        assert summary["peak_memory_gib"] > 0
+        assert 0 < summary["peak_memory_gib"] < 0.25
 
 
 def test_train_loads_the_next_batch_after_backward(monkeypatch):
