@@ -107,7 +107,15 @@ def _winding_moments(
         centroid[cell],
         area[cell],
     )
-    radius[leaf] = (simplex[cell] - centroid[cell, None]).norm(dim=-1).amax(-1)
+    ### (one vertex at a time: the same norms and maximum, without an (F, 3, 3)
+    ### temporary)
+    radius[leaf] = torch.stack(
+        [
+            (simplex[cell, k] - centroid[cell]).norm(dim=-1)
+            for k in range(simplex.shape[1])
+        ],
+        -1,
+    ).amax(-1)
     _bottom_up(
         _node_moments_kernel,
         levels,
@@ -121,14 +129,17 @@ def _winding_moments(
         ],
         simplex,
     )
+    ### (each float64 moment freed as it is rounded)
+    del weight, centroid
+    far2 = (WINDING_NUMBER_BETA * radius).square().float().contiguous()
+    del radius
+    dipole = dipole.float().contiguous()
+    spread = spread.float().contiguous()
     return [
         wp.from_torch(centre.contiguous(), dtype=wp.vec3d),
-        wp.from_torch(
-            (WINDING_NUMBER_BETA * radius).square().float().contiguous(),
-            dtype=wp.float32,
-        ),
-        wp.from_torch(dipole.float().contiguous(), dtype=wp.vec3f),
-        wp.from_torch(spread.float().contiguous(), dtype=wp.mat33f),
+        wp.from_torch(far2, dtype=wp.float32),
+        wp.from_torch(dipole, dtype=wp.vec3f),
+        wp.from_torch(spread, dtype=wp.mat33f),
         wp.from_torch(simplex.reshape(-1, 3).contiguous(), dtype=wp.vec3d),
         wp.from_torch(parity.contiguous(), dtype=wp.float64),
     ]

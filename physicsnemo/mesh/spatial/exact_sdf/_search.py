@@ -251,6 +251,7 @@ def _closest_candidates_impl(query_points, points, cells, parity, face_normals):
     low, high = low[order], high[order]
     new = (low[1:] != low[:-1]) | (high[1:] != high[:-1])
     rep = order[torch.cat([new.new_ones(1), new])]
+    del new, low, high
     ### The band: the storage term on the magnitudes as given, the arithmetic's on
     ### the centred ones. The float32 copies the BVH and the 2-D brute force read are
     ### the centred coordinates cast once.
@@ -288,6 +289,9 @@ def _closest_candidates_impl(query_points, points, cells, parity, face_normals):
         s_ord = s_rep if once else simplex[order]
         f_ord = flat[order] if any_flat else None
         tree, leaf_order, s_leaf = _preorder_cell_tree(s_ord)
+        if once:
+            ### (the leaves hold the cells; the winding number reads them there)
+            s_ord = s_rep = None
         seed = order[leaf_order[_nearest_cells(query_c, s_leaf, tree)]]
         w0 = _closest_weights(q64, simplex[seed], flat[seed] if any_flat else None)
         bound = (q64 - (w0[..., None] * simplex[seed]).sum(1)).norm(dim=-1) + band(
@@ -305,6 +309,8 @@ def _closest_candidates_impl(query_points, points, cells, parity, face_normals):
             flat=None if f_ord is None else f_ord[leaf_order],
         )
         pk = order[leaf_order[pk]]
+        ### (the winding number reads the tree's links and leaves, not its boxes)
+        tree = (*tree[:5], None, None)
         if not once:
             tree, leaf_order, s_leaf = _preorder_cell_tree(s_rep)
         w_sum = _packed_winding_sum(
@@ -544,6 +550,7 @@ def _closest_features(
     ### their rounding, so they must not depend on the queries' precision.
     cell64 = cell_points.double()
     n64 = parity[:, None].double() * compute_cell_normals(cell64[:, 1:] - cell64[:, :1])
+    del cell_points, cell64
     with torch.no_grad():
         q, y = query_points, points
         if q.dtype in (torch.float16, torch.bfloat16):

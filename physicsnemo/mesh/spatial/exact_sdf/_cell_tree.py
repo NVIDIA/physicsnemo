@@ -625,7 +625,8 @@ def _ball_candidates(
             torch.linalg.cross(p1 - p0, n, dim=-1), dim=-1, eps=0.0
         )
         rows_.append(torch.cat([m, (m * p0).sum(-1, keepdim=True)], -1))
-    planes = torch.stack(rows_, 1).float().reshape(-1, 4)
+    planes = torch.stack([r.float() for r in rows_], 1).reshape(-1, 4)
+    del rows_, n
     delta, kappa, longest = _thin_bounds(simplex)
     ### (NaN fails every rejection test of the kernel)
     unsure = delta > torch.finfo(torch.float32).eps / 2
