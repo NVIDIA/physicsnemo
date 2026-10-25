@@ -33,6 +33,7 @@ handling for:
   sums over the global sample count (used per step and per epoch); its
   single-process path must equal plain ``total_loss / n`` + per-leaf
   ``sum / n`` averaging.
+- :func:`train._run_epoch`: per-step times and per-epoch summary fields.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -41,8 +42,12 @@ this module's tensorboard skip guard.)
 
 from __future__ import annotations
 
+import time
+from types import SimpleNamespace
+
 import pytest
 import torch
+from omegaconf import OmegaConf
 from tensordict import TensorDict
 
 ### `train.py` imports `torch.utils.tensorboard.SummaryWriter` at module
@@ -53,9 +58,11 @@ from tensordict import TensorDict
 ### directly (no skip).
 pytest.importorskip("tensorboard")
 
+import train  # noqa: E402  -- monkeypatch module globals in focused tests
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
     _reduce_and_average,
+    _run_epoch,
     _walk_batch_for_logging,
 )
 
@@ -244,3 +251,111 @@ class TestReduceAndAverage:
         )
         assert loss == pytest.approx(7.0)
         assert losses == {} and metrics == {}
+
+
+### ---------------------------------------------------------------------------
+### _run_epoch
+### ---------------------------------------------------------------------------
+
+
+def _single_rank(device: str = "cpu") -> SimpleNamespace:
+    """Return a single-process stand-in for ``DistributedManager``."""
+    return SimpleNamespace(rank=0, world_size=1, device=torch.device(device))
+
+
+def _run_test_epoch(loader, model, *, mode, dist_manager, log_jsonl=None):
+    """Run one :func:`train._run_epoch` on a one-field tensor model with SGD.
+
+    Tests patch ``train.forward_pass``, so no loss or metric calculator is
+    needed.
+    """
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    cfg = OmegaConf.create(
+        {
+            "precision": "float32",
+            "profile": False,
+            "training": {"scheduler_update_mode": "epoch"},
+        }
+    )
+    return _run_epoch(
+        loader,
+        model,
+        None,
+        None,
+        SimpleNamespace(info=lambda *args, **kwargs: None),
+        0,
+        cfg,
+        dist_manager,
+        mode=mode,
+        output_type="tensors",
+        target_config={"pressure": "scalar"},
+        optimizer=optimizer,
+        scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=1),
+        log_jsonl=log_jsonl,
+    )
+
+
+def _patch_forward(monkeypatch, model, sleep_s=0.0):
+    """Replace ``train.forward_pass`` with ``model.weight.sum()`` as the loss."""
+
+    def forward(batch, *args, **kwargs):
+        time.sleep(sleep_s)
+        loss = model.weight.sum()
+        values = TensorDict({"loss/test": loss.detach()})
+        return loss, values, values.clone()
+
+    monkeypatch.setattr(train, "forward_pass", forward)
+
+
+@pytest.mark.parametrize("mode", ["train", "val"])
+def test_iter_time_is_the_whole_iteration(monkeypatch, mode):
+    """Every per-step record carries a positive ``iter_time_s`` at least its
+    ``step_time_s``, and the iteration times add up to the epoch's time."""
+    model = torch.nn.Linear(1, 1, bias=False)
+    _patch_forward(monkeypatch, model, sleep_s=0.05)
+    records = []
+    _run_test_epoch(
+        [{"k": k} for k in range(3)],
+        model,
+        mode=mode,
+        dist_manager=_single_rank(),
+        log_jsonl=records.append,
+    )
+    steps = [r for r in records if r["phase"] == f"{mode}_step"]
+    (summary,) = [r for r in records if r["phase"] == f"{mode}_summary"]
+    assert len(steps) == 3
+    assert all(0 < r["step_time_s"] <= r["iter_time_s"] for r in steps), steps
+    total = sum(r["iter_time_s"] for r in steps)
+    assert 0.9 * summary["epoch_seconds"] < total <= summary["epoch_seconds"]
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+    ],
+)
+def test_summary_records_epoch_cost(monkeypatch, device):
+    """The epoch summary carries ``epoch_seconds``, and ``peak_memory_gib``
+    on CUDA only."""
+    model = torch.nn.Linear(1, 1, bias=False).to(device)
+    _patch_forward(monkeypatch, model)
+    records = []
+    _run_test_epoch(
+        [{"k": k} for k in range(2)],
+        model,
+        mode="train",
+        dist_manager=_single_rank(device),
+        log_jsonl=records.append,
+    )
+    (summary,) = [r for r in records if r["phase"] == "train_summary"]
+    assert summary["epoch_seconds"] > 0
+    assert ("peak_memory_gib" in summary) == (device == "cuda")
+    if device == "cuda":
+        assert summary["peak_memory_gib"] > 0
