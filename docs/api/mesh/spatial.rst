@@ -4,7 +4,7 @@ Spatial Queries
 .. currentmodule:: physicsnemo.mesh.spatial
 
 ``physicsnemo.mesh.spatial`` answers geometric queries on large meshes with a
-bounding volume hierarchy (BVH), a cluster tree, and a signed distance field. Unlike
+bounding volume hierarchy (BVH), a cluster tree, and two signed distance functions. Unlike
 :doc:`neighbors`, these queries use distances, not connectivity.
 
 :bdg-success:`GPU` :bdg-secondary:`any dimension` :bdg-secondary:`Warp signed distance` :bdg-warning:`signed distance needs triangles in 3D`
@@ -122,6 +122,14 @@ Use the following guidelines to choose a structure:
   is a :class:`~physicsnemo.mesh.Mesh`-typed wrapper around the Warp-backed
   :func:`physicsnemo.nn.functional.signed_distance_field` function, which runs
   NVIDIA Warp mesh queries on CPU and CUDA.
+- :func:`exact_signed_distance` computes the exact signed distance and the
+  direction from the surface to each query point, in float64, for segments in
+  2D or triangles in 3D. Its ties and on-surface decisions are certified
+  against the rounding of the inputs, and its sign comes from the generalized
+  winding number, so it holds on open, degenerate, and folded surfaces. It is
+  slower than :func:`signed_distance_field` on ordinary closed triangle meshes
+  and synchronizes with the host. Use it where exactness, 2D, degenerate
+  geometry, or a boundary of large extent matter.
 
 ``use_sign_winding_number`` selects one of two methods for the sign of the
 distance:
@@ -152,6 +160,7 @@ Summary
    ClusterTree
    DualInteractionPlan
    SourceAggregates
+   exact_signed_distance
    signed_distance_field
 
 Related Topics

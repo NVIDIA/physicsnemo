@@ -22,6 +22,8 @@ This module provides data structures and algorithms for fast spatial queries:
 - ClusterTree for dual-tree Barnes-Hut acceleration of kernel/attention operators
 - Signed distance field (:func:`signed_distance_field`) over a triangle
   surface mesh, backed by NVIDIA Warp mesh queries (CPU and CUDA)
+- Exact signed distance and direction (:func:`exact_signed_distance`) to a 2D
+  or 3D boundary mesh, in float64, with certified ties and a winding-number sign
 """
 
 from physicsnemo.mesh.spatial.bvh import BVH
@@ -30,6 +32,7 @@ from physicsnemo.mesh.spatial.cluster_tree import (
     DualInteractionPlan,
     SourceAggregates,
 )
+from physicsnemo.mesh.spatial.exact_sdf import exact_signed_distance
 from physicsnemo.mesh.spatial.sdf import signed_distance_field
 
 __all__ = [
@@ -37,5 +40,6 @@ __all__ = [
     "ClusterTree",
     "DualInteractionPlan",
     "SourceAggregates",
+    "exact_signed_distance",
     "signed_distance_field",
 ]

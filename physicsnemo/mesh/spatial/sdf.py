@@ -257,6 +257,12 @@ def signed_distance_field(
         measure distance to), if ``mesh`` and ``query_points`` are on different
         devices, or if ``max_dist`` is negative.
 
+    See Also
+    --------
+    exact_signed_distance : The exact float64 distance and direction, with
+        certified ties and a winding-number sign, to segments in 2D or triangles
+        in 3D, including open, degenerate and folded surfaces; slower.
+
     Notes
     -----
     A finite ``max_dist`` is an opt-in optimization/narrow-band mode: it prunes

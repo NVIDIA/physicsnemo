@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `physicsnemo.mesh.spatial.exact_signed_distance`, an exact float64
+  signed distance and direction to a 2D or 3D boundary mesh, with certified
+  ties and a winding-number sign that holds on open, degenerate and folded
+  surfaces.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - Adds a Rotor37 compressor blade example with GeoTransolver
