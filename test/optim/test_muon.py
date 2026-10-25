@@ -17,6 +17,7 @@
 import copy
 import io
 import pickle
+import threading
 
 import pytest
 import torch
@@ -257,6 +258,62 @@ def test_cuda_graph_under_torch_compile():
         eager_opt.step()
         compiled_step()
     assert graph_opt._graph is not None
+    for pe, pg in zip(eager_params, graph_params):
+        assert torch.equal(pe, pg)
+
+
+def _loader_cuda_work(stop, ready, iterations, errors):
+    """Until *stop* is set, do the CUDA work of a data loader thread on a
+    stream of its own: pinned and device allocations of varying sizes,
+    host-to-device copies and blocking device-to-host copies. Sets *ready*
+    after the first round."""
+    try:
+        with torch.cuda.stream(torch.cuda.Stream()):
+            while not stop.is_set():
+                n = 2**14 * (1 + len(iterations) % 7)
+                device_copy = torch.empty(n, pin_memory=True).to(
+                    "cuda", non_blocking=True
+                )
+                torch.empty(n * (1 + len(iterations) % 5), device="cuda")
+                device_copy[:1].cpu()
+                iterations.append(None)
+                ready.set()
+    except Exception as e:
+        errors.append(e)
+
+
+@_requires_cuda
+def test_cuda_graph_capture_with_loader_thread():
+    """CUDA work in another thread, as a data loader does, does not invalidate
+    the capture; every step recaptures (a new lr) and matches eager bit for bit."""
+    eager_params = _make_params(_GRAPH_SHAPES, "cuda", seed=10)
+    graph_params = [torch.nn.Parameter(p.detach().clone()) for p in eager_params]
+    eager_opt = Muon(eager_params, lr=0.02)
+    graph_opt = Muon(graph_params, lr=0.02, cuda_graph=True)
+    stop, ready, iterations, errors = threading.Event(), threading.Event(), [], []
+    thread = threading.Thread(
+        target=_loader_cuda_work, args=(stop, ready, iterations, errors)
+    )
+    thread.start()
+    try:
+        assert ready.wait(timeout=60), errors
+        before, graphs = len(iterations), []
+        for step in range(6):
+            for opt in (eager_opt, graph_opt):
+                opt.param_groups[0]["lr"] = 0.02 / (1 + step)
+            _set_grads(eager_params, seed=500 + step)
+            _set_grads(graph_params, seed=500 + step)
+            eager_opt.step()
+            graph_opt.step()
+            graphs.append(graph_opt._graph)
+        during = len(iterations) - before
+    finally:
+        stop.set()
+        thread.join()
+    assert not errors
+    assert during > 0
+    assert graphs[0] is None and None not in graphs[1:]
+    assert len({id(g) for g in graphs[1:]}) == 5
     for pe, pg in zip(eager_params, graph_params):
         assert torch.equal(pe, pg)
 

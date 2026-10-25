@@ -302,8 +302,13 @@ class Muon(_TorchMuon):
             try:
                 for p, g in zip(params, graph_grads):
                     p.grad = g
+                # Other threads, such as a data loader's, may allocate or sync
+                # meanwhile; in the default "global" mode that would invalidate
+                # the capture.
                 with torch.cuda.graph(
-                    graph, stream=torch.cuda.Stream(params[0].device)
+                    graph,
+                    stream=torch.cuda.Stream(params[0].device),
+                    capture_error_mode="thread_local",
                 ):
                     self._step()
             except Exception as e:
