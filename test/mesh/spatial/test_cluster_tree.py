@@ -1820,7 +1820,9 @@ def test_point_plan_order_is_the_per_tree_walks_joined(device, implementation, n
 
 
 @pytest.mark.parametrize("theta", [0.5, 1.0])
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, "bfloat16 autocast"])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.float16, "bfloat16 autocast"]
+)
 @pytest.mark.parametrize("n_dims", [2, 3])
 def test_warp_walk_is_the_torch_walk(device, n_dims, dtype, theta):
     """The Warp walk (on Warp's CPU backend for CPU targets) gives the torch
@@ -1873,9 +1875,10 @@ def test_warp_walk_is_the_torch_walk(device, n_dims, dtype, theta):
         (torch.float32, torch.float32, False),
         (torch.float64, torch.float64, False),
         (torch.bfloat16, torch.bfloat16, False),
+        (torch.float16, torch.float16, False),
         (torch.bfloat16, torch.float32, True),
     ],
-    ids=["float32", "float64", "bfloat16", "bfloat16_boxes_under_autocast"],
+    ids=["float32", "float64", "bfloat16", "float16", "bfloat16_boxes_under_autocast"],
 )
 def test_warp_walk_opening_test_is_the_torch_walks_at_the_threshold(
     device, boxes, diagonals, autocast
@@ -1902,6 +1905,7 @@ def test_warp_walk_opening_test_is_the_torch_walks_at_the_threshold(
         at = (gap.pow(2).sum(dim=0) * theta**2).to(diagonals)
         bits = {
             torch.bfloat16: torch.int16,
+            torch.float16: torch.int16,
             torch.float32: torch.int32,
             f64: torch.int64,
         }
