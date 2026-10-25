@@ -23,7 +23,8 @@ split at every node on its way, and emits the nodes whose range starts at it:
 a count pass, one readback, and a fill pass. A sort of the nodes by (tree,
 depth, first position) is the level-by-level numbering of the torch build, so
 the topology, which is integer arithmetic, is that build's exactly.
-:func:`node_boxes` fills the nodes' boxes bottom up in one kernel.
+:func:`node_boxes` fills the nodes' boxes bottom up in one kernel; they are
+the torch build's except in the signs of tied zeros and the payloads of NaNs.
 
 Imported lazily by :class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree`,
 so importing :mod:`physicsnemo.mesh.spatial` registers no kernels.
@@ -388,8 +389,10 @@ def node_boxes(
     :func:`~physicsnemo.mesh.spatial.cluster_tree._node_boxes` makes them, in
     one kernel launch: leaves from their points, then every internal node by
     the second of its children to finish. Minima and maxima are exact, so the
-    boxes are that function's for finite points, whichever child finishes
-    first; half-precision points are widened to float32 and back exactly."""
+    boxes are that function's in every bit, whichever child finishes first,
+    except where ``+0.0`` ties ``-0.0`` (the zero kept depends on the order of
+    comparison) and in NaN payloads (both give NaN in the same entries). Half-precision points
+    are widened to float32 and back exactly."""
     n_nodes = topo.node_count
     d = sorted_points.shape[1]
     device = sorted_points.device

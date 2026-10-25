@@ -2018,8 +2018,8 @@ def test_warp_walk_refuses_or_falls_back_past_its_limits(monkeypatch):
 
 
 def test_walk_implementation_resolution(monkeypatch):
-    """``None`` walks with torch on CPU, in float64 and for trees Warp cannot
-    take, and with Warp for other CUDA targets; unknown names are refused."""
+    """``None`` walks with torch on CPU and for trees Warp cannot take, and
+    with Warp for other CUDA targets; unknown names are refused."""
     from types import SimpleNamespace
 
     import physicsnemo.mesh.spatial.cluster_tree as ct
@@ -2030,7 +2030,7 @@ def test_walk_implementation_resolution(monkeypatch):
     assert ct._resolve_walk(None, tree, cpu) == "torch"
     assert ct._resolve_walk("warp", tree, cpu) == "warp"
     assert ct._resolve_walk(None, tree, cuda) == "warp"
-    assert ct._resolve_walk(None, tree.double(), cuda) == "torch"
+    assert ct._resolve_walk(None, tree.double(), cuda) == "warp"
     tree_4d = ClusterTree.from_points(torch.rand(30, 4))
     assert ct._resolve_walk(None, tree_4d, cuda) == "torch"
     with pytest.raises(ValueError, match="implementation must be"):
@@ -2055,15 +2055,14 @@ def test_point_plan_count_only_at_theta_zero_and_when_empty(device):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("n_dims", [2, 3])
 def test_warp_walk_on_cuda_is_the_default_and_the_torch_walk(n_dims, dtype):
-    """On CUDA, ``None`` walks float32 trees with Warp (float64 with torch), and
-    the Warp walk gives the torch walk's plan entry for entry."""
+    """On CUDA, ``None`` walks with Warp, and the Warp walk gives the torch
+    walk's plan entry for entry."""
     import physicsnemo.mesh.spatial.cluster_tree as ct
 
     points = _points(3000, n_dims, "cuda", seed=59, dtype=dtype)
     targets = _points(2000, n_dims, "cuda", seed=60, dtype=dtype) * 3.0
     tree = ClusterTree.from_points(points, leaf_size=4)
-    expected = "warp" if dtype == torch.float32 else "torch"
-    assert ct._resolve_walk(None, tree, targets) == expected
+    assert ct._resolve_walk(None, tree, targets) == "warp"
     plans = [
         tree.find_point_interaction_pairs(targets, implementation=impl)
         for impl in ("torch", "warp", None)
@@ -2098,8 +2097,8 @@ def test_warp_walk_non_default_cuda_stream():
 @pytest.mark.parametrize("split", ["morton", "midpoint"])
 def test_warp_node_boxes_are_the_torch_node_boxes(device, split, dtype):
     """The one-kernel bottom-up boxes are ``_node_boxes``' in every bit for
-    finite points, on both topologies and at three leaf sizes; a NaN point
-    makes the same boxes NaN."""
+    finite points without signed-zero ties, on both topologies and at three
+    leaf sizes; a NaN point makes the same boxes NaN."""
     from physicsnemo.mesh.spatial._lbvh import (
         build_lbvh_topology,
         build_morton_topology,

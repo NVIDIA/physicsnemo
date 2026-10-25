@@ -134,7 +134,7 @@ def _resolve_walk(
 ) -> Literal["torch", "warp"]:
     """The point walk to run: a forced name is kept (``"warp"`` raises for a
     walk it cannot take); ``None`` picks Warp for CUDA targets when Warp is
-    available and can take the walk, except in float64, and torch otherwise.
+    available and can take the walk, and torch otherwise.
     Walks too deep for Warp's stack or past its array limit are found only
     during the walk."""
     if implementation not in (None, "torch", "warp"):
@@ -163,11 +163,7 @@ def _resolve_walk(
         )
     if implementation is not None:
         return implementation
-    ### Float64 rule: Warp's float64 walk was measured slower than torch's at
-    ### 800k and 1.6M targets, so float64 walks stay with torch until a rule
-    ### is measured.
-    float64 = torch.float64 in dtypes
-    use_warp = targets.is_cuda and fits and not float64 and _warp_available()
+    use_warp = targets.is_cuda and fits and _warp_available()
     chosen = "warp" if use_warp else "torch"
     _log_once(
         ("walk", targets.device.type, chosen),
@@ -905,14 +901,16 @@ class ClusterTree(TensorClass):
             handles such bodies in any orientation.
         implementation : {"torch", "warp"} or None, optional, default=None
             How the ``split="morton"`` topology is built; the tree is the same
-            in every bit either way. The torch build synchronizes with the
-            host once per tree level; ``"warp"`` builds it in Warp kernels
-            with one synchronization, on CPU or CUDA, for fewer than 2**31
-            points, and raises where it cannot. ``None`` picks Warp for CUDA
-            points and torch otherwise, and falls back to torch where Warp
+            in every bit either way, except that a box bound where a node's
+            points tie ``+0.0`` with ``-0.0`` may take either sign, and a NaN
+            bound may carry another NaN payload. The torch build synchronizes
+            with the host once per tree level; ``"warp"`` builds it in Warp
+            kernels with one synchronization, on CPU or CUDA, for fewer than
+            2**31 points, and raises where it cannot. ``None`` picks Warp for
+            CUDA points and torch otherwise, and falls back to torch where Warp
             cannot build the tree. ``split="midpoint"`` is always built by
-            torch (its topology is computed on the host without
-            synchronizing), so it refuses ``"warp"``.
+            torch (its topology is computed on the host without synchronizing),
+            so it refuses ``"warp"``.
 
         Returns
         -------
@@ -1046,7 +1044,9 @@ class ClusterTree(TensorClass):
         that its ``sorted_source_order`` indexes ``points`` itself and its
         ``source_points`` is ``points``, so the plans of a traversal of the
         forest index the caller's points. With Warp, every tree is built in
-        one pass with one host synchronization.
+        one pass with one host synchronization; its boxes may differ from the
+        torch build's in the signs of zeros and the payloads of NaNs, as in
+        :meth:`from_points`.
 
         Parameters
         ----------
@@ -2105,7 +2105,7 @@ class ClusterTree(TensorClass):
             3-D trees with floating-point boxes, and raises where it cannot (a
             tree more than about 95 levels deep, or a stream of ``2**31``
             entries or more). ``None`` picks Warp for CUDA targets where it
-            can walk, except in float64, and torch otherwise.
+            can walk, and torch otherwise.
         count_only : bool, optional, default=False
             Return only each target's numbers of near and far entries, without
             making the plan; their cumulative sums are the offsets of each
