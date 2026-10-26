@@ -335,10 +335,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `physicsnemo.mesh` validation and trace-only branches no longer misfire in
-  data-loading threads while another thread compiles. Since torch 2.13,
-  `torch.compiler.is_compiling()` is True in every thread during a compile, so
-  these guards now use a check that is True only in code being traced.
 - `Mesh.get_point_to_points_adjacency()`, `get_facet_mesh()`, and
   `get_boundary_mesh()` compile with `torch.compile(fullgraph=True, dynamic=True)`.
   Facet extraction now specializes on the cell width instead of passing a
@@ -346,7 +342,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compiled code that reads `Mesh` geometric properties, such as `cell_areas`
   or curvatures, no longer recompiles when the input mesh's cache differs, and
   no longer writes into that cache. `set_cell_measures` stores a copy of the
-  cached `cell_areas`, so a measure never aliases it.
+  cached `cell_areas`, so a measure never aliases it. `physicsnemo.mesh` now
+  checks whether its own code is being traced, because since torch 2.13
+  `torch.compiler.is_compiling()` is True in every thread during a compile,
+  which made data-loading threads drop caches and skip validation.
 - GraphCast and MeshGraphNet run on graphs partitioned across GPUs again
   (`partition_size > 1`, or a `DistributedGraph` in place of the PyG graph),
   so the distributed shallow-water example works. This broke when the DGL
