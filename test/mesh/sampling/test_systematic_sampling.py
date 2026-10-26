@@ -26,7 +26,7 @@ count.
 
 Several groups of cells (``_draw``) are composed as one line: per-group
 probabilities, one canonical frame, each group in its own Morton order after the
-previous ones, and one :func:`systematic_sample` over the whole line.
+previous ones, and one :func:`_systematic_sample` over the whole line.
 """
 
 import pytest
@@ -35,12 +35,12 @@ from torch._inductor.utils import fresh_cache
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
-from physicsnemo.mesh.sampling import (
-    pps_inclusion_probabilities,
-    sample_cells_systematic,
-    systematic_sample,
+from physicsnemo.mesh.sampling import sample_cells_systematic
+from physicsnemo.mesh.sampling.systematic_sampling import (
+    _cumsum,
+    _pps_inclusion_probabilities,
+    _systematic_sample,
 )
-from physicsnemo.mesh.sampling.systematic_sampling import _cumsum
 from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
@@ -72,7 +72,7 @@ def _line(measures, centroids, shares):
     for a, x, share in zip(measures, centroids, shares):
         if a.shape[0] == 0:
             continue
-        pis.append(pps_inclusion_probabilities(a, share))
+        pis.append(_pps_inclusion_probabilities(a, share))
         code = _compute_morton_codes(frame_coordinates(x, frame), isotropic=True)
         orders.append(code.argsort(stable=True) + offset)
         offset += a.shape[0]
@@ -84,7 +84,7 @@ def _draw(measures, centroids, shares, budget, start):
     sample of min(cells, budget), and the kept cells' weights."""
     pi, order, measure, total = _line(measures, centroids, shares)
     k = min(total, budget)
-    kept = systematic_sample(pi, k, start, order=order, max_n_samples=budget)
+    kept = _systematic_sample(pi, k, start, order=order, max_n_samples=budget)
     return kept, measure[kept] / pi[kept]
 
 
@@ -101,7 +101,7 @@ def _per_group(kept, weights, sizes):
 def _whole_kept_once(kept, measures, shares):
     """Asserts the draw keeps distinct cells and every cell with pi = 1 exactly once."""
     pi = torch.cat(
-        [pps_inclusion_probabilities(a, s) for a, s in zip(measures, shares)]
+        [_pps_inclusion_probabilities(a, s) for a, s in zip(measures, shares)]
     )
     assert torch.equal(kept, kept.unique())
     assert bool(torch.isin((pi.cpu() == 1).nonzero()[:, 0], kept.cpu()).all())
@@ -141,15 +141,15 @@ def test_inclusion_probabilities_are_capped_proportional_to_size():
     g = torch.Generator().manual_seed(0)
     a = torch.rand(1000, generator=g, dtype=D) ** 4
     a[:5] = 50.0
-    pi = pps_inclusion_probabilities(a, torch.tensor(100.0, dtype=D))
+    pi = _pps_inclusion_probabilities(a, torch.tensor(100.0, dtype=D))
     assert float(pi.sum()) == pytest.approx(100.0, rel=1e-12)
     capped = pi == 1
     assert bool(capped[:5].all()) and int(capped.sum()) == 5
     ratio = pi[~capped] / a[~capped]
     assert torch.allclose(ratio, ratio[0].expand_as(ratio), rtol=1e-12)
     assert bool((ratio[0] * a[capped] >= 1).all())
-    assert torch.equal(pps_inclusion_probabilities(a, 1000.0), torch.ones_like(a))
-    assert torch.equal(pps_inclusion_probabilities(a, 100.0), pi)
+    assert torch.equal(_pps_inclusion_probabilities(a, 1000.0), torch.ones_like(a))
+    assert torch.equal(_pps_inclusion_probabilities(a, 100.0), pi)
 
 
 def test_a_share_of_the_count_caps_every_cell():
@@ -160,7 +160,7 @@ def test_a_share_of_the_count_caps_every_cell():
         for n in (2, 40, 3000, 52_119):
             a = torch.rand(n, generator=g, dtype=D) ** 3 + 1e-3
             for share in (n, n + 0.5):
-                pi = pps_inclusion_probabilities(a, float(share))
+                pi = _pps_inclusion_probabilities(a, float(share))
                 assert torch.equal(pi, torch.ones_like(a)), (seed, n, share)
 
 
@@ -173,7 +173,7 @@ def test_equal_measures_with_a_share_of_the_count_are_kept_whole():
         for n in (7, 100, 3000, 300_001):
             a = torch.full((n,), value, dtype=D)
             for share in (n, n + 0.5):
-                pi = pps_inclusion_probabilities(a, float(share))
+                pi = _pps_inclusion_probabilities(a, float(share))
                 assert torch.equal(pi, torch.ones_like(a)), (value, n, share)
 
 
@@ -181,16 +181,16 @@ def test_zero_measures_get_probability_zero():
     """Zero measures get pi = 0, and the probabilities sum to the smaller of the share
     and the positive count: [1, 0, 0] at 2 gives [1, 0, 0], and on random measures
     with exact zeros a share above the positive count keeps every positive cell."""
-    one = pps_inclusion_probabilities(torch.tensor([1.0, 0.0, 0.0], dtype=D), 2.0)
+    one = _pps_inclusion_probabilities(torch.tensor([1.0, 0.0, 0.0], dtype=D), 2.0)
     assert torch.equal(one, torch.tensor([1.0, 0.0, 0.0], dtype=D))
     g = torch.Generator().manual_seed(0)
     a = torch.rand(1000, generator=g, dtype=D) ** 3
     a[::4] = 0.0
     zero = a == 0
-    pi = pps_inclusion_probabilities(a, 300.0)
+    pi = _pps_inclusion_probabilities(a, 300.0)
     assert bool((pi[zero] == 0).all())
     assert float(pi.sum()) == pytest.approx(300.0, rel=1e-12)
-    pi = pps_inclusion_probabilities(a, 800.0)
+    pi = _pps_inclusion_probabilities(a, 800.0)
     assert bool((pi[zero] == 0).all()) and bool((pi[~zero] == 1).all())
     assert float(pi.sum()) == 750.0
 
@@ -209,7 +209,7 @@ def test_tiny_measures_keep_their_share():
     )
     measures = [a, torch.rand(40, generator=g, dtype=D)]
     centroids = [torch.randn(n, 3, generator=g, dtype=D) for n in (5000, 40)]
-    pi = pps_inclusion_probabilities(a, 260.0)
+    pi = _pps_inclusion_probabilities(a, 260.0)
     assert bool((pi >= 0).all())
     assert abs(float(pi.sum()) - 260) < 1e-9
     kept, w = _draw(measures, centroids, [260, 40], 300, torch.tensor(0.5, dtype=D))
@@ -258,7 +258,7 @@ def test_horvitz_thompson_measure_sums_are_unbiased():
     sums, hits = [], torch.zeros(sum(sizes), dtype=D)
     for _ in range(draws):
         start = torch.rand((), dtype=D, generator=g)
-        kept = systematic_sample(pi, budget, start, order=order)
+        kept = _systematic_sample(pi, budget, start, order=order)
         w = measure[kept] / pi[kept]
         counts, s = _per_group(kept, w, sizes)
         assert int(counts[1]) == 40
@@ -366,12 +366,14 @@ def test_the_integer_search_is_the_search_for_the_hits():
             hits = U + torch.arange(k, dtype=torch.int64) * 2**Q
             direct = torch.searchsorted(line, hits, right=True)
             assert int(direct.max()) < p.shape[0]
-            position = systematic_sample(p, k, torch.tensor(u, dtype=D))
+            position = _systematic_sample(p, k, torch.tensor(u, dtype=D))
             assert torch.equal(position, direct)
-            assert torch.equal(systematic_sample(p, k, u, max_n_samples=budget), direct)
+            assert torch.equal(
+                _systematic_sample(p, k, u, max_n_samples=budget), direct
+            )
         order = torch.randperm(p.shape[0], generator=g)
-        kept = systematic_sample(p, k, 0.5, order=order)
-        assert torch.equal(kept, order[systematic_sample(p[order], k, 0.5)].sort()[0])
+        kept = _systematic_sample(p, k, 0.5, order=order)
+        assert torch.equal(kept, order[_systematic_sample(p[order], k, 0.5)].sort()[0])
 
 
 def test_half_and_single_probabilities_draw_as_double():
@@ -380,9 +382,9 @@ def test_half_and_single_probabilities_draw_as_double():
     g = torch.Generator().manual_seed(0)
     random = (torch.rand(1000, generator=g, dtype=D) * 0.3).half().double()
     for p, k in ((torch.full((4,), 0.5, dtype=D), 2), (random, int(random.sum()))):
-        ref = systematic_sample(p, k, 0.5)
+        ref = _systematic_sample(p, k, 0.5)
         for dtype in (torch.float16, torch.float32):
-            assert torch.equal(systematic_sample(p.to(dtype), k, 0.5), ref), dtype
+            assert torch.equal(_systematic_sample(p.to(dtype), k, 0.5), ref), dtype
 
 
 def test_the_grid_needs_a_python_int():
@@ -390,9 +392,9 @@ def test_the_grid_needs_a_python_int():
     max_n_samples, or n_samples above max_n_samples, is an error."""
     pi = torch.full((10,), 0.5, dtype=D)
     with pytest.raises(TypeError, match="max_n_samples"):
-        systematic_sample(pi, torch.tensor(5), 0.5)
+        _systematic_sample(pi, torch.tensor(5), 0.5)
     with pytest.raises(ValueError, match="exceeds"):
-        systematic_sample(pi, 5, 0.5, max_n_samples=4)
+        _systematic_sample(pi, 5, 0.5, max_n_samples=4)
 
 
 def test_the_float_scan_is_the_doubling_scan_bitwise():

@@ -144,8 +144,6 @@ The draw is systematic sampling along the Morton order of the cell centroids
 in the mesh's own principal axes, so the sample is spread over the mesh and
 is the same in every pose of the mesh. It is bitwise the same from run to
 run, on CPU and on CUDA, and compiles to one graph with ``torch.compile``.
-Its building blocks are :func:`pps_inclusion_probabilities` and
-:func:`systematic_sample`.
 
 Choosing a Function
 -------------------
@@ -172,8 +170,6 @@ Summary
 
    sample_random_points_on_cells
    sample_cells_systematic
-   pps_inclusion_probabilities
-   systematic_sample
    sample_data_at_points
    find_containing_cells
    find_all_containing_cells
@@ -197,10 +193,6 @@ API Reference
 .. autofunction:: sample_random_points_on_cells
 
 .. autofunction:: sample_cells_systematic
-
-.. autofunction:: pps_inclusion_probabilities
-
-.. autofunction:: systematic_sample
 
 .. autofunction:: sample_data_at_points
 

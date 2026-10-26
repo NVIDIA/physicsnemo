@@ -19,8 +19,7 @@
 This module provides functions for sampling points on meshes, including:
 - Random uniform point sampling on cells using Dirichlet distributions
 - Systematic sampling of cells with probability proportional to measure, with
-  Horvitz-Thompson weights (``sample_cells_systematic``,
-  ``pps_inclusion_probabilities``, ``systematic_sample``)
+  Horvitz-Thompson weights (``sample_cells_systematic``)
 - Spatial data sampling at query points with interpolation
 - BVH-accelerated sampling for large meshes (via the ``bvh`` parameter)
 """
@@ -36,8 +35,4 @@ from physicsnemo.mesh.sampling.sample_data import (
     match_points,
     sample_data_at_points,
 )
-from physicsnemo.mesh.sampling.systematic_sampling import (
-    pps_inclusion_probabilities,
-    sample_cells_systematic,
-    systematic_sample,
-)
+from physicsnemo.mesh.sampling.systematic_sampling import sample_cells_systematic

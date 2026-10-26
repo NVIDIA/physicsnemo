@@ -25,10 +25,10 @@ the whole mesh:
   :math:`\pi_i = \min(1, c\,a_i)`, with :math:`c` the one constant such that
   :math:`\sum_i \pi_i = b`. It is the capped fixed point of the iterative
   adjustment, found exactly from the sorted measures
-  (:func:`pps_inclusion_probabilities`). A size :math:`b` of at least the count
+  (:func:`_pps_inclusion_probabilities`). A size :math:`b` of at least the count
   of positive measures gives each of them :math:`\pi_i = 1`; a zero measure gets
   :math:`\pi_i = 0`.
-- **Draw.** Systematic sampling (:func:`systematic_sample`): the cells are laid
+- **Draw.** Systematic sampling (:func:`_systematic_sample`): the cells are laid
   along a line, each cell an interval of length :math:`\pi_i`, and the cells hit
   by the points :math:`u + m`, :math:`m = 0, \dots, k - 1`, are kept. The
   intervals are half-open, so a hit exactly on a boundary takes the later cell.
@@ -113,7 +113,7 @@ def _(x):
     return torch.empty_like(x)
 
 
-def pps_inclusion_probabilities(
+def _pps_inclusion_probabilities(
     measures: Float[torch.Tensor, " n_cells"],
     n_samples: float | Float[torch.Tensor, ""],
 ) -> Float[torch.Tensor, " n_cells"]:
@@ -149,7 +149,7 @@ def pps_inclusion_probabilities(
     --------
     >>> import torch
     >>> measures = torch.tensor([4.0, 1.0, 1.0, 2.0], dtype=torch.float64)
-    >>> pps_inclusion_probabilities(measures, 2.0)
+    >>> _pps_inclusion_probabilities(measures, 2.0)
     tensor([1.0000, 0.2500, 0.2500, 0.5000], dtype=torch.float64)
     """
     if measures.ndim != 1:
@@ -172,7 +172,7 @@ def pps_inclusion_probabilities(
     return torch.empty_like(pi).scatter_(0, order, pi)
 
 
-def systematic_sample(
+def _systematic_sample(
     inclusion_probabilities: Float[torch.Tensor, " n_cells"],
     n_samples: int,
     start: float | Float[torch.Tensor, ""],
@@ -202,7 +202,7 @@ def systematic_sample(
     inclusion_probabilities : torch.Tensor
         The probabilities :math:`\pi_i \in [0, 1]`, shape ``(n_cells,)``, in any
         floating dtype (scaled to the line in float64), summing to ``n_samples`` up
-        to the line's grid (:func:`pps_inclusion_probabilities`). Otherwise the hits
+        to the line's grid (:func:`_pps_inclusion_probabilities`). Otherwise the hits
         past the end of the line repeat the last cell.
     n_samples : int
         The number of hits :math:`k`. It may be a symbolic size under
@@ -233,7 +233,7 @@ def systematic_sample(
     --------
     >>> import torch
     >>> pi = torch.tensor([0.5, 0.5, 1.0, 0.25, 0.75], dtype=torch.float64)
-    >>> systematic_sample(pi, 3, 0.5)
+    >>> _systematic_sample(pi, 3, 0.5)
     tensor([1, 2, 4])
     """
     budget = n_samples if max_n_samples is None else max_n_samples
@@ -280,11 +280,12 @@ def sample_cells_systematic(
 
     Keeps :math:`\min(N, b)` distinct cells of the :math:`N` cells, for
     ``n_samples`` :math:`b`. The cell :math:`i` is kept with probability
-    :math:`\pi_i = \min(1, c\,a_i)` (:func:`pps_inclusion_probabilities`), with
-    :math:`a_i` its effective measure (``cell_data["_effective_measure"]``) when
-    stored, else its geometric measure. The cells are laid along the Morton order
-    of their centroids in the mesh's canonical frame, so the draw is the same in
-    every pose and numbering of the mesh, and drawn by :func:`systematic_sample`.
+    :math:`\pi_i = \min(1, c\,a_i)`, with :math:`c` chosen so the probabilities
+    sum to the sample size, and :math:`a_i` its effective measure
+    (``cell_data["_effective_measure"]``) when stored, else its geometric measure.
+    The cells are laid along the Morton order of their centroids in the mesh's
+    canonical frame, so the draw is the same in every pose and numbering of the
+    mesh, and drawn by systematic sampling along that line.
     Each kept cell carries its Horvitz-Thompson weight :math:`a_i / \pi_i`, so a
     weighted sum over the kept cells is unbiased for the sum over all cells. See
     the module docstring.
@@ -371,7 +372,7 @@ def sample_cells_systematic(
         ### mesh leaves the line, and the draw, unchanged (up to roundoff and the
         ### frame's ties).
         frame = canonical_frame(centroids, measure)
-        pi = pps_inclusion_probabilities(measure, share)
+        pi = _pps_inclusion_probabilities(measure, share)
         ### More samples than positive-measure cells keeps every positive cell, and
         ### the zero-measure cells fill the rest of the count equally, at
         ### Horvitz-Thompson weight 0.
@@ -391,6 +392,6 @@ def sample_cells_systematic(
         ### replays the guards that hold it (evaluated with the builtin min), a
         ### recompile on the other.
         k = n_samples + (n_cells - n_samples) * (1 // (n_cells // n_samples + 1))
-        kept = systematic_sample(pi, k, start, order=order, max_n_samples=n_samples)
+        kept = _systematic_sample(pi, k, start, order=order, max_n_samples=n_samples)
         weights = measure[kept] / pi[kept]
     return kept, weights.to(mesh.points.dtype)
