@@ -304,19 +304,8 @@ def _run_epoch(
     step and emits per-step TensorBoard + JSONL entries (``phase: "step"``);
     val mode wraps the loop in ``torch.no_grad()``, skips TensorBoard
     per-step logging, and emits a lighter-weight JSONL record per step
-    (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``,
-    ``step_time_s`` and ``iter_time_s``.
-
-    The two per-step times (console ``Step:`` and ``Iter:``):
-
-    - ``step_time_s``: host time from the end of the previous step's logging
-      to just before this step's per-step reduction; it misses the device work
-      still queued and the wait for the other ranks.
-    - ``iter_time_s``: time between the ends of consecutive per-step
-      reductions (the first from the start of the epoch). The reduction syncs
-      with the device and, under DDP, with every rank, so this is the true time
-      per iteration; the iteration times sum to the epoch's time but for the
-      last step's logging.
+    (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
+    and ``step_time_s``.
 
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
@@ -352,26 +341,11 @@ def _run_epoch(
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
-    ### Each summary's peak memory measures only its own epoch.
-    if torch.cuda.is_available() and dist_manager.device.type == "cuda":
-        torch.cuda.reset_peak_memory_stats(dist_manager.device)
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
-        iter_t0 = step_t0
-        ### Iterated by hand: a train step fetches the next batch during its
-        ### backward (below). Under cfg.profile, stop after step
-        ### _PROFILE_MAX_STEPS.
-        batches = iter(dataloader)
-        next_batch = None
-        stop = min(num_steps, _PROFILE_MAX_STEPS + 1) if cfg.profile else num_steps
-
-        def load():
-            return recursive_to_device(next(batches), dist_manager.device)
-
-        for i in range(stop):
-            batch = load() if next_batch is None else next_batch
-            next_batch = None
+        for i, batch in enumerate(dataloader):
+            batch = recursive_to_device(batch, dist_manager.device)
 
             loss, losses, metrics = forward_pass(
                 batch,
@@ -387,18 +361,10 @@ def _run_epoch(
                 optimizer.zero_grad()
                 if precision == "float16" and scaler is not None:
                     scaler.scale(loss).backward()
-                    if i + 1 < stop:
-                        next_batch = load()
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
-                    ### Load the next batch now, while the GPU still runs this
-                    ### backward, so the loader's host-side work overlaps GPU
-                    ### work instead of leaving the GPU idle at the start of the
-                    ### next step. Same samples, same order.
-                    if i + 1 < stop:
-                        next_batch = load()
                     optimizer.step()
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
@@ -440,11 +406,6 @@ def _run_epoch(
             step_loss, step_losses, step_metrics = _reduce_and_average(
                 loss_det, losses, metrics, 1, device=dist_manager.device
             )
-            ### The reduction above syncs with the device (and every rank under
-            ### DDP), so this clock reads after this step's device work.
-            now = time.perf_counter()
-            iter_dt = now - iter_t0
-            iter_t0 = now
 
             ### Train mode includes Mem in the per-step line; val drops it
             ### because the no_grad path is the lowest-noise place to look.
@@ -452,8 +413,7 @@ def _run_epoch(
             logger.info(
                 f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
                 f"Loss: {step_loss:.6f} "
-                f"Step: {step_dt:.3f}s "
-                f"Iter: {iter_dt:.3f}s"
+                f"Step: {step_dt:.3f}s"
                 f"{mem_str}"
             )
 
@@ -490,11 +450,6 @@ def _run_epoch(
                             step_dt,
                             global_step=global_step,
                         )
-                        writer.add_scalar(
-                            "iteration/performance/iter_time_s",
-                            iter_dt,
-                            global_step=global_step,
-                        )
                     if log_jsonl is not None:
                         log_jsonl(
                             {
@@ -503,7 +458,6 @@ def _run_epoch(
                                 "loss": step_loss,
                                 "mem_gb": mem_gb,
                                 "step_time_s": step_dt,
-                                "iter_time_s": iter_dt,
                                 **step_losses,
                                 **step_metrics,
                             }
@@ -524,12 +478,13 @@ def _run_epoch(
                             "val_step": i,
                             "loss": step_loss,
                             "step_time_s": step_dt,
-                            "iter_time_s": iter_dt,
                             **step_losses,
                             **step_metrics,
                         }
                     )
 
+            if cfg.profile and i >= _PROFILE_MAX_STEPS:
+                break
             step_t0 = time.perf_counter()
 
     epoch_dt = time.perf_counter() - epoch_t0
@@ -551,17 +506,6 @@ def _run_epoch(
         f"({n_local} steps, {epoch_dt / n:.3f}s/step avg)"
     )
 
-    ### Peak device memory of the epoch, the maximum over ranks.
-    peak_gib = None
-    if torch.cuda.is_available() and dist_manager.device.type == "cuda":
-        peak = torch.tensor(
-            [torch.cuda.max_memory_allocated(dist_manager.device) / 2**30],
-            device=dist_manager.device,
-        )
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(peak, op=dist.ReduceOp.MAX)
-        peak_gib = float(peak.item())
-
     if is_rank0:
         _log_to_tensorboard(writer, avg_losses, "epoch", epoch)
         _log_to_tensorboard(writer, avg_metrics, "epoch/metrics", epoch)
@@ -574,8 +518,6 @@ def _run_epoch(
                     "loss": avg_loss,
                     **avg_losses,
                     **avg_metrics,
-                    "epoch_seconds": epoch_dt,
-                    **({"peak_memory_gib": peak_gib} if peak_gib is not None else {}),
                 }
             )
 
