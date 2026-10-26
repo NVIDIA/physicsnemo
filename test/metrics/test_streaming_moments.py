@@ -56,3 +56,39 @@ def test_deprecated_base_aliases_and_silent_module_imports():
             pass
 
         assert isinstance(LegacySubclass((3,)), em.StreamingStatistic)
+
+
+@pytest.mark.parametrize(
+    "module_name,other_exports",
+    [
+        (
+            "physicsnemo.metrics.general.ensemble_metrics",
+            ("Mean", "Variance", "Tensor"),
+        ),
+        (
+            "physicsnemo.diffusion.metrics",
+            ("Mean", "Variance", "Histogram", "crps", "EDMLoss", "MSEDSMLoss"),
+        ),
+    ],
+)
+def test_deprecated_base_wildcard_import(module_name, other_exports):
+    """Legacy wildcard imports can still define subclasses of EnsembleMetrics."""
+    import importlib
+
+    from physicsnemo.core.warnings import LegacyFeatureWarning
+    from physicsnemo.metrics.general.ensemble_metrics import StreamingStatistic
+
+    module = importlib.import_module(module_name)
+    namespace = {}
+    with pytest.warns(LegacyFeatureWarning, match="EnsembleMetrics is deprecated"):
+        exec(  # noqa: S102 - exercise wildcard syntax with fixed test module names
+            f"from {module_name} import *\n"
+            "class LegacyStatistic(EnsembleMetrics):\n"
+            "    pass\n",
+            namespace,
+        )
+    assert namespace["EnsembleMetrics"] is StreamingStatistic
+    assert namespace["StreamingStatistic"] is StreamingStatistic
+    assert isinstance(namespace["LegacyStatistic"]((3,)), StreamingStatistic)
+    for name in other_exports:
+        assert namespace[name] is getattr(module, name)
