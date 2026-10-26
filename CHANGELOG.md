@@ -340,6 +340,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Mesh.get_point_to_points_adjacency()`, `get_facet_mesh()`, and
+  `get_boundary_mesh()` compile with `torch.compile(fullgraph=True, dynamic=True)`.
+  Facet extraction now specializes on the cell width instead of passing a
+  symbolic size to `itertools.combinations`.
+- GraphCast and MeshGraphNet run on graphs partitioned across GPUs again
+  (`partition_size > 1`, or a `DistributedGraph` in place of the PyG graph),
+  so the distributed shallow-water example works. This broke when the DGL
+  backend was removed.
 - `weighted_multinomial` with `replacement=True` accepts more than 2^24
   weights, instead of raising `torch.multinomial`'s category-limit error. So
   DoMINO's `sample_points_on_mesh` now works on meshes with over 2^24 faces.
