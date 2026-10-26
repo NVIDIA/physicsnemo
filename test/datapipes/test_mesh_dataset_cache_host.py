@@ -99,13 +99,32 @@ class _SlowCountingReader(_CountingReader):
         return super().__getitem__(index)
 
 
-def test_cache_host_concurrent_requests_serve_one_identical_sample():
+def test_read_host_concurrent_calls_read_each_index_once():
+    """Eight threads call ``_read_host(1)`` at once; the per-index lock lets one read."""
     from concurrent.futures import ThreadPoolExecutor
 
     reader = _SlowCountingReader()
-    ds = MeshDataset(reader, cache_host=True, num_workers=4)
+    ds = MeshDataset(reader, cache_host=True)
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _: ds._read_host(1), range(8)))
     assert reader.reads == {1: 1}
     assert len({id(data) for data, _ in results}) == 1
+    ds.close()
+
+
+def test_cache_host_through_transform_chain_serves_the_same_sample():
+    """The built-in transforms do not mutate the cached sample, so a second read matches."""
+    from physicsnemo.datapipes.transforms.mesh import CenterMesh, ScaleMesh
+
+    reader = _CountingReader()
+    ds = MeshDataset(
+        reader,
+        transforms=[CenterMesh(store_center_as="center"), ScaleMesh(2.0)],
+        cache_host=True,
+    )
+    first, _ = ds[1]
+    second, _ = ds[1]
+    assert reader.reads == {1: 1}
+    assert torch.equal(first.points, second.points)
+    assert torch.equal(first.global_data["center"], second.global_data["center"])
     ds.close()
