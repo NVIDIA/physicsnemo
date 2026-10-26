@@ -22,7 +22,7 @@ import torch.distributed as dist
 
 from physicsnemo.distributed.manager import DistributedManager
 
-from .ensemble_metrics import EnsembleMetrics
+from .ensemble_metrics import StreamingStatistic
 
 Tensor = torch.Tensor
 
@@ -582,7 +582,7 @@ def cdf(
     return bin_edges, cdf
 
 
-class Histogram(EnsembleMetrics):
+class Histogram(StreamingStatistic):
     """
     Convenience class for computing histograms, possibly as a part of a distributed or
     iterative environment
