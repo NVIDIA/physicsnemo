@@ -24,7 +24,7 @@ pytest.importorskip("pyvista")
 
 import pyvista as pv
 
-from physicsnemo.experimental.guardrails.geometry import (
+from physicsnemo.experimental.uq.ood.geometry import (
     FEATURE_NAMES,
     FEATURE_VERSION,
     extract_features,

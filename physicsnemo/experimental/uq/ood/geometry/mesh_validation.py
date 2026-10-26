@@ -52,9 +52,7 @@ def validate_mesh(mesh: PhysicsNeMoMesh, min_verts: int = 4) -> None:
         raise ValueError("Object is not a physicsnemo.mesh.Mesh")
 
     if mesh.n_points < min_verts:
-        raise ValueError(
-            f"Too few vertices: {mesh.n_points} < {min_verts}"
-        )
+        raise ValueError(f"Too few vertices: {mesh.n_points} < {min_verts}")
 
     # Check for non-finite vertex coordinates
     verts = mesh.points.cpu().numpy()
@@ -66,7 +64,7 @@ def validate_mesh(mesh: PhysicsNeMoMesh, min_verts: int = 4) -> None:
     # as long as there are some valid triangles with positive area
     cell_areas = mesh.cell_areas
     total_area = float(cell_areas.sum().item())
-    
+
     if total_area <= 0:
         # Provide more detailed error message
         n_zero_area = int((cell_areas <= 0).sum().item())

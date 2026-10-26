@@ -25,7 +25,7 @@ pytest.importorskip("pyvista")
 
 import pyvista as pv
 
-from physicsnemo.experimental.guardrails.geometry import validate_mesh
+from physicsnemo.experimental.uq.ood.geometry import validate_mesh
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 
