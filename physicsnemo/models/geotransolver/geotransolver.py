@@ -777,7 +777,7 @@ class GeoTransolver(Module):
             requested embedding states and before geometry features. Default
             is ``False``.
 
-        return_geometry_features : bool, optional, keyword-only
+        return_geometry_features : bool, optional, keyword-only, default=False
             Append detached geometry tokens of shape :math:`(B, H, S, D_g)`
             after any requested embedding states and point features. Returns
             ``None`` when no geometry tokenizer/input is present. Pending domain

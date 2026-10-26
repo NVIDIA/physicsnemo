@@ -101,7 +101,7 @@ class GeoTransolverOneShot(GeoTransolver):
         *,
         return_geometry_features: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
-        """Predict the rollout, optionally returning detached geometry tokens."""
+        r"""Predict the rollout, optionally returning detached geometry tokens."""
         coords, features, N, T, Fo = _oneshot_inputs(sample, self.rollout_steps)
         fx = torch.cat([coords, features], dim=-1)
         global_emb = None
