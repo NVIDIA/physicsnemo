@@ -351,6 +351,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `EnsembleMetrics`, the base class of `Mean`, `Variance`, and `Histogram`, is
+  renamed `StreamingStatistic`. `EnsembleMetrics` remains an alias of the same
+  class, so existing subclasses and `isinstance` checks keep working; importing
+  it emits a `LegacyFeatureWarning`.
 - `weighted_multinomial` and `WeightedMultinomial` moved from
   `physicsnemo.nn.functional` to `physicsnemo.utils`. Importing them from
   `physicsnemo.nn.functional` still works but emits `LegacyFeatureWarning`.
