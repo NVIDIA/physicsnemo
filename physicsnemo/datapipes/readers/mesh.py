@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import glob as _glob
 import logging
+import operator
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
@@ -563,11 +564,15 @@ class DomainMeshReader:
             )
         self.boundary_subsample = boundary_subsample
         if interior_n_points_range is not None:
-            lo, hi = (int(interior_n_points_range[0]), int(interior_n_points_range[1]))
-            if lo <= 0 or hi < lo:
+            try:
+                lo, hi = (operator.index(n) for n in interior_n_points_range)
+                valid = 0 < lo <= hi
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
                 raise ValueError(
-                    "interior_n_points_range must be (lo, hi) with 0 < lo <= hi, "
-                    f"got {interior_n_points_range!r}"
+                    "interior_n_points_range must be two integers (lo, hi) with "
+                    f"0 < lo <= hi, got {interior_n_points_range!r}"
                 )
             interior_n_points_range = (lo, hi)
         self.interior_n_points_range = interior_n_points_range

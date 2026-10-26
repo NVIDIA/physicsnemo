@@ -250,7 +250,7 @@ class CenterMesh(MeshTransform):
         com = self._compute_com(mesh)
         centered = mesh.translate(-com)
         if self.store_center_as is not None:
-            global_data = centered.global_data.clone()
+            global_data = centered.global_data.copy()
             global_data[self.store_center_as] = com
             centered.global_data = global_data
         return centered
@@ -274,7 +274,7 @@ class CenterMesh(MeshTransform):
         com = self._compute_com(domain.interior)
         centered = domain.translate(-com)
         if self.store_center_as is not None:
-            global_data = centered.global_data.clone()
+            global_data = centered.global_data.copy()
             global_data[self.store_center_as] = com
             centered.global_data = global_data
         return centered
