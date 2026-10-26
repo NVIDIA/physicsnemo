@@ -296,9 +296,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the grid spacing (was an absolute length), so its default no longer folds
   cells, even on fine grids.
 - Unified external aero recipe: training steps no longer wait for the GPU to
-  log each step's loss. The values are read back without blocking once every
-  `logging.log_every_n_steps` steps, so the datapipe's prefetch now overlaps
-  compute.
+  log each step's loss. Each step's values are read back without blocking and
+  logged once they land, so the datapipe's prefetch now overlaps compute.
 
 ### Deprecated
 

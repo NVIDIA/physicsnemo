@@ -123,8 +123,8 @@ def _reduce_and_average(
     keeps the integer count out of the float reduction buffer. It is
     granularity-neutral, mirrors the inference-side ``infer._allreduce_sums``,
     and is called once per epoch, with ``n_samples == n_local`` and the running
-    epoch sums, for the dataset-wide summary. (Per-step records go through
-    :func:`_start_readback`, which does not wait for the device.)
+    epoch sums, for the dataset-wide summary (per-step values go through
+    :func:`_start_step_readback`).
 
     Args:
         loss_sum: Rank-local sum of scalar losses over the ``n_samples`` being
@@ -181,51 +181,26 @@ def _reduce_and_average(
     )
 
 
-def _start_readback(records: list[tuple], device: torch.device | str) -> tuple:
-    """Average a period's per-step records across ranks and copy them to the host.
+def _start_step_readback(
+    loss: Float[torch.Tensor, ""],
+    losses_td: TensorDict,
+    metrics_td: TensorDict,
+    *,
+    device: torch.device | str,
+) -> tuple[TensorDict, torch.cuda.Event | None]:
+    """Start the all-rank mean of one step's values and its copy to the host.
 
-    *records* are ``(meta, loss, losses, metrics)`` tuples, with on-device
-    values. One fused ``AVG`` all-reduce of the stacked values is followed by a
-    ``non_blocking`` copy into pinned host memory, so the host does not wait for
-    the device. Returns ``(event, host_values, metas)``; *event* (``None`` off
-    CUDA) completes when the copy has landed.
+    The copy is ``non_blocking``, so no step waits for the device. Read the
+    returned host ``TensorDict`` only once the returned event (``None`` off
+    CUDA, where the copy is synchronous) has completed.
     """
-    stacked = TensorDict(
-        {
-            name: torch.stack([record[k] for record in records])
-            for k, name in enumerate(("loss", "losses", "metrics"), start=1)
-        },
-        batch_size=[len(records)],
-    )
-    reduced = fused_all_reduce(stacked, op=dist.ReduceOp.AVG, device=device)
+    bundle = TensorDict({"loss": loss, "losses": losses_td, "metrics": metrics_td})
+    reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device)
     if torch.device(device).type != "cuda":
-        return None, reduced, [record[0] for record in records]
-    reduced = reduced.to("cpu", non_blocking=True)
-    event = torch.cuda.Event()
+        return reduced, None
+    reduced, event = reduced.to("cpu", non_blocking=True), torch.cuda.Event()
     event.record()
-    return event, reduced, [record[0] for record in records]
-
-
-def _collect_landed(readbacks: deque, ready: deque, *, wait: bool) -> None:
-    """Move landed readbacks, oldest first, to *ready* as per-step host values.
-
-    Stops at the first readback whose copy has not landed, unless *wait*.
-    """
-    while readbacks and (wait or readbacks[0][0] is None or readbacks[0][0].query()):
-        event, reduced, metas = readbacks.popleft()
-        if wait and event is not None:
-            event.synchronize()
-        losses = {key: value.tolist() for key, value in reduced["losses"].items()}
-        metrics = {key: value.tolist() for key, value in reduced["metrics"].items()}
-        for j, (meta, loss) in enumerate(zip(metas, reduced["loss"].tolist())):
-            ready.append(
-                (
-                    *meta,
-                    loss,
-                    {key: value[j] for key, value in losses.items()},
-                    {key: value[j] for key, value in metrics.items()},
-                )
-            )
+    return reduced, event
 
 
 ### ---------------------------------------------------------------------------
@@ -352,11 +327,6 @@ def _run_epoch(
     (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
     and ``step_time_s``.
 
-    No step waits for the device: the per-step values are read back once
-    every ``logging.log_every_n_steps`` steps without blocking, so each step
-    is logged about one such period late, in order, and the epoch's end logs
-    the rest.
-
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
             and *scheduler*; ``"val"`` ignores them.
@@ -381,7 +351,7 @@ def _run_epoch(
     is_rank0 = dist_manager.rank == 0
 
     ### All three accumulators live on-device, so epoch sums build up with no
-    ### per-step host sync (per-step records are read back in periods, below).
+    ### per-step host sync (per-step values are read back without waiting, below).
     ### total_loss is float64 for accumulation precision, downcast to float32 at
     ### the epoch reduce. None = not yet seeded; n_local is this rank's local
     ### sample count.
@@ -391,17 +361,15 @@ def _run_epoch(
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
-    ### Per-step records stay on the device. Every log_every_n_steps steps,
-    ### _start_readback averages them across ranks and copies them to the host
-    ### without waiting; the step loop then logs at most one landed record per
-    ### step, and the epoch's end drains the rest. No step waits for the device.
-    log_every = max(1, int(cfg.get("logging", {}).get("log_every_n_steps", 10)))
-    records: list[tuple] = []
-    readbacks: deque = deque()
-    ready: deque = deque()
+    ### One entry per step, logged in order once its readback has landed;
+    ### the epoch's end logs the rest (see _start_step_readback).
+    pending: deque = deque()
 
-    def log_step(i, step_dt, mem_gb, lr, step_loss, step_losses, step_metrics):
-        """Log one step's record, whose values are global all-rank means."""
+    def log_step(i, step_dt, mem_gb, lr, reduced):
+        """Log one step's landed record, whose values are global all-rank means."""
+        step_loss = reduced["loss"].item()
+        step_losses = {key: value.item() for key, value in reduced["losses"].items()}
+        step_metrics = {key: value.item() for key, value in reduced["metrics"].items()}
         ### Train mode includes Mem in the per-step line; val drops it
         ### because the no_grad path is the lowest-noise place to look.
         mem_str = f" Mem: {mem_gb:.2f}GB" if is_train else ""
@@ -420,29 +388,17 @@ def _run_epoch(
             if is_train:
                 global_step = epoch * num_steps + i
                 if writer is not None:
-                    ### Loss keys already start with `loss/`, so the iteration
-                    ### prefix yields tags like `iteration/loss/pressure`;
-                    ### metric tags get an explicit `iteration/metrics/...`
-                    ### namespace so we never have to split by string prefix.
+                    ### Tags: iteration/loss/... and iteration/metrics/...
                     _log_to_tensorboard(writer, step_losses, "iteration", global_step)
                     _log_to_tensorboard(
                         writer, step_metrics, "iteration/metrics", global_step
                     )
-                    writer.add_scalar(
-                        "iteration/lr",
-                        lr,
-                        global_step=global_step,
-                    )
-                    writer.add_scalar(
-                        "iteration/performance/mem_gb",
-                        mem_gb,
-                        global_step=global_step,
-                    )
-                    writer.add_scalar(
-                        "iteration/performance/step_time_s",
-                        step_dt,
-                        global_step=global_step,
-                    )
+                    for tag, value in (
+                        ("lr", lr),
+                        ("performance/mem_gb", mem_gb),
+                        ("performance/step_time_s", step_dt),
+                    ):
+                        writer.add_scalar(f"iteration/{tag}", value, global_step)
                 if log_jsonl is not None:
                     log_jsonl(
                         {
@@ -456,14 +412,7 @@ def _run_epoch(
                         }
                     )
             elif log_jsonl is not None:
-                ### Val per-step record. ``epoch`` is explicit (unlike
-                ### the train ``step`` records, which the parser infers
-                ### from surrounding ``train`` markers) so val_step
-                ### records can be associated with an epoch without
-                ### relying on surrounding context. ``mem_gb`` is
-                ### intentionally omitted -- the no_grad path is the
-                ### lowest-noise place to measure step time and we
-                ### don't want allocator state hopping in TB.
+                ### Val records name their epoch and omit mem_gb (lowest-noise path).
                 log_jsonl(
                     {
                         "phase": "val_step",
@@ -519,7 +468,7 @@ def _run_epoch(
             n_local += 1
 
             ### Detached scalar loss: accumulate the epoch sum on-device (no
-            ### host sync) and keep it for this step's record below.
+            ### host sync) and keep it for this step's readback below.
             loss_det = loss.detach()
             total_loss += loss_det
 
@@ -530,26 +479,27 @@ def _run_epoch(
                 else 0
             )
 
-            ### Keep this step's record, read back a full period without
-            ### waiting, and log the oldest record whose copy has landed.
+            ### Start this step's all-rank readback without waiting, then log
+            ### every earlier step whose copy has landed, in order.
             lr = scheduler.get_last_lr()[0] if is_train else None
-            records.append(((i, step_dt, mem_gb, lr), loss_det, losses, metrics))
-            if len(records) == log_every:
-                readbacks.append(_start_readback(records, dist_manager.device))
-                records = []
-            _collect_landed(readbacks, ready, wait=False)
-            if ready:
-                log_step(*ready.popleft())
+            pending.append(
+                (i, step_dt, mem_gb, lr)
+                + _start_step_readback(
+                    loss_det, losses, metrics, device=dist_manager.device
+                )
+            )
+            while pending and (pending[0][-1] is None or pending[0][-1].query()):
+                log_step(*pending.popleft()[:-1])
 
             if cfg.profile and i >= _PROFILE_MAX_STEPS:
                 break
             step_t0 = time.perf_counter()
 
-        if records:
-            readbacks.append(_start_readback(records, dist_manager.device))
-        _collect_landed(readbacks, ready, wait=True)
-        while ready:
-            log_step(*ready.popleft())
+        ### The epoch's end waits for the copies still in flight.
+        for *record, event in pending:
+            if event is not None:
+                event.synchronize()
+            log_step(*record)
 
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_local, 1)

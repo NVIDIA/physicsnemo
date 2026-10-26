@@ -30,12 +30,12 @@ handling for:
   TensorDict, with clear error messages on shape / channel-count
   mismatches.
 - :func:`train._reduce_and_average`: averages rank-local loss / metric
-  sums over the global sample count (used per step and per epoch); its
+  sums over the global sample count (used per epoch); its
   single-process path must equal plain ``total_loss / n`` + per-leaf
   ``sum / n`` averaging.
-- :func:`train._run_epoch`: per-step records are read back without a host
-  sync, and every step is logged once, in order, with the values the
-  per-step blocking readback gave.
+- :func:`train._run_epoch`: each step's values are read back without a
+  host sync (:func:`train._start_step_readback`), and every step is logged
+  once, in order, with the values the blocking per-step readback gave.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -272,21 +272,48 @@ _DEVICES = [
 ]
 
 
+class _InFlight:
+    """A readback event that never lands before the epoch's end, so every
+    record goes through the epoch-end drain; counts its waits."""
+
+    def __init__(self, waits):
+        self.waits = waits
+
+    def query(self):
+        return False
+
+    def synchronize(self):
+        self.waits.append(self)
+
+
+def _hold_readbacks(monkeypatch):
+    """Patch :func:`train._start_step_readback` so no record lands before the
+    epoch's end; returns the list of drain waits, one per record."""
+    waits = []
+    start = train._start_step_readback
+
+    def held(*args, **kwargs):
+        reduced, _ = start(*args, **kwargs)
+        return reduced, _InFlight(waits)
+
+    monkeypatch.setattr(train, "_start_step_readback", held)
+    return waits
+
+
 def _run_test_epoch(
-    monkeypatch, loader, device, *, mode, profile=False, reference=True
+    monkeypatch, loader, device, *, mode, profile=False, reference=True, writer=None
 ):
     """Run one :func:`train._run_epoch` with a one-weight model and SGD.
 
     ``train.forward_pass`` is patched to return step-dependent loss and
     metric values; returns ``(jsonl records, expected per-step records)``,
     where the expected values come from the per-step blocking readback
-    (``_reduce_and_average`` with ``n_samples=1``) and the scheduler's lr
-    right after each step. ``reference=False`` skips that readback, which
-    syncs.
+    (``_reduce_and_average`` with ``n_samples=1``, main's per-step path).
+    ``reference=False`` skips that readback, which syncs.
     """
     model = torch.nn.Linear(1, 1, bias=False).to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     expected = []
 
     def forward(batch, *args, **kwargs):
@@ -306,7 +333,6 @@ def _run_test_epoch(
             "precision": "float32",
             "profile": profile,
             "training": {"scheduler_update_mode": "step"},
-            "logging": {"log_every_n_steps": 4},
         }
     )
     _run_epoch(
@@ -323,25 +349,17 @@ def _run_test_epoch(
         target_config={"pressure": "scalar"},
         optimizer=optimizer,
         scheduler=scheduler,
+        writer=writer,
         log_jsonl=records.append,
     )
     return records, expected
 
 
-@pytest.mark.parametrize("device", _DEVICES)
-@pytest.mark.parametrize("mode", ["train", "val"])
-def test_every_step_logged_once_in_order_with_blocking_values(
-    monkeypatch, device, mode
-):
-    """Each of 10 steps (log period 4, so the last period of 2 is drained at
-    the epoch's end) is logged once, in order, with the per-step blocking
-    readback's loss, losses and metrics, bitwise (single process, so the
-    all-reduce is the identity on both paths)."""
-    loader = [{"k": float(k)} for k in range(10)]
-    records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
+def _check_steps(records, expected, mode, n_steps):
+    """Every step is logged once, in order, bitwise equal to ``expected``."""
     steps = [r for r in records if r["phase"] == f"{mode}_step"]
     key = "global_step" if mode == "train" else "val_step"
-    assert [r[key] for r in steps] == list(range(10))
+    assert [r[key] for r in steps] == list(range(n_steps))
     for r, (loss, losses, metrics) in zip(steps, expected, strict=True):
         assert r["loss"] == loss
         assert {k: r[k] for k in losses} == losses
@@ -349,67 +367,64 @@ def test_every_step_logged_once_in_order_with_blocking_values(
     assert records[-1]["phase"] == f"{mode}_summary"
 
 
-def test_lr_is_read_at_its_own_step(monkeypatch):
-    """The lagged TensorBoard ``iteration/lr`` of step i is the lr right after
-    step i's scheduler step, not the lr when the record is logged."""
-    scalars = []
-    writer = SimpleNamespace(
-        add_scalar=lambda tag, value, global_step: scalars.append(
-            (tag, value, global_step)
-        )
-    )
-    model = torch.nn.Linear(1, 1, bias=False)
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("mode", ["train", "val"])
+def test_every_step_logged_once_in_order_with_blocking_values(
+    monkeypatch, device, mode
+):
+    """Each of 10 steps is logged once, in order, with the per-step blocking
+    readback's loss, losses and metrics, bitwise (single process, so the
+    all-reduce is the identity on both paths). On CUDA the records log as
+    their copies land, and the epoch's end drains the rest."""
+    loader = [{"k": float(k)} for k in range(10)]
+    records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
+    _check_steps(records, expected, mode, 10)
 
-    def forward(batch, *args, **kwargs):
-        loss = model.weight.sum()
-        values = TensorDict({"loss/test": loss.detach()})
-        return loss, values, values.clone()
 
-    monkeypatch.setattr(train, "forward_pass", forward)
-    _run_epoch(
-        [{}] * 7,
-        model,
-        None,
-        None,
-        SimpleNamespace(info=lambda *args, **kwargs: None),
-        0,
-        OmegaConf.create(
-            {
-                "precision": "float32",
-                "profile": False,
-                "training": {"scheduler_update_mode": "step"},
-                "logging": {"log_every_n_steps": 3},
-            }
-        ),
-        SimpleNamespace(rank=0, world_size=1, device=torch.device("cpu")),
-        mode="train",
-        output_type="tensors",
-        target_config={"pressure": "scalar"},
-        optimizer=optimizer,
-        scheduler=scheduler,
-        writer=writer,
-    )
-    lrs = [(step, value) for tag, value, step in scalars if tag == "iteration/lr"]
-    assert lrs == [(i, 0.1 * 0.5 ** (i + 1)) for i in range(7)]
+@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("mode", ["train", "val"])
+def test_epoch_end_drains_records_still_in_flight(monkeypatch, device, mode):
+    """With no copy landed before the loop ends, nothing is logged during the
+    steps and the epoch's end waits for and logs every record, in order."""
+    waits = _hold_readbacks(monkeypatch)
+    loader = [{"k": float(k)} for k in range(7)]
+    records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
+    _check_steps(records, expected, mode, 7)
+    assert len(waits) == 7
 
 
 def test_profile_stop_drains_its_records(monkeypatch):
     """Under ``cfg.profile`` the loop stops after step ``_PROFILE_MAX_STEPS``
-    and still logs every step it ran."""
+    and the epoch's end still logs every step it ran."""
+    _hold_readbacks(monkeypatch)
     loader = [{"k": float(k)} for k in range(train._PROFILE_MAX_STEPS + 5)]
     records, _ = _run_test_epoch(monkeypatch, loader, "cpu", mode="train", profile=True)
     steps = [r["global_step"] for r in records if r["phase"] == "train_step"]
     assert steps == list(range(train._PROFILE_MAX_STEPS + 1))
 
 
+def test_lr_is_read_at_its_own_step(monkeypatch):
+    """A record logged late carries the lr right after its own step's
+    scheduler step, not the lr when it is logged."""
+    _hold_readbacks(monkeypatch)
+    scalars = []
+    writer = SimpleNamespace(
+        add_scalar=lambda tag, value, global_step: scalars.append(
+            (tag, value, global_step)
+        )
+    )
+    loader = [{"k": float(k)} for k in range(7)]
+    _run_test_epoch(monkeypatch, loader, "cpu", mode="train", writer=writer)
+    lrs = [(step, value) for tag, value, step in scalars if tag == "iteration/lr"]
+    assert lrs == [(i, 0.1 * 0.5 ** (i + 1)) for i in range(7)]
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_train_steps_do_not_sync_with_the_device(monkeypatch):
     """From the first batch to the loader's end, no step syncs the host with
     the device: torch's sync debug mode raises on any flagged sync, and
-    explicit event, stream and device waits (which it does not flag, such as
-    TensorDict's blocking D2H) are counted. Only the epoch's end may wait."""
+    explicit event, stream and device waits (which it does not flag) are
+    counted. Only the epoch-end drain may wait."""
     waits = []
     in_steps = False
     for owner, name in (
@@ -451,11 +466,27 @@ def test_train_steps_do_not_sync_with_the_device(monkeypatch):
     assert steps == list(range(12))
 
 
-def test_step_loop_has_no_host_readback():
-    """No ``.cpu()``, ``.item()``, ``.tolist()`` or ``.numpy()`` call remains in
-    ``_run_epoch`` or ``_start_readback``, and the step loop does not call the
-    blocking ``_reduce_and_average``. Host values are read only from landed
-    copies (``_collect_landed``) and in the epoch summary."""
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_step_readback_lands_in_pinned_memory():
+    """The ``non_blocking`` copy targets pinned host memory; a pageable
+    target would make it synchronous."""
+    loss = torch.ones((), device="cuda")
+    reduced, event = train._start_step_readback(
+        loss,
+        TensorDict({"loss/test": loss * 2}),
+        TensorDict({"test_l2": loss * 3}),
+        device="cuda",
+    )
+    event.synchronize()
+    leaves = reduced.values(include_nested=True, leaves_only=True)
+    assert all(leaf.device.type == "cpu" and leaf.is_pinned() for leaf in leaves)
+
+
+def test_step_path_has_no_host_readback():
+    """``_start_step_readback`` and ``_run_epoch``'s step loop call no
+    ``.cpu()``, ``.item()``, ``.tolist()`` or ``.numpy()``, nor the blocking
+    ``_reduce_and_average``. Host values are read only in ``log_step``, from
+    landed copies, and in the epoch summary."""
 
     def called(node):
         return {
@@ -465,10 +496,13 @@ def test_step_loop_has_no_host_readback():
             and isinstance(call.func, (ast.Attribute, ast.Name))
         }
 
-    readbacks = {"cpu", "item", "tolist", "numpy"}
-    for fn in (train._run_epoch, train._start_readback):
-        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
-        assert not called(tree) & readbacks, fn.__name__
+    readbacks = {"cpu", "item", "tolist", "numpy", "_reduce_and_average"}
+    source = textwrap.dedent(inspect.getsource(train._start_step_readback))
+    assert not called(ast.parse(source)) & readbacks
     tree = ast.parse(textwrap.dedent(inspect.getsource(train._run_epoch)))
-    (loop,) = [node for node in ast.walk(tree) if isinstance(node, ast.For)]
-    assert "_reduce_and_average" not in called(loop)
+    (loop,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.For) and "dataloader" in ast.unparse(node.iter)
+    ]
+    assert not called(loop) & readbacks
