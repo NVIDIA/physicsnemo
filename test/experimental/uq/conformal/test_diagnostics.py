@@ -35,13 +35,24 @@ from test.experimental.uq.conformal._helpers import (
     count_syncs,
     fit,
     fitted_risk,
+    make_predictor,
 )
 
 
-def _accumulator(tier="risk_control", **fit_kwargs):
-    """Diagnostics for a 3-sample, alpha=0.5 predictor (fit kwargs override)."""
+def _accumulator(tier="risk_control", weighted=None, **fit_kwargs):
+    """Diagnostics for a 3-sample, alpha=0.5 predictor (fit kwargs override).
+
+    Built directly so ``weighted`` stays free unless a test fixes it.
+    """
     kwargs = {"n_samples": 3, "alpha": 0.5, "shape": (3,), **fit_kwargs}
-    return fit(tier, **kwargs)[0].coverage_accumulator()
+    predictor = fit(tier, **kwargs)[0]
+    return CoverageAccumulator(
+        tier=predictor.tier,
+        alpha=predictor.alpha,
+        n_cal=predictor.n_cal,
+        keys=predictor.keys,
+        weighted=weighted,
+    )
 
 
 def _td(**fields):
@@ -482,3 +493,27 @@ def test_finalizers_run_per_process_in_multi_rank_job(finalizer, fake_multi_rank
     finalize = FINALIZERS[finalizer]()
     fake_multi_rank()
     assert finalize() is not None
+
+
+def test_predictor_accumulator_fixes_the_weighted_mode():
+    unweighted = make_predictor()
+    accumulator = unweighted.coverage_accumulator()
+    with pytest.raises(TypeError, match="calibrated without weights="):
+        accumulator.update(
+            -torch.ones(3), torch.ones(3), torch.zeros(3), weights=torch.ones(3)
+        )
+    weighted = make_predictor(weighted=True)
+    assert weighted.weighted
+    accumulator = weighted.coverage_accumulator()
+    with pytest.raises(TypeError, match="calibrated with weights="):
+        accumulator.update(-torch.ones(3), torch.ones(3), torch.zeros(3))
+    accumulator.update(
+        -torch.ones(3), torch.ones(3), torch.zeros(3), weights=torch.ones(3)
+    )
+    assert accumulator.finalize()["fields"]["tensor"]["empirical_mean_risk"] == 0.0
+    with pytest.raises(ValueError, match="applies only to the risk_control tier"):
+        make_predictor(tier="functional", weighted=True)
+    with pytest.raises(TypeError, match="weighted must be a bool"):
+        make_predictor(weighted=1)
+    with pytest.raises(ValueError, match="applies only to the risk_control tier"):
+        CoverageAccumulator(tier="functional", alpha=0.5, n_cal=3, weighted=True)

@@ -45,6 +45,7 @@ _SCHEMA_KEYS = {
     "thresholds",
     "scale",
     "mesh_fingerprint",
+    "weighted",
     "provenance",
 }
 
@@ -147,6 +148,10 @@ def _parse_artifact(payload: object) -> dict:
             payload["scale"], _SCALE_REGISTRY, "scale"
         )
     )
+    if type(payload["weighted"]) is not bool:
+        raise TypeError(
+            f"Artifact weighted must be a bool, got {payload['weighted']!r}."
+        )
     return {
         "tier": payload["tier"],
         "score": score,
@@ -155,6 +160,7 @@ def _parse_artifact(payload: object) -> dict:
         "thresholds": _wire_thresholds(payload["thresholds"]),
         "scale": scale,
         "mesh_fingerprint": payload["mesh_fingerprint"],
+        "weighted": payload["weighted"],
         "provenance": payload["provenance"],
     }
 
@@ -178,6 +184,7 @@ def _artifact_payload(state: Mapping) -> dict:
             else _strategy_spec(scale, _SCALE_REGISTRY)
         ),
         "mesh_fingerprint": state["mesh_fingerprint"],
+        "weighted": state["weighted"],
         "provenance": validate_provenance(state["provenance"]),
     }
 
