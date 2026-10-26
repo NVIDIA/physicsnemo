@@ -72,6 +72,15 @@ runs:
         ln -sf /usr/bin/python3 /usr/bin/python
         rm -rf /var/lib/apt/lists/*
 
+    # Ubuntu 24.04's apt python3 lags CPython security releases (e.g. the
+    # emSign CA rejection in 3.12.16).  Put the latest upstream patch release
+    # first on PATH; every later `python3` / `UV_PYTHON=python3` resolves here.
+    - name: Install latest CPython patch release
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        check-latest: true
+
     # Start a virtual framebuffer on :99 and publish DISPLAY to every
     # subsequent step in the job.  Required by VTK/pyvista (rationale in
     # the install step above).  Background processes started inside a
@@ -125,6 +134,14 @@ runs:
         set -euo pipefail
         python3 --version
         uv --version
+        # Fail if python3 fell back to Ubuntu's unpatched apt interpreter.
+        actual_exe="$(python3 -c 'import sys; print(sys.executable)')"
+        case "$actual_exe" in
+          /usr/bin/*|/bin/*)
+            echo "::error::python3 resolves to apt Python (${actual_exe}), not setup-python"
+            exit 1
+            ;;
+        esac
         # Keep the container Python aligned with its cache key.
         actual_py="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
         if [ "$actual_py" != "$EXPECTED_PYTHON_VERSION" ]; then
