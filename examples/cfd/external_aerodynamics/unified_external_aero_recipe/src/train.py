@@ -354,7 +354,7 @@ def _run_epoch(
 
     No step waits for the device: the per-step values are read back once
     every ``logging.log_every_n_steps`` steps without blocking, so each step
-    is logged up to two such periods late, in order, and the epoch's end logs
+    is logged about one such period late, in order, and the epoch's end logs
     the rest.
 
     Args:
@@ -530,7 +530,7 @@ def _run_epoch(
                 else 0
             )
 
-            ### Keep this step's record; read back a full period without
+            ### Keep this step's record, read back a full period without
             ### waiting, and log the oldest record whose copy has landed.
             lr = scheduler.get_last_lr()[0] if is_train else None
             records.append(((i, step_dt, mem_gb, lr), loss_det, losses, metrics))
