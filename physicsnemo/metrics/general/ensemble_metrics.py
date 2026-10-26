@@ -238,7 +238,7 @@ class Mean(_TensorModeMixin, StreamingStatistic):
     Legacy mode uses batches shaped ``(B, *input_shape)`` and combines incoming
     sums and counts across the default process group when PhysicsNeMo's
     distributed manager and that group are initialized. Tensor mode reduces
-    selected observation dimensions and follows the input tensor's distributed
+    a selected observation dimension and follows the input tensor's distributed
     layout, retaining the unreduced dimensions in the result.
 
     Parameters
@@ -473,7 +473,7 @@ class Variance(_TensorModeMixin, StreamingStatistic):
     Legacy mode uses batches shaped ``(B, *input_shape)`` and combines incoming
     statistics across the default process group when PhysicsNeMo's distributed
     manager and that group are initialized. It computes the unbiased variance.
-    Tensor mode reduces selected observation dimensions, follows the input
+    Tensor mode reduces a selected observation dimension, follows the input
     tensor's distributed layout, and supports a configurable ``correction``.
 
     Parameters

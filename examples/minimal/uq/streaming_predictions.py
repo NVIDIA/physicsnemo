@@ -17,7 +17,7 @@
 """Compose existing ensemble, Concrete Dropout, and GP outputs with shared moments.
 
 Run from the repo root: python examples/minimal/uq/streaming_predictions.py
-Add --conformal after Carmelo's conformal stack is available. These small,
+Add --conformal to demonstrate pointwise conformal calibration. These small,
 untrained models demonstrate interfaces, not uncertainty quality or coverage.
 """
 
