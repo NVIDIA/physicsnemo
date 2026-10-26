@@ -231,7 +231,7 @@ Four strategies ship with this example, all implementing the
 | **JointUQQueryStrategy** | `joint_uq` | The recommended UQ-driven default. Per-sample score is `max(|disagreement|, 2 · GP_std)`, where *disagreement* is `|Cd_GP − Cd_field|` — i.e. the gap between the GP-head Cd prediction and the field-integrated Cd recovered from the same forward pass. |
 | **RandomQueryStrategy** | `random` | Pure random baseline (uniform over the pool). Use as a UQ-vs-random sanity check. |
 | **ClassBalancedRandomQueryStrategy** | `class_balanced_random` | Random *within each class*, with the per-round budget split proportionally. Use as a strong baseline that controls for class imbalance in the pool. |
-| **LatentNoveltyQueryStrategy** | `latent_novelty` | Encoder-only novelty signal: each round we calibrate the embedded `OODGuard` (from `physicsnemo.experimental.guardrails.embedded`) on the currently labeled set, then rank unlabeled samples by their average kNN cosine distance in the learned geometry-latent space. Reuses the same guardrail that flags OOD inputs at inference time as the acquisition signal. The first round falls back to class-balanced random because the calibration buffer is empty. |
+| **LatentNoveltyQueryStrategy** | `latent_novelty` | Encoder-only novelty signal: each round fits `KNNScorer` from `physicsnemo.experimental.uq.ood` on the currently labeled reduced embeddings, then ranks unlabeled samples by their average Euclidean distance between normalized embeddings. The recipe owns reference collection and acquisition decisions. The first round falls back to class-balanced random when the labeled set is empty. |
 
 Adding a new strategy is a matter of subclassing `QueryStrategy` from
 `physicsnemo.active_learning.protocols`, implementing

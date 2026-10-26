@@ -213,72 +213,66 @@ Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be
 
 ## Guardrails (OOD detection)
 
-An optional out-of-distribution (OOD) guardrail calibrates during training and
-emits warnings at inference when inputs drift outside the training distribution.
-It watches two surfaces:
-
-- **Global parameters** — per-channel bounding box on the global embedding
-  (e.g. `velocity_x`, `thickness_scale`).
-- **Geometry** — k-nearest-neighbour distance on a pooled geometry latent.
-
-To enable the guard, wrap a constructed `GeoTransolver` with
-`GuardedGeoTransolver` (from `physicsnemo.experimental.guardrails.embedded`).
-The wrapper observes the two surfaces above through a forward hook and delegates the
-forward pass unchanged:
+Use the trained model's optional geometry-feature output with the reusable
+`KNNScorer`. Feature collection, threshold selection, and the response to a score
+remain explicit recipe steps. They do not depend on `model.train()` toggling
+reference collection.
 
 ```python
-from physicsnemo.experimental.guardrails.embedded import (
-    GuardedGeoTransolver,
-    OODGuardConfig,
-)
+import logging
+import torch
+from physicsnemo.experimental.uq.ood import KNNScorer
 
-model = instantiate(cfg.model)  # your GeoTransolver (or rollout subclass)
-model = GuardedGeoTransolver(
-    model,
-    OODGuardConfig(
-        buffer_size=121,  # FIFO buffer; typically = num_training_samples
-        knn_k=10,  # k for geometry kNN distance
-        sensitivity=1.5,  # threshold multiplier on 99th-percentile kNN dist
-    ),
+# model is a trained GeoTransolverOneShot; batches contain SimSample objects.
+model.eval()
+
+
+@torch.no_grad()
+def predict_with_features(sample):
+    prediction, tokens = model(sample, data_stats, return_geometry_features=True)
+    return prediction, tokens.mean(dim=(1, 2))  # [batch, head_dim]
+
+
+reference = torch.cat(
+    [predict_with_features(inputs)[1] for inputs in reference_batches]
 )
+validation = torch.cat(
+    [predict_with_features(inputs)[1] for inputs in validation_batches]
+)
+scorer = KNNScorer(k=10, normalize=True)
+scorer.fit(reference)
+threshold = torch.quantile(scorer.score(validation), 0.99)
+
+prediction, features = predict_with_features(test_inputs)
+flagged = scorer.score(features) > threshold
+if flagged.any():
+    logging.warning("Geometry features exceed the selected OOD threshold")
 ```
 
-Call `model.train()` / `model.eval()` as usual; the wrapper collects during
-training and checks during inference.
+`GeoTransolverOneShot` in `rollout.py` accepts the optional feature flag and
+returns the normal rollout prediction plus detached geometry tokens. Calling
+`model(...)` preserves PyTorch's module hooks. Other rollout classes can adopt
+this optional output separately.
 
-What each parameter controls:
+The optional output contains the same geometry tokens previously captured by the
+guard's hook; pooling is visible in the recipe. Prediction and scoring share one
+forward pass. Reference features can also be retained from existing evaluation
+forwards rather than recomputing them. Use a separate validation set for threshold
+selection: scoring reference samples against themselves includes a zero-distance
+self-neighbor.
 
-- **`buffer_size`** — Capacity of the FIFO ring buffer that stores pooled
-  geometry latents during training; the kNN threshold is computed over its
-  contents. Set it to at least the training-set size so calibration sees every
-  sample. Under DDP each rank keeps its own buffer and the distributed sampler
-  shuffles, so after a few epochs each rank's FIFO covers most of the data.
-  Memory cost is `buffer_size × head_dim × 4` bytes — typically well under 1 MB.
-- **`knn_k`** — Number of nearest neighbours used in the kNN distance. Smaller
-  `k` is more sensitive to isolated training-set outliers; larger `k` is
-  smoother but can blur multi-modal cluster boundaries. The default of `10`
-  works for buffer sizes from ~100 up to several thousand.
-- **`sensitivity`** — Multiplier on the 99th-percentile training kNN distance
-  used as the OOD threshold. **Higher = less sensitive** (fewer warnings).
-  Raise it if known in-distribution validation data triggers warnings; lower
-  it if known-OOD inputs are being missed.
+Global parameter bounds remain ordinary input checks. For example, compare each
+velocity/thickness parameter with minima and maxima from the reference inputs,
+then let the application warn, reject, or choose a fallback. Keep the parameters'
+units and preprocessing consistent.
 
-Recommended starting points by training-set size:
-
-| Training samples | `buffer_size`           | `knn_k` | `sensitivity` |
-|------------------|-------------------------|---------|---------------|
-| ~100             | 100–200                 | 5–10    | 1.5           |
-| ~500             | 500–1000                | 10      | 1.5           |
-| 5000+            | = dataset size          | 10–15   | 1.5           |
-
-If validation data trips warnings, raise `sensitivity` toward 2.0–3.0; if
-known-OOD inputs slip through, lower it toward 1.0.
-
-Once the model is wrapped, no further changes are required: during training the
-guard silently collects calibration statistics, and during inference it emits
-warnings of the form `OOD Guard: geometry sample ...` or
-`OOD Guard: global_embedding dim ...` to the Python logger whenever a sample
-falls outside the calibrated training envelope.  Warnings do not halt inference.
+Save the scorer's `state_dict()`, threshold, and feature metadata together.
+Before reuse, check checkpoint identity, pooling (`mean` over heads and slices),
+normalization, units, and preprocessing. A matching feature dimension does not
+establish a matching representation. See
+[`examples/minimal/uq`](../../minimal/uq/README.md) for runnable scoring and
+persistence examples. A novelty score is an input to an application decision;
+it does not certify prediction accuracy.
 
 ## Experiments
 
