@@ -17,6 +17,7 @@
 import atexit
 import os
 import queue
+import re
 import warnings
 from datetime import timedelta
 from numbers import Real
@@ -63,6 +64,23 @@ class PhysicsNeMoUninitializedDistributedManagerWarning(Warning):
             + "DistributedManager.initialize() before instantiating."
         )
         super().__init__(message)
+
+
+def _first_slurm_host(nodelist: str) -> str:
+    r"""First host of a Slurm host list, e.g. ``gpu03`` for ``gpu[03-05,07],cpu1``.
+
+    Parameters
+    ----------
+    nodelist : str
+        Slurm host list, such as the value of ``SLURM_STEP_NODELIST``.
+
+    Returns
+    -------
+    str
+        Name of the first host in the list.
+    """
+    first = re.split(r",(?![^\[]*\])", nodelist)[0]  # commas outside brackets
+    return re.sub(r"\[([^\],-]+)[^\]]*\]", r"\1", first)  # first of each range
 
 
 class DistributedManager(object):
@@ -397,7 +415,13 @@ class DistributedManager(object):
         rank = int(os.environ.get("SLURM_PROCID"))
         world_size = int(os.environ.get("SLURM_NPROCS"))
         local_rank = int(os.environ.get("SLURM_LOCALID"))
-        addr = os.environ.get("SLURM_LAUNCH_NODE_IPADDR")
+        # Rank 0 hosts the rendezvous. Slurm starts task 0 on the first node of
+        # the job step, which need not be the node that ran srun.
+        nodelist = os.environ.get("SLURM_STEP_NODELIST")
+        if nodelist:
+            addr = _first_slurm_host(nodelist)
+        else:
+            addr = os.environ.get("SLURM_LAUNCH_NODE_IPADDR")
 
         DistributedManager.setup(
             rank=rank,
@@ -420,7 +444,9 @@ class DistributedManager(object):
                 https://pytorch.org/docs/stable/distributed.html#environment-variable-initialization
             `SLURM`: Initialization on SLURM systems.
                 Uses `SLURM_PROCID`, `SLURM_NPROCS`, `SLURM_LOCALID` and
-                `SLURM_LAUNCH_NODE_IPADDR` environment variables.
+                `SLURM_STEP_NODELIST` environment variables, and rendezvouses
+                on the first node of the job step (or at
+                `SLURM_LAUNCH_NODE_IPADDR` without `SLURM_STEP_NODELIST`).
             `OPENMPI`: Initialization for OpenMPI launchers.
                 Uses `OMPI_COMM_WORLD_RANK`, `OMPI_COMM_WORLD_SIZE` and
                 `OMPI_COMM_WORLD_LOCAL_RANK` environment variables.

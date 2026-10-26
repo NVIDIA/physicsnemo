@@ -127,6 +127,7 @@ def test_volume_dataset_reader_boundary_policy(
     assert dataset_cfg.pipeline.reader.drop_in_file_boundaries is False
     resolved = _apply_dataset_reader_overrides(dataset_cfg, train_cfg)
     assert resolved.pipeline.reader.drop_in_file_boundaries is expected_drop
+    assert resolved.pipeline.reader.boundary_subsample == "cells"
     if model == "globe_volume":
         assert "dataset_reader_overrides" not in train_cfg
         assert train_cfg.forward_kwargs.boundary_meshes.vehicle == "boundaries.vehicle"
