@@ -16,13 +16,14 @@
 
 import warnings
 from abc import ABC
-from typing import List, Tuple, Union
+from typing import List, Literal, Self, Tuple, Union
 
 import torch
 import torch.distributed as dist
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.metrics.general._moments import _check_correction, _StreamingMoments
 
 Tensor = torch.Tensor
 
@@ -94,6 +95,99 @@ class StreamingStatistic(ABC):
         raise NotImplementedError("Class member must implement a finalize method.")
 
 
+class _TensorModeMixin:
+    """Opt-in operations shared only by Mean and Variance."""
+
+    # Pickles written before tensor mode have no instance-level _moments.
+    _moments = None
+
+    @property
+    def count(self) -> int:
+        """Number of observations in tensor mode, rather than updates.
+
+        Returns
+        -------
+        int
+            Accumulated observation count.
+
+        Raises
+        ------
+        AttributeError
+            In legacy mode, where callers use ``n`` instead.
+        """
+        if self._moments is None:
+            raise AttributeError(
+                "count is available in mode='tensor'; legacy callers use n"
+            )
+        return self._moments.count
+
+    def combine(self, other: Self) -> Self:
+        """Append an independent state's observations; leave the other state unchanged.
+
+        Parameters
+        ----------
+        other : Self
+            Statistic containing independent observations, left unchanged.
+
+        Returns
+        -------
+        Self
+            This accumulator, updated in place.
+
+        Raises
+        ------
+        ValueError
+            If modes, statistic types, accumulation dtypes or layouts differ.
+
+        Notes
+        -----
+        Tensor mode only. Outputs must have identical shape and distributed layout.
+        States must represent disjoint observations; replicated copies must not be
+        combined again. This method does not gather spatial partitions.
+        """
+        if (
+            type(self) is not type(other)
+            or self._moments is None
+            or other._moments is None
+        ):
+            raise ValueError("combine requires matching tensor-mode statistics")
+        self._moments.combine(other._moments)
+        self.dtype = self._moments.dtype
+        return self
+
+    def reset(self) -> Self:
+        """Discard observations, retaining the settled dtype and output layout.
+
+        Returns
+        -------
+        Self
+            This empty accumulator.
+
+        Raises
+        ------
+        ValueError
+            If called in legacy mode.
+        """
+        if self._moments is None:
+            raise ValueError("reset is available in mode='tensor'")
+        self._moments.reset()
+        return self
+
+    def _init_tensor_mode(
+        self, *, variance: bool, like: Tensor | None, kwargs: dict
+    ) -> None:
+        unknown = kwargs.keys() - {"dtype"}
+        if unknown:
+            raise TypeError(
+                f"{type(self).__name__} got unexpected tensor-mode keyword(s): {', '.join(sorted(unknown))}"
+            )
+        dtype: torch.dtype | None = kwargs.get("dtype")
+        self._moments = _StreamingMoments(variance=variance, like=like, dtype=dtype)
+        self.input_shape = None
+        self.device = None
+        self.dtype = self._moments.dtype
+
+
 def _update_mean(
     old_sum: Tensor,
     old_n: Union[int, Tensor],
@@ -133,45 +227,92 @@ def _update_mean(
     return new_sum, new_n
 
 
-class Mean(StreamingStatistic):
+class Mean(_TensorModeMixin, StreamingStatistic):
     """Accumulate a mean across successive batches of observations.
 
-    Keep a running sum and observation count. Call the statistic with an initial
-    batch, pass additional batches to ``update``, and read the result with
-    ``finalize``. In the standard layout ``(B, *input_shape)``, the leading
-    dimension holds observations and the remaining dimensions identify values
-    whose means are accumulated separately.
+    Call the statistic with an initial batch, pass additional observations to
+    ``update``, and read the mean with ``finalize``. Calling the statistic again
+    replaces its accumulated observations. Tensor mode also accepts ``update``
+    as the first operation.
 
-    When PhysicsNeMo's distributed manager and a process group are initialized,
-    each call and update reduces the incoming sum and count across the default
-    process group. ``finalize`` divides the accumulated sum by the count.
+    Legacy mode uses batches shaped ``(B, *input_shape)`` and combines incoming
+    sums and counts across the default process group when PhysicsNeMo's
+    distributed manager and that group are initialized. Tensor mode reduces
+    selected observation dimensions and follows the input tensor's distributed
+    layout, retaining the unreduced dimensions in the result.
 
     Parameters
     ----------
     input_shape : Union[Tuple, List]
-        Shape of each observation, excluding the leading batch dimension.
+        Shape of each observation in legacy mode, excluding the leading batch
+        dimension. Omit in tensor mode.
+    mode : {"legacy", "tensor"}, optional
+        ``"legacy"`` preserves the existing constructor and implicit world-group
+        reductions. ``"tensor"`` enables detached streaming accumulation: ordinary
+        tensors are local and distributed tensor layouts determine communication.
+        Tensor mode infers output shape/device from the first update or ``like``;
+        omit ``input_shape`` and ``device`` in this mode.
+    like : torch.Tensor, optional
+        Tensor-mode output template, including any spatial layout. It does not
+        add an observation. Not needed when the first update supplies the layout.
+    dtype : torch.dtype, optional
+        Tensor-mode accumulation dtype (float32 or float64). By default, float64
+        inputs remain float64 and lower-precision inputs accumulate in float32.
+        The dtype settles from ``like`` or the first update. Inferred float32
+        rejects later float64 inputs; specify ``dtype`` to allow explicit casts.
+
+    Notes
+    -----
+    In tensor mode, ``update(value, dim=0)`` appends a batch of observations;
+    ``dim=None`` appends one complete field or observable. Each observation has
+    equal weight. State shape and output layout must remain aligned. Empty
+    updates contribute no observations. ``combine(other)`` appends a disjoint
+    state's observations, and ``reset()`` discards accumulated observations.
+    Reading/finalizing does not mutate the accumulated state. In tensor mode,
+    ``input_shape`` and ``device`` are None; results carry shape, device and
+    layout, and ``dtype`` records the settled accumulation precision.
+    ``update`` returns None; use ``finalize`` to read the result.
     """
 
-    def __init__(self, input_shape: Union[Tuple, List], **kwargs):
+    def __init__(
+        self,
+        input_shape: tuple[int, ...] | list[int] | None = None,
+        *,
+        mode: Literal["legacy", "tensor"] = "legacy",
+        like: Tensor | None = None,
+        **kwargs,
+    ):
+        self._moments = None
+        if mode == "tensor":
+            if input_shape is not None or "device" in kwargs:
+                raise ValueError("Tensor mode infers shape/device from inputs or like")
+            self._init_tensor_mode(variance=False, like=like, kwargs=kwargs)
+            return
+        if mode != "legacy" or like is not None:
+            raise ValueError("Use mode='tensor' for tensor-aware streaming statistics")
         super().__init__(input_shape, **kwargs)
         self.sum = torch.zeros(self.input_shape, dtype=self.dtype, device=self.device)
         self.n = torch.zeros([1], dtype=torch.int32, device=self.device)
 
-    def __call__(self, inputs: Tensor, dim: int = 0) -> Tensor:
+    def __call__(self, inputs: Tensor, dim: int | None = 0) -> Tensor | None:
         """Calculate an initial mean
 
         Parameters
         ----------
         inputs : Tensor
             Input data
-        dim : Int
-            Dimension of batched data
+        dim : int or None, optional
+            Observation axis; None appends one entire field in tensor mode.
 
         Returns
         -------
-        Tensor
-            Mean value
+        Tensor or None
+            Mean value, or None for an empty tensor-mode batch.
         """
+        if self._moments is not None:
+            self.reset()
+            self.update(inputs, dim=dim)
+            return self.finalize() if self.count else None
         if inputs.device != self.device:
             raise AssertionError(
                 f"Input device, {inputs.device}, and Module device, {self.device}, must be the same."
@@ -188,21 +329,34 @@ class Mean(StreamingStatistic):
 
         return self.sum / self.n
 
-    def update(self, inputs: Tensor, dim: int = 0) -> Tensor:
+    def update(self, inputs: Tensor, dim: int | None = 0) -> Tensor | None:
         """Update current mean and essential statistics with new data
 
         Parameters
         ----------
         inputs : Tensor
             Inputs tensor
-        dim : int
-            Dimension of batched data
+        dim : int or None
+            Observation axis. In tensor mode, None appends one entire field.
 
         Returns
         -------
-        Tensor
-            Current mean value
+        Tensor or None
+            Current mean in legacy mode; None in tensor mode.
+
+        Raises
+        ------
+        TypeError
+            Tensor-mode input is not a real floating-point tensor.
+        ValueError
+            Tensor-mode input is incompatible with the settled dtype or layout.
+        IndexError
+            Tensor-mode observation axis is out of range.
         """
+        if self._moments is not None:
+            self._moments.update(inputs, dim)
+            self.dtype = self._moments.dtype
+            return None
         self._check_shape(inputs)
         if inputs.device != self.device:
             raise AssertionError(
@@ -231,13 +385,20 @@ class Mean(StreamingStatistic):
     def finalize(
         self,
     ) -> Tensor:
-        """Compute and store final mean
+        """Read the mean (also stored as ``mean`` in legacy mode)
 
         Returns
         -------
         Tensor
-            Final mean value
+            Mean without changing tensor-mode state. Legacy mode also stores it.
+
+        Raises
+        ------
+        ValueError
+            Tensor-mode accumulator is empty.
         """
+        if self._moments is not None:
+            return self._moments.read_mean()
         self.mean = self.sum / self.n
 
         return self.mean
@@ -301,24 +462,56 @@ def _update_var(
     return new_sum, new_sum2, new_n
 
 
-class Variance(StreamingStatistic):
+class Variance(_TensorModeMixin, StreamingStatistic):
     """Accumulate a variance across successive batches of observations.
 
-    Keep an observation count, sum, and sum of squared deviations. Call the
-    statistic with an initial batch, then pass additional batches to ``update``.
-    Each batch has shape ``(B, *input_shape)``: observations occupy the leading
-    dimension and variances are accumulated separately for the remaining values.
-    ``finalize`` returns the unbiased variance, or its square root with
-    ``std=True``, and requires at least two observations.
+    Call the statistic with an initial batch, then append observations with
+    ``update``. ``finalize`` returns the variance, or its square root with
+    ``std=True``. Calling the statistic again replaces its accumulated
+    observations. Tensor mode also accepts ``update`` as the first operation.
 
-    When PhysicsNeMo's distributed manager and a process group are initialized,
-    each call and update combines incoming statistics across the default process
-    group. ``finalize`` computes the result from the accumulated state.
+    Legacy mode uses batches shaped ``(B, *input_shape)`` and combines incoming
+    statistics across the default process group when PhysicsNeMo's distributed
+    manager and that group are initialized. It computes the unbiased variance.
+    Tensor mode reduces selected observation dimensions, follows the input
+    tensor's distributed layout, and supports a configurable ``correction``.
 
     Parameters
     ----------
     input_shape : Union[Tuple, List]
-        Shape of each observation, excluding the leading batch dimension.
+        Shape of each observation in legacy mode, excluding the leading batch
+        dimension. Omit in tensor mode.
+    correction : int, optional
+        Tensor-mode degrees-of-freedom correction, default 1. Use 0 for population
+        variance across ensemble members or GP component means. Finalization
+        requires more observations than the correction. Updates always return
+        None; ``__call__`` returns None until that condition holds.
+    mode : {"legacy", "tensor"}, optional
+        ``"legacy"`` preserves the existing constructor and implicit world-group
+        reductions. ``"tensor"`` enables detached streaming accumulation: ordinary
+        tensors are local and distributed tensor layouts determine communication.
+        Tensor mode infers output shape/device from the first update or ``like``;
+        omit ``input_shape`` and ``device`` in this mode.
+    like : torch.Tensor, optional
+        Tensor-mode output template, including any spatial layout. It does not
+        add an observation. Not needed when the first update supplies the layout.
+    dtype : torch.dtype, optional
+        Tensor-mode accumulation dtype (float32 or float64). By default, float64
+        inputs remain float64 and lower-precision inputs accumulate in float32.
+        The dtype settles from ``like`` or the first update. Inferred float32
+        rejects later float64 inputs; specify ``dtype`` to allow explicit casts.
+
+    Notes
+    -----
+    In tensor mode, ``update(value, dim=0)`` appends a batch of observations;
+    ``dim=None`` appends one complete field or observable. Each observation has
+    equal weight. State shape and output layout must remain aligned. Empty
+    updates contribute no observations. ``combine(other)`` appends a disjoint
+    state's observations, and ``reset()`` discards accumulated observations.
+    Reading/finalizing does not mutate the accumulated state. In tensor mode,
+    ``input_shape`` and ``device`` are None; results carry shape, device and
+    layout, and ``dtype`` records the settled accumulation precision.
+    ``update`` returns None; use ``finalize`` to read the result.
 
     Note
     ----
@@ -328,28 +521,51 @@ class Variance(StreamingStatistic):
     for details.
     """
 
-    def __init__(self, input_shape: Union[Tuple, List], **kwargs):
+    def __init__(
+        self,
+        input_shape: tuple[int, ...] | list[int] | None = None,
+        *,
+        mode: Literal["legacy", "tensor"] = "legacy",
+        like: Tensor | None = None,
+        correction: int = 1,
+        **kwargs,
+    ):
+        self._moments = None
+        _check_correction(correction)
+        self.correction = correction
+        if mode == "tensor":
+            if input_shape is not None or "device" in kwargs:
+                raise ValueError("Tensor mode infers shape/device from inputs or like")
+            self._init_tensor_mode(variance=True, like=like, kwargs=kwargs)
+            return
+        if mode != "legacy" or like is not None or correction != 1:
+            raise ValueError("Use mode='tensor' for tensor-aware streaming statistics")
         super().__init__(input_shape, **kwargs)
         self.n = torch.zeros([1], dtype=torch.int32, device=self.device)
         self.sum = torch.zeros(self.input_shape, dtype=self.dtype, device=self.device)
         self.sum2 = torch.zeros(self.input_shape, dtype=self.dtype, device=self.device)
 
-    def __call__(self, inputs: Tensor, dim: int = 0) -> Tensor:
+    def __call__(self, inputs: Tensor, dim: int | None = 0) -> Tensor | None:
         """Calculate an initial variance
 
         Parameters
         ----------
         inputs : Tensor
             Input data
-        dim : Int
-            Dimension of batched data
+        dim : int or None, optional
+            Observation axis; None appends one entire field in tensor mode.
 
         Returns
         -------
-        Tensor
-            Unbiased variance values
+        Tensor or None
+            Variance with the configured correction in tensor mode, or None
+            when there are insufficient observations. Legacy behavior is unchanged.
         """
 
+        if self._moments is not None:
+            self.reset()
+            self.update(inputs, dim=dim)
+            return self.finalize() if self.count > self.correction else None
         if inputs.device != self.device:
             raise AssertionError(
                 f"Input device, {inputs.device}, and Module device, {self.device}, must be the same."
@@ -374,20 +590,39 @@ class Variance(StreamingStatistic):
         else:
             return self.sum2 / (self.n - 1.0)
 
-    def update(self, inputs: Tensor) -> Tensor:
+    def update(self, inputs: Tensor, dim: int | None = 0) -> Tensor | None:
         """Update current variance value and essential statistics with new data
 
         Parameters
         ----------
         inputs : Tensor
             Input data
+        dim : int or None, optional
+            Observation axis; None appends one entire field in tensor mode.
+            Legacy mode supports only 0.
 
         Returns
         -------
-        Tensor
-            Unbiased variance tensor
+        Tensor or None
+            Unbiased variance in legacy mode; None in tensor mode.
+
+        Raises
+        ------
+        TypeError
+            Tensor-mode input is not a real floating-point tensor.
+        ValueError
+            Tensor-mode input is incompatible with the settled dtype or layout,
+            or a nonzero observation axis is used in legacy mode.
+        IndexError
+            Tensor-mode observation axis is out of range.
         """
 
+        if self._moments is not None:
+            self._moments.update(inputs, dim)
+            self.dtype = self._moments.dtype
+            return None
+        if dim != 0:
+            raise ValueError("Legacy Variance.update only supports dim=0")
         self._check_shape(inputs)
         if inputs.device != self.device:
             raise AssertionError(
@@ -423,21 +658,40 @@ class Variance(StreamingStatistic):
     @property
     def mean(self) -> Tensor:
         """Mean value"""
+        if self._moments is not None:
+            return self._moments.read_mean()
         return self.sum / self.n
 
-    def finalize(self, std: bool = False) -> Tuple[Tensor, Tensor]:
-        """Compute and store final mean and unbiased variance / std
+    def finalize(self, std: bool = False, *, correction: int | None = None) -> Tensor:
+        """Read variance or standard deviation with the requested correction
 
         Parameters
         ----------
         std : bool, optional
-            Compute standard deviation, by default False
+            Compute standard deviation, by default False.
+        correction : int, optional
+            Override the tensor-mode correction for this read. Does not alter
+            the configured correction or accumulated state.
 
         Returns
         -------
         Tensor
-            Final (mean, variance/std) value
+            Final variance or standard deviation. The mean is available through
+            the ``mean`` property. Tensor mode does not mutate state; legacy
+            mode also stores ``var`` and, when requested, ``std``.
+
+        Raises
+        ------
+        ValueError
+            Correction is invalid or there are insufficient observations.
         """
+        if self._moments is not None:
+            result = self._moments.read_variance(
+                self.correction if correction is None else correction
+            )
+            return result.sqrt() if std else result
+        if correction is not None and correction != 1:
+            raise ValueError("Legacy Variance uses correction=1")
         if not (self.n > 1.0):
             raise ValueError(
                 "Error! In order to finalize, there needs to be at least 2 samples."
