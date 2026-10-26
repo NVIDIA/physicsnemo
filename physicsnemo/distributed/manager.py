@@ -416,12 +416,15 @@ class DistributedManager(object):
         world_size = int(os.environ.get("SLURM_NPROCS"))
         local_rank = int(os.environ.get("SLURM_LOCALID"))
         # Rank 0 hosts the rendezvous. Slurm starts task 0 on the first node of
-        # the job step, which need not be the node that ran srun.
+        # the job step, which need not be the node that ran srun. A batch script
+        # run without srun has neither variable and runs on the job's first node.
         nodelist = os.environ.get("SLURM_STEP_NODELIST")
         if nodelist:
             addr = _first_slurm_host(nodelist)
         else:
             addr = os.environ.get("SLURM_LAUNCH_NODE_IPADDR")
+            if addr is None and os.environ.get("SLURM_JOB_NODELIST"):
+                addr = _first_slurm_host(os.environ["SLURM_JOB_NODELIST"])
 
         DistributedManager.setup(
             rank=rank,
@@ -445,8 +448,10 @@ class DistributedManager(object):
             `SLURM`: Initialization on SLURM systems.
                 Uses `SLURM_PROCID`, `SLURM_NPROCS`, `SLURM_LOCALID` and
                 `SLURM_STEP_NODELIST` environment variables, and rendezvouses
-                on the first node of the job step (or at
-                `SLURM_LAUNCH_NODE_IPADDR` without `SLURM_STEP_NODELIST`).
+                on the first node of the job step, whose Slurm node name must
+                resolve from every node. Without `SLURM_STEP_NODELIST` it uses
+                `SLURM_LAUNCH_NODE_IPADDR`, and in a batch script run without
+                `srun`, the first node of `SLURM_JOB_NODELIST`.
             `OPENMPI`: Initialization for OpenMPI launchers.
                 Uses `OMPI_COMM_WORLD_RANK`, `OMPI_COMM_WORLD_SIZE` and
                 `OMPI_COMM_WORLD_LOCAL_RANK` environment variables.
