@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- Adds opt-in tensor-aware streaming `Mean`/`Variance`, with detached state,
+  state combination, and ShardTensor reductions over declared observation axes.
+  Existing metric constructors retain their behavior. Includes examples for
+  GP mixtures, Concrete Dropout, observables, and conformal calibration.
 - Groups experimental scalar and field GP heads under `experimental.uq.gp`.
   Both this namespace and `experimental.uq` expose the heads without `gpytorch`;
   constructing a head raises an installation error if it is missing.
