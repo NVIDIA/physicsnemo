@@ -39,7 +39,7 @@ first-class boundary wherever the domain reaches them. The pipeline is
 5. peel residual boundary pancakes.
 
 Every update is validity-gated and the iteration budget is fixed, so the
-generator cannot fail to emit a valid mesh; input scale degrades
+generator cannot fail to emit a valid mesh; input difficulty degrades
 element quality (reported in the diagnostics), never existence. Features
 smaller than ``h`` cannot be represented; the coverage guard measures the
 worst boundary gap and (by default) raises rather than silently dropping
