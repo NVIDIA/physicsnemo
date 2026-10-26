@@ -16,7 +16,7 @@
 
 """Shared member statistics -> complete cases -> unchanged conformal calibration.
 
-Run after Carmelo's conformal PR stack is available:
+Run from the repo root:
     torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_calibration.py
 
 Analytic predictions check integration only. They do not demonstrate calibrated
