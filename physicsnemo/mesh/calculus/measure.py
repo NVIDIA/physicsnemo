@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
+from physicsnemo.utils._tracing import is_tracing
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -136,7 +138,7 @@ def point_measure_dimension(mesh: "Mesh") -> torch.Tensor:
         raise ValueError(
             "Point measure dimension is missing or not scalar; use set_point_measures"
         )
-    if not torch.compiler.is_compiling() and not bool(
+    if not is_tracing() and not bool(
         (dimension >= 0)
         & (dimension <= mesh.n_spatial_dims)
         & (dimension == dimension.round())
@@ -199,9 +201,7 @@ def _transfer_cell_measures(
     old_areas = source.cell_areas
     if parents is not None:
         measures, old_areas = measures[parents], old_areas[parents]
-    if not torch.compiler.is_compiling() and bool(
-        ((old_areas == 0) & (measures != 0)).any()
-    ):
+    if not is_tracing() and bool(((old_areas == 0) & (measures != 0)).any()):
         raise ValueError(
             "Cannot transform nonzero effective measure on a zero-measure cell; supply replacement measures"
         )

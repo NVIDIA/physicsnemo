@@ -56,6 +56,7 @@ from jaxtyping import Float
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.mesh.calculus.measure import cell_measures, point_measures
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -160,7 +161,7 @@ def _integrate_cell_data(
     ValueError
         If ``field.shape[0]`` does not equal ``mesh.n_cells``.
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if field.shape[0] != mesh.n_cells:
             raise ValueError(
                 f"Field leading dimension ({field.shape[0]}) must equal "
@@ -217,7 +218,7 @@ def _integrate_point_data(
     ValueError
         If ``field.shape[0]`` does not equal ``mesh.n_points``.
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if field.shape[0] != mesh.n_points:
             raise ValueError(
                 f"Field leading dimension ({field.shape[0]}) must equal "
@@ -302,7 +303,7 @@ def integrate(
     >>> mesh.integrate("T", data_source="points")  # P1 integral
     tensor(1.)
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if mesh.n_cells == 0:
             raise ValueError(
                 "Cannot integrate over a mesh with no cells. "
@@ -438,7 +439,7 @@ def _integrate_weighted_moment(
         Moment with shape ``aligned_shape + left_event_shape +
         right_event_shape`` in the promoted compute dtype.
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if left.ndim < 1 or right.ndim < 1 or weights.ndim != 1:
             raise ValueError("left, right, and weights must have a leading entity axis")
         if left.shape[0] != right.shape[0] or left.shape[0] != weights.shape[0]:
@@ -591,7 +592,7 @@ def integrate_moment(
     As with any matrix product, indeterminate expressions involving infinities
     (for example ``0 * inf``) are not treated as missing data.
     """
-    if not torch.compiler.is_compiling() and mesh.n_cells == 0:
+    if not is_tracing() and mesh.n_cells == 0:
         raise ValueError(
             "Cannot integrate a moment over a mesh with no cells. "
             "Integration requires simplicial connectivity."
@@ -603,7 +604,7 @@ def integrate_moment(
     ### Only mesh-coupling checks live here; everything expressible on the
     ### bare tensors (aligned dims, dtypes, device agreement) is validated
     ### once in `_integrate_weighted_moment`.
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         for name, tensor in (("left", left_tensor), ("right", right_tensor)):
             if tensor.ndim < 1 or tensor.shape[0] != mesh.n_cells:
                 leading = tensor.shape[0] if tensor.ndim > 0 else None
@@ -705,7 +706,7 @@ def integrate_flux(
     >>> mesh.integrate_flux("v")
     tensor(0.)
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if mesh.codimension != 1:
             raise ValueError(
                 f"integrate_flux requires a codimension-1 mesh "
@@ -716,7 +717,7 @@ def integrate_flux(
 
     resolved = _resolve_field(mesh, field, data_source)
 
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         expected_leading = mesh.n_cells if data_source == "cells" else mesh.n_points
         if resolved.shape[0] != expected_leading:
             entity = "n_cells" if data_source == "cells" else "n_points"

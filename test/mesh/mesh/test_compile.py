@@ -41,6 +41,8 @@ or a refactor of ``Mesh`` that loses the workaround), these tests fail loudly
 instead of waiting for the notebook-level CI to break.
 """
 
+import threading
+
 import pytest
 import torch
 
@@ -330,3 +332,39 @@ def test_facet_extraction_under_dynamic_fullgraph_compile(
 
     for actual, reference in zip(compiled, expected, strict=True):
         torch.testing.assert_close(actual, reference)
+
+
+def _in_another_thread_while_compiling(fn):
+    """Return ``fn()``, run in a second thread while this thread compiles."""
+    result = {}
+
+    def backend(gm, example_inputs):
+        thread = threading.Thread(target=lambda: result.update(value=fn()))
+        thread.start()
+        thread.join()
+        return gm.forward
+
+    torch._dynamo.reset()
+    torch.compile(lambda x: torch.sin(x) + 1, backend=backend)(torch.randn(4))
+    return result["value"]
+
+
+def test_validation_runs_in_another_thread_while_compiling() -> None:
+    """`Mesh` validation still runs in another thread while this thread compiles.
+
+    Since torch 2.13, ``torch.compiler.is_compiling()`` is True in every thread
+    during a compile, so it must not decide whether a data-loading thread's own
+    code is being traced.
+    """
+
+    def build_with_float_cells() -> Exception | None:
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        try:
+            Mesh(points=points, cells=torch.tensor([[0.0, 1.0, 2.0]]))
+        except TypeError as error:
+            return error
+        return None
+
+    assert isinstance(
+        _in_another_thread_while_compiling(build_with_float_cells), TypeError
+    )

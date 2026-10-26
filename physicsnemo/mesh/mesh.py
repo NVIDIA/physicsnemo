@@ -73,6 +73,7 @@ from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
+from physicsnemo.utils._tracing import is_tracing
 
 ### slice_points remaps cells through a full-mesh lookup table unless the mesh
 ### has more than this many points per cell-vertex entry, in which case it
@@ -120,7 +121,7 @@ _64_BIT_INTEGER_DTYPES = frozenset({torch.int64, torch.uint64})
 
 def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
     """Check tensor values eagerly or retain the assertion in a compiled graph."""
-    if torch.compiler.is_compiling() or valid.device.type == "meta":
+    if is_tracing() or valid.device.type == "meta":
         torch._assert_async(valid, message)
         return
 
@@ -570,7 +571,7 @@ class Mesh(
             )
 
         ### Validate shapes and dtypes
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if self.points.ndim != 2:
                 raise ValueError(
                     f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
@@ -1462,7 +1463,7 @@ class Mesh(
             If tensors from different meshes reside on different devices.
         """
         ### Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
             elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
@@ -2918,7 +2919,7 @@ class Mesh(
         >>> padded.n_cells   # 256  # doctest: +SKIP
         """
         # Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if target_n_points is not None and target_n_points < self.n_points:
                 raise ValueError(f"{target_n_points=} must be >= {self.n_points=}")
             if target_n_cells is not None and target_n_cells < self.n_cells:
@@ -2934,11 +2935,7 @@ class Mesh(
         if target_n_cells is None:
             target_n_cells = self.n_cells
 
-        if (
-            not torch.compiler.is_compiling()
-            and target_n_cells > 0
-            and target_n_points == 0
-        ):
+        if not is_tracing() and target_n_cells > 0 and target_n_points == 0:
             raise ValueError("Cannot pad cells without at least one mesh point.")
 
         def _pad_data(tensor: torch.Tensor, size: int) -> torch.Tensor:
@@ -3044,7 +3041,7 @@ class Mesh(
         >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 291 cells
         >>> # Padding cells have zero area and don't affect computations
         """
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if power <= 1:
                 raise ValueError(f"power must be > 1, got {power=}")
 
