@@ -131,8 +131,10 @@ The guarantee becomes: the expected weighted fraction of missed points is at
 most ``alpha``. With ``physicsnemo.mesh``, ``point_measures(mesh)`` from
 ``physicsnemo.mesh.calculus`` returns these weights for a mesh that stores
 point measures, and ``lumped_point_measures(mesh)`` builds them from the
-cells. Pass ``weights`` on every call or on none, and pass the same weights
-to ``CoverageAccumulator.update(lo, hi, target, weights=...)`` so the report
+cells. Pass ``weights`` on every call or on none. The predictor remembers
+that it was calibrated with weights, also across ``save`` and ``load``, and
+the accumulator from ``predictor.coverage_accumulator()`` then requires
+``weights`` on every ``update(lo, hi, target, weights=...)`` so the report
 measures the weighted risk.
 
 Several Coverage Levels
