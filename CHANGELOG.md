@@ -669,6 +669,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- CI and the Docker image no longer trust the compromised eMudhra emSign root
+  CA ([advisory](https://discuss.python.org/t/109576)). uv is now 0.13.5 in
+  CI and the Dockerfile, the image requires `pip>=26.2.2` and
+  `certifi>=2026.10.19`, and the lockfiles pin `certifi` 2026.10.23 and
+  `virtualenv` 21.14.13. The GPU CI bootstrap installs the Hugging Face CLI
+  with uv instead of Ubuntu's apt pip.
+
 ### Dependencies
 
 - Requires TensorDict 0.15.3 or later (`tensordict[zarr]>=0.15.3,<0.16.0`).
