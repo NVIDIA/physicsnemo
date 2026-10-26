@@ -46,11 +46,10 @@ def main():
         inputs = torch.randn(batch, 11, 3)
         geometry = torch.randn(batch, 13, 3)
         global_inputs = torch.randn(batch, 1, 2)
-        _, tokens = model(
+        _, tokens = model.forward_with_geometry_features(
             inputs,
             geometry=geometry,
             global_embedding=global_inputs,
-            return_geometry_features=True,
         )
         # Pool over heads and slice tokens.
         # Persist this pooling choice with application/checkpoint metadata.

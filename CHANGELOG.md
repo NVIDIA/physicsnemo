@@ -380,7 +380,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.experimental.uq.ood`; thresholds and responses now live in
   example recipes. Replacements:
   - `GuardedGeoTransolver`, `attach_ood_guard`, `OODGuard`, `OODGuardConfig`:
-    call `GeoTransolver` with `return_geometry_features=True`, pool the tokens,
+    call `GeoTransolver.forward_with_geometry_features`, pool the tokens,
     and score them with `KNNScorer`. Global-parameter bounds become an explicit
     input check. See `examples/minimal/uq/feature_scoring.py`. A saved
     `GuardedGeoTransolver` keeps its GeoTransolver weights under the `model.`

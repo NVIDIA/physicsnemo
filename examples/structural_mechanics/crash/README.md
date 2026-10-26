@@ -229,7 +229,7 @@ model.eval()
 
 @torch.no_grad()
 def predict_with_features(sample):
-    prediction, tokens = model(sample, data_stats, return_geometry_features=True)
+    prediction, tokens = model.forward_with_geometry_features(sample, data_stats)
     return prediction, tokens.mean(dim=(1, 2))  # [batch, head_dim]
 
 

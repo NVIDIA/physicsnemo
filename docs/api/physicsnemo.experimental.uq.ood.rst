@@ -95,8 +95,8 @@ explicitly reviewed and updated before use with the recipe; do not reorder
 fitted model parameters. Generic scorer imports do not import these utilities
 or require mesh loading. Use ``physicsnemo.mesh.io`` to convert meshes before extracting features.
 
-GeoTransolver can expose detached geometry tokens with
-``return_geometry_features=True``. This output is distinct from combined context
+``GeoTransolver.forward_with_geometry_features`` returns predictions and
+detached geometry tokens in one pass. This output is distinct from combined context
 embeddings; the model completes pending domain reductions before returning it.
 Pooling, checkpoint identity, scoring, and accept/reject decisions belong to the
 recipe. See ``examples/minimal/uq/feature_scoring.py``.
