@@ -87,6 +87,7 @@ def test_center_mesh_stores_domain_center_at_domain_level():
         ),
     )
     assert "center" not in centered.interior.global_data
+    assert "center" not in domain.global_data
 
 
 def test_center_mesh_default_does_not_add_metadata():
@@ -98,7 +99,10 @@ def test_center_mesh_default_does_not_add_metadata():
 
 
 def test_center_mesh_stores_center_under_a_nested_key():
-    mesh = Mesh(points=torch.tensor([[2.0, 0.0], [4.0, 0.0]]))
+    mesh = Mesh(
+        points=torch.tensor([[2.0, 0.0], [4.0, 0.0]]),
+        global_data={"frame": {"scale": torch.tensor(2.0)}},
+    )
 
     centered = CenterMesh(use_area_weighting=False, store_center_as="frame.center")(
         mesh
@@ -107,3 +111,4 @@ def test_center_mesh_stores_center_under_a_nested_key():
     torch.testing.assert_close(
         centered.global_data["frame", "center"], torch.tensor([3.0, 0.0])
     )
+    assert ("frame", "center") not in mesh.global_data.keys(include_nested=True)

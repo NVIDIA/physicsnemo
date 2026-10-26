@@ -254,6 +254,32 @@ class TestDomainMeshReader:
                 tmp_path, pattern="*.pdmsh", interior_n_points_range=(900, 300)
             )
 
+    def test_interior_n_points_range_overrides_subsample_n_points(self, tmp_path):
+        """The range replaces ``subsample_n_points`` for the interior only;
+        boundaries are still subsampled to ``subsample_n_points``."""
+        self._save_point_cloud_with_triangulated_wall(tmp_path, 2000, 5000)
+        lo, hi, k = 300, 900, 1000
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            subsample_n_points=k,
+            interior_n_points_range=[lo, hi],
+        )
+        reader.set_generator(torch.Generator().manual_seed(0))
+        for epoch in range(4):
+            reader.set_epoch(epoch)
+            dm = reader[0][0]
+            assert lo <= dm.interior.n_points <= hi
+            assert dm.boundaries["wall"].n_points == k
+
+    @pytest.mark.parametrize(
+        "bad", [(300.9, 900.2), (300, 900, 5), (300,), (0, 10), (900, 300), 300]
+    )
+    def test_interior_n_points_range_invalid(self, tmp_path, bad):
+        self._make_domain_mesh().save(tmp_path / "dm.pdmsh")
+        with pytest.raises(ValueError, match="interior_n_points_range"):
+            DomainMeshReader(tmp_path, pattern="*.pdmsh", interior_n_points_range=bad)
+
 
 class TestMeshDataset:
     """Tests for MeshDataset with mesh transforms."""
