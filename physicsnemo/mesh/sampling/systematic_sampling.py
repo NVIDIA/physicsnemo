@@ -53,11 +53,13 @@ the whole mesh:
   :math:`\operatorname{round}(\pi_i 2^Q)` units, so a cell with
   :math:`\pi_i = 1` is exactly :math:`2^Q` units. The start is clamped by the
   line's rounding residual, so such a cell holds exactly one hit. The drawn
-  inclusion probability is the interval's length over :math:`2^Q`, within
-  :math:`2^{-(Q+1)}` of :math:`\pi_i` (about 3e-14 for 200,000 samples). So the
-  draw is bitwise the same run to run, and on CPU and CUDA given the same float64
-  inputs. (The Morton order reads the canonical frame, which devices compute to
-  roundoff, so a centroid on a grid line could still order differently.)
+  inclusion probability is within :math:`(\lvert D \rvert + 1/2)\,2^{-Q}` of
+  :math:`\pi_i`, for the line's residual :math:`D` in units: at most half a unit
+  per cell plus the rounding of :math:`\sum_i \pi_i` (2.6e-11 measured for a
+  million cells and 200,000 samples). So the draw is bitwise the same run to
+  run, and on CPU and CUDA given the same float64 inputs. (The Morton order reads
+  the canonical frame, which devices compute to roundoff, so a centroid on a grid
+  line could still order differently.)
 
 Everything is tensor arithmetic without a data-dependent shape, so the draw
 traces into one graph under ``torch.compile(fullgraph=True, dynamic=True)``.
@@ -135,7 +137,8 @@ def _pps_inclusion_probabilities(
     ----------
     measures : torch.Tensor
         Nonnegative cell measures, shape ``(n_cells,)``, ``n_cells >= 1``. Float64
-        is recommended.
+        is recommended. Their sums must stay in the dtype's normal range (in
+        float64, about 1e-308 to 1e308).
     n_samples : float | torch.Tensor
         The expected sample size :math:`b`, the sum of the probabilities. It may be
         fractional. At least the count of positive measures gives every cell of
@@ -284,10 +287,10 @@ def sample_cells_systematic(
     ``n_samples`` :math:`b`. The cell :math:`i` is kept with probability
     :math:`\pi_i = \min(1, c\,a_i)`, with :math:`c` chosen so the probabilities
     sum to the sample size, and :math:`a_i` its effective measure
-    (``cell_data["_effective_measure"]``) when stored, else its geometric measure.
-    The cells are laid along the Morton order of their centroids in the mesh's
-    canonical frame, so the draw is the same in every pose and numbering of the
-    mesh, and drawn by systematic sampling along that line.
+    (``cell_data["_effective_measure"]``, which must be nonnegative) when stored,
+    else its geometric measure. The cells are laid along the Morton order of their
+    centroids in the mesh's canonical frame, so the draw is the same in every pose
+    and numbering of the mesh, and drawn by systematic sampling along that line.
     Each kept cell carries its Horvitz-Thompson weight :math:`a_i / \pi_i`, so a
     weighted sum over the kept cells is unbiased for the sum over all cells. See
     the module docstring.
