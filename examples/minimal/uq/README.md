@@ -12,8 +12,8 @@ python examples/minimal/uq/force_statistics.py
 torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_moments.py
 ```
 
-The first example requires `gpytorch`. Add `--conformal` after the conformal PR
-stack is available; it uses `PointwiseCalibrator.update` and `aux={"sigma": ...}`
+The first example requires `gpytorch`. Add `--conformal` to demonstrate pointwise
+conformal calibration using `PointwiseCalibrator.update` and `aux={"sigma": ...}`
 without modifying those APIs. The small untrained models illustrate interfaces,
 not calibrated coverage or OOD detection quality.
 
@@ -50,7 +50,7 @@ application-owned; this example needs no GP or application-specific toolkit.
 
 ## Distributed calibration
 
-After the conformal stack is present, run:
+Run from the repo root:
 
 ```bash
 torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_calibration.py
