@@ -25,8 +25,8 @@ from physicsnemo.mesh import Mesh as PhysicsNeMoMesh
 
 from .mesh_validation import validate_mesh
 
-#: Feature schema version identifier
-FEATURE_VERSION = "v1.0"
+#: v1.1 corrects PCA labels; numerical feature values/order are unchanged.
+FEATURE_VERSION = "v1.1"
 
 #: Ordered list of feature names defining the schema
 FEATURE_NAMES = [
@@ -34,10 +34,10 @@ FEATURE_NAMES = [
     "centroid_y",
     "centroid_z",
     "pca_axis1_x",
-    "pca_axis1_y",
-    "pca_axis1_z",
     "pca_axis2_x",
+    "pca_axis1_y",
     "pca_axis2_y",
+    "pca_axis1_z",
     "pca_axis2_z",
     "pca_eig1",
     "pca_eig2",
@@ -74,7 +74,7 @@ def feature_hash(names: list[str]) -> str:
 
     Examples
     --------
-    >>> from physicsnemo.experimental.guardrails.geometry import feature_hash
+    >>> from physicsnemo.experimental.uq.ood.geometry import feature_hash
     >>> names = ["feature_1", "feature_2", "feature_3"]
     >>> hash_value = feature_hash(names)
     >>> len(hash_value)
@@ -88,7 +88,9 @@ def feature_hash(names: list[str]) -> str:
     return h.hexdigest()
 
 
-def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_validation: bool = False) -> np.ndarray | torch.Tensor:
+def extract_features(
+    mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_validation: bool = False
+) -> np.ndarray | torch.Tensor:
     r"""
     Extract non-invariant geometric descriptors from a triangular mesh.
 
@@ -131,8 +133,8 @@ def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_va
     >>> import numpy as np
     >>> import pyvista as pv
     >>> from physicsnemo.mesh.io import from_pyvista
-    >>> from physicsnemo.experimental.guardrails.geometry import extract_features
-    >>> 
+    >>> from physicsnemo.experimental.uq.ood.geometry import extract_features
+    >>>
     >>> # Create a unit cube using PyVista
     >>> pv_mesh = pv.Cube()
     >>> mesh = from_pyvista(pv_mesh)
@@ -163,9 +165,6 @@ def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_va
     if not skip_validation:
         validate_mesh(mesh)
 
-    # Get device from mesh
-    device = mesh.points.device
-    
     # Work with torch tensors directly (no conversion to numpy)
     verts = mesh.points  # Shape: (N, 3) - already on device
     centroid = verts.mean(dim=0)  # Shape: (3,)
@@ -177,9 +176,9 @@ def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_va
     # Compute PCA via singular value decomposition
     # U: left singular vectors, S: singular values, Vt: right singular vectors transposed
     U, S, Vt = torch.linalg.svd(X, full_matrices=False)
-    
+
     # Convert singular values to eigenvalues (variance)
-    eigvals = (S ** 2) / (X.shape[0] - 1)  # Shape: (3,)
+    eigvals = (S**2) / (X.shape[0] - 1)  # Shape: (3,)
     eigvecs = Vt.T  # Shape: (3, 3)
 
     # Sort eigenvalues and eigenvectors in descending order
@@ -192,7 +191,8 @@ def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_va
         if eigvecs[0, i] < 0:
             eigvecs[:, i] *= -1
 
-    # Extract first two principal axes (6 components total)
+    # Preserve the original interleaved layout: axis1_x, axis2_x, axis1_y,
+    # axis2_y, axis1_z, axis2_z. v1.0 incorrectly labeled these axis-by-axis.
     pca_axes = eigvecs[:, :2].reshape(-1)  # Shape: (6,)
     pca_vals = eigvals[:3]  # Shape: (3,)
 
