@@ -37,7 +37,7 @@ from physicsnemo.active_learning.protocols import (
     LabelStrategy,
     QueryStrategy,
 )
-from physicsnemo.experimental.guardrails.embedded import OODGuard
+from physicsnemo.experimental.uq.ood import KNNScorer
 
 from utils import cast_precisions, padded_all_gather
 from aero_physics import (
@@ -372,11 +372,11 @@ class ClassBalancedRandomQueryStrategy(QueryStrategy):
 class LatentNoveltyQueryStrategy(QueryStrategy):
     """Select unlabeled samples whose learned latent is farthest from the labeled set.
 
-    At each round we (a) calibrate a fresh :class:`OODGuard` on the
+    At each round we (a) fit a fresh :class:`KNNScorer` on the
     *currently labeled* training pool by collecting per-sample reduced
     embeddings (the same vector the GP head consumes), then (b) score
-    every unlabeled sample by its average kNN cosine distance to that
-    calibration buffer and rank by descending novelty.  The intuition
+    every unlabeled sample by its average normalized Euclidean kNN distance to that
+    reference population and rank by descending novelty.  The intuition
     is that the most informative geometries to label next are those the
     model has not seen anything close to yet.
 
@@ -387,9 +387,9 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
 
     Implementation notes
     --------------------
-    * Calibration is performed redundantly across DDP ranks (each rank
+    * Reference fitting is performed redundantly across DDP ranks (each rank
       receives every labeled latent via :func:`padded_all_gather`) so
-      that all ranks hold an identical ``OODGuard`` buffer; this keeps
+      that all ranks hold an identical scorer reference population; this keeps
       novelty scores deterministic regardless of rank topology.
     * Scoring is parallelised: each rank scores its slice of the
       unlabeled pool, then all per-sample ``(flat_idx, novelty)`` rows
@@ -398,7 +398,7 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
     Cold start
     ----------
     The very first AL round starts with an empty labeled pool, so there
-    is nothing to calibrate the OOD guard against.  In that case the
+    is no reference population to fit.  In that case the
     strategy delegates to an internal :class:`ClassBalancedRandomQueryStrategy`
     so the round still produces a sensible, class-balanced seed batch.
     The selection_history entry is tagged with ``cold_start_fallback=True``
@@ -412,7 +412,7 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
     precision : str
         Precision for model forward pass (e.g. "float32").
     knn_k : int
-        Number of nearest neighbours used by the OOD guard when
+        Number of nearest neighbours used by the scorer when
         computing the average kNN distance.  Clamped at scoring time
         to the calibration buffer size, so values larger than the
         labeled pool are safe.
@@ -562,7 +562,7 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
 
     @torch.no_grad()
     def sample(self, query_queue: AbstractQueue, *args: Any, **kwargs: Any) -> None:
-        """Calibrate an OODGuard on the labeled set, score the unlabeled pool, take top-N."""
+        """Fit a scorer on the labeled set, score the unlabeled pool, take top-N."""
         pool = self.driver.training_pool
         unlabeled = pool.unlabeled_indices()
 
@@ -597,11 +597,9 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
         backbone.eval()
         embedding_reduction.eval()
 
-        # ---- Phase 1: calibrate OODGuard on labeled latents ----
+        # ---- Phase 1: fit the scorer on labeled latents ----
         if rank == 0:
-            self.logger.info(
-                f"Calibrating OODGuard on {len(labeled)} labeled samples..."
-            )
+            self.logger.info(f"Fitting KNNScorer on {len(labeled)} labeled samples...")
         labeled_table = self._embed_indices(
             labeled,
             backbone=backbone,
@@ -613,14 +611,8 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
         )
         # First column is flat_idx; remainder is the reduced latent.
         labeled_latents = labeled_table[:, 1:].contiguous().to(torch.float32)
-        latent_dim = labeled_latents.shape[1]
-
-        guard = OODGuard(
-            buffer_size=labeled_latents.shape[0],
-            geometry_embed_dim=latent_dim,
-            knn_k=self.knn_k,
-        ).to(device)
-        guard.collect(geometry_latent=labeled_latents)
+        scorer = KNNScorer(k=self.knn_k, normalize=True)
+        scorer.fit(labeled_latents)
 
         # ---- Phase 2: score unlabeled pool ----
         if rank == 0:
@@ -656,7 +648,7 @@ class LatentNoveltyQueryStrategy(QueryStrategy):
                 return_embedding_states=True,
             )
             reduced = embedding_reduction(embedding_states.flatten(1, 2))
-            novelty = guard.score_geometry(reduced.detach().to(torch.float32))
+            novelty = scorer.score(reduced.detach().to(torch.float32))
             local_rows.append([float(flat_idx), float(novelty.item())])
 
         # Rows are (flat_idx, novelty_score); ranks with no work after the

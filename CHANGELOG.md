@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- Adds reusable `KNNScorer` and `DensityScorer` under `experimental.uq.ood`,
+  optional geometry descriptors, and examples with application-owned scoring decisions.
 - Adds opt-in tensor-aware streaming `Mean`/`Variance`, with detached state,
   state combination, and ShardTensor reductions over declared observation axes.
   Existing metric constructors retain their behavior. Public `TensorAccumulator`
@@ -374,6 +376,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `physicsnemo.experimental.guardrails`. Scoring moved to
+  `physicsnemo.experimental.uq.ood`; thresholds and responses now live in
+  example recipes. Replacements:
+  - `GuardedGeoTransolver`, `attach_ood_guard`, `OODGuard`, `OODGuardConfig`:
+    call `GeoTransolver` with `return_geometry_features=True`, pool the tokens,
+    and score them with `KNNScorer`. Global-parameter bounds become an explicit
+    input check. See `examples/minimal/uq/feature_scoring.py`. A saved
+    `GuardedGeoTransolver` keeps its GeoTransolver weights under the `model.`
+    prefix; refit the scorer on reference features.
+  - `GeometryGuardrail`, `GeometryDensityModel`, `TorchPCEDensityModel`:
+    `DensityScorer(method="gmm" | "pce")` on descriptors from
+    `physicsnemo.experimental.uq.ood.geometry.extract_features`. See
+    `examples/minimal/guardrails/geometry_validation.py`, which also replaces
+    `load_features_from_dir`.
+  - The other geometry utilities keep their names under
+    `physicsnemo.experimental.uq.ood.geometry`; `FEATURE_VERSION` is now `v1.1`.
 - The `physicsnemo.experimental.uq.variational_gp_head` and
   `physicsnemo.experimental.uq.field_variational_gp_head` modules. Import the
   heads from `physicsnemo.experimental.uq` as before, or from
@@ -404,6 +422,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stabilizes PCE density scores for collinear features by fitting polynomial
+  covariance/precision in float64. Rejects non-finite density scores before
+  percentile decisions, and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
 - Multi-node jobs launched with `srun` no longer hang in

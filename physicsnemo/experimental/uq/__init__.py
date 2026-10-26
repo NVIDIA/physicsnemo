@@ -17,7 +17,8 @@
 """Uncertainty quantification modules (experimental).
 
 This subpackage collects UQ building blocks that attach to existing backbones.
-The ``gp`` subpackage provides Gaussian-process heads, and
+The ``gp`` subpackage provides Gaussian-process heads; ``ood`` provides reusable
+out-of-distribution scorers and optional geometry descriptors; and
 :mod:`physicsnemo.experimental.uq.conformal` provides post-hoc conformal prediction.
 
 For methodology and scientific results on UQ for geometry-conditioned neural

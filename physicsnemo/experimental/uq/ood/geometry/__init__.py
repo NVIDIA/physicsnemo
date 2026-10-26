@@ -14,20 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Embedded (in-forward) guardrails for PhysicsNemo models.
+"""Optional geometry descriptors and their ordered feature schema.
 
-This submodule provides guardrails that live inside a model's forward pass,
-calibrating during training and checking during inference.  Contrast with
-``physicsnemo.experimental.guardrails.geometry``, which operates on raw mesh
-data offline prior to inference.
+Import this module explicitly when using mesh descriptors. Generic OOD scorers
+have no dependency on it.
 """
 
-from .geotransolver_guard import GuardedGeoTransolver, attach_ood_guard
-from .ood_guard import OODGuard, OODGuardConfig
+from .feature_extraction import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    extract_features,
+    feature_hash,
+)
+from .feature_schema import FeatureSchema
+from .mesh_validation import validate_mesh
 
 __all__ = [
-    "GuardedGeoTransolver",
-    "OODGuard",
-    "OODGuardConfig",
-    "attach_ood_guard",
+    "FEATURE_NAMES",
+    "FEATURE_VERSION",
+    "extract_features",
+    "feature_hash",
+    "FeatureSchema",
+    "validate_mesh",
 ]

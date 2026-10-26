@@ -157,3 +157,42 @@ def test_geometry_method_preserves_predictions_and_gradients(
         torch.testing.assert_close(
             parameter.grad, gradients[name], rtol=1e-6, atol=1e-9
         )
+
+
+def test_feature_scoring_is_independent_of_checkpoint_backward(device):
+    """Backward recomputation cannot implicitly collect reference observations."""
+    from physicsnemo.experimental.uq.ood import KNNScorer
+
+    model = (
+        GeoTransolver(
+            functional_dim=3,
+            geometry_dim=3,
+            out_dim=1,
+            n_layers=1,
+            n_hidden=16,
+            n_head=4,
+            slice_num=4,
+            use_te=False,
+            activation_checkpointing=True,
+            activation_checkpointing_components=(
+                "context",
+                "preprocess",
+                "blocks",
+                "output",
+            ),
+        )
+        .to(device)
+        .train()
+    )
+    local = torch.randn(2, 11, 3, device=device)
+    geometry = torch.randn(2, 13, 3, device=device)
+    prediction, tokens = model(local, geometry=geometry, return_geometry_features=True)
+    embeddings = tokens.mean(dim=(1, 2))
+    scorer = KNNScorer(k=1)
+    scorer.fit(embeddings)
+    snapshot = scorer.state_dict()["reference"]
+    prediction.square().mean().backward()
+    torch.testing.assert_close(scorer.state_dict()["reference"], snapshot)
+    assert snapshot.shape[0] == 2
+    assert not tokens.requires_grad
+    assert any(p.grad is not None for p in model.parameters())
