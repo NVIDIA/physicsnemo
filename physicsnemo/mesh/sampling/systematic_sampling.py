@@ -60,7 +60,9 @@ the whole mesh:
   roundoff, so a centroid on a grid line could still order differently.)
 
 Everything is tensor arithmetic without a data-dependent shape, so the draw
-traces into one graph under ``torch.compile(fullgraph=True, dynamic=True)``. It
+traces into one graph under ``torch.compile(fullgraph=True, dynamic=True)``.
+The graph serves every cell count, except that Inductor's stable sort recompiles
+once for large meshes, and it is specialized to the sample size. The draw
 synchronizes with the host only in the canonical frame's small eigensolve.
 """
 
@@ -69,7 +71,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, cell_measures
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
@@ -291,18 +293,24 @@ def sample_cells_systematic(
     the module docstring.
 
     The measures and centroids are computed in float64 from the points as given,
-    so the draw is bitwise the same run to run, on CPU and CUDA, and for float32
-    and float64 copies of the mesh. No gradients flow through the draw.
+    so the kept cells and their weights are bitwise the same run to run and for
+    float32 and float64 copies of the mesh. Across devices, and between compiled
+    and eager code, they are bitwise the same given stored effective measures (up
+    to the frame's roundoff, see the module docstring). Measures computed from the
+    points round differently there, which moves the weights in their last bits. No
+    gradients flow through the draw.
 
     Parameters
     ----------
     mesh : Mesh
         The mesh whose cells are drawn.
     n_samples : int
-        The sample size :math:`b`, a Python int ``>= 1``. It fixes the line's grid.
+        The sample size :math:`b`, a Python int ``>= 1``. It fixes the line's grid,
+        so ``torch.compile`` compiles one graph per value.
     start : float | torch.Tensor, optional
         The systematic start :math:`u \in [0, 1)`. ``None`` draws it uniformly from
-        ``generator``.
+        ``generator``. Under ``torch.compile``, pass a tensor: a Python float is a
+        constant there, and each new value recompiles.
     generator : torch.Generator, optional
         The random generator for the start, on the mesh's device. Defaults to the
         global generator.
@@ -349,13 +357,19 @@ def sample_cells_systematic(
     device = mesh.points.device
     if start is None:
         start = torch.rand((), dtype=torch.float64, device=device, generator=generator)
+    elif not isinstance(start, torch.Tensor):
+        ### torch.full fills on the device; as_tensor would copy from the host and sync.
+        start = torch.full((), start, dtype=torch.float64, device=device)
     start = torch.as_tensor(start, dtype=torch.float64, device=device)
     with torch.no_grad():
         ### Measures and centroids in float64 from the points as given, never the
         ### mesh's cached geometry, which is in the mesh's precision.
         verts = gather_rows(mesh.points.detach().double(), mesh.cells)
-        if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
-            measure = mesh.cell_data[EFFECTIVE_MEASURE_KEY]
+        if (
+            EFFECTIVE_MEASURE_KEY in mesh.cell_data
+            or "_measure_weights" in mesh.cell_data  # legacy: cell_measures raises
+        ):
+            measure = cell_measures(mesh)
         else:
             measure = compute_cell_areas(verts[:, 1:] - verts[:, :1])
         measure = measure.detach().double()

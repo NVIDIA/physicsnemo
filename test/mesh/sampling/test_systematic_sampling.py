@@ -531,6 +531,19 @@ def test_the_mesh_draw_validates_n_samples():
         sample_cells_systematic(mesh, 5.0, 0.5)
 
 
+def test_the_mesh_draw_reads_stored_measures_through_cell_measures():
+    """A stored measure is validated as ``cell_measures`` does, and the legacy
+    ``_measure_weights`` field is an error rather than silently ignored."""
+    mesh = _soup(10, effective=False)
+    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = torch.ones(10, dtype=torch.int64)
+    with pytest.raises(TypeError, match="floating-point"):
+        sample_cells_systematic(mesh, 5, 0.5)
+    legacy = _soup(10, effective=False)
+    legacy.cell_data["_measure_weights"] = torch.full((10,), 10.0, dtype=D)
+    with pytest.raises(ValueError, match="Legacy _measure_weights"):
+        sample_cells_systematic(legacy, 5, 0.5)
+
+
 def test_the_draw_is_the_same_at_every_precision():
     """A float32 mesh and its float64 copy keep bitwise the same cells, with the same
     weights up to the final cast: the draw reads the measures and centroids in
