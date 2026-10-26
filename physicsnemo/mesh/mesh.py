@@ -2702,12 +2702,16 @@ class Mesh(
     ) -> torch.Tensor:
         """Return ``_cache[key]``, computing and storing it on a miss.
 
-        Under ``torch.compile`` this always calls ``compute()`` and leaves
+        While Dynamo traces this call, it always calls ``compute()`` and leaves
         ``_cache`` alone: Dynamo guards on the cache's contents, so each cache
         state would need its own graph, and it would replay the write onto the
-        caller's mesh.
+        caller's mesh. The test is ``torch.compiler.is_dynamo_compiling()``,
+        which is True only in the frame being traced. Since torch 2.13,
+        ``torch.compiler.is_compiling()`` is True in every thread while any
+        thread compiles, so it would also drop the cache of a data-loading
+        thread, which carries cell areas through transforms.
         """
-        if torch.compiler.is_compiling():
+        if torch.compiler.is_dynamo_compiling():
             return compute()
         cached = self._cache.get(key, None)
         if cached is None:

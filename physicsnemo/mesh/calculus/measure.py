@@ -105,9 +105,9 @@ def set_cell_measures(mesh: "Mesh", values: torch.Tensor) -> None:
     aliases the cache.
     """
     values = _validate_measures(mesh, values, "cells")
-    # Under compile, reading _cache would guard on it; cell_measures then never
-    # returns the cached tensor anyway.
-    if not torch.compiler.is_compiling() and values is mesh._cache.get(
+    # While Dynamo traces, reading _cache would guard on it, and cell_measures
+    # then never returns the cached tensor anyway (see Mesh._cached).
+    if not torch.compiler.is_dynamo_compiling() and values is mesh._cache.get(
         ("cell", "areas"), None
     ):
         values = values.clone()

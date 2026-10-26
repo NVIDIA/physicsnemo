@@ -41,10 +41,13 @@ or a refactor of ``Mesh`` that loses the workaround), these tests fail loudly
 instead of waiting for the notebook-level CI to break.
 """
 
+import threading
+
 import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus.measure import set_cell_measures
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
 ### Fixtures ###
@@ -367,3 +370,57 @@ def test_geometric_property_ignores_cache_under_compile(property_name: str) -> N
             actual = compiled(mesh)
             assert set(mesh._cache.keys(True, True)) == keys
             torch.testing.assert_close(actual, getattr(mesh, property_name))
+
+
+def _in_another_thread_while_compiling(fn):
+    """Return ``fn()``, run in a second thread while this thread compiles."""
+    result = {}
+
+    def backend(gm, example_inputs):
+        thread = threading.Thread(target=lambda: result.update(value=fn()))
+        thread.start()
+        thread.join()
+        return gm.forward
+
+    torch._dynamo.reset()
+    torch.compile(lambda x: torch.sin(x) + 1, backend=backend)(torch.randn(4))
+    return result["value"]
+
+
+def _triangle(dx: float = 1.0) -> Mesh:
+    """A float32 triangle whose first edge has length ``dx``."""
+    points = torch.tensor([[0.0, 0.0, 0.0], [dx, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    return Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+
+def test_cache_is_kept_in_another_thread_while_compiling() -> None:
+    """A mesh used in another thread keeps its cache while this thread compiles.
+
+    Since torch 2.13, ``torch.compiler.is_compiling()`` is True in every thread
+    during a compile, so it must not decide whether a data-loading thread's own
+    code is being traced.
+    """
+
+    def areas_cached() -> bool:
+        mesh = _triangle()
+        return mesh.cell_areas is mesh.cell_areas
+
+    assert _in_another_thread_while_compiling(areas_cached)
+
+
+def test_measure_survives_a_collapse_in_another_thread_while_compiling() -> None:
+    """A sliver's measure stays valid after its float32 vertices collapse.
+
+    The cached area carries the measure through a translation that makes two
+    vertices equal in float32, so a later scale meets no zero-area cell with a
+    nonzero measure, even when the mesh was built while another thread compiled.
+    """
+
+    def collapse() -> Mesh:
+        mesh = _triangle(dx=1e-5)
+        set_cell_measures(mesh, mesh.cell_areas)
+        return mesh.translate(torch.tensor([1000.0, 0.0, 0.0]))
+
+    moved = _in_another_thread_while_compiling(collapse)
+    assert torch.equal(moved.points[0], moved.points[1])
+    moved.scale(2.0, assume_invertible=True)
