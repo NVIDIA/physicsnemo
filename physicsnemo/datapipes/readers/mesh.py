@@ -499,14 +499,18 @@ class DomainMeshReader:
             over the closed integer range ``[lo, hi]``, from the sample's
             generator (so it is reproducible per ``(epoch, index)`` under
             ``set_epoch``), and overrides ``subsample_n_points`` for the
-            interior only; boundaries keep the fixed sizes. A count above
+            interior only; boundaries are subsampled as without it, per
+            ``boundary_subsample`` (so with ``"points"`` and no
+            ``subsample_n_points`` they stay at full resolution). A count above
             the interior's size keeps all of its points, so the draw is
             uniform only when ``hi`` is at most that size. This is
             query-count augmentation: a model trained on a range of interior
             request sizes is asked to give the same field at every size
             (consistency in the fine-mesh limit) instead of learning the one
-            count it was trained at. Default ``None`` leaves behaviour
-            unchanged.
+            count it was trained at. Under ``MeshDataset(cache_host=True)``
+            the first draw for each sample is cached and reused, so the
+            augmentation has no effect across epochs. Default ``None``
+            leaves behaviour unchanged.
         extra_boundaries : dict[str, dict] or None, optional
             Load additional sibling meshes as extra boundaries on each
             sample.  Each key is the boundary name to assign; each value

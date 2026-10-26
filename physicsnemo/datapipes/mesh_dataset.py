@@ -110,7 +110,13 @@ class MeshDataset(DatasetBase):
             modify them in place (the built-in mesh transforms do not).
             Samples loaded from ``.pmsh`` or ``.pdmsh`` files without
             subsampling or pinning stay memory-mapped, so the operating
-            system's page cache holds their bytes.
+            system's page cache holds their bytes. The cache holds the host
+            read, so with ``device`` set every epoch still pays the
+            host-to-device copy. Under ``torch.utils.data.DataLoader`` with
+            ``num_workers > 0`` each worker process keeps its own cache,
+            discarded every epoch unless ``persistent_workers=True``; use
+            :class:`~physicsnemo.datapipes.DataLoader` instead, which loads
+            on threads of this process, so one cache serves every epoch.
         """
         super().__init__(num_workers=num_workers)
         self.reader = reader
@@ -140,7 +146,8 @@ class MeshDataset(DatasetBase):
         children: the first goes to the reader, the rest map 1-to-1 to
         the transform list (deterministic transforms silently ignore
         theirs). Also empties the ``cache_host`` cache, so samples read
-        before seeding are read again with the new generator.
+        before seeding are read again with the new generator. Call it
+        before iteration begins: the cache is cleared without a lock.
 
         Parameters
         ----------
