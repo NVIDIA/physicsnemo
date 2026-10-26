@@ -22,7 +22,7 @@ import torch.nn as nn
 
 pytest.importorskip("gpytorch", reason="FieldVariationalGPHead requires gpytorch")
 
-from physicsnemo.experimental.uq import (  # noqa: E402
+from physicsnemo.experimental.uq.gp import (  # noqa: E402
     FieldVariationalGPHead,
     FieldVariationalGPPrediction,
 )

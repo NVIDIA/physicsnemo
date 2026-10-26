@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     # Annotation only: the head is built by hydra from cfg.gp_head, and importing
     # it eagerly would trade its own "install gpytorch" message for an
     # ImportError on the name.
-    from physicsnemo.experimental.uq import FieldVariationalGPHead
+    from physicsnemo.experimental.uq.gp import FieldVariationalGPHead
 
 # physicsnemo's ``.mdlus`` checkpoints store the model's instantiation arguments
 # alongside its weights, and those arrive from hydra as OmegaConf nodes rather
