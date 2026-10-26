@@ -997,7 +997,7 @@ class GlobalContextBuilder(nn.Module):
               disabled.
             - ``geometry_context_detached``: Detached geometry-tokenizer output of shape
               :math:`(B, H, S, D)`, returned to callers requesting
-              ``return_geometry_features=True``.  ``None`` when geometry tokenization is disabled
+              ``GeoTransolver.forward_with_geometry_features``.  ``None`` when geometry tokenization is disabled
               or no geometry was provided.
 
         Raises
@@ -1046,7 +1046,7 @@ class GlobalContextBuilder(nn.Module):
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
             geometry_context = self.geometry_tokenizer(geometry)
-            # Detach tokens requested through return_geometry_features=True so
+            # Detach geometry tokens exposed by forward_with_geometry_features so
             # callers do not retain the backward graph.
             geometry_context_detached = geometry_context.detach()
             context_parts.append(geometry_context)

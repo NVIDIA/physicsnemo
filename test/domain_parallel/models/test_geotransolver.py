@@ -475,26 +475,69 @@ def test_geometry_feature_return_preserves_distributed_training(
         for name, p in model.named_parameters()
     }
     model.zero_grad(set_to_none=True)
-    exposed = model(
-        *sharded_args, **sharded_kwargs, **options, return_geometry_features=True
+    exposed, features = model.forward_with_geometry_features(
+        *sharded_args, **sharded_kwargs
     )
-    expected_parts = original if embedding or points else (original,)
-    assert len(exposed) == len(expected_parts) + 1
-    for actual, expected in zip(exposed[:-1], expected_parts):
-        assert actual.placements == expected.placements
-        assert actual._spec.sharding_shapes() == expected._spec.sharding_shapes()
-        torch.testing.assert_close(
-            actual.to_local(), expected.to_local(), rtol=0, atol=0
-        )
-    features = exposed[-1]
+    assert exposed.placements == prediction.placements
+    assert exposed._spec.sharding_shapes() == prediction._spec.sharding_shapes()
+    torch.testing.assert_close(
+        exposed.to_local(), prediction.to_local(), rtol=0, atol=0
+    )
     assert not features.requires_grad
     assert features.placements == (Replicate(),)
     torch.testing.assert_close(
         features.to_local(), expected_features, rtol=1e-4, atol=1e-5
     )
-    exposed[0].full_tensor().square().mean().backward()
+    exposed.full_tensor().square().mean().backward()
     for name, parameter in model.named_parameters():
         # CUDA attention backward can vary by a few fp32 ULPs between calls.
         torch.testing.assert_close(
             parameter.grad, original_grads[name], rtol=1e-6, atol=1e-9
         )
+
+
+@pytest.mark.multigpu_static
+def test_geometry_method_through_ddp_adapter(distributed_mesh):
+    """An adapter lets DDP synchronize gradients from the geometry-feature entry point."""
+    from torch.nn.parallel import DistributedDataParallel
+
+    class FeatureAdapter(nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+
+        def forward(self, inputs, **kwargs):
+            return self.model.forward_with_geometry_features(inputs, **kwargs)
+
+    dm = DistributedManager()
+    torch.manual_seed(72)
+    model = _build_geotransolver("GALE")(dm.device).train()
+    torch.manual_seed(73 + dm.rank)
+    args, kwargs = _build_inputs(31, geometry_points=19)(dm.device)
+    expected = model(*args, **kwargs)
+    expected.square().mean().backward()
+    gradients = {}
+    for name, parameter in model.named_parameters():
+        grad = parameter.grad.clone()
+        dist.all_reduce(grad)
+        gradients[name] = grad / dm.world_size
+    model.zero_grad(set_to_none=True)
+    adapter = FeatureAdapter(model)
+    wrapped = DistributedDataParallel(adapter, device_ids=[dm.local_rank])
+    observed = []
+    handle = adapter.register_forward_hook(
+        lambda module, inputs, output: observed.append(output)
+    )
+    # Two steps also detect unfinished reductions or unused-parameter errors.
+    for _ in range(2):
+        wrapped.zero_grad(set_to_none=True)
+        prediction, tokens = wrapped(*args, **kwargs)
+        torch.testing.assert_close(prediction, expected, rtol=0, atol=0)
+        assert not tokens.requires_grad
+        prediction.square().mean().backward()
+        for name, parameter in model.named_parameters():
+            torch.testing.assert_close(
+                parameter.grad, gradients[name], rtol=1e-5, atol=1e-8
+            )
+    handle.remove()
+    assert len(observed) == 2

@@ -733,13 +733,9 @@ class GeoTransolver(Module):
         *,
         return_embedding_states: bool = False,
         return_point_features: bool = False,
-        return_geometry_features: bool = False,
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
-        | tuple[
-            Float[torch.Tensor, "..."] | tuple[Float[torch.Tensor, "..."], ...] | None,
-            ...,
-        ]
+        | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
     ):
         r"""Forward pass of the GeoTransolver model.
 
@@ -773,32 +769,22 @@ class GeoTransolver(Module):
             :math:`(B, N, D_{eff})` where
             :math:`D_{eff} = n\_hidden + n\_hidden\_local \cdot len(radii)`.
             These per-point latents are intended for attaching pointwise heads
-            (e.g. a field GP head for per-point uncertainty). Returned after any
-            requested embedding states and before geometry features. Default
-            is ``False``.
-
-        return_geometry_features : bool, optional, keyword-only, default=False
-            Append detached geometry tokens of shape :math:`(B, H, S, D_g)`
-            after any requested embedding states and point features. Returns
-            ``None`` when no geometry tokenizer/input is present. Pending domain
-            reductions are completed before returning the tokens. This does not
-            pool features or apply an OOD score. Default is ``False``.
+            (e.g. a field GP head for per-point uncertainty).  Returned as the
+            last element of the output tuple.  Default is ``False``.
 
         Returns
         -------
-        torch.Tensor or tuple
-            With no flags set (default): output tensor of shape
+        Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], Float[torch.Tensor, "batch heads slices context_dim"]]
+            With neither flag set (default): output tensor of shape
             :math:`(B, N, C_{out})`.
 
-            With any flag set: a tuple containing the output followed by the
-            requested optional values, in the order ``embedding_states``,
-            ``point_features``, ``geometry_features``. For example, requesting
-            only geometry features returns ``(output, geometry_features)``;
-            requesting all three returns a 4-tuple. The flags are keyword-only
-            to make the requested outputs explicit at the call site. Geometry
-            features are None when geometry tokenization or geometry input is
-            absent; embedding states can likewise be None without context.
-            With tuple inputs, output and point features are tuples of tensors.
+            With one flag set: a 2-tuple, ``(output, embedding_states)`` or
+            ``(output, point_features)``.
+
+            With both set: the 3-tuple
+            ``(output, embedding_states, point_features)``.  The two flags are
+            keyword-only, since they share a return signature and reading a
+            bare ``True`` at the call site would not say which was meant.
 
         Raises
         ------
@@ -807,6 +793,112 @@ class GeoTransolver(Module):
         ValueError
             If input tensors have incorrect dimensions.
         """
+        output, embedding_states, point_features, _ = self._forward_impl(
+            local_embedding, local_positions, global_embedding, geometry, time
+        )
+        outputs = [output]
+        if return_embedding_states:
+            outputs.append(embedding_states)
+        if return_point_features:
+            outputs.append(point_features)
+        return tuple(outputs) if len(outputs) > 1 else output
+
+    def forward_with_geometry_features(
+        self,
+        local_embedding: (
+            Float[torch.Tensor, "batch tokens features"]
+            | tuple[Float[torch.Tensor, "batch tokens features"], ...]
+        ),
+        local_positions: (
+            Float[torch.Tensor, "batch tokens spatial_dim"]
+            | tuple[Float[torch.Tensor, "batch tokens spatial_dim"], ...]
+            | None
+        ) = None,
+        global_embedding: Float[torch.Tensor, "batch global_tokens global_dim"]
+        | None = None,
+        geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
+        time: torch.Tensor | None = None,
+    ) -> tuple[
+        Float[torch.Tensor, "..."] | tuple[Float[torch.Tensor, "..."], ...],
+        Float[torch.Tensor, "batch heads slices dim_head"] | None,
+    ]:
+        r"""Predict and return detached geometry tokens in one forward pass.
+
+        Parameters
+        ----------
+        local_embedding : torch.Tensor | tuple[torch.Tensor, ...]
+            Input tensor of shape :math:`(B, N, C)`, or one tensor per stream.
+            Structured inputs follow the same conventions as :meth:`forward`.
+        local_positions : torch.Tensor | tuple[torch.Tensor, ...] | None, optional, default=None
+            Positions of shape :math:`(B, N, 3)` for each input stream.
+            Required when ``include_local_features=True``.
+        global_embedding : torch.Tensor | None, optional, default=None
+            Global context of shape :math:`(B, N_g, C_g)`.
+        geometry : torch.Tensor | None, optional, default=None
+            Geometry inputs of shape :math:`(B, N_geo, C_geo)`.
+        time : torch.Tensor | None, optional, default=None
+            Time embedding (not yet implemented).
+
+        Returns
+        -------
+        tuple[torch.Tensor | tuple[torch.Tensor, ...], torch.Tensor | None]
+            Always ``(prediction, geometry_features)``. Prediction has the same
+            shape, stream structure, and gradients as :meth:`forward` with its
+            return flags unset. Geometry features have shape
+            :math:`(B, H, S, D_g)` and are detached from the computation graph.
+            They are ``None`` when geometry tokenization or its input is absent.
+            Pending domain reductions are completed before returning features.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``time`` is provided.
+        ValueError
+            If inputs do not satisfy the same requirements as :meth:`forward`.
+
+        Notes
+        -----
+        Features contain only geometry tokens, not combined global context.
+        Pooling and OOD scoring belong to the caller. This method does not run
+        model-level forward hooks. For a wrapper such as DistributedDataParallel,
+        call this method inside an adapter's ``forward`` and wrap that adapter;
+        calling it through ``wrapper.module`` bypasses the wrapper's forward.
+
+        Examples
+        --------
+        >>> model = GeoTransolver(functional_dim=3, out_dim=1, geometry_dim=3,
+        ...                       n_layers=1, n_hidden=16, n_head=4, use_te=False)
+        >>> inputs = torch.randn(1, 10, 3)
+        >>> geometry = torch.randn(1, 20, 3)
+        >>> prediction, tokens = model.forward_with_geometry_features(
+        ...     inputs, geometry=geometry)
+        """
+        prediction, _, _, geometry_features = self._forward_impl(
+            local_embedding, local_positions, global_embedding, geometry, time
+        )
+        # Tokenization may leave a pending reduction over domain shards.
+        # Complete it before callers pool or score these features.
+        placements = getattr(geometry_features, "placements", ())
+        if any(p.is_partial() for p in placements):
+            geometry_features = geometry_features.redistribute(
+                placements=[Replicate() if p.is_partial() else p for p in placements]
+            )
+        return prediction, geometry_features
+
+    def _forward_impl(
+        self,
+        local_embedding: torch.Tensor | tuple[torch.Tensor, ...],
+        local_positions: torch.Tensor | tuple[torch.Tensor, ...] | None,
+        global_embedding: torch.Tensor | None,
+        geometry: torch.Tensor | None,
+        time: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+    ]:
+        r"""Compute predictions and features shared by both public entry points."""
         # Track whether input was a single tensor for output format
         single_input = isinstance(local_embedding, torch.Tensor)
 
@@ -937,20 +1029,4 @@ class GeoTransolver(Module):
             x = tuple(x)
             point_features_out = tuple(point_features)
 
-        outputs = [x]
-        if return_embedding_states:
-            outputs.append(embedding_states)
-        if return_point_features:
-            outputs.append(point_features_out)
-        if return_geometry_features:
-            # Tokenization may leave a pending reduction over domain shards.
-            # Complete it before callers pool or score these features.
-            placements = getattr(geometry_features, "placements", ())
-            if any(p.is_partial() for p in placements):
-                geometry_features = geometry_features.redistribute(
-                    placements=[
-                        Replicate() if p.is_partial() else p for p in placements
-                    ]
-                )
-            outputs.append(geometry_features)
-        return tuple(outputs) if len(outputs) > 1 else x
+        return x, embedding_states, point_features_out, geometry_features
