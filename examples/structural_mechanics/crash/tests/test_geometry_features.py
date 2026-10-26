@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Optional one-shot features preserve predictions and module hooks."""
+"""One-shot feature method preserves predictions and ordinary forward hooks."""
 
 import os
 import sys
@@ -45,7 +45,7 @@ from rollout import GeoTransolverOneShot  # noqa: E402
     ],
 )
 def test_oneshot_geometry_features(device):
-    """The recipe exposes features through __call__ with unchanged rollout values."""
+    """The separate method exposes features with unchanged rollout values."""
     torch.manual_seed(11)
     model = (
         GeoTransolverOneShot(
@@ -72,13 +72,13 @@ def test_oneshot_geometry_features(device):
     )
     with torch.no_grad():
         ordinary = model(sample, {})
-        prediction, tokens = model(sample, {}, return_geometry_features=True)
+        prediction, tokens = model.forward_with_geometry_features(sample, {})
         expected_tokens = model.context_builder.geometry_tokenizer(
             sample.node_features["coords"].unsqueeze(0)
         )
     hook.remove()
-    assert len(observed) == 2
-    assert isinstance(observed[0], torch.Tensor) and isinstance(observed[1], tuple)
+    assert len(observed) == 1
+    assert isinstance(observed[0], torch.Tensor)
     assert prediction.shape == (11, 2, 3)
     torch.testing.assert_close(prediction, ordinary, rtol=0, atol=0)
     torch.testing.assert_close(tokens, expected_tokens, rtol=0, atol=0)
