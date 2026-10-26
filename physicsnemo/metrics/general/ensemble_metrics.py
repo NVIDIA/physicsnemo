@@ -14,19 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from abc import ABC
 from typing import List, Tuple, Union
 
 import torch
 import torch.distributed as dist
 
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.distributed.manager import DistributedManager
 
 Tensor = torch.Tensor
 
 
-class EnsembleMetrics(ABC):
-    """Abstract class for ensemble performance related metrics
+class StreamingStatistic(ABC):
+    """Base class for statistics computed incrementally
 
     Can be helpful for distributed and sequential computations of metrics.
 
@@ -122,7 +124,7 @@ def _update_mean(
     return new_sum, new_n
 
 
-class Mean(EnsembleMetrics):
+class Mean(StreamingStatistic):
     """Utility class that computes the mean over a batched or ensemble dimension
 
     This is particularly useful for distributed environments and sequential computation.
@@ -282,7 +284,7 @@ def _update_var(
     return new_sum, new_sum2, new_n
 
 
-class Variance(EnsembleMetrics):
+class Variance(StreamingStatistic):
     """Utility class that computes the variance over a batched or ensemble dimension
 
     This is particularly useful for distributed environments and sequential computation.
@@ -420,3 +422,15 @@ class Variance(EnsembleMetrics):
             return self.std
         else:
             return self.var
+
+
+def __getattr__(name):
+    """Keep the original base-class import available without eager warnings."""
+    if name == "EnsembleMetrics":
+        warnings.warn(
+            "EnsembleMetrics is deprecated; use StreamingStatistic instead.",
+            LegacyFeatureWarning,
+            stacklevel=2,
+        )
+        return StreamingStatistic
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

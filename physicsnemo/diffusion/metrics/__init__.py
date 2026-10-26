@@ -14,11 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
+
 # NOTE: re-import these general metrics for increased visibility in the
 # diffusion subpackage
 from physicsnemo.metrics.general.calibration import rank_probability_score
 from physicsnemo.metrics.general.crps import crps, kcrps
-from physicsnemo.metrics.general.ensemble_metrics import EnsembleMetrics, Mean, Variance
+from physicsnemo.metrics.general.ensemble_metrics import (
+    Mean,
+    StreamingStatistic,
+    Variance,
+)
 from physicsnemo.metrics.general.entropy import (
     entropy_from_counts,
     relative_entropy_from_counts,
@@ -55,3 +63,15 @@ from .losses import (
     WeightedFlowMatchingLoss,
     WeightedMSEDSMLoss,
 )
+
+
+def __getattr__(name):
+    """Keep the original base-class import available without eager warnings."""
+    if name == "EnsembleMetrics":
+        warnings.warn(
+            "EnsembleMetrics is deprecated; use StreamingStatistic instead.",
+            LegacyFeatureWarning,
+            stacklevel=2,
+        )
+        return StreamingStatistic
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
