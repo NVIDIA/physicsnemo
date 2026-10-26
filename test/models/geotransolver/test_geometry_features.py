@@ -186,7 +186,7 @@ def test_feature_scoring_is_independent_of_checkpoint_backward(device):
     )
     local = torch.randn(2, 11, 3, device=device)
     geometry = torch.randn(2, 13, 3, device=device)
-    prediction, tokens = model(local, geometry=geometry, return_geometry_features=True)
+    prediction, tokens = model.forward_with_geometry_features(local, geometry=geometry)
     embeddings = tokens.mean(dim=(1, 2))
     scorer = KNNScorer(k=1)
     scorer.fit(embeddings)
