@@ -335,6 +335,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh` validation and trace-only branches no longer misfire in
+  data-loading threads while another thread compiles. Since torch 2.13,
+  `torch.compiler.is_compiling()` is True in every thread during a compile, so
+  these guards now use a check that is True only in code being traced.
 - `Mesh.get_point_to_points_adjacency()`, `get_facet_mesh()`, and
   `get_boundary_mesh()` compile with `torch.compile(fullgraph=True, dynamic=True)`.
   Facet extraction now specializes on the cell width instead of passing a

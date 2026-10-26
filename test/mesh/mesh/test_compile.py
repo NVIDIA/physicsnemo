@@ -424,3 +424,24 @@ def test_measure_survives_a_collapse_in_another_thread_while_compiling() -> None
     moved = _in_another_thread_while_compiling(collapse)
     assert torch.equal(moved.points[0], moved.points[1])
     moved.scale(2.0, assume_invertible=True)
+
+
+def test_validation_runs_in_another_thread_while_compiling() -> None:
+    """`Mesh` validation still runs in another thread while this thread compiles.
+
+    Since torch 2.13, ``torch.compiler.is_compiling()`` is True in every thread
+    during a compile, so it must not decide whether a data-loading thread's own
+    code is being traced.
+    """
+
+    def build_with_float_cells() -> Exception | None:
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        try:
+            Mesh(points=points, cells=torch.tensor([[0.0, 1.0, 2.0]]))
+        except TypeError as error:
+            return error
+        return None
+
+    assert isinstance(
+        _in_another_thread_while_compiling(build_with_float_cells), TypeError
+    )
