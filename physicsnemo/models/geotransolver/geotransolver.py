@@ -31,6 +31,7 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 from jaxtyping import Float
+from torch.distributed.tensor import Replicate
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -732,9 +733,13 @@ class GeoTransolver(Module):
         *,
         return_embedding_states: bool = False,
         return_point_features: bool = False,
+        return_geometry_features: bool = False,
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
-        | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
+        | tuple[
+            Float[torch.Tensor, "..."] | tuple[Float[torch.Tensor, "..."], ...] | None,
+            ...,
+        ]
     ):
         r"""Forward pass of the GeoTransolver model.
 
@@ -768,22 +773,32 @@ class GeoTransolver(Module):
             :math:`(B, N, D_{eff})` where
             :math:`D_{eff} = n\_hidden + n\_hidden\_local \cdot len(radii)`.
             These per-point latents are intended for attaching pointwise heads
-            (e.g. a field GP head for per-point uncertainty).  Returned as the
-            last element of the output tuple.  Default is ``False``.
+            (e.g. a field GP head for per-point uncertainty). Returned after any
+            requested embedding states and before geometry features. Default
+            is ``False``.
+
+        return_geometry_features : bool, optional, keyword-only
+            Append detached geometry tokens of shape :math:`(B, H, S, D_g)`
+            after any requested embedding states and point features. Returns
+            ``None`` when no geometry tokenizer/input is present. Pending domain
+            reductions are completed before returning the tokens. This does not
+            pool features or apply an OOD score. Default is ``False``.
 
         Returns
         -------
-        Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], Float[torch.Tensor, "batch heads slices context_dim"]]
-            With neither flag set (default): output tensor of shape
+        torch.Tensor or tuple
+            With no flags set (default): output tensor of shape
             :math:`(B, N, C_{out})`.
 
-            With one flag set: a 2-tuple, ``(output, embedding_states)`` or
-            ``(output, point_features)``.
-
-            With both set: the 3-tuple
-            ``(output, embedding_states, point_features)``.  The two flags are
-            keyword-only, since they share a return signature and reading a
-            bare ``True`` at the call site would not say which was meant.
+            With any flag set: a tuple containing the output followed by the
+            requested optional values, in the order ``embedding_states``,
+            ``point_features``, ``geometry_features``. For example, requesting
+            only geometry features returns ``(output, geometry_features)``;
+            requesting all three returns a 4-tuple. The flags are keyword-only
+            to make the requested outputs explicit at the call site. Geometry
+            features are None when geometry tokenization or geometry input is
+            absent; embedding states can likewise be None without context.
+            With tuple inputs, output and point features are tuples of tensors.
 
         Raises
         ------
@@ -869,10 +884,9 @@ class GeoTransolver(Module):
                     f"got {global_embedding.ndim}D tensor with shape {tuple(global_embedding.shape)}"
                 )
 
-        # Build context embeddings and extract local features. The third
-        # return value (detached geometry latent) is consumed by an optional
-        # external OOD guard wrapper via a forward hook, not here.
-        embedding_states, local_embedding_bq, _ = self._build_context(
+        # Geometry features are detached tokens from the geometry tokenizer,
+        # distinct from the combined geometry/global context embeddings.
+        embedding_states, local_embedding_bq, geometry_features = self._build_context(
             local_embedding, local_positions, geometry, global_embedding
         )
 
@@ -923,10 +937,20 @@ class GeoTransolver(Module):
             x = tuple(x)
             point_features_out = tuple(point_features)
 
-        if return_embedding_states and return_point_features:
-            return x, embedding_states, point_features_out
+        outputs = [x]
         if return_embedding_states:
-            return x, embedding_states
+            outputs.append(embedding_states)
         if return_point_features:
-            return x, point_features_out
-        return x
+            outputs.append(point_features_out)
+        if return_geometry_features:
+            # Tokenization may leave a pending reduction over domain shards.
+            # Complete it before callers pool or score these features.
+            placements = getattr(geometry_features, "placements", ())
+            if any(p.is_partial() for p in placements):
+                geometry_features = geometry_features.redistribute(
+                    placements=[
+                        Replicate() if p.is_partial() else p for p in placements
+                    ]
+                )
+            outputs.append(geometry_features)
+        return tuple(outputs) if len(outputs) > 1 else x

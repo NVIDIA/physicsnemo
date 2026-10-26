@@ -94,7 +94,14 @@ class GeoTransolverOneShot(GeoTransolver):
         self.rollout_steps = _oneshot_init(kwargs, "out_dim")
         super().__init__(*args, **kwargs)
 
-    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+    def forward(
+        self,
+        sample: SimSample,
+        data_stats: dict,
+        *,
+        return_geometry_features: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
+        """Predict the rollout, optionally returning detached geometry tokens."""
         coords, features, N, T, Fo = _oneshot_inputs(sample, self.rollout_steps)
         fx = torch.cat([coords, features], dim=-1)
         global_emb = None
@@ -103,18 +110,18 @@ class GeoTransolverOneShot(GeoTransolver):
                 [sample.global_features[k] for k in sample.global_features], dim=0
             )
             global_emb = g.unsqueeze(0).unsqueeze(0)  # [1, 1, G]
-        raw = (
-            super()
-            .forward(
-                local_embedding=fx.unsqueeze(0),
-                geometry=coords.unsqueeze(0),
-                local_positions=coords.unsqueeze(0),
-                global_embedding=global_emb,
-            )
-            .squeeze(0)
+        raw = super().forward(
+            local_embedding=fx.unsqueeze(0),
+            geometry=coords.unsqueeze(0),
+            local_positions=coords.unsqueeze(0),
+            global_embedding=global_emb,
+            return_geometry_features=return_geometry_features,
         )
+        if return_geometry_features:
+            raw, geometry_tokens = raw
+        raw = raw.squeeze(0)
         pred = _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
-        return pred
+        return (pred, geometry_tokens) if return_geometry_features else pred
 
 
 class TransolverOneShot(Transolver):
