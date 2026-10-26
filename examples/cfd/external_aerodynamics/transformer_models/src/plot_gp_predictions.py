@@ -59,7 +59,7 @@ import gpytorch
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.transolver_datapipe import create_transolver_dataset
 from physicsnemo.utils import load_checkpoint
-from physicsnemo.experimental.uq import VariationalGPHead
+from physicsnemo.experimental.uq.gp import VariationalGPHead
 
 from gp_utils import (
     DRAG_COEFF_SCALE,
