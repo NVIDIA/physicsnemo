@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- Adds optional detached geometry-feature output to GeoTransolver.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - `MeshDataset(cache_host=True)` reads each sample once and serves repeats from

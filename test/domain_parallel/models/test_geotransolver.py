@@ -435,3 +435,66 @@ def test_gale_block_distributed(distributed_mesh, attention_type):
         rtol=1e-4,
         output_check_fn=_assert_sharded_like_hidden,
     )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("topology", ["world", "member_domain"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize(
+    "embedding,points", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_geometry_feature_return_preserves_distributed_training(
+    distributed_mesh, topology, attention_type, embedding, points
+):
+    """Feature exposure preserves outputs/gradients and resolves only its domain group."""
+    from torch.distributed.device_mesh import init_device_mesh
+
+    dm = DistributedManager()
+    mesh = distributed_mesh
+    member = 0
+    if topology == "member_domain":
+        if dm.world_size != 4:
+            pytest.skip("Member/domain isolation requires four GPUs")
+        parent = init_device_mesh("cuda", (2, 2), mesh_dim_names=("member", "domain"))
+        member = parent.get_coordinate()[0]
+        mesh = parent["domain"]
+    torch.manual_seed(62 + member)
+    model = _build_geotransolver(attention_type)(dm.device).train()
+    # Distinct reference models/data in each member group detect accidental
+    # WORLD reductions when only the domain group should communicate.
+    args, kwargs = _build_inputs(131, geometry_points=91)(dm.device)
+    with torch.no_grad():
+        expected_features = model.context_builder.geometry_tokenizer(kwargs["geometry"])
+    sharded_args, sharded_kwargs = _shard_inputs(args, kwargs, mesh)
+    options = dict(return_embedding_states=embedding, return_point_features=points)
+    original = model(*sharded_args, **sharded_kwargs, **options)
+    prediction = original[0] if embedding or points else original
+    prediction.full_tensor().square().mean().backward()
+    original_grads = {
+        name: None if p.grad is None else p.grad.clone()
+        for name, p in model.named_parameters()
+    }
+    model.zero_grad(set_to_none=True)
+    exposed = model(
+        *sharded_args, **sharded_kwargs, **options, return_geometry_features=True
+    )
+    expected_parts = original if embedding or points else (original,)
+    assert len(exposed) == len(expected_parts) + 1
+    for actual, expected in zip(exposed[:-1], expected_parts):
+        assert actual.placements == expected.placements
+        assert actual._spec.sharding_shapes() == expected._spec.sharding_shapes()
+        torch.testing.assert_close(
+            actual.to_local(), expected.to_local(), rtol=0, atol=0
+        )
+    features = exposed[-1]
+    assert not features.requires_grad
+    assert features.placements == (Replicate(),)
+    torch.testing.assert_close(
+        features.to_local(), expected_features, rtol=1e-4, atol=1e-5
+    )
+    exposed[0].full_tensor().square().mean().backward()
+    for name, parameter in model.named_parameters():
+        # CUDA attention backward can vary by a few fp32 ULPs between calls.
+        torch.testing.assert_close(
+            parameter.grad, original_grads[name], rtol=1e-6, atol=1e-9
+        )
