@@ -75,3 +75,9 @@ def __getattr__(name):
         )
         return StreamingStatistic
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Preserve historical wildcard exports, including imported public names, while
+# resolving the deprecated base lazily so ordinary module imports stay silent.
+__all__ = [name for name in globals() if not name.startswith("_")]
+__all__.append("EnsembleMetrics")
