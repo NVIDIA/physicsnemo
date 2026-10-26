@@ -114,6 +114,11 @@ class CoverageAccumulator:
     keys : Sequence[str], optional
         Calibrated field names for ``TensorDict`` inputs, or ``None`` for
         plain tensors.
+    weighted : bool, optional
+        Whether the predictor was calibrated with ``weights`` (risk-control
+        tier only). ``True`` requires ``weights`` on every :meth:`update`,
+        ``False`` rejects them, and ``None`` (the default) accepts whichever
+        the first update uses and holds every later update to it.
 
     Notes
     -----
@@ -151,9 +156,16 @@ class CoverageAccumulator:
         alpha: float,
         n_cal: int,
         keys: Sequence[str] | None = None,
+        weighted: bool | None = None,
     ) -> None:
         if tier not in TIERS:
             raise ValueError(f"tier must be one of {TIERS}, got {tier!r}.")
+        if weighted is not None and type(weighted) is not bool:
+            raise TypeError(f"weighted must be a bool or None, got {weighted!r}.")
+        if weighted and tier != "risk_control":
+            raise ValueError(
+                f"weighted=True applies only to the risk_control tier, not {tier!r}."
+            )
         self._tier = tier
         self._alpha = validate_alpha(alpha)
         self._n_cal = validate_n_cal(n_cal)
@@ -161,7 +173,8 @@ class CoverageAccumulator:
         field_keys = (TENSOR_KEY,) if self._keys is None else self._keys
         self._counters = {key: _FieldCounters() for key in field_keys}
         self._element_hits: dict[str, Tensor] = {}
-        self._weighted: bool | None = None
+        self._weighted: bool | None = weighted
+        self._weighted_fixed = weighted is not None
 
     def update(
         self,
@@ -198,7 +211,10 @@ class CoverageAccumulator:
             :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`
             calibrated with ``weights``. One vector applies to every
             calibrated field, so each field's leading dimension must equal
-            ``len(weights)``. Pass ``weights`` on every call or on none.
+            ``len(weights)``. Pass ``weights`` on every call or on none; an
+            accumulator from ``predictor.coverage_accumulator()`` requires
+            them when the predictor was calibrated with weights and rejects
+            them otherwise.
 
         Returns
         -------
@@ -238,6 +254,14 @@ class CoverageAccumulator:
                 f"weights= applies only to the risk_control tier, not {self._tier!r}."
             )
         if self._weighted is not None and (weights is not None) != self._weighted:
+            if self._weighted_fixed:
+                raise TypeError(
+                    "The predictor was calibrated with weights=; pass the same "
+                    "kind of weights= to update."
+                    if self._weighted
+                    else "The predictor was calibrated without weights=; omit "
+                    "weights= so the report measures its guarantee."
+                )
             first = "had" if self._weighted else "did not have"
             raise TypeError(
                 f"The first held-out sample {first} weights=; pass weights= on "

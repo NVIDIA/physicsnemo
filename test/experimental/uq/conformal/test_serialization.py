@@ -50,6 +50,7 @@ _ARTIFACT_KEYS = {
     "thresholds",
     "scale",
     "mesh_fingerprint",
+    "weighted",
     "provenance",
 }
 
@@ -122,10 +123,17 @@ def test_weighted_risk_control_predictor_round_trips_in_the_same_schema(tmp_path
     predictor.save(path)
     payload = torch.load(path, weights_only=True)
     assert set(payload) == _ARTIFACT_KEYS and payload["version"] == 1
+    assert payload["weighted"] is True
     loaded = ConformalPredictor.load(path)
-    assert torch.equal(loaded.thresholds, predictor.thresholds)
+    assert loaded.weighted and torch.equal(loaded.thresholds, predictor.thresholds)
     lo, hi = loaded.predict_interval(prediction)
     assert torch.equal(lo, lo_ref) and torch.equal(hi, hi_ref)
+    # The loaded predictor's accumulator holds the report to the weighted risk.
+    accumulator = loaded.coverage_accumulator()
+    with pytest.raises(TypeError, match="calibrated with weights="):
+        accumulator.update(lo, hi, prediction)
+    accumulator.update(lo, hi, prediction, weights=torch.ones(6))
+    assert accumulator.finalize()["fields"]["tensor"]["n_samples"] == 1
 
 
 def test_constructor_and_threshold_access_snapshot_storage(tmp_path):
@@ -258,6 +266,8 @@ CORRUPTIONS = {
     "unknown_score_kind": (_set_in("score", "kind", "bogus"), "Unknown score kind"),
     "extra_score_key": (_set_in("score", "class", "AbsoluteErrorScore"), "score spec schema is invalid"),
     "unknown_scale_kind": (_set("scale", {"kind": "bogus", "kwargs": {}}), "Unknown scale kind"),
+    "weighted_not_bool": (_set("weighted", 1), "weighted must be a bool"),
+    "weighted_on_functional": (_set("weighted", True), "applies only to the risk_control tier", "normalized"),
     "extra_scale_key": (_set("scale", {"kind": "aux", "kwargs": {"key": "s", "eps": 1e-8}, "class": "X"}), "scale spec schema is invalid"),
     "non_mapping_scale": (_set("scale", "aux"), "scale spec schema is invalid"),
     "non_json_provenance": (_set("provenance", {"tags": ("x",)}), "strict-JSON"),

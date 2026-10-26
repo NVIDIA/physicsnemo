@@ -1017,4 +1017,5 @@ class RiskControlCalibrator(_ScaledCalibratorBase):
             pack_fields(thresholds),
             alpha=alpha,
             scale=self._scale,
+            weighted=self._weighted,
         )

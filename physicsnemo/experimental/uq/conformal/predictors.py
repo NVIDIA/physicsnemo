@@ -150,6 +150,11 @@ class ConformalPredictor:
         pointwise tier only. The predictor keeps only a checksum of them, and
         :meth:`predict_interval` then requires the same coordinates, dtype,
         and point order. Omit them for pointwise outputs without a mesh.
+    weighted : bool, optional, default=False
+        Whether calibration weighted the points (risk-control tier only).
+        The accumulator from :meth:`coverage_accumulator` then requires
+        ``weights`` on every update, so the report measures the weighted
+        risk the predictor guarantees.
 
     Raises
     ------
@@ -168,9 +173,10 @@ class ConformalPredictor:
         - A threshold is negative and ``score`` is not
           ``QuantileRegressionScore``.
         - ``scale`` reads the aux key that ``score`` divides by.
+        - ``weighted=True`` on a tier other than ``"risk_control"``.
     TypeError
-        If ``score`` or ``scale`` is not a built-in class, or a
-        threshold is not floating point.
+        If ``score`` or ``scale`` is not a built-in class, a threshold is
+        not floating point, or ``weighted`` is not a ``bool``.
 
     Examples
     --------
@@ -198,6 +204,7 @@ class ConformalPredictor:
         thresholds: Float[Tensor, "*dims"] | Float[Tensor, ""] | TensorDict,
         scale: AuxScale | None = None,
         points: Float[Tensor, "n_points n_spatial_dims"] | None = None,
+        weighted: bool = False,
     ) -> None:
         self._init(
             tier=tier,
@@ -207,6 +214,7 @@ class ConformalPredictor:
             thresholds=thresholds,
             scale=scale,
             mesh_fingerprint=None if points is None else points_fingerprint(points),
+            weighted=weighted,
         )
 
     @classmethod
@@ -227,9 +235,16 @@ class ConformalPredictor:
         scale: AuxScale | None = None,
         mesh_fingerprint: str | None = None,
         provenance: Mapping | None = None,
+        weighted: bool = False,
     ) -> None:
         if tier not in TIERS:
             raise ValueError(f"tier must be one of {TIERS}, got {tier!r}.")
+        if type(weighted) is not bool:
+            raise TypeError(f"weighted must be a bool, got {type(weighted).__name__}.")
+        if weighted and tier != "risk_control":
+            raise ValueError(
+                f"weighted=True applies only to the risk_control tier, not {tier!r}."
+            )
         require_feasible_alpha(n_cal, alpha)
         alpha = float(alpha)
         score_snapshot = _snapshot_strategy(score, _SCORE_REGISTRY, "score")
@@ -278,6 +293,7 @@ class ConformalPredictor:
                     )
         self._scale = scale_snapshot
         self._mesh_fingerprint = mesh_snapshot
+        self._weighted = weighted
         self._provenance = {} if provenance is None else validate_provenance(provenance)
 
     @property
@@ -319,6 +335,11 @@ class ConformalPredictor:
     def _tensor_mode(self) -> bool:
         """Whether calibration used a plain tensor instead of a ``TensorDict``."""
         return set(self._thresholds_by_key) == {TENSOR_KEY}
+
+    @property
+    def weighted(self) -> bool:
+        r"""Whether calibration weighted the points (risk-control tier only)."""
+        return self._weighted
 
     @property
     def keys(self) -> list[str] | None:
@@ -535,12 +556,15 @@ class ConformalPredictor:
             A new, empty
             :class:`~physicsnemo.experimental.uq.conformal.CoverageAccumulator`
             set to this predictor's tier, ``alpha``, ``n_cal``, and fields.
+            For a risk-control predictor it requires ``weights`` on every
+            update if calibration used them, and rejects them otherwise.
         """
         return CoverageAccumulator(
             tier=self._tier,
             alpha=self._alpha,
             n_cal=self._n_cal,
             keys=self.keys,
+            weighted=self._weighted if self._tier == "risk_control" else None,
         )
 
     def save(self, path: Path | str, *, provenance: Mapping | None = None) -> None:
@@ -573,6 +597,7 @@ class ConformalPredictor:
             "thresholds": self._thresholds_by_key,
             "scale": self._scale,
             "mesh_fingerprint": self._mesh_fingerprint,
+            "weighted": self._weighted,
             "provenance": self._provenance if provenance is None else provenance,
         }
         _save_artifact(state, path, lambda written: self._read(written, path))
