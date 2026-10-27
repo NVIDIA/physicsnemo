@@ -94,7 +94,7 @@ def build_muon_optimizer(
     Args:
         model: The model (may be DDP-wrapped).
         cfg: Full Hydra config. Reads ``cfg.training.optimizer.*`` for lr,
-            weight_decay, betas, and eps.
+            weight_decay, betas, eps, and muon_cuda_graph.
         compile_optimizer: If True, compile the optimizer step functions
             with ``torch.compile``.
     """
@@ -107,6 +107,7 @@ def build_muon_optimizer(
     weight_decay = opt_cfg.get("weight_decay", 1e-4)
     betas = tuple(opt_cfg.get("betas", [0.9, 0.999]))
     eps = opt_cfg.get("eps", 1e-8)
+    cuda_graph = opt_cfg.get("muon_cuda_graph", False)
 
     compile_kwargs = {} if compile_optimizer else None
 
@@ -118,6 +119,7 @@ def build_muon_optimizer(
                     lr=lr,
                     weight_decay=weight_decay,
                     adjust_lr_fn="match_rms_adamw",
+                    cuda_graph=cuda_graph,
                 ),
                 torch.optim.AdamW(
                     other_params,
@@ -135,6 +137,7 @@ def build_muon_optimizer(
             lr=lr,
             weight_decay=weight_decay,
             adjust_lr_fn="match_rms_adamw",
+            cuda_graph=cuda_graph,
         )
         if compile_optimizer:
             opt.step = torch.compile(opt.step)

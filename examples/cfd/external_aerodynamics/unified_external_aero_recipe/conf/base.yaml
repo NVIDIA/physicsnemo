@@ -40,6 +40,9 @@ training:
     weight_decay: 1.0e-4
     betas: [0.9, 0.999]
     eps: 1.0e-8
+    # Replay Muon's step as one CUDA graph: faster when the step is host-bound
+    # (small models or meshes), at about 1 GiB more GPU memory.
+    muon_cuda_graph: false
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:

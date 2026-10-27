@@ -154,6 +154,18 @@ class Muon(_TorchMuon):
     adjust_lr_fn : str, optional
         One of ``"original"`` or ``"match_rms_adamw"``. Default None
         (treated as ``"original"``).
+    cuda_graph : bool, optional
+        Replay the step as one CUDA graph instead of launching its kernels one
+        by one from Python. The graph runs the same kernels, so the result is
+        the same bit for bit. It is captured at the first step after the
+        momentum buffers exist, and captured again when the parameters with
+        gradients, any hyperparameter (such as a scheduler's learning rate) or
+        the state tensors (after loading a state dict) change, so a schedule
+        that changes the learning rate every step recaptures every step and
+        gains nothing. Needs CUDA parameters and float learning rates, and
+        holds a copy of the gradients and the graph's memory pool. Under
+        ``torch.compile`` the step runs outside the compiled region, so the
+        graph replaces compiling it. Default False.
 
     Forward
     -------
@@ -210,8 +222,111 @@ class Muon(_TorchMuon):
             groups[(tuple(p.shape), p.dtype, p.device)].append(i)
         return groups
 
+    def __init__(self, params, *args, cuda_graph: bool = False, **kwargs) -> None:
+        super().__init__(params, *args, **kwargs)
+        if cuda_graph and not all(
+            p.is_cuda for g in self.param_groups for p in g["params"]
+        ):
+            raise ValueError("Muon(cuda_graph=True) needs every parameter on CUDA")
+        self.cuda_graph = cuda_graph
+        self._graph = self._graph_key = self._graph_grads = None
+
+    def __getstate__(self) -> dict:
+        return {**super().__getstate__(), "cuda_graph": self.cuda_graph}
+
+    def __setstate__(self, state: dict) -> None:
+        super().__setstate__(state)
+        # load_state_dict also lands here, with a state lacking cuda_graph.
+        self.__dict__.setdefault("cuda_graph", False)
+        # A graph cannot be copied, so a copy captures its own.
+        self._graph = self._graph_key = self._graph_grads = None
+
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
+        """Perform a single optimization step (see :meth:`_step`).
+
+        With ``cuda_graph`` set and no closure, the step is replayed as a CUDA
+        graph (see :meth:`_graph_step`).
+
+        Parameters
+        ----------
+        closure : Callable[[], float], optional
+            Optional callable that reevaluates the model and returns the loss.
+            Default None.
+
+        Returns
+        -------
+        float or None
+            The loss returned by *closure*, or ``None`` if no closure was given.
+        """
+        if closure is None and self.cuda_graph:
+            return self._graph_step()
+        return self._step(closure)
+
+    @torch.compiler.disable
+    def _graph_step(self) -> None:
+        """Replay the step as a CUDA graph, capturing it first if needed.
+
+        It runs eagerly while any parameter with a gradient has no momentum
+        buffer yet, so that no buffer is ever initialized inside a capture.
+        Under ``torch.compile`` it runs outside the compiled region.
+        """
+        params = [
+            p for g in self.param_groups for p in g["params"] if p.grad is not None
+        ]
+        if not params or any(
+            "momentum_buffer" not in self.state.get(p, {}) for p in params
+        ):
+            return self._step()
+        bufs = [self.state[p]["momentum_buffer"] for p in params]
+        key = (
+            [t.data_ptr() for t in params + bufs],
+            [{k: v for k, v in g.items() if k != "params"} for g in self.param_groups],
+        )
+        if key != self._graph_key:
+            if len({p.device for p in params}) != 1 or not params[0].is_cuda:
+                raise ValueError(
+                    "Muon(cuda_graph=True) needs every parameter on one CUDA device"
+                )
+            if any(isinstance(g["lr"], Tensor) for g in self.param_groups):
+                raise ValueError(
+                    "Muon(cuda_graph=True) needs float learning rates, not tensors"
+                )
+            # Free the old graph and gradient copies before capturing anew.
+            self._graph = self._graph_key = self._graph_grads = None
+            # The graph reads the gradients from copies of its own, refilled
+            # before every replay.
+            grads = [p.grad for p in params]
+            graph_grads = [g.clone() for g in grads]
+            graph = torch.cuda.CUDAGraph()
+            try:
+                for p, g in zip(params, graph_grads):
+                    p.grad = g
+                # Other threads, such as a data loader's, may allocate or sync
+                # meanwhile; in the default "global" mode that would invalidate
+                # the capture.
+                with torch.cuda.graph(
+                    graph,
+                    stream=torch.cuda.Stream(params[0].device),
+                    capture_error_mode="thread_local",
+                ):
+                    self._step()
+            except Exception as e:
+                raise RuntimeError(
+                    "Muon(cuda_graph=True) could not capture its step as a CUDA "
+                    "graph (a host sync inside the step cannot be captured); use "
+                    "cuda_graph=False"
+                ) from e
+            finally:
+                for p, g in zip(params, grads):
+                    p.grad = g
+            self._graph, self._graph_key, self._graph_grads = graph, key, graph_grads
+        # Capturing launches nothing, so the step also runs here after a capture.
+        torch._foreach_copy_(self._graph_grads, [p.grad for p in params])
+        self._graph.replay()
+        return None
+
+    def _step(self, closure: Callable[[], float] | None = None) -> float | None:
         """Perform a single optimization step.
 
         Parameters
@@ -281,10 +396,9 @@ class Muon(_TorchMuon):
                 )
 
                 group_params = [params_with_grad[i] for i in idxs]
-                # Cast back to the parameter dtype (NS runs in bf16).
-                ortho_list = [
-                    ortho[j].to(group_params[j].dtype) for j in range(len(idxs))
-                ]
+                # Cast back to the parameter dtype (NS runs in bf16), once per
+                # group: the group key includes the dtype.
+                ortho_list = ortho.to(group_params[0].dtype).unbind(0)
                 torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
 
         return loss
