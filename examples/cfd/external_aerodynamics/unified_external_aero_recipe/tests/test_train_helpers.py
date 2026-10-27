@@ -277,17 +277,25 @@ _DEVICES = [
 class _InFlight:
     """A readback event that lands only when ``landed()`` says so (by default
     never before the epoch's end, so every record goes through the epoch-end
-    drain); counts its waits."""
+    drain); counts its waits. It wraps the real event, so a record's host copy
+    has always landed by the time it is read."""
 
-    def __init__(self, waits, landed):
+    def __init__(self, waits, landed, event):
         self.waits = waits
         self.landed = landed
+        self.event = event
 
     def query(self):
-        return self.landed()
+        if not self.landed():
+            return False
+        if self.event is not None:
+            self.event.synchronize()
+        return True
 
     def synchronize(self):
         self.waits.append(self)
+        if self.event is not None:
+            self.event.synchronize()
 
 
 def _hold_readbacks(monkeypatch, landed=lambda step: False):
@@ -298,9 +306,9 @@ def _hold_readbacks(monkeypatch, landed=lambda step: False):
     start = train._start_step_readback
 
     def held(*args, **kwargs):
-        reduced, _ = start(*args, **kwargs)
+        reduced, event = start(*args, **kwargs)
         steps.append(step := len(steps))
-        return reduced, _InFlight(waits, lambda: landed(step))
+        return reduced, _InFlight(waits, lambda: landed(step), event)
 
     monkeypatch.setattr(train, "_start_step_readback", held)
     return waits

@@ -37,7 +37,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, nullcontext
 from typing import Any, Literal, NamedTuple
 
 import hydra
@@ -441,17 +441,10 @@ def _run_epoch(
         while pending and (pending[0].landed is None or pending[0].landed.query()):
             log_step(pending.popleft())
 
-    @contextmanager
-    def log_landed_on_error():
-        """On an error, log the landed steps without waiting, then re-raise."""
-        try:
-            yield
-        except BaseException:
-            log_landed()
-            raise
-
     epoch_t0 = time.perf_counter()
-    with grad_ctx, log_landed_on_error():
+    with grad_ctx, ExitStack() as on_exit:
+        ### If a step raises, log the steps whose copies have landed, without waiting.
+        on_exit.callback(log_landed)
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
             batch = recursive_to_device(batch, dist_manager.device)
