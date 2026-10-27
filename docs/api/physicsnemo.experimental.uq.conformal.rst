@@ -3,8 +3,9 @@ PhysicsNeMo Conformal Prediction
 
 .. currentmodule:: physicsnemo.experimental.uq.conformal
 
-Calibrated prediction intervals for the field outputs of a trained model,
-without retraining it.
+Post hoc uncertainty quantification with conformal prediction. The module
+turns the outputs of a trained model into calibrated prediction intervals.
+The model is not retrained.
 
 .. warning::
 
@@ -14,20 +15,19 @@ without retraining it.
 Overview
 --------
 
-A surrogate model returns a field, for example surface pressure on a car,
-but not how far that field can be from the truth. Conformal prediction
-answers that question after training. It measures the model's errors on a
-held-out *calibration set*, picks a threshold from those errors, and turns
-every new prediction into a lower and an upper bound, ``(lo, hi)``, with a
-stated probability of containing the true field.
+A trained model returns a prediction, a scalar, a vector, or a field, but
+not how far that prediction can be from the truth. Conformal prediction
+measures the model's errors on a held-out *calibration set*, picks a
+threshold from those errors, and turns each new prediction into bounds
+``(lo, hi)`` that contain the true value with a stated probability.
 
-The guarantee holds for any model and any data distribution. It needs only
-one assumption: the calibration samples and the new samples are
+The guarantee holds for any model and any data distribution. It needs one
+assumption. The calibration samples and the new samples are
 *exchangeable*, for example drawn independently from the same distribution.
 If the deployment data drifts away from the calibration data, the
 guarantee no longer holds.
 
-The workflow has three steps:
+The workflow has three steps.
 
 1. Pass each calibration sample, the prediction and the target, to a
    calibrator's ``update``.
@@ -51,24 +51,24 @@ Quick Start
     )
 
     calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.1)
-    for prediction, target in calibration_set:  # meshes may differ per sample
+    for prediction, target in calibration_set:  # samples may differ in size
         calibrator.update(prediction, target)
     predictor = calibrator.finalize()
 
     lo, hi = predictor.predict_interval(model(new_input))
 
-With ``alpha=0.1``, a new field has on average at most 10% of its points
-outside ``[lo, hi]``. ``prediction`` and ``target`` have shape
-:math:`(n_{\text{points}}, *\text{dims})`, for example
-``(n_points, 4)`` for pressure and wall shear stress.
+With ``alpha=0.1``, on average at most 10% of a new sample's points fall
+outside ``[lo, hi]``. ``prediction`` and ``target`` share a shape
+:math:`(n_{\text{points}}, *\text{dims})`. A scalar observable has shape
+``(1,)`` and a surface field with four channels has shape ``(n_points, 4)``.
 
 
 Choosing a Calibrator
 ---------------------
 
 The calibrator sets what the guarantee covers and how the band width varies
-across the field. Pick it by the guarantee your application needs and by
-whether every sample uses the same mesh.
+across the output. Pick it by the guarantee your application needs and by
+whether every sample has the same output layout.
 
 .. list-table::
    :header-rows: 1
@@ -76,38 +76,38 @@ whether every sample uses the same mesh.
 
    * - Calibrator
      - With ``alpha=0.1``
-     - Band width across the field
-     - Meshes
+     - Band width across the output
+     - Layout
    * - :class:`PointwiseCalibrator`
      - Each output element is covered with probability at least 90%, one
        element at a time.
      - One width per element, fitted from that element's calibration
        errors, so the band follows the model's local error.
-     - One layout; the same mesh if ``points`` is given.
+     - One layout, and the same mesh if ``points`` is given.
    * - :class:`FunctionalBandCalibrator`
-     - The whole field is covered at once with probability at least 90%.
+     - The whole sample is covered at once with probability at least 90%.
      - One threshold times the per-point scale from the score (sigma for
-       ``NormalizedErrorScore``) or from an ``AuxScale``; constant
-       across the field with ``AbsoluteErrorScore`` alone.
+       ``NormalizedErrorScore``) or from an ``AuxScale``. Constant with
+       ``AbsoluteErrorScore`` alone.
      - May differ.
    * - :class:`RiskControlCalibrator`
-     - The fraction of missed points is at most 10% in expectation; a
+     - The fraction of missed points is at most 10% in expectation. A
        single case may exceed it.
      - Same as the functional band, and narrower.
      - May differ.
 
-For fields on meshes that change between samples, such as CFD results on
-different geometries, start with :class:`RiskControlCalibrator`. Use
-:class:`FunctionalBandCalibrator` when a single miss anywhere on the field
+Start with :class:`RiskControlCalibrator` when the output size changes
+between samples, such as CFD results on different geometries. Use
+:class:`FunctionalBandCalibrator` when a single miss anywhere in the sample
 matters, for example to bound the worst-case error over a surface. Both
-treat a field as a whole: the functional band must hold at every point and
-every channel, and risk control counts a point as missed when any of its
+treat a sample as a whole. The functional band must hold at every point and
+every channel. Risk control counts a point as missed when any of its
 channels falls outside the band. Separate ``TensorDict`` fields get separate
 thresholds and separate guarantees. Use :class:`PointwiseCalibrator` when
 every sample has the same output layout and you need an interval for each
-output element. The layout can be one grid or mesh, or a fixed set of
-outputs such as drag, lift, and moment coefficients. For a mesh, pass the
-coordinates as ``points=`` on every call, and the calibrator and predictor
+output element. The layout can be a grid, a mesh, or a fixed set of outputs
+such as drag, lift, and moment coefficients. For a mesh, pass the
+coordinates as ``points=`` on every call and the calibrator and predictor
 reject any other mesh.
 
 Non-Uniform Meshes
@@ -116,7 +116,7 @@ Non-Uniform Meshes
 Risk control counts every point equally, so on a mesh that is fine in one
 region and coarse in another, the fraction of missed points is not the
 fraction of missed area. Pass ``weights=`` to count each point by its cell
-area or volume:
+area or volume.
 
 .. code:: python
 
@@ -126,23 +126,23 @@ area or volume:
     predictor = calibrator.finalize()
 
 ``weights`` has shape ``(n_points,)`` and holds nonnegative, finite values
-that are not all zero; the calibrator normalizes them within each sample.
-The guarantee becomes: the expected weighted fraction of missed points is at
-most ``alpha``. With ``physicsnemo.mesh``, ``point_measures(mesh)`` from
+that are not all zero. The calibrator normalizes them within each sample.
+The guarantee then bounds the expected weighted fraction of missed points by
+``alpha``. With ``physicsnemo.mesh``, ``point_measures(mesh)`` from
 ``physicsnemo.mesh.calculus`` returns these weights for a mesh that stores
 point measures, and ``lumped_point_measures(mesh)`` builds them from the
-cells. Pass ``weights`` on every call or on none. The predictor remembers
-that it was calibrated with weights, also across ``save`` and ``load``, and
-the accumulator from ``predictor.coverage_accumulator()`` then requires
-``weights`` on every ``update(lo, hi, target, weights=...)`` so the report
-measures the weighted risk.
+cells. Pass ``weights`` on every call or on none. The predictor records
+that it was calibrated with weights, and ``save`` and ``load`` keep that
+record. Its ``coverage_accumulator()`` then requires ``weights`` on every
+``update(lo, hi, target, weights=...)`` so the report measures the weighted
+risk.
 
 Several Coverage Levels
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 ``finalize(alpha=...)`` fits the thresholds at another level from the stored
 calibration scores, so one pass over the calibration set gives predictors at
-several levels:
+several levels.
 
 .. code:: python
 
@@ -151,7 +151,7 @@ several levels:
     predictor_95 = calibrator.finalize(alpha=0.05)
 
 Each predictor has its own ``alpha`` and its own guarantee. Choose the
-levels before looking at the fitted intervals: picking ``alpha`` from the
+levels before looking at the fitted intervals. Picking ``alpha`` from the
 results weakens the guarantee. The calibration set size rule in Practical
 Notes applies to each level, so ``alpha=0.05`` needs at least 19 samples.
 
@@ -189,7 +189,7 @@ gives narrow intervals where the model is confident and wide intervals
 where it is not, so it is the better choice when the model has a
 :math:`\sigma` head, an MC-dropout spread, or an ensemble spread.
 
-Pass ``sigma`` the same way at calibration and at prediction:
+Pass ``sigma`` the same way at calibration and at prediction.
 
 .. code:: python
 
@@ -218,28 +218,27 @@ Custom Scores
 
 Write a custom score when no built-in score gives the interval shape you
 need, for example a band proportional to the prediction. You do not need
-one to widen the band where the model is uncertain:
+one to widen the band where the model is uncertain.
 :class:`NormalizedErrorScore` divides the error by a predicted ``sigma``,
-and ``scale=AuxScale(key)`` multiplies a functional or risk-control
-band by any per-point ``aux`` entry without a new score. A custom score
-can shape the interval element by element, and works with every
-calibrator.
+and ``scale=AuxScale(key)`` multiplies a functional or risk-control band by
+any per-point ``aux`` entry. A custom score can shape the interval element
+by element and works with every calibrator.
 
 The Contract
 ^^^^^^^^^^^^
 
 Subclass :class:`NonconformityScore`, implement two methods, and register
-the class with :func:`register_score`:
+the class with :func:`register_score`. The two methods are
 
-- ``score(prediction, target, *, aux=None)`` returns the per-element score;
-  larger is worse.
+- ``score(prediction, target, *, aux=None)`` returns the per-element score,
+  where larger is worse.
 - ``bounds(prediction, threshold, *, aux=None)`` returns ``(lo, hi)``, the
   targets whose score is at most ``threshold``.
 
-The coverage guarantee holds only if the two methods agree: for every
+The coverage guarantee holds only if the two methods agree. For every
 element, the targets with ``score <= t`` are exactly the values in
-``bounds(t)``, and that interval grows with ``t``. For example, a band
-proportional to the prediction:
+``bounds(t)``, and that interval grows with ``t``. The example below is a
+band proportional to the prediction.
 
 .. code:: python
 
@@ -304,8 +303,8 @@ score. All default to empty or ``False``.
      - ``bounds`` multiplies the threshold by an ``aux`` entry.
 
 A score that reads an ``aux`` entry lists it in ``aux_keys``, and also in
-``scale_aux_keys`` if it divides by it. For example, an error in units of a
-per-point tolerance set by the application:
+``scale_aux_keys`` if it divides by it. The example below scores the error
+in units of a per-point tolerance set by the application.
 
 .. code:: python
 
@@ -340,9 +339,9 @@ Do not override ``interval``. It checks that every entry in ``aux_keys`` is
 present, converts the prediction and the threshold to float64, calls
 ``bounds``, and rounds the interval outward to the prediction's dtype, so
 low-precision inputs keep the guarantee without any work in ``bounds``. The
-``aux`` entries reach ``bounds`` in their original dtype: repeat any
+``aux`` entries reach ``bounds`` in their original dtype. Repeat any
 dtype-dependent step of ``score``, such as a clamp, before converting them
-to float64, so the two methods still agree.
+to float64, so the two methods agree.
 
 Checking a Score
 ^^^^^^^^^^^^^^^^
@@ -361,10 +360,10 @@ Calibrators and predictors accept only registered classes, and a subclass
 needs its own registration. A saved predictor stores the registered name
 and the ``config_fields`` values, which must be ``bool``, ``int``, ``float``,
 or ``str`` so the file loads with ``weights_only=True``. Import the module
-that registers the class before :meth:`ConformalPredictor.load`; otherwise
+that registers the class before :meth:`ConformalPredictor.load`. Otherwise
 ``load`` raises and lists the registered names. Registering the same class
 again under the same name is allowed, for example when a notebook cell is
-re-run; registering a different class under a name in use raises
+re-run. Registering a different class under a name in use raises
 ``ValueError``.
 
 
@@ -372,7 +371,7 @@ Multiple Fields
 ---------------
 
 Pass a ``TensorDict`` to calibrate several fields at once. Each field gets
-its own threshold and its own guarantee. Nest ``aux`` by field name:
+its own threshold and its own guarantee. Nest ``aux`` by field name.
 
 .. code:: python
 
@@ -413,9 +412,9 @@ A fitted predictor saves to a single file that loads with
 ``torch.load(..., weights_only=True)``. Check its coverage on held-out data
 that was not used for calibration. The coverage report measures the same
 quantity the calibrator guarantees. This example continues the Quick Start
-predictor, which uses :class:`AbsoluteErrorScore`; a predictor fitted with
+predictor, which uses :class:`AbsoluteErrorScore`. A predictor fitted with
 :class:`NormalizedErrorScore` also needs ``aux={"sigma": ...}`` on every
-``predict_interval`` call:
+``predict_interval`` call.
 
 .. code:: python
 
@@ -432,8 +431,8 @@ predictor, which uses :class:`AbsoluteErrorScore`; a predictor fitted with
 
 For a risk-control predictor, ``report["fields"]["tensor"]["empirical_mean_risk"]``
 is the mean fraction of points per sample that fell outside the band. It
-should be close to or below ``alpha``. A plain-tensor field is reported
-under the key ``"tensor"``; ``TensorDict`` fields under their own names.
+should be close to or below ``alpha``. A plain tensor is reported under the
+key ``"tensor"`` and ``TensorDict`` fields under their own names.
 
 
 Practical Notes
@@ -458,7 +457,7 @@ Practical Notes
 **Memory.**
     :class:`PointwiseCalibrator` and :class:`RiskControlCalibrator` keep the
     calibration scores on the CPU until ``finalize``. Pointwise memory grows
-    as :math:`n_{cal}` times the field size; risk control stores one
+    as :math:`n_{cal}` times the output size. Risk control stores one
     float64 per calibration point, two with ``weights``.
     :class:`FunctionalBandCalibrator` stores one number per sample.
 
@@ -470,7 +469,7 @@ Practical Notes
 
 **Separate data for the uncertainty estimate.**
     Whatever produces ``sigma`` or the ``AuxScale`` values must not see
-    the calibration samples: fit it on training data or a separate split.
+    the calibration samples. Fit it on training data or a separate split.
 
 
 References
