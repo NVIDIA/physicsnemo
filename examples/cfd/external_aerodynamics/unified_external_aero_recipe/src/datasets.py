@@ -710,7 +710,7 @@ def _build_directory_samplers(
     *,
     use_distributed: bool,
     sampler_seed: int,
-    data_mesh: "DeviceMesh | None" = None,
+    data_parallel_mesh: "DeviceMesh | None" = None,
 ) -> tuple[Sampler | None, Sampler | None]:
     """Per-split :class:`DistributedSampler` pair for **directory-mode** datasets.
 
@@ -721,16 +721,16 @@ def _build_directory_samplers(
     default sequential sampler is sufficient.
 
     Under domain parallelism, samples are distributed over the ``ddp``
-    axis only (*data_mesh*): every rank in a domain group must receive
+    axis only (*data_parallel_mesh*): every rank in a domain group must receive
     the same sample index, since each holds one shard of that sample.
     """
     if not use_distributed:
         return None, None
     replica_kwargs = {}
-    if data_mesh is not None:
+    if data_parallel_mesh is not None:
         replica_kwargs = {
-            "num_replicas": data_mesh.size(),
-            "rank": data_mesh.get_local_rank(),
+            "num_replicas": data_parallel_mesh.size(),
+            "rank": data_parallel_mesh.get_local_rank(),
         }
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset, shuffle=True, drop_last=True, seed=sampler_seed, **replica_kwargs
@@ -747,17 +747,17 @@ def _build_manifest_samplers(
     *,
     dist_manager: DistributedManager,
     sampler_seed: int,
-    data_mesh: "DeviceMesh | None" = None,
+    data_parallel_mesh: "DeviceMesh | None" = None,
 ) -> tuple[ManifestSampler, ManifestSampler]:
     """ManifestSamplers over global dataset indices, with optional sharding.
 
     Under domain parallelism, indices are sharded over the ``ddp`` axis
-    only (*data_mesh*): every rank in a domain group must receive the same
+    only (*data_parallel_mesh*): every rank in a domain group must receive the same
     sample index, since each holds one shard of that sample.
     """
-    if data_mesh is not None:
-        rank = data_mesh.get_local_rank()
-        world_size = data_mesh.size()
+    if data_parallel_mesh is not None:
+        rank = data_parallel_mesh.get_local_rank()
+        world_size = data_parallel_mesh.size()
     elif dist_manager.world_size > 1:
         rank, world_size = dist_manager.rank, dist_manager.world_size
     else:
@@ -800,8 +800,8 @@ def _domain_parallel_from_cfg(cfg: DictConfig) -> dict[str, Any]:
 def build_dataloaders(
     cfg: DictConfig,
     *,
-    domain_mesh: "DeviceMesh | None" = None,
-    data_mesh: "DeviceMesh | None" = None,
+    domain_parallel_mesh: "DeviceMesh | None" = None,
+    data_parallel_mesh: "DeviceMesh | None" = None,
 ) -> tuple[DataLoader, DataLoader, "NormalizeMeshFields | None", dict[str, Any]]:
     """Build train and val dataloaders from the chosen dataset(s).
 
@@ -862,7 +862,7 @@ def build_dataloaders(
     ### Domain parallelism: declarative reading policy from cfg, paired
     ### with the runtime device mesh injected by the caller. None when off.
     domain_parallel = (
-        _domain_parallel_from_cfg(cfg) if domain_mesh is not None else None
+        _domain_parallel_from_cfg(cfg) if domain_parallel_mesh is not None else None
     )
 
     ### The primary dataset is `cfg.dataset` (a single string); extras
@@ -963,7 +963,7 @@ def build_dataloaders(
             num_workers=num_workers,
             pin_memory=pin_memory,
             domain_parallel=domain_parallel,
-            device_mesh=domain_mesh,
+            device_mesh=domain_parallel_mesh,
         )
         train_datasets.append(dataset)
 
@@ -1004,7 +1004,7 @@ def build_dataloaders(
                 num_workers=num_workers,
                 pin_memory=pin_memory,
                 domain_parallel=domain_parallel,
-                device_mesh=domain_mesh,
+                device_mesh=domain_parallel_mesh,
             )
             val_dataset = (
                 manifest_val_dataset if manifest_val_dataset is not None else dataset
@@ -1029,7 +1029,7 @@ def build_dataloaders(
                 num_workers=num_workers,
                 pin_memory=pin_memory,
                 domain_parallel=domain_parallel,
-                device_mesh=domain_mesh,
+                device_mesh=domain_parallel_mesh,
             )
             val_datasets.append(val_dataset)
             combined_val_indices.extend(
@@ -1068,7 +1068,7 @@ def build_dataloaders(
             combined_val_indices,
             dist_manager=dist_manager,
             sampler_seed=sampler_seed,
-            data_mesh=data_mesh,
+            data_parallel_mesh=data_parallel_mesh,
         )
     else:
         ### Directory mode: separate datasets per split, with per-rank
@@ -1079,7 +1079,7 @@ def build_dataloaders(
             val_dataset,
             use_distributed=use_distributed,
             sampler_seed=sampler_seed,
-            data_mesh=data_mesh,
+            data_parallel_mesh=data_parallel_mesh,
         )
 
     ### Shared loader knobs; the two splits differ only in dataset / shuffle /

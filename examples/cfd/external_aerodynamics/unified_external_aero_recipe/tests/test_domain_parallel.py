@@ -90,7 +90,7 @@ def test_directory_samplers_shard_over_data_mesh_only():
             val_ds,
             use_distributed=True,
             sampler_seed=7,
-            data_mesh=_FakeMesh(size=2, rank=ddp_rank),
+            data_parallel_mesh=_FakeMesh(size=2, rank=ddp_rank),
         )
         train_sampler.set_epoch(0)
         seqs[ddp_rank] = (list(train_sampler), list(val_sampler))
@@ -104,7 +104,7 @@ def test_directory_samplers_shard_over_data_mesh_only():
         val_ds,
         use_distributed=True,
         sampler_seed=7,
-        data_mesh=_FakeMesh(size=2, rank=0),
+        data_parallel_mesh=_FakeMesh(size=2, rank=0),
     )
     again.set_epoch(0)
     assert list(again) == seqs[0][0]
@@ -119,9 +119,9 @@ def test_manifest_samplers_shard_over_data_mesh_only():
         train_sampler, val_sampler = _build_manifest_samplers(
             train_idx,
             val_idx,
-            dist_manager=None,  # unused when a data_mesh is given
+            dist_manager=None,  # unused when a data_parallel_mesh is given
             sampler_seed=3,
-            data_mesh=_FakeMesh(size=3, rank=ddp_rank),
+            data_parallel_mesh=_FakeMesh(size=3, rank=ddp_rank),
         )
         parts.append((set(train_sampler), set(val_sampler)))
     assert set().union(*(p[1] for p in parts)) == set(val_idx)

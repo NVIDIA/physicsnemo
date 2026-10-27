@@ -779,13 +779,17 @@ def main(cfg: DictConfig) -> None:
     is_rank0 = dist_manager.rank == 0
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
-    domain_mesh, data_mesh = build_distributed_meshes(cfg, dist_manager, logger)
+    domain_parallel_mesh, data_parallel_mesh = build_distributed_meshes(
+        cfg, dist_manager, logger
+    )
 
     ### Seed per data-parallel replica: every rank of a domain group works on
     ### the same sample and must draw identical dropout / augmentation RNG.
     seed = cfg.training.get("seed", None)
     seed_rank = (
-        data_mesh.get_local_rank() if data_mesh is not None else dist_manager.rank
+        data_parallel_mesh.get_local_rank()
+        if data_parallel_mesh is not None
+        else dist_manager.rank
     )
     set_seed(seed, rank=seed_rank)
     logger.info(f"Random seed: {seed} (rank offset: {seed_rank})")
@@ -806,7 +810,9 @@ def main(cfg: DictConfig) -> None:
         log_jsonl = make_jsonl_logger(os.path.join(run_dir, "metrics.jsonl"))
 
     train_loader, val_loader, normalizer, dataset_info = build_dataloaders(
-        cfg, domain_mesh=domain_mesh, data_mesh=data_mesh
+        cfg,
+        domain_parallel_mesh=domain_parallel_mesh,
+        data_parallel_mesh=data_parallel_mesh,
     )
     target_config: dict[str, FieldType] = dataset_info["targets"]
     ### `metrics_list` is derived later from cfg.metrics (recipe-side);
@@ -869,11 +875,11 @@ def main(cfg: DictConfig) -> None:
 
     model.to(device)
 
-    if domain_mesh is not None:
+    if domain_parallel_mesh is not None:
         # All ranks in a domain group process the same sample and must hold
         # identical weights; DDP below all-reduces gradients over the flat
         # world, which covers both the ddp and domain axes.
-        sync_module_over_mesh(model, domain_mesh)
+        sync_module_over_mesh(model, domain_parallel_mesh)
 
     if dist_manager.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -950,7 +956,7 @@ def main(cfg: DictConfig) -> None:
     loaded_epoch = load_checkpoint(device=device, **ckpt_args)
 
     if cfg.compile:
-        if domain_mesh is not None:
+        if domain_parallel_mesh is not None:
             # DDPOptimizer splits the compiled graph into gradient buckets and
             # re-fakeifies tensors at each split; it does not understand
             # ShardTensor and fails with "expected size <global>==<local>".

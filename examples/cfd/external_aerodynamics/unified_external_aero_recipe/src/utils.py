@@ -90,7 +90,7 @@ def set_seed(seed: int | None, rank: int = 0) -> None:
 def build_distributed_meshes(
     cfg: DictConfig, dist_manager: DistributedManager, logger: Any
 ) -> tuple["DeviceMesh | None", "DeviceMesh | None"]:
-    """Build the ``(domain_mesh, data_mesh)`` pair for domain parallelism.
+    """Build the ``(domain_parallel_mesh, data_parallel_mesh)`` pair for domain parallelism.
 
     Both are ``None`` when ``domain_size == 1``. The ``domain`` axis varies
     fastest, so a domain group is a block of consecutive ranks.
@@ -103,13 +103,15 @@ def build_distributed_meshes(
             f"world_size {dist_manager.world_size} is not divisible by "
             f"domain_parallelism.domain_size {domain_size}"
         )
-    global_mesh = dist_manager.initialize_mesh(
+    parallel_mesh = dist_manager.initialize_mesh(
         mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
     )
-    domain_mesh = global_mesh["domain"]
-    data_mesh = global_mesh["ddp"]
-    logger.info(f"Domain parallelism: ddp={data_mesh.size()} x domain={domain_size}")
-    return domain_mesh, data_mesh
+    domain_parallel_mesh = parallel_mesh["domain"]
+    data_parallel_mesh = parallel_mesh["ddp"]
+    logger.info(
+        f"Domain parallelism: ddp={data_parallel_mesh.size()} x domain={domain_size}"
+    )
+    return domain_parallel_mesh, data_parallel_mesh
 
 
 def build_muon_optimizer(
