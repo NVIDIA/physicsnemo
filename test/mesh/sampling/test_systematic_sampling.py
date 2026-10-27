@@ -21,8 +21,8 @@ systematic sampling along a line, and the kept cells carry Horvitz-Thompson
 weights. These tests pin the exact counts, the inclusion probabilities, the
 unbiasedness of the measure sums, the cells kept whole, the spatial spread, the
 exact int64 line, the bitwise reproducibility, the invariance of the Mesh-level
-draw under pose, numbering and precision, and one compiled graph for every cell
-count.
+draw under pose, numbering, precision and padding, its ties broken by index, and
+one compiled graph for every cell count.
 
 Several groups of cells (``_draw``) are composed as one line: per-group
 probabilities, one canonical frame, each group in its own Morton order after the
@@ -55,11 +55,11 @@ HALF_SHARES = [31_250, 58_315.5, 52_119, 58_315.5]
 ### Helpers ###
 
 
-def _groups(sizes, seed=0):
+def _groups(sizes, seed=0, device="cpu"):
     g = torch.Generator().manual_seed(seed)
     measures = [torch.rand(n, generator=g, dtype=D) ** 3 + 1e-3 for n in sizes]
     centroids = [torch.randn(n, 3, generator=g, dtype=D) for n in sizes]
-    return measures, centroids
+    return [a.to(device) for a in measures], [x.to(device) for x in centroids]
 
 
 def _line(measures, centroids, shares):
@@ -134,14 +134,14 @@ def _orthogonal(seed, improper):
 ### Inclusion probabilities ###
 
 
-def test_inclusion_probabilities_are_capped_proportional_to_size():
+def test_inclusion_probabilities_are_capped_proportional_to_size(device):
     """pi = min(1, c a) with sum pi equal to n_samples: the largest cells are capped
     at one, the rest proportional to their measure; n_samples of at least the count
     keeps every cell."""
     g = torch.Generator().manual_seed(0)
-    a = torch.rand(1000, generator=g, dtype=D) ** 4
+    a = (torch.rand(1000, generator=g, dtype=D) ** 4).to(device)
     a[:5] = 50.0
-    pi = _pps_inclusion_probabilities(a, torch.tensor(100.0, dtype=D))
+    pi = _pps_inclusion_probabilities(a, torch.tensor(100.0, dtype=D, device=device))
     assert float(pi.sum()) == pytest.approx(100.0, rel=1e-12)
     capped = pi == 1
     assert bool(capped[:5].all()) and int(capped.sum()) == 5
@@ -152,39 +152,39 @@ def test_inclusion_probabilities_are_capped_proportional_to_size():
     assert torch.equal(_pps_inclusion_probabilities(a, 100.0), pi)
 
 
-def test_a_share_of_the_count_caps_every_cell():
+def test_a_share_of_the_count_caps_every_cell(device):
     """n_samples of at least the cell count gives every pi = 1 on full-precision
     float64 measures."""
     for seed in range(4):
         g = torch.Generator().manual_seed(seed)
         for n in (2, 40, 3000, 52_119):
-            a = torch.rand(n, generator=g, dtype=D) ** 3 + 1e-3
+            a = (torch.rand(n, generator=g, dtype=D) ** 3 + 1e-3).to(device)
             for share in (n, n + 0.5):
                 pi = _pps_inclusion_probabilities(a, float(share))
                 assert torch.equal(pi, torch.ones_like(a)), (seed, n, share)
 
 
-def test_equal_measures_with_a_share_of_the_count_are_kept_whole():
+def test_equal_measures_with_a_share_of_the_count_are_kept_whole(device):
     """Equal measures (a uniform mesh) with n_samples of at least the count give every
     pi exactly 1, though the float tail sums of equal values can exceed their count
     times the value, which leaves a rank uncapped with a level below 1 / a (a = 0.1,
     n = 100: rank 9, and 91 cells a rounding below 1 from the tails alone)."""
     for value in (0.1, 0.3, 0.7, 3.3):
         for n in (7, 100, 3000, 300_001):
-            a = torch.full((n,), value, dtype=D)
+            a = torch.full((n,), value, dtype=D, device=device)
             for share in (n, n + 0.5):
                 pi = _pps_inclusion_probabilities(a, float(share))
                 assert torch.equal(pi, torch.ones_like(a)), (value, n, share)
 
 
-def test_zero_measures_get_probability_zero():
+def test_zero_measures_get_probability_zero(device):
     """Zero measures get pi = 0, and the probabilities sum to the smaller of the share
     and the positive count: [1, 0, 0] at 2 gives [1, 0, 0], and on random measures
     with exact zeros a share above the positive count keeps every positive cell."""
-    one = _pps_inclusion_probabilities(torch.tensor([1.0, 0.0, 0.0], dtype=D), 2.0)
-    assert torch.equal(one, torch.tensor([1.0, 0.0, 0.0], dtype=D))
+    one = torch.tensor([1.0, 0.0, 0.0], dtype=D, device=device)
+    assert torch.equal(_pps_inclusion_probabilities(one, 2.0), one)
     g = torch.Generator().manual_seed(0)
-    a = torch.rand(1000, generator=g, dtype=D) ** 3
+    a = (torch.rand(1000, generator=g, dtype=D) ** 3).to(device)
     a[::4] = 0.0
     zero = a == 0
     pi = _pps_inclusion_probabilities(a, 300.0)
@@ -195,7 +195,7 @@ def test_zero_measures_get_probability_zero():
     assert float(pi.sum()) == 750.0
 
 
-def test_tiny_measures_keep_their_share():
+def test_tiny_measures_keep_their_share(device):
     """100 cells of ordinary measure and 4,900 of 1e-17 in one group of share 260:
     the large cells are capped and the tiny ones share the rest, so the probabilities
     are nonnegative and sum to the share, the 300 kept cells are distinct, the second
@@ -207,8 +207,9 @@ def test_tiny_measures_keep_their_share():
             torch.full((4900,), 1e-17, dtype=D),
         ]
     )
-    measures = [a, torch.rand(40, generator=g, dtype=D)]
-    centroids = [torch.randn(n, 3, generator=g, dtype=D) for n in (5000, 40)]
+    measures = [x.to(device) for x in (a, torch.rand(40, generator=g, dtype=D))]
+    centroids = [torch.randn(n, 3, generator=g, dtype=D).to(device) for n in (5000, 40)]
+    a = measures[0]
     pi = _pps_inclusion_probabilities(a, 260.0)
     assert bool((pi >= 0).all())
     assert abs(float(pi.sum()) - 260) < 1e-9
@@ -233,10 +234,10 @@ def test_tiny_measures_keep_their_share():
         (10**6, [500, 40, 3000]),
     ],
 )
-def test_the_count_is_exact(budget, shares):
+def test_the_count_is_exact(budget, shares, device):
     """Exactly min(total cells, budget) distinct cells, in increasing order."""
     sizes = [500, 40, 3000]
-    measures, centroids = _groups(sizes)
+    measures, centroids = _groups(sizes, device=device)
     for u in (0.0, 0.37, 0.999):
         kept, w = _draw(measures, centroids, shares, budget, torch.tensor(u, dtype=D))
         assert kept.shape == w.shape == (min(sum(sizes), budget),)
@@ -274,30 +275,32 @@ def test_horvitz_thompson_measure_sums_are_unbiased():
     assert bool(((hits - draws * pi).abs() <= 5 * sd + 2).all())
 
 
-def test_the_sample_is_spread_over_the_surface():
+def test_the_sample_is_spread_over_the_surface(device):
     """Along the Morton order the kept cells are evenly spaced in cumulative
     probability, so a uniform measure on a grid gives samples in every octant of the
     box in proportion to its cells (to one sample), unlike an unstratified draw that
     could leave one empty."""
-    g = torch.arange(16, dtype=D)
+    g = torch.arange(16, dtype=D, device=device)
     xyz = torch.stack(torch.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
-    a = torch.ones(xyz.shape[0], dtype=D)
+    a = torch.ones(xyz.shape[0], dtype=D, device=device)
+    bits = torch.tensor([4, 2, 1], device=device)
     for u in (0.1, 0.5, 0.9):
         kept, _ = _draw([a], [xyz], [64], 64, torch.tensor(u, dtype=D))
-        octant = ((xyz[kept] >= 8).long() * torch.tensor([4, 2, 1])).sum(-1)
-        assert torch.equal(torch.bincount(octant, minlength=8), torch.full((8,), 8))
+        octant = ((xyz[kept] >= 8).long() * bits).sum(-1)
+        counts = torch.bincount(octant, minlength=8)
+        assert torch.equal(counts, torch.full((8,), 8, device=device))
 
 
-def test_an_empty_group_takes_no_samples():
+def test_an_empty_group_takes_no_samples(device):
     """A group without cells is skipped."""
-    measures, centroids = _groups([0, 50, 80])
+    measures, centroids = _groups([0, 50, 80], device=device)
     kept, w = _draw(measures, centroids, [0, 30, 30], 60, torch.tensor(0.5, dtype=D))
     assert kept.shape == (60,) and bool((kept < 130).all())
     counts, _ = _per_group(kept, w, [0, 50, 80])
     assert counts.tolist() == [0, 30, 30]
 
 
-def test_a_hit_on_a_cell_boundary_takes_the_later_cell():
+def test_a_hit_on_a_cell_boundary_takes_the_later_cell(device):
     """With a half-integer share before a group kept whole, every hit at the start
     0.5 lands exactly on a boundary of the whole group's cells, and on the boundary
     between the groups: each hit takes the later cell (half-open intervals), so the
@@ -309,7 +312,8 @@ def test_a_hit_on_a_cell_boundary_takes_the_later_cell():
     ### equal measures: pi = 300.5 / 1024, on the line's grid, so the line is exact
     measures = [torch.ones(1024, dtype=D), torch.rand(50, generator=g, dtype=D) ** 3]
     measures.append(torch.rand(1024, generator=g, dtype=D) ** 3 + 1e-3)
-    centroids = [torch.randn(n, 3, generator=g, dtype=D) for n in sizes]
+    centroids = [torch.randn(n, 3, generator=g, dtype=D).to(device) for n in sizes]
+    measures = [a.to(device) for a in measures]
     kept, w = _draw(measures, centroids, shares, 651, torch.tensor(0.5, dtype=D))
     counts, _ = _per_group(kept, w, sizes)
     assert counts.tolist() == [300, 50, 301]
@@ -325,17 +329,18 @@ def test_a_hit_on_a_cell_boundary_takes_the_later_cell():
         float(torch.nextafter(torch.tensor(1.0, dtype=D), torch.tensor(0.0, dtype=D))),
     ],
 )
-def test_a_group_kept_whole_last_is_kept_at_every_start(u):
+def test_a_group_kept_whole_last_is_kept_at_every_start(u, device):
     """The line's end differs from k units by the rounding of the intervals; the start
     is clamped by that residual, so a group kept whole at the end of the line keeps
     every cell once at any start, including the ends of [0, 1). On full-precision
     float64 measures and on float32 stored ones, whose line (seed 1) is shorter than k
     units, so the start's upper clamp is needed."""
     sizes, shares = [5000, 40], [260, 40]
-    full, centroids = _groups(sizes, seed=3)
+    full, centroids = _groups(sizes, seed=3, device=device)
     g = torch.Generator().manual_seed(1)
     stored = [
-        (torch.rand(n, generator=g, dtype=D) + 1e-3).float().double() for n in sizes
+        (torch.rand(n, generator=g, dtype=D) + 1e-3).float().double().to(device)
+        for n in sizes
     ]
     for measures in (full, stored):
         kept, w = _draw(measures, centroids, shares, 300, torch.tensor(u, dtype=D))
@@ -344,7 +349,7 @@ def test_a_group_kept_whole_last_is_kept_at_every_start(u):
         _whole_kept_once(kept, measures, shares)
 
 
-def test_the_integer_search_is_the_search_for_the_hits():
+def test_the_integer_search_is_the_search_for_the_hits(device):
     """The search for the hit counts, (line - U - 1) >> Q, finds for every hit
     U + m 2**Q the first interval past it, as a direct search would; U the start on the
     grid, clamped by the line's residual. On random probabilities with some 0 and 1
@@ -356,14 +361,14 @@ def test_the_integer_search_is_the_search_for_the_hits():
     exact = torch.cat(
         [torch.full((1024,), 300.5 / 1024, dtype=D), torch.ones(50, dtype=D), pi[:1000]]
     )
-    for p in (pi, exact):
+    for p in (pi.to(device), exact.to(device)):
         budget = int(p.sum())
         k, Q = budget, 62 - budget.bit_length()
         line = (p * 2.0**Q).round().long().cumsum(0)
         residual = int(line[-1]) - k * 2**Q
         for u in (0.0, 0.5, 1.0 - 2.0**-53):
             U = min(max(int(u * 2**Q), residual, 0), 2**Q - 1, 2**Q - 1 + residual)
-            hits = U + torch.arange(k, dtype=torch.int64) * 2**Q
+            hits = U + torch.arange(k, dtype=torch.int64, device=device) * 2**Q
             direct = torch.searchsorted(line, hits, right=True)
             assert int(direct.max()) < p.shape[0]
             position = _systematic_sample(p, k, torch.tensor(u, dtype=D))
@@ -371,17 +376,18 @@ def test_the_integer_search_is_the_search_for_the_hits():
             assert torch.equal(
                 _systematic_sample(p, k, u, max_n_samples=budget), direct
             )
-        order = torch.randperm(p.shape[0], generator=g)
+        order = torch.randperm(p.shape[0], generator=g).to(device)
         kept = _systematic_sample(p, k, 0.5, order=order)
         assert torch.equal(kept, order[_systematic_sample(p[order], k, 0.5)].sort()[0])
 
 
-def test_half_and_single_probabilities_draw_as_double():
+def test_half_and_single_probabilities_draw_as_double(device):
     """float16 and float32 probabilities give bitwise the float64 draw: the line is
     scaled in float64, where pi 2**Q does not overflow."""
     g = torch.Generator().manual_seed(0)
-    random = (torch.rand(1000, generator=g, dtype=D) * 0.3).half().double()
-    for p, k in ((torch.full((4,), 0.5, dtype=D), 2), (random, int(random.sum()))):
+    random = (torch.rand(1000, generator=g, dtype=D) * 0.3).half().double().to(device)
+    halves = torch.full((4,), 0.5, dtype=D, device=device)
+    for p, k in ((halves, 2), (random, int(random.sum()))):
         ref = _systematic_sample(p, k, 0.5)
         for dtype in (torch.float16, torch.float32):
             assert torch.equal(_systematic_sample(p.to(dtype), k, 0.5), ref), dtype
@@ -397,7 +403,7 @@ def test_the_grid_needs_a_python_int():
         _systematic_sample(pi, 5, 0.5, max_n_samples=4)
 
 
-def test_the_float_scan_is_the_doubling_scan_bitwise():
+def test_the_float_scan_is_the_doubling_scan_bitwise(device):
     """The draw's float scan is the doubling (Kogge-Stone) scan, bitwise, which the
     sequential ``cumsum`` is not on 100 copies of 0.1; its integer scan is ``cumsum``."""
 
@@ -409,11 +415,12 @@ def test_the_float_scan_is_the_doubling_scan_bitwise():
         return y
 
     tenths = torch.full((100,), 0.1, dtype=D)
-    assert not torch.equal(tenths.cumsum(0), doubling(tenths))
+    assert not torch.equal(tenths.cumsum(0), doubling(tenths))  # on the CPU
     g = torch.Generator().manual_seed(0)
     for x in (tenths, torch.rand(1000, generator=g, dtype=D) ** 3):
+        x = x.to(device)
         assert torch.equal(_cumsum(x), doubling(x))
-    k = torch.randint(0, 2**40, (1000,), generator=g)
+    k = torch.randint(0, 2**40, (1000,), generator=g).to(device)
     assert torch.equal(_cumsum(k), k.cumsum(0))
 
 
@@ -429,8 +436,7 @@ def test_the_cumsum_op_passes_opcheck(device, dtype):
 
 
 def _half_integer_case(device):
-    measures, centroids = _groups(HALF_SIZES)
-    return [a.to(device) for a in measures], [x.to(device) for x in centroids]
+    return _groups(HALF_SIZES, device=device)
 
 
 @pytest.mark.cuda
@@ -480,37 +486,39 @@ def test_the_mesh_draw_is_the_composed_draw(device):
         assert torch.equal(w.view(torch.int64), ref_w.view(torch.int64))
 
 
-def test_the_mesh_draw_keeps_min_cells_and_samples():
+def test_the_mesh_draw_keeps_min_cells_and_samples(device):
     """min(n_cells, n_samples) cells; a mesh with at most n_samples cells is kept
     whole with its measures as weights; an empty mesh gives empty tensors; the start
     defaults to a draw from the generator."""
-    mesh = _soup(500)
+    mesh = _soup(500).to(device)
     for n_samples in (1, 77, 499, 500, 501, 10**6):
         kept, w = sample_cells_systematic(mesh, n_samples, 0.5)
         assert kept.shape == w.shape == (min(500, n_samples),)
         assert torch.equal(kept, kept.unique())
     kept, w = sample_cells_systematic(mesh, 500, 0.5)
-    assert torch.equal(kept, torch.arange(500))
+    assert torch.equal(kept, torch.arange(500, device=device))
     assert torch.equal(w, mesh.cell_data[EFFECTIVE_MEASURE_KEY])
     draws = [
-        sample_cells_systematic(mesh, 50, generator=torch.Generator().manual_seed(s))
+        sample_cells_systematic(
+            mesh, 50, generator=torch.Generator(device=device).manual_seed(s)
+        )
         for s in (0, 0, 1)
     ]
     assert torch.equal(draws[0][0], draws[1][0])
     assert not torch.equal(draws[0][0], draws[2][0])
     empty = Mesh(points=torch.randn(4, 3), cells=torch.zeros(0, 3, dtype=torch.long))
-    kept, w = sample_cells_systematic(empty, 10, 0.5)
+    kept, w = sample_cells_systematic(empty.to(device), 10, 0.5)
     assert kept.shape == w.shape == (0,) and w.dtype == torch.float32
 
 
-def test_zero_area_cells_fill_the_count_at_weight_zero():
+def test_zero_area_cells_fill_the_count_at_weight_zero(device):
     """A mesh with degenerate (zero-area) cells and more samples than positive cells
     keeps min(n_cells, n_samples) distinct cells, every positive cell among them; the
     zero cells fill the count at weight 0, so the weights sum to the area."""
     mesh = _soup(500, effective=False)
     points = mesh.points.reshape(500, 3, 3).clone()
     points[::5] = points[::5, :1]  # every fifth triangle collapsed to a point
-    mesh = Mesh(points=points.reshape(-1, 3), cells=mesh.cells)
+    mesh = Mesh(points=points.reshape(-1, 3), cells=mesh.cells).to(device)
     area = mesh.cell_areas
     zero = area == 0
     assert int(zero.sum()) == 100
@@ -531,6 +539,27 @@ def test_the_mesh_draw_validates_n_samples():
         sample_cells_systematic(mesh, 5.0, 0.5)
 
 
+def test_a_start_outside_the_unit_interval_is_an_error_or_clamped(device):
+    """A Python start outside [0, 1), or NaN, is an error. A tensor start is not
+    checked, which would sync with the host, but clamped: below 0 it draws as 0, at
+    or above 1 as 1 does (the last start on the line's grid), and NaN as 0."""
+    mesh = _soup(500).to(device)
+    for u in (-0.1, 1.0, 1.5, 100.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match=r"start must be in \[0, 1\)"):
+            sample_cells_systematic(mesh, 50, u)
+
+    def kept(u):
+        return sample_cells_systematic(
+            mesh, 50, torch.tensor(u, dtype=D, device=device)
+        )[0]
+
+    assert not torch.equal(kept(0.0), kept(1.0))
+    for u in (-0.1, -1e300, float("-inf"), float("nan")):
+        assert torch.equal(kept(u), kept(0.0)), u
+    for u in (1.5, 100.0, 1e300, float("inf")):
+        assert torch.equal(kept(u), kept(1.0)), u
+
+
 def test_the_mesh_draw_reads_stored_measures_through_cell_measures():
     """A stored measure is validated as ``cell_measures`` does, and the legacy
     ``_measure_weights`` field is an error rather than silently ignored."""
@@ -544,12 +573,13 @@ def test_the_mesh_draw_reads_stored_measures_through_cell_measures():
         sample_cells_systematic(legacy, 5, 0.5)
 
 
-def test_the_draw_is_the_same_at_every_precision():
+def test_the_draw_is_the_same_at_every_precision(device):
     """A float32 mesh and its float64 copy keep bitwise the same cells, with the same
     weights up to the final cast: the draw reads the measures and centroids in
     float64 from the points as given. The cells sit far from the origin, so float32
     centroids and areas would be rounded by many Morton grid units."""
     mesh32 = _soup(4000, effective=False, shift=300.0, size=1e-3).to(torch.float32)
+    mesh32 = mesh32.to(device)
     mesh64 = Mesh(points=mesh32.points.double(), cells=mesh32.cells)
     for u in (0.5, 0.123):
         k32, w32 = sample_cells_systematic(mesh32, 500, u)
@@ -561,7 +591,7 @@ def test_the_draw_is_the_same_at_every_precision():
 
 
 @pytest.mark.parametrize("effective", [True, False])
-def test_the_draw_is_independent_of_the_numbering(effective):
+def test_the_draw_is_independent_of_the_numbering(effective, device):
     """Renumbering the cells and the vertices of a float32 mesh keeps the same
     physical cells with bitwise the same weights."""
     mesh = _soup(2500, effective=effective, shift=40.0).to(torch.float32)
@@ -572,6 +602,7 @@ def test_the_draw_is_independent_of_the_numbering(effective):
     renumbered = Mesh(
         points=mesh.points[p], cells=cells[mesh.cells[c]], cell_data=mesh.cell_data[c]
     )
+    mesh, renumbered, c = mesh.to(device), renumbered.to(device), c.to(device)
     for u in (0.5, 0.123):
         k0, w0 = sample_cells_systematic(mesh, 700, u)
         k1, w1 = sample_cells_systematic(renumbered, 700, u)
@@ -580,19 +611,53 @@ def test_the_draw_is_independent_of_the_numbering(effective):
         assert torch.equal(w1[order], w0)
 
 
-def test_the_draw_is_the_same_in_every_pose():
+def test_the_draw_is_the_same_in_every_pose(device):
     """A rotation, reflection and translation of the mesh keep the same cells with
     the same weights: the Morton grid lies in the mesh's canonical frame, not in the
     lab axes, so the line along which the cells are drawn moves with the mesh."""
-    mesh = _soup(3000)
+    mesh = _soup(3000).to(device)
     k0, w0 = sample_cells_systematic(mesh, 700, 0.5)
     for seed, improper in ((1, False), (2, True)):
-        R = _orthogonal(seed, improper)
-        shift = torch.tensor([3.0, -1.0, 2.0], dtype=D)
+        R = _orthogonal(seed, improper).to(device)
+        shift = torch.tensor([3.0, -1.0, 2.0], dtype=D, device=device)
         moved = Mesh(
             points=mesh.points @ R.T + shift, cells=mesh.cells, cell_data=mesh.cell_data
         )
         k1, w1 = sample_cells_systematic(moved, 700, 0.5)
+        assert torch.equal(k1, k0)
+        torch.testing.assert_close(w1, w0, atol=0, rtol=1e-12)
+
+
+def test_cells_on_one_centroid_are_laid_in_index_order(device):
+    """Cells whose centroids share a Morton code lie along the line in index order
+    (a stable sort): with one centroid for every cell, the draw is the systematic
+    sample of the cells in index order, which an unstable sort would reorder."""
+    s = torch.randperm(100, generator=torch.Generator().manual_seed(0)).to(D) + 1
+    ### triangles (2s, 0, 0), (-s, s, 0), (-s, -s, 0): area 3 s**2, centroid exactly 0
+    corners = torch.tensor([[2.0, 0.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0]])
+    points = (s[:, None, None] * corners.to(D)).reshape(-1, 3)
+    mesh = Mesh(points=points, cells=torch.arange(300).reshape(100, 3)).to(device)
+    pi = _pps_inclusion_probabilities(mesh.cell_areas, 30.0)
+    for u in (0.1, 0.5, 0.9):
+        kept, _ = sample_cells_systematic(mesh, 30, u)
+        assert torch.equal(kept, _systematic_sample(pi, 30, u))
+
+
+@pytest.mark.parametrize("effective", [True, False])
+def test_a_padded_mesh_keeps_the_same_cells(effective, device):
+    """Mesh.pad's cells sit on the last point, here far outside the other cells, at
+    zero measure: they move neither the canonical frame nor the Morton grid, so the
+    padded mesh keeps the same cells as the mesh itself, with the same weights to
+    roundoff, while n_samples is at most the count of positive measures."""
+    soup = _soup(3000, effective=effective)
+    far = torch.tensor([[40.0, -30.0, 20.0]], dtype=D)  # used by no cell
+    mesh = Mesh(
+        points=torch.cat([soup.points, far]), cells=soup.cells, cell_data=soup.cell_data
+    ).to(device)
+    padded = mesh.pad(target_n_points=mesh.n_points + 5, target_n_cells=3500)
+    for n_samples, u in ((700, 0.05), (700, 0.5), (3000, 0.37)):
+        k0, w0 = sample_cells_systematic(mesh, n_samples, u)
+        k1, w1 = sample_cells_systematic(padded, n_samples, u)
         assert torch.equal(k1, k0)
         torch.testing.assert_close(w1, w0, atol=0, rtol=1e-12)
 

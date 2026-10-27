@@ -133,12 +133,18 @@ mesh:
 
 .. code:: python
 
+    from physicsnemo.mesh.calculus import set_cell_measures
     from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
     from physicsnemo.mesh.sampling import sample_cells_systematic
 
     mesh = sphere_icosahedral.load(subdivisions=4)  # 5,120 triangles
     cells, weights = sample_cells_systematic(mesh, 500)
     print(weights.sum(), mesh.cell_areas.sum())  # close: an unbiased estimate
+
+    # The sample as a mesh: store the weights as its cell measures, so that its
+    # integrals estimate the whole mesh's (else each cell counts its own area)
+    sample = mesh.slice_cells(cells)
+    set_cell_measures(sample, weights)
 
 The draw is systematic sampling along the Morton order of the cell centroids
 in the mesh's own principal axes, so the sample is spread over the mesh and

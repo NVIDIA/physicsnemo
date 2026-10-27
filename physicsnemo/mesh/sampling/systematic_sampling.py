@@ -215,7 +215,8 @@ def _systematic_sample(
         The number of hits :math:`k`. It may be a symbolic size under
         ``torch.compile`` when ``max_n_samples`` is given.
     start : float | torch.Tensor
-        The start :math:`u \in [0, 1)`, a float64 scalar.
+        The start :math:`u \in [0, 1)`, a float64 scalar. A start outside it is
+        clamped into it, and NaN acts as 0.
     order : torch.Tensor, optional
         A permutation of the cells, shape ``(n_cells,)``, the order in which they
         are laid along the line, such as a space-filling curve's.
@@ -263,7 +264,7 @@ def _systematic_sample(
     ### Triton rejects.
     T = line[-1]
     D = (((T >> Q) - k) << Q) + (T - ((T >> Q) << Q))
-    U = torch.floor(start * 2.0**Q).to(torch.int64)
+    U = torch.floor(start.nan_to_num(0.0).clamp(0.0, 1.0) * 2.0**Q).to(torch.int64)
     U = torch.maximum(torch.minimum(U, D.clamp_max(0) + ((1 << Q) - 1)), D.clamp_min(0))
     ### line_j > U + m 2**Q  <=>  (line_j - U - 1) >> Q >= m, so the first interval
     ### past hit m is a search for m among these hit counts (nondecreasing), without
@@ -293,6 +294,9 @@ def sample_cells_systematic(
     else its geometric measure. The cells are laid along the Morton order of their
     centroids in the mesh's canonical frame, so the draw is the same in every pose
     and numbering of the mesh, and drawn by systematic sampling along that line.
+    Cells of zero measure, such as those :meth:`~physicsnemo.mesh.mesh.Mesh.pad`
+    adds, move neither the frame nor the Morton grid, so a padded mesh keeps the
+    same cells while ``n_samples`` is at most its count of positive measures.
     Each kept cell carries its Horvitz-Thompson weight :math:`a_i / \pi_i`, so a
     weighted sum over the kept cells is unbiased for the sum over all cells. See
     the module docstring.
@@ -315,7 +319,9 @@ def sample_cells_systematic(
     start : float | torch.Tensor, optional
         The systematic start :math:`u \in [0, 1)`. ``None`` draws it uniformly from
         ``generator``. Under ``torch.compile``, pass a tensor: a Python float is a
-        constant there, and each new value recompiles.
+        constant there, and each new value recompiles. A tensor start is not
+        checked, which would synchronize with the host: outside :math:`[0, 1)` it
+        is clamped into it, and NaN acts as 0.
     generator : torch.Generator, optional
         The random generator for the start, on the mesh's device. Defaults to the
         global generator.
@@ -336,7 +342,8 @@ def sample_cells_systematic(
     TypeError
         If ``n_samples`` is not a Python int.
     ValueError
-        If ``n_samples < 1``.
+        If ``n_samples < 1``, or ``start`` is a Python number outside
+        :math:`[0, 1)`.
 
     Examples
     --------
@@ -363,6 +370,8 @@ def sample_cells_systematic(
     if start is None:
         start = torch.rand((), dtype=torch.float64, device=device, generator=generator)
     elif not isinstance(start, torch.Tensor):
+        if not 0 <= start < 1:  # also NaN
+            raise ValueError(f"start must be in [0, 1), got {start=}")
         ### torch.full fills on the device; as_tensor would copy from the host and sync.
         start = torch.full((), start, dtype=torch.float64, device=device)
     start = torch.as_tensor(start, dtype=torch.float64, device=device)
@@ -400,10 +409,14 @@ def sample_cells_systematic(
         pi = torch.where(
             zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
         )
-        ### Morton order of the centroids on cubic cells, ties broken by index.
-        code = _compute_morton_codes(
-            frame_coordinates(centroids, frame), isotropic=True
-        )
+        ### Morton order of the centroids on cubic cells, ties broken by index. The
+        ### grid spans the cells of positive measure (all if none), and the others
+        ### are clamped onto it, so padding leaves the order of the rest alone.
+        xyz = frame_coordinates(centroids, frame)
+        inside = (~zero | zero.all())[:, None]
+        lo = torch.where(inside, xyz, torch.inf).amin(0)
+        hi = torch.where(inside, xyz, -torch.inf).amax(0)
+        code = _compute_morton_codes(xyz.clamp(lo, hi), isotropic=True)
         order = code.argsort(stable=True)
         ### k = min(n_cells, n_samples) in integer division: 1 // (n_cells //
         ### n_samples + 1) is 1 when every cell is kept, else 0. A symbolic Min
