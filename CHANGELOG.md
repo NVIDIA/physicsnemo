@@ -316,6 +316,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `perturbed_grid` primitive takes `perturbation_scale` as a fraction of
   the grid spacing (was an absolute length), so its default no longer folds
   cells, even on fine grids.
+- `physicsnemo.nn.functional.knn` uses a new exact Warp backend by default for
+  CUDA points of one to three dimensions in float32, float16 or bfloat16. On
+  DoMINO's surface-neighbor search it is about 60x faster than cuML, which
+  stays the default for other CUDA points.
 
 ### Deprecated
 
