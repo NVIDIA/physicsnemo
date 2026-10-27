@@ -286,12 +286,13 @@ def point_walk(
     max_elements: int,
 ) -> tuple[torch.Tensor, ...] | None:
     """The walk of ``find_point_interaction_pairs`` for a nonempty tree of 2
-    or 3 dimensions, nonempty ``targets`` and ``theta > 0``: ``(near_target,
+    or 3 dimensions, nonempty ``targets`` of its dimension on its device (the
+    caller checks them) and ``theta > 0``: ``(near_target,
     near_source, far_target, far_node)``, or with ``count_only`` the counts
     ``(n_near, n_far)`` per target. ``None`` when a walk passes the stack or
     an array would hold ``max_elements`` entries or more. One host read."""
     device = tree.node_aabb_min.device
-    n_q, d = targets.shape
+    n_q, d = targets.shape[0], tree.n_spatial_dims
     n_t = tree.root_ids.shape[0]
     theta_sq = theta * theta
     ### Reduced-precision values are widened exactly to float32 and the kernels

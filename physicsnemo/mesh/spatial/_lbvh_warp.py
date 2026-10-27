@@ -33,6 +33,7 @@ so importing :mod:`physicsnemo.mesh.spatial` registers no kernels.
 from typing import Any, NamedTuple
 
 import torch
+import torch.nn.functional as F
 import warp as wp
 
 from physicsnemo.core.function_spec import FunctionSpec
@@ -41,6 +42,9 @@ from physicsnemo.mesh.spatial._lbvh import LBVHTopology
 #: Depth bins of the readback. A node key holds the depth in 6 bits, so a
 #: forest with internal nodes at depth ``_DEPTH_BINS - 2`` is left to torch.
 _DEPTH_BINS = 64
+#: Copies of the depth bins that the positions' counts are spread over, so
+#: that the atomic adds to one bin do not serialize.
+_LANES = 1024
 
 
 @wp.func
@@ -173,8 +177,9 @@ class ForestTopology(NamedTuple):
     numbered as :func:`~physicsnemo.mesh.spatial._lbvh.build_morton_topology`
     numbers them, its ``max_depth`` the largest tree depth. ``root_ids`` holds
     the root of each nonempty tree, ``node_tree`` the tree of each node and
-    ``node_offset`` the first node of each tree; the lists hold the items,
-    nodes and depth of each tree.
+    ``node_offset`` the first node of each tree; the lists hold the items and
+    nodes of each tree, and ``tree_depths`` the depth of each nonempty tree
+    (int64, shape ``(n_trees,)``; any value for an empty tree).
     """
 
     topology: LBVHTopology
@@ -183,7 +188,7 @@ class ForestTopology(NamedTuple):
     node_offset: torch.Tensor
     tree_items: list[int]
     tree_nodes: list[int]
-    tree_depths: list[int]
+    tree_depths: torch.Tensor
 
 
 def build_morton_forest_topology(
@@ -222,7 +227,8 @@ def build_morton_forest_topology(
     n_trees = tree_counts.shape[0]
     device = codes.device
     start_bits = n.bit_length()
-    if n_trees.bit_length() + 6 + start_bits > 63:
+    key_bits = n_trees.bit_length() + 6 + start_bits
+    if key_bits > 63:
         return None
     tree_end = torch.cumsum(tree_counts, 0)
     tree_start = tree_end - tree_counts
@@ -232,22 +238,25 @@ def build_morton_forest_topology(
     leaf_depth = torch.empty(n, dtype=torch.long, device=device)
     fixed = [codes, tree, tree_start, tree_end, int(leaf_size), int(balance)]
     _launch(_node_count_kernel, [*fixed, count, leaf_depth], codes)
-    zeros = torch.zeros(n_trees, dtype=torch.long, device=device)
-    nodes_per = zeros.index_add(0, tree, count)
-    depth_per = zeros.scatter_reduce(0, tree, leaf_depth, "amax")
+    ### Each tree's nodes from a prefix sum, not atomic adds, which would all
+    ### land on one element for one tree.
+    first_node = F.pad(torch.cumsum(count, 0), (1, 0))
+    nodes_per = first_node[tree_end] - first_node[tree_start]
     ### The internal nodes starting at position p have the depths
     ### leaf_depth - count + 1 to leaf_depth - 1: counted per depth by a
-    ### difference array.
+    ### difference array, position p adding to copy p % _LANES of the bins.
     starts_here = (count > 0).long()
-    bins = torch.zeros(_DEPTH_BINS, dtype=torch.long, device=device)
-    bins.index_add_(0, (leaf_depth - count + 1).clamp_max(_DEPTH_BINS - 1), starts_here)
-    bins.index_add_(0, leaf_depth.clamp_max(_DEPTH_BINS - 1), -starts_here)
-    stats = torch.cat([tree_counts, nodes_per, depth_per, torch.cumsum(bins, 0)])
-    stats = stats.tolist()
+    lane = torch.arange(n, device=device) % _LANES * _DEPTH_BINS
+    bins = torch.zeros(_LANES * _DEPTH_BINS, dtype=torch.long, device=device)
+    bins.index_add_(
+        0, lane + (leaf_depth - count + 1).clamp_max(_DEPTH_BINS - 1), starts_here
+    )
+    bins.index_add_(0, lane + leaf_depth.clamp_max(_DEPTH_BINS - 1), -starts_here)
+    bins = bins.view(_LANES, _DEPTH_BINS).sum(0)
+    stats = torch.cat([tree_counts, nodes_per, torch.cumsum(bins, 0)]).tolist()
     items_per_h = stats[:n_trees]
     nodes_per_h = stats[n_trees : 2 * n_trees]
-    depth_per_h = stats[2 * n_trees : 3 * n_trees]
-    internal_per_depth = stats[3 * n_trees :]
+    internal_per_depth = stats[2 * n_trees :]
     if internal_per_depth[_DEPTH_BINS - 2]:
         return None
     n_nodes = sum(nodes_per_h)
@@ -257,14 +266,15 @@ def build_morton_forest_topology(
     ### Fill pass, then the nodes in the torch build's numbering: tree by
     ### tree, each tree level by level from its root, a level by first
     ### position.
-    offset = torch.cumsum(count, 0) - count
     depth = torch.empty(n_nodes, dtype=torch.long, device=device)
     size = torch.empty(n_nodes, dtype=torch.long, device=device)
-    _launch(_node_fill_kernel, [*fixed, offset, depth, size], codes)
+    _launch(_node_fill_kernel, [*fixed, first_node[:-1], depth, size], codes)
     start = torch.repeat_interleave(
         torch.arange(n, device=device), count, output_size=n_nodes
     )
     key = ((tree[start] << 6 | depth) << start_bits) | start
+    if key_bits <= 31:
+        key = key.int()  # half the radix sort's passes
     key, order = torch.sort(key)
     range_start, range_count, depth = start[order], size[order], depth[order]
     is_leaf = range_count <= leaf_size
@@ -277,9 +287,10 @@ def build_morton_forest_topology(
     leaf_starts = range_start[leaf_ids]
     leaf_sizes = range_count[leaf_ids]
     ### Internal nodes by depth, each depth in ascending id, as the torch
-    ### build lists them.
+    ### build lists them (the order of the ids themselves for one tree).
     internal = torch.nonzero_static(~is_leaf, size=n_internal)[:, 0]
-    internal = internal[torch.argsort(depth[internal], stable=True)]
+    if n_trees > 1:
+        internal = internal[torch.argsort(depth[internal], stable=True)]
     by_depth = list(torch.split(internal, internal_per_depth[:n_levels]))
     topo = LBVHTopology(
         left_child=left,
@@ -298,14 +309,16 @@ def build_morton_forest_topology(
     )
     node_tree = tree[range_start]
     n_roots = sum(1 for c in items_per_h if c)
+    node_offset = torch.cumsum(nodes_per, 0) - nodes_per
     return ForestTopology(
         topology=topo,
         root_ids=torch.nonzero_static(depth == 0, size=n_roots)[:, 0],
         node_tree=node_tree,
-        node_offset=torch.cumsum(nodes_per, 0) - nodes_per,
+        node_offset=node_offset,
         tree_items=items_per_h,
         tree_nodes=nodes_per_h,
-        tree_depths=depth_per_h,
+        ### A tree's depth is its last node's, its nodes being by depth.
+        tree_depths=depth[(node_offset + nodes_per - 1).clamp_min(0)],
     )
 
 

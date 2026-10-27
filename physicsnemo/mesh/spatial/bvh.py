@@ -137,10 +137,16 @@ def _compute_morton_codes(
         cmin = quantization_points.min(dim=0).values  # (D,)
         cmax = quantization_points.max(dim=0).values  # (D,)
     else:
-        index = groups[:, None].expand(-1, D)
-        bound = quantization_points.new_full((n_groups, D), float("inf"))
+        ### Each group's bounds in copies, point i updating copy i % copies,
+        ### so that the atomic updates of few groups' bounds do not serialize.
+        copies = max(1, 1024 // n_groups)
+        slot = groups * copies + torch.arange(N, device=device) % copies
+        index = slot[:, None].expand(-1, D)
+        bound = quantization_points.new_full((n_groups * copies, D), float("inf"))
         cmin = bound.scatter_reduce(0, index, quantization_points, "amin")
         cmax = (-bound).scatter_reduce(0, index, quantization_points, "amax")
+        cmin = cmin.view(n_groups, copies, D).amin(dim=1)
+        cmax = cmax.view(n_groups, copies, D).amax(dim=1)
     extent = cmax - cmin
     if isotropic:
         extent = extent.amax(dim=-1, keepdim=True).expand_as(extent)

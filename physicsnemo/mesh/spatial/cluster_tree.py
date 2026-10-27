@@ -101,6 +101,20 @@ def _warp_available() -> bool:
     return importlib.util.find_spec("warp") is not None
 
 
+def _check_build_inputs(points: torch.Tensor, areas: torch.Tensor | None) -> None:
+    """Raise unless ``points`` is ``(n_points, n_spatial_dims)`` and ``areas``,
+    if given, is ``(n_points,)``."""
+    if points.ndim != 2:
+        raise ValueError(
+            "points must have shape (n_points, n_spatial_dims), "
+            f"got {tuple(points.shape)}"
+        )
+    if areas is not None and areas.shape != points.shape[:1]:
+        raise ValueError(
+            f"areas must have shape ({points.shape[0]},), got {tuple(areas.shape)}"
+        )
+
+
 def _resolve_build(
     implementation: Literal["torch", "warp"] | None, points: torch.Tensor
 ) -> Literal["torch", "warp"]:
@@ -882,11 +896,11 @@ class ClusterTree(TensorClass):
         ----------
         points : Float[torch.Tensor, "n_points n_dims"]
             Source point coordinates, shape :math:`(N, D)`.
-        leaf_size : int
+        leaf_size : int, optional, default=1
             Maximum sources per leaf node. Larger values produce shallower
             trees (fewer traversal iterations) at the cost of more exact
             near-field interactions per leaf hit.
-        areas : Float[torch.Tensor, "n_points"] or None
+        areas : Float[torch.Tensor, "n_points"] or None, optional, default=None
             Per-source area weights used for aggregate computation. If
             ``None``, all areas default to 1.
         split : {"morton", "midpoint"}, optional, default="morton"
@@ -924,6 +938,7 @@ class ClusterTree(TensorClass):
         """
         if leaf_size < 1:
             raise ValueError(f"leaf_size must be >= 1, got {leaf_size=!r}")
+        _check_build_inputs(points, areas)
         if split not in ("morton", "midpoint"):
             raise ValueError(f"split must be 'morton' or 'midpoint', got {split=!r}")
         if split == "midpoint" and implementation not in (None, "torch"):
@@ -1053,7 +1068,10 @@ class ClusterTree(TensorClass):
         torch build's in the signs of zeros and the payloads of NaNs, as in
         :meth:`from_points`. The Warp build slices each of ``trees`` from the
         forest only when it is first accessed, so a caller that needs only
-        the forest pays nothing for them.
+        the forest pays nothing for them. Those trees share the forest's
+        memory (with one group, ``trees[0]`` is the forest), so an in-place
+        change to one changes the other; the torch build's trees and forest
+        are separate tensors.
 
         Parameters
         ----------
@@ -1061,13 +1079,13 @@ class ClusterTree(TensorClass):
             Point coordinates, shape :math:`(N, D)`.
         groups : Int[torch.Tensor, "n_points"]
             Group of each point, integers in ``[0, n_groups)``, shape
-            :math:`(N,)`. Values are not checked.
+            :math:`(N,)`, on the device of ``points``. Values are not checked.
         n_groups : int
             Number of groups (``>= 1``), given so that finding it needs no
             host synchronization.
-        leaf_size : int
+        leaf_size : int, optional, default=1
             Maximum points per leaf node, as in :meth:`from_points`.
-        areas : Float[torch.Tensor, "n_points"] or None
+        areas : Float[torch.Tensor, "n_points"] or None, optional, default=None
             Per-point area weights, as in :meth:`from_points`.
         implementation : {"torch", "warp"} or None, optional, default=None
             As in :meth:`from_points`; the torch build calls
@@ -1090,9 +1108,11 @@ class ClusterTree(TensorClass):
             raise ValueError(f"leaf_size must be >= 1, got {leaf_size=!r}")
         if n_groups < 1:
             raise ValueError(f"n_groups must be >= 1, got {n_groups=!r}")
-        if groups.shape != points.shape[:1]:
+        _check_build_inputs(points, areas)
+        if groups.shape != points.shape[:1] or groups.device != points.device:
             raise ValueError(
-                f"groups must have shape ({points.shape[0]},), got {tuple(groups.shape)}"
+                f"groups must have shape ({points.shape[0]},) on {points.device}, "
+                f"got {tuple(groups.shape)} on {groups.device}"
             )
         if (
             groups.is_floating_point()
@@ -1154,8 +1174,6 @@ class ClusterTree(TensorClass):
         dtype = points.dtype
         grouped = n_groups > 1
         points = points.detach()
-        if areas is None:
-            areas = torch.ones(n_points, device=device, dtype=dtype)
 
         ### Points by group, then code, then index: each group's sorted order,
         ### the groups end to end.
@@ -1171,8 +1189,9 @@ class ClusterTree(TensorClass):
                 by_group = torch.argsort(groups[order], stable=True)
                 order, sorted_codes = order[by_group], sorted_codes[by_group]
                 tree = groups[order]
-                tree_counts = torch.zeros(n_groups, dtype=torch.long, device=device)
-                tree_counts.index_add_(0, groups, torch.ones_like(groups))
+                tree_counts = torch.searchsorted(
+                    tree, torch.arange(n_groups + 1, device=device)
+                ).diff()
             else:
                 tree = torch.zeros(n_points, dtype=torch.long, device=device)
                 tree_counts = torch.full((1,), n_points, device=device)
@@ -1198,21 +1217,27 @@ class ClusterTree(TensorClass):
             diameter_sq = (aabb_max - aabb_min).pow(2).sum(dim=-1)
 
         ### Total area per node: the range sums of its tree's own prefix sum,
-        ### as from_points makes it; the prefix sums laid end to end, each with
-        ### its leading zero.
-        sorted_areas = areas.detach()[order].double()
-        prefixes, end = [], 0
-        for count in built.tree_items:
-            if count:
-                prefix = torch.cumsum(sorted_areas[end : end + count], dim=0)
-                prefixes.append(F.pad(prefix, (1, 0)))
-            end += count
-        area_prefix = torch.cat(prefixes)
-        nonempty = (tree_counts > 0).long()
-        starts = topo.range_start + (nonempty.cumsum(0) - nonempty)[built.node_tree]
-        total_area = (area_prefix[starts + topo.range_count] - area_prefix[starts]).to(
-            dtype
-        )
+        ### as from_points makes it, so that each tree's sums round as its own
+        ### build's do (one prefix sum over the forest would not); the prefix
+        ### sums laid end to end, each with its leading zero. Unit areas sum
+        ### to the exact counts.
+        if areas is None:
+            total_area = topo.range_count.to(dtype)
+        else:
+            sorted_areas = areas.detach()[order].double()
+            area_prefix = sorted_areas.new_zeros(n_points + built.root_ids.shape[0])
+            end = 0
+            for i, count in enumerate(c for c in built.tree_items if c):
+                at = end + i + 1
+                torch.cumsum(
+                    sorted_areas[end : end + count], 0, out=area_prefix[at : at + count]
+                )
+                end += count
+            nonempty = (tree_counts > 0).long()
+            starts = topo.range_start + (nonempty.cumsum(0) - nonempty)[built.node_tree]
+            total_area = (
+                area_prefix[starts + topo.range_count] - area_prefix[starts]
+            ).to(dtype)
 
         forest = cls(
             node_aabb_min=aabb_min,
@@ -1289,9 +1314,7 @@ class ClusterTree(TensorClass):
                 node_total_area=total_area[m:mb],
                 sorted_source_order=local_order[a:b],
                 source_points=group_points[a:b],
-                max_depth=torch.full(
-                    (), built.tree_depths[g], dtype=torch.long, device=device
-                ),
+                max_depth=built.tree_depths[g],
                 root_ids=torch.zeros(1, dtype=torch.long, device=device),
                 batch_size=torch.Size([]),
             )
@@ -2097,17 +2120,18 @@ class ClusterTree(TensorClass):
         Parameters
         ----------
         targets : Float[torch.Tensor, "n_targets n_dims"]
-            Target point coordinates, shape :math:`(M, D)`.
+            Target point coordinates, shape :math:`(M, D)`, on the tree's
+            device.
         theta : float
             Barnes-Hut opening angle. ``theta = 0`` forces all interactions to
             be exact (the plan is every pair, built directly).
         validate : bool, optional, default=True
             Run :meth:`PointInteractionPlan.validate` (synchronizes).
         source_admissible : torch.Tensor or None, optional
-            Boolean mask of shape ``(n_source_nodes,)``, as in
-            :meth:`find_dual_interaction_pairs`: a source node whose entry is
-            ``False`` is never replaced by its aggregate; the point descends
-            into it instead.
+            Boolean mask of shape ``(n_source_nodes,)`` on the tree's device,
+            as in :meth:`find_dual_interaction_pairs`: a source node whose
+            entry is ``False`` is never replaced by its aggregate; the point
+            descends into it instead.
         implementation : {"torch", "warp"} or None, optional, default=None
             How the walk runs; the plan is the same either way, entry for
             entry. The torch walk synchronizes with the host once per tree
@@ -2130,6 +2154,27 @@ class ClusterTree(TensorClass):
             int64 of shape ``(n_targets,)``.
         """
         device = self.node_aabb_min.device
+        ### Checked here for both walks: the Warp kernels would read past their
+        ### arrays or across devices where torch's operations raise.
+        if targets.ndim != 2 or (
+            self.n_nodes > 0 and targets.shape[1] != self.n_spatial_dims
+        ):
+            raise ValueError(
+                f"targets must have shape (n_targets, {self.n_spatial_dims}), "
+                f"got {tuple(targets.shape)}"
+            )
+        if targets.device != device:
+            raise ValueError(f"targets must be on {device}, got {targets.device}")
+        if source_admissible is not None and (
+            source_admissible.shape != (self.n_nodes,)
+            or source_admissible.dtype != torch.bool
+            or source_admissible.device != device
+        ):
+            raise ValueError(
+                f"source_admissible must be a bool tensor of shape ({self.n_nodes},) "
+                f"on {device}, got {source_admissible.dtype} of shape "
+                f"{tuple(source_admissible.shape)} on {source_admissible.device}"
+            )
         n_targets = targets.shape[0]
         theta_sq = theta * theta
         empty = torch.empty(0, dtype=torch.long, device=device)

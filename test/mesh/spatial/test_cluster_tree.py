@@ -1625,6 +1625,23 @@ def test_point_groups_of_one_group_and_of_no_points(device, implementation):
     assert [t.n_nodes for t in trees] == [0, 0]
 
 
+def test_builds_refuse_points_and_areas_of_other_shapes(device):
+    """Points that are not ``(n_points, n_dims)`` and areas that are not
+    ``(n_points,)`` are refused before either build runs."""
+    points = _points(50, 3, device, seed=66)
+    groups = torch.zeros(50, dtype=torch.long, device=device)
+    with pytest.raises(ValueError, match="points must have shape"):
+        ClusterTree.from_points(points[:, 0])
+    with pytest.raises(ValueError, match="points must have shape"):
+        ClusterTree.from_point_groups(points[:, 0], groups, n_groups=1)
+    with pytest.raises(ValueError, match="areas must have shape"):
+        ClusterTree.from_points(points, areas=torch.ones(50, 1, device=device))
+    with pytest.raises(ValueError, match="areas must have shape"):
+        ClusterTree.from_point_groups(
+            points, groups, n_groups=1, areas=torch.ones(49, device=device)
+        )
+
+
 def test_build_implementation_resolution(monkeypatch):
     """``None`` builds with torch on CPU and with Warp on CUDA when Warp is
     available and the points fit; a forced name is kept and an unknown one
@@ -2060,6 +2077,28 @@ def test_point_plan_count_only_at_theta_zero_and_when_empty(device):
     assert n_near.tolist() == [0] * 4 and n_far.tolist() == [0] * 4
 
 
+@pytest.mark.parametrize("implementation", [None, "torch", "warp"])
+def test_point_walk_refuses_targets_and_masks_that_do_not_fit_the_tree(
+    device, implementation
+):
+    """Targets of another dimension and masks of another length or dtype are
+    refused before either walk runs (the Warp kernels would read past their
+    arrays)."""
+    tree = ClusterTree.from_points(_points(200, 3, device, seed=62), leaf_size=4)
+    targets = _points(20, 3, device, seed=63)
+    for bad in (targets[:, :2], torch.cat([targets, targets[:, :1]], 1), targets[:, 0]):
+        with pytest.raises(ValueError, match="targets must have shape"):
+            tree.find_point_interaction_pairs(bad, implementation=implementation)
+    for mask in (
+        torch.ones(tree.n_nodes - 1, dtype=torch.bool, device=device),
+        torch.ones(tree.n_nodes, dtype=torch.uint8, device=device),
+    ):
+        with pytest.raises(ValueError, match="source_admissible must be"):
+            tree.find_point_interaction_pairs(
+                targets, source_admissible=mask, implementation=implementation
+            )
+
+
 @pytest.mark.cuda
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("n_dims", [2, 3])
@@ -2098,6 +2137,26 @@ def test_warp_walk_non_default_cuda_stream():
         ).clone()
     torch.cuda.current_stream().wait_stream(stream)
     assert _same_point_plans(plan, baseline)
+
+
+@pytest.mark.cuda
+def test_inputs_on_another_device_than_the_tree_are_refused():
+    """Targets or a mask on another device than the tree, and groups on
+    another device than the points, are refused instead of reaching a Warp
+    kernel (CUDA targets on a CPU tree used to pick the Warp walk)."""
+    tree = ClusterTree.from_points(_points(200, 3, "cpu", seed=64), leaf_size=4)
+    targets = _points(20, 3, "cpu", seed=65)
+    with pytest.raises(ValueError, match="targets must be on cpu"):
+        tree.find_point_interaction_pairs(targets.cuda())
+    mask = torch.ones(tree.n_nodes, dtype=torch.bool)
+    with pytest.raises(ValueError, match="source_admissible must be"):
+        tree.to("cuda").find_point_interaction_pairs(
+            targets.cuda(), source_admissible=mask
+        )
+    with pytest.raises(ValueError, match="groups must have shape"):
+        ClusterTree.from_point_groups(
+            targets.cuda(), torch.zeros(20, dtype=torch.long), n_groups=1
+        )
 
 
 @pytest.mark.parametrize(
