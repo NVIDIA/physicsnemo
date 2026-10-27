@@ -65,7 +65,9 @@ class _FNN(nn.Module):
             [nn.Linear(layers[i], layers[i + 1]) for i in range(len(layers) - 1)]
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "... dim_in"]
+    ) -> Float[torch.Tensor, "... dim_out"]:
         for linear in self.net[:-1]:
             x = self.activation(linear(x))
         return self.net[-1](x)
@@ -105,7 +107,9 @@ class _MFNN(nn.Module):
         self.Unet = nn.Linear(layers[0], layers[1])
         self.Vnet = nn.Linear(layers[0], layers[1])
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "... dim_in"]
+    ) -> Float[torch.Tensor, "... dim_out"]:
         U = self.activation(self.Unet(x))
         V = self.activation(self.Vnet(x))
         for linear in self.Znet[:-1]:
@@ -172,8 +176,9 @@ class ArGEnT(Module):
         otherwise GEGLU.
     axis_slices : list of int, optional
         Channels of each attention head assigned to each coordinate axis. Must
-        have ``dim_pos`` even entries summing to at most ``dim_emb``. Defaults
-        to ``[dim_emb // dim_pos] * dim_pos``.
+        have ``dim_pos`` even entries summing to at most ``dim_emb``; remaining
+        channels are not rotated. Defaults to
+        ``[2 * (dim_emb // (2 * dim_pos))] * dim_pos``.
     attention_type : {"cross", "self", "hybrid"}, optional, default="cross"
         ArGEnT variant. Only ``"cross"`` is currently supported; other values
         raise :class:`NotImplementedError`.
@@ -186,8 +191,9 @@ class ArGEnT(Module):
         Key/value tokens of shape :math:`(B, N_{kv}, D_{kv})`.
     padding_kv : torch.Tensor, optional
         Boolean or float mask of shape :math:`(B, N_{kv})` or
-        :math:`(B, N_{kv}, 1)`. Nonzero entries mark valid tokens; padded
-        tokens are excluded from the attention.
+        :math:`(B, N_{kv}, 1)`. Any nonzero entry marks a valid token; padded
+        tokens are excluded from the attention. Padded entries of ``x_kv`` may
+        hold any value, including NaN; they are zeroed before embedding.
 
     Outputs
     -------
@@ -236,7 +242,7 @@ class ArGEnT(Module):
                 f"dim_query={dim_query}, dim_kv={dim_kv}"
             )
         if axis_slices is None:
-            axis_slices = [dim_emb // dim_pos] * dim_pos
+            axis_slices = [2 * (dim_emb // (2 * dim_pos))] * dim_pos
         if len(axis_slices) != dim_pos:
             raise ValueError(
                 f"Expected axis_slices with {dim_pos} entries (dim_pos), "
@@ -286,6 +292,8 @@ class ArGEnT(Module):
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
         padding_kv: Optional[Shaped[torch.Tensor, "batch nkv ..."]] = None,
     ) -> Float[torch.Tensor, "batch nq dim_out"]:
+        B = x_query.shape[0]
+
         ### Input validation
         if not torch.compiler.is_compiling():
             if x_query.ndim != 3 or x_query.shape[-1] != self.dim_query:
@@ -293,18 +301,25 @@ class ArGEnT(Module):
                     f"Expected x_query of shape (B, N_q, {self.dim_query}) "
                     f"but got tensor of shape {tuple(x_query.shape)}"
                 )
-            B = x_query.shape[0]
             if x_kv.ndim != 3 or x_kv.shape[0] != B or x_kv.shape[-1] != self.dim_kv:
                 raise ValueError(
                     f"Expected x_kv of shape ({B}, N_kv, {self.dim_kv}) "
                     f"but got tensor of shape {tuple(x_kv.shape)}"
                 )
-            if padding_kv is not None and padding_kv.numel() != B * x_kv.shape[1]:
+            N_kv = x_kv.shape[1]
+            if padding_kv is not None and padding_kv.shape not in (
+                (B, N_kv),
+                (B, N_kv, 1),
+            ):
                 raise ValueError(
-                    f"Expected padding_kv of shape ({B}, {x_kv.shape[1]}) or "
-                    f"({B}, {x_kv.shape[1]}, 1) but got tensor of shape "
-                    f"{tuple(padding_kv.shape)}"
+                    f"Expected padding_kv of shape ({B}, {N_kv}) or ({B}, {N_kv}, 1) "
+                    f"but got tensor of shape {tuple(padding_kv.shape)}"
                 )
+
+        # Zero padded geometry so that non-finite padding values cannot reach
+        # the embeddings, the RoPE tables, or the gradients.
+        if padding_kv is not None:
+            x_kv = x_kv.masked_fill(padding_kv.reshape(B, -1, 1) == 0, 0.0)
 
         pos_query = x_query[..., : self.dim_pos]
         pos_kv = x_kv[..., : self.dim_pos]
