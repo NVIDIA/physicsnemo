@@ -674,9 +674,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI and the Dockerfile, the image requires `pip>=26.2.2` and
   `certifi>=2026.10.19`, and the lockfiles pin `certifi` 2026.10.23 and
   `virtualenv` 21.14.13. The GPU CI bootstrap installs the Hugging Face CLI
-  with uv instead of Ubuntu's apt pip. All CI jobs, including the GPU
-  containers, now use the latest CPython patch release from `setup-python`
-  instead of Ubuntu's apt Python.
+  with uv instead of Ubuntu's apt pip, and `install-ci` sets `check-latest`
+  so it uses the patched CPython releases.
 
 ### Dependencies
 
