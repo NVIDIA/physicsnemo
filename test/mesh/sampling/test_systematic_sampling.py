@@ -647,8 +647,9 @@ def test_cells_on_one_centroid_are_laid_in_index_order(device):
 def test_a_padded_mesh_keeps_the_same_cells(effective, device):
     """Mesh.pad's cells sit on the last point, here far outside the other cells, at
     zero measure: they move neither the canonical frame nor the Morton grid, so the
-    padded mesh keeps the same cells as the mesh itself, with the same weights to
-    roundoff, while n_samples is at most the count of positive measures."""
+    padded mesh keeps the same cells as the mesh itself, while n_samples is at most
+    the count of positive measures. The weights are bitwise the same: the doubling
+    scan of the tails gives the same bits after leading zeros."""
     soup = _soup(3000, effective=effective)
     far = torch.tensor([[40.0, -30.0, 20.0]], dtype=D)  # used by no cell
     mesh = Mesh(
@@ -659,7 +660,7 @@ def test_a_padded_mesh_keeps_the_same_cells(effective, device):
         k0, w0 = sample_cells_systematic(mesh, n_samples, u)
         k1, w1 = sample_cells_systematic(padded, n_samples, u)
         assert torch.equal(k1, k0)
-        torch.testing.assert_close(w1, w0, atol=0, rtol=1e-12)
+        assert torch.equal(w1, w0)
 
 
 ### torch.compile ###
