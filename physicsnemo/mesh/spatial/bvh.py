@@ -125,8 +125,10 @@ def _compute_morton_codes(
         torch.float64 if centroids.dtype == torch.float64 else torch.float32
     )
     quantization_points = centroids.to(quantization_dtype)
-    cmin = quantization_points.min(dim=0).values  # (D,)
-    cmax = quantization_points.max(dim=0).values  # (D,)
+    ### Values only: Inductor splits these over thread blocks, but not a min or
+    ### max that also returns indices.
+    cmin = quantization_points.amin(dim=0)  # (D,)
+    cmax = quantization_points.amax(dim=0)  # (D,)
     extent = cmax - cmin
     if isotropic:
         extent = extent.amax().expand(D)

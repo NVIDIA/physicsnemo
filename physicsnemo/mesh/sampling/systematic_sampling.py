@@ -165,7 +165,9 @@ def _pps_inclusion_probabilities(
     tail = _cumsum(a.flip(0)).flip(0)  # sum of the measures from rank m on
     rank = torch.arange(n, device=a.device, dtype=a.dtype)
     uncapped = (share - rank) * a < tail
-    m = torch.where(uncapped.any(), uncapped.to(torch.int8).argmax(), n)
+    ### The first uncapped rank as a min, not an argmax: Inductor splits a min over
+    ### every cell across thread blocks, but runs an argmax in one.
+    m = torch.where(uncapped, torch.arange(n, device=a.device), n).amin()
     ### (a gather, not tail[m]: indexing by a 0-d tensor would read it on the host)
     tail_m = tail.gather(0, m.clamp_max(n - 1).reshape(1))[0]
     c = (share - m) / tail_m.clamp_min(torch.finfo(a.dtype).tiny)
