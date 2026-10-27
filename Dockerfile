@@ -46,7 +46,7 @@ ENV UV_SYSTEM_PYTHON=1 \
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install "pip>=26.2.2" "certifi>=2026.10.19" "setuptools>=84.0.0" && \
     apt-get update && \
-    apt-get install -y git-lfs graphviz libgl1 zip unzip && \
+    apt-get install -y ca-certificates git-lfs graphviz libgl1 zip unzip && \
     git lfs install && \
     FILE="/etc/pip/constraint.txt" && \
     if [ -f "$FILE" ]; then \
