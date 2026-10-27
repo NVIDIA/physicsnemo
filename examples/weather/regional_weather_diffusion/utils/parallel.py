@@ -138,7 +138,12 @@ class ParallelHelper:
             mesh_shape=(self.data_parallel_size, domain_parallel_size),
             mesh_dim_names=["ddp", "domain"],
         )
-        self.domain_rank = self.mesh["domain"].get_local_rank()
+        # Slice each submesh once and reuse the object: every mesh["..."] builds a
+        # new, equal DeviceMesh, and a compiled graph that meets one it does not
+        # track fails in Inductor (pytorch/pytorch#201701).
+        self.domain_mesh = self.mesh["domain"]
+        self.ddp_mesh = self.mesh["ddp"]
+        self.domain_rank = self.domain_mesh.get_local_rank()
         self.use_shard_tensor = use_shard_tensor
 
     def get_domain_group_zero_rank(self) -> int:
@@ -149,7 +154,7 @@ class ParallelHelper:
         int
             Global rank for local domain rank 0.
         """
-        return torch.distributed.get_global_rank(self.mesh["domain"].get_group(), 0)
+        return torch.distributed.get_global_rank(self.domain_mesh.get_group(), 0)
 
     def local_batch_size(self, global_batch_size: int) -> int:
         """Compute per-rank batch size for data parallelism.
@@ -339,7 +344,7 @@ class ParallelHelper:
 
         i = 0
         batch = None
-        domain_group = self.mesh["domain"].get_group()
+        domain_group = self.domain_mesh.get_group()
         while True:
             # the source rank within the domain group (always 0 when domain_parallel_size == 1)
             source_rank_in_mesh = i % self.domain_parallel_size
@@ -431,10 +436,10 @@ class ParallelHelper:
                 if not p.is_contiguous():
                     p.data = p.data.contiguous()
 
-        sync_module_over_mesh(model, self.mesh["domain"])
+        sync_module_over_mesh(model, self.domain_mesh)
         if self.use_shard_tensor:
             self._shard_spatial_params(model)
-        fully_shard(model, mesh=self.mesh["ddp"])
+        fully_shard(model, mesh=self.ddp_mesh)
         return model
 
     def _shard_spatial_params(self, model: torch.nn.Module) -> None:
@@ -451,7 +456,7 @@ class ParallelHelper:
         model : torch.nn.Module
             Model whose spatial parameters/buffers should be sharded in place.
         """
-        domain_mesh = self.mesh["domain"]
+        domain_mesh = self.domain_mesh
         for module in model.modules():
             for name, param in list(module.named_parameters(recurse=False)):
                 shard_dim = shard_dim_selector(name)
@@ -500,7 +505,7 @@ class ParallelHelper:
 
         return DomainParallelNoiseScheduler(
             scheduler,
-            self.mesh["domain"],
+            self.domain_mesh,
             shard_dim=self.shard_dim,
         )
 
@@ -523,7 +528,7 @@ class ParallelHelper:
         if not self.use_shard_tensor or isinstance(t, DTensor):
             return t
         return DTensor.from_local(
-            t, device_mesh=self.mesh["domain"], placements=[Replicate()]
+            t, device_mesh=self.domain_mesh, placements=[Replicate()]
         )
 
     def sync_replicated_grads(self, model: torch.nn.Module) -> None:
@@ -553,7 +558,7 @@ class ParallelHelper:
         """
         if not self.use_shard_tensor:
             return
-        mesh = self.mesh["domain"]
+        mesh = self.domain_mesh
         mesh_size = mesh.size(0)
         if mesh_size == 1:
             return
@@ -623,7 +628,7 @@ class ParallelHelper:
             x = scatter_tensor(
                 x,
                 global_rank_of_source,
-                self.mesh["domain"],
+                self.domain_mesh,
                 placements=(placement,),  # Shard along height (H dimension)
                 global_shape=x.shape,
                 dtype=x.dtype,
