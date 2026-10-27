@@ -1,215 +1,157 @@
 # PhysicsNeMo-Mesh Tutorials
 
-This directory contains a series of progressive tutorials introducing
-**PhysicsNeMo-Mesh** - NVIDIA's GPU-accelerated mesh processing library for
-physics-AI applications.
-
-## What is PhysicsNeMo-Mesh?
-
-PhysicsNeMo-Mesh is a PyTorch-based library for working with simplicial meshes
-(point clouds, curves, surfaces, volumes) in a unified, dimensionally-generic
-framework. Key features include:
-
-- **GPU-Accelerated**: All operations vectorized with PyTorch, run natively on CUDA
-- **Dimensionally Generic**: Works with n-D manifolds embedded in m-D spaces
-- **TensorDict Integration**: Structured data management with automatic device handling
-- **Differentiable**: Seamless integration with PyTorch autograd
-- **Flexible Data**: Arbitrary-rank tensor fields on points, cells, or globally
-
-For the complete feature list, see the
+Nine executed notebooks that take you from a first mesh to meshes in a machine
+learning (ML) pipeline. PhysicsNeMo-Mesh stores point clouds, curves, surfaces,
+and volumes as PyTorch tensors, so operations run on a GPU, and the numerical
+ones work with autograd. For an overview of the module, refer to the
 [physicsnemo.mesh README](../../../physicsnemo/mesh/README.md).
 
-## Prerequisites
+## The Tutorials
 
-- Python 3.10+
-- PyTorch 2.0+
-- CUDA-capable GPU (recommended, not required)
+Each picture links to its notebook, and the caption says what you build:
 
-## Installation
+<!-- markdownlint-disable MD013 MD033 -->
+<table>
+<tr>
+<td width="33%" valign="top">
+<a href="tutorial_1_getting_started.ipynb"><img src="../../../docs/img/mesh/thumbnails/getting_started.png" alt="A curved triangle mesh colored by a field, with its vertices drawn as dots" width="100%"></a><br>
+<b>1. <a href="tutorial_1_getting_started.ipynb">Getting Started</a></b><br>
+Build a mesh from two tensors, attach fields, draw it, and differentiate its area.
+</td>
+<td width="33%" valign="top">
+<a href="tutorial_2_io_interop.ipynb"><img src="../../../docs/img/mesh/thumbnails/io.png" alt="A cube of hexahedral cells, each split into tetrahedra" width="100%"></a><br>
+<b>2. <a href="tutorial_2_io_interop.ipynb">Loading, Converting, and Saving Meshes</a></b><br>
+Convert PyVista and VTK meshes, triangulate polygons, and save to <code>.pmsh</code> and Zarr.
+</td>
+<td width="33%" valign="top">
+<a href="tutorial_3_primitives_generation.ipynb"><img src="../../../docs/img/mesh/thumbnails/primitives.png" alt="A Möbius strip triangle mesh" width="100%"></a><br>
+<b>3. <a href="tutorial_3_primitives_generation.ipynb">Primitives and Mesh Generation</a></b><br>
+Load ready-made shapes, and mesh a boundary, an implicit shape, or an isosurface.
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+<a href="tutorial_4_operations.ipynb"><img src="../../../docs/img/mesh/thumbnails/subdivision.png" alt="A coarse cube outline around the smooth sphere that Loop subdivision makes of it" width="100%"></a><br>
+<b>4. <a href="tutorial_4_operations.ipynb">Mesh Operations</a></b><br>
+Transform, subdivide, slice, and merge meshes, and extract boundaries and edge graphs.
+</td>
+<td width="33%" valign="top">
+<a href="tutorial_5_calculus.ipynb"><img src="../../../docs/img/mesh/thumbnails/calculus.png" alt="A sphere colored by a scalar field, with gradient arrows on its surface" width="100%"></a><br>
+<b>5. <a href="tutorial_5_calculus.ipynb">Discrete Calculus and Curvature</a></b><br>
+Compute gradients, divergence, curl, and curvature, and backpropagate through them.
+</td>
+<td width="33%" valign="top">
+<a href="tutorial_6_neighbors_spatial.ipynb"><img src="../../../docs/img/mesh/thumbnails/graphs.png" alt="The edge graph of a curved triangle sheet, drawn as blue nodes and edges" width="100%"></a><br>
+<b>6. <a href="tutorial_6_neighbors_spatial.ipynb">Neighbors, Adjacency, and Spatial Queries</a></b><br>
+Query adjacency, build graphs for graph networks, and sample fields at any point.
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+<a href="tutorial_7_quality_repair.ipynb"><img src="../../../docs/img/mesh/thumbnails/repair.png" alt="A sphere with a hole filled by new orange triangles" width="100%"></a><br>
+<b>7. <a href="tutorial_7_quality_repair.ipynb">Quality, Validation, and Repair</a></b><br>
+Measure cell quality, find defects, and repair them.
+</td>
+<td width="33%" valign="top">
+<a href="tutorial_8_domain_mesh.ipynb"><img src="../../../docs/img/mesh/thumbnails/domain_mesh.png" alt="A flow field in an annulus between a blue outer boundary and an orange inner boundary" width="100%"></a><br>
+<b>8. <a href="tutorial_8_domain_mesh.ipynb">Simulation Domains with DomainMesh</a></b><br>
+Keep an interior mesh, named boundaries, and case parameters in one object.
+</td>
+<td width="33%" valign="top">
+<a href="tutorial_9_ml_integration.ipynb"><img src="../../../docs/img/mesh/thumbnails/ml_pipelines.png" alt="Three small meshes of different shapes side by side, ready to batch" width="100%"></a><br>
+<b>9. <a href="tutorial_9_ml_integration.ipynb">Meshes in ML Pipelines</a></b><br>
+Batch meshes, train a graph model, compile it, and declare field schemas.
+</td>
+</tr>
+</table>
+<!-- markdownlint-enable MD013 MD033 -->
+
+## Learning Path
+
+Each tutorial builds on the ones before it. The nine fall into five steps:
+
+| Step | Tutorials | You Learn |
+| ---- | --------- | --------- |
+| The data model | 1 and 2 | What a `Mesh` holds, and how meshes get in and out |
+| Making meshes | 3 and 4 | Where meshes come from, and how to change them |
+| The math | 5 and 6 | Derivatives, curvature, neighbors, and spatial queries |
+| Robustness | 7 and 8 | Defects and repairs, and whole simulation domains |
+| ML | 9 | Batching, graph models, `torch.compile`, and field schemas |
+
+If you have one goal, you can take a shortcut:
+
+| Your Goal | Read |
+| --------- | ---- |
+| Build a graph neural network on meshes | 1, 4, 6, and 9 |
+| Write a physics loss with mesh derivatives | 1, 5, and 9 |
+| Turn computational fluid dynamics (CFD) results into training data | 1, 2, 8, and 9 |
+| Clean up scanned or CAD meshes | 1, 2, and 7 |
+
+## Install
+
+The tutorials need PhysicsNeMo with its `mesh-extras` extra (matplotlib,
+PyVista, and VTK) and Jupyter. From this directory, install them with:
 
 ```bash
-pip install nvidia-physicsnemo pyvista[all,trame] matplotlib jupyter
+pip install -r requirements.txt
 ```
 
-Or install from the repository:
+The tutorials use APIs from PhysicsNeMo 2.3, such as `FieldSchema` in
+Tutorial 9. Until version 2.3.0 is released, install PhysicsNeMo from its main
+branch or from a clone, as the following block shows.
 
-```bash
-pip install -e ".[mesh]"
-```
+<!-- markdownlint-disable MD033 -->
+<details>
+<summary>Install from the main branch or from a clone</summary>
+<!-- markdownlint-enable MD033 -->
 
-## Tutorial Overview
+From the main branch:
 
 <!-- markdownlint-disable MD013 -->
-| Tutorial | Topic | What You'll Learn |
-| ---------- | ------- | ------------------- |
-| **1. Getting Started** | Core concepts | Mesh structure, data attachment, GPU acceleration |
-| **2. Operations** | Mesh manipulation | Transformations, subdivision, slicing, merging |
-| **3. Discrete Calculus** | Mathematical operators | Gradients, divergence, curl, curvature |
-| **4. Neighbors & Spatial** | Queries | Adjacency, BVH, sampling, interpolation |
-| **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
-| **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
-| **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
-| **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
+```bash
+pip install "nvidia-physicsnemo[mesh-extras] @ git+https://github.com/NVIDIA/physicsnemo.git" \
+    jupyter ipykernel ipywidgets
+```
 <!-- markdownlint-enable MD013 -->
 
-## Running the Tutorials
-
-### Option 1: Jupyter Notebook
+From the root of a clone of the PhysicsNeMo repository:
 
 ```bash
-cd examples/minimal/mesh
-jupyter notebook
+pip install -e ".[mesh-extras]" jupyter ipykernel ipywidgets
 ```
 
-Then open any `tutorial_*.ipynb` file.
+<!-- markdownlint-disable MD033 -->
+</details>
+<!-- markdownlint-enable MD033 -->
 
-### Option 2: JupyterLab
+PhysicsNeMo needs Python 3.11 or later. The notebooks run on a CPU, and they use
+a CUDA GPU when one is present. Some cells download PyVista example meshes the
+first time that they run, so they need internet access once.
+
+## Run
+
+Start Jupyter in this directory, because the notebooks read files from
+`assets/` (a coarse Stanford bunny, `bunny.pt`). From the repository root, run:
 
 ```bash
 cd examples/minimal/mesh
 jupyter lab
 ```
 
-### Option 3: VS Code / Cursor
+Then open a `tutorial_*.ipynb` file. VS Code and other editors with notebook
+support open the files directly.
 
-Open the `.ipynb` files directly - they work with the built-in notebook support.
+The notebooks render 3D figures with PyVista as static images
+(`pv.set_jupyter_backend("static")`), so that the figures show on GitHub. To
+rotate and zoom a 3D figure, install `trame` (`pip install "pyvista[jupyter]"`)
+and change the backend to `"trame"`.
 
-## Tutorial Contents
+## More Information
 
-### Tutorial 1: Getting Started
+The following pages have more information:
 
-**File**: `tutorial_1_getting_started.ipynb`
-
-Learn the core concepts - a `Mesh` is just 5 fields: 2 for geometry, 3 for data.
-
-- The 5-field data structure (points, cells, point_data, cell_data, global_data)
-- Creating meshes from scratch
-- Loading from PyVista and built-in primitives
-- Attaching scalar, vector, and tensor data
-- Visualization with `.draw()`
-- GPU acceleration with `.to("cuda")`
-- Autograd integration
-
-### Tutorial 2: Operations and Transformations
-
-**File**: `tutorial_2_operations.ipynb`
-
-Learn mesh manipulation operations.
-
-- Geometric transformations (translate, rotate, scale, transform)
-- Subdivision schemes (linear, Loop, Butterfly)
-- Slicing (slice_cells, slice_points)
-- Merging multiple meshes
-- Boundary and facet extraction
-- Data conversion (cell_data_to_point_data, point_data_to_cell_data)
-- Topology checks (is_watertight, is_manifold)
-
-### Tutorial 3: Discrete Calculus and Differential Geometry
-
-**File**: `tutorial_3_calculus.ipynb`
-
-Learn mathematical operations on meshes.
-
-- Computing gradients (LSQ and DEC methods)
-- Divergence and curl
-- Gaussian and mean curvature
-- Intrinsic vs extrinsic derivatives
-- Vector calculus identities
-- Physics-informed feature extraction
-
-### Tutorial 4: Neighbors, Adjacency, and Spatial Queries
-
-**File**: `tutorial_4_neighbors_spatial.ipynb`
-
-Learn about mesh queries for GNN-style processing.
-
-- Topological neighbors (point-to-points, cell-to-cells)
-- Sparse adjacency encoding
-- BVH construction and queries
-- Point containment
-- Random point sampling
-- Data interpolation at query points
-
-### Tutorial 5: Quality, Validation, and Repair
-
-**File**: `tutorial_5_quality_repair.ipynb`
-
-Learn mesh quality assessment and repair.
-
-- Quality metrics (aspect ratio, angles, quality score)
-- Mesh statistics
-- Validation (detect errors)
-- Repair operations (clean, remove duplicates, fix orientation)
-- Manifold and watertight checking
-
-### Tutorial 6: Integration with ML Workflows
-
-**File**: `tutorial_6_ml_integration.ipynb`
-
-Learn to use PhysicsNeMo-Mesh in production ML pipelines.
-
-- Performance comparison with PyVista/VTK
-- Batching with padding for torch.compile
-- Feature extraction for ML models
-- Boundary condition handling
-- End-to-end CAE preprocessing workflow
-- torch.compile compatibility
-
-### Tutorial 7: Simulation Domains with DomainMesh
-
-**File**: `tutorial_7_domain_mesh.ipynb`
-
-Learn to represent full simulation domains with interior meshes and named boundaries.
-
-- Building a DomainMesh from mesh primitives (cube volume + boundary surfaces)
-- Inspecting domain properties and iterating over meshes
-- Data augmentation via geometric transforms (quasi-equivariance)
-- Validation and boundary watertightness checking
-- Visualization of boundary patches by BC type
-- Domain-wide operations (subdivide, clean)
-
-### Tutorial 8: I/O - Interoperability and Serialization
-
-**File**: `tutorial_8_io_interop.ipynb`
-
-Learn to get meshes in and out of PhysicsNeMo-Mesh.
-
-- The simplex-only data model (why importing usually means triangulating)
-- Importing from PyVista with `from_pyvista` (automatic triangulation)
-- Importing raw polygon soups with `Adjacency` + `triangulate` / `Mesh.from_polygons`
-- Convex vs non-convex polygons: ear clipping for correct areas and forces
-- Exporting to PyVista with `to_pyvista`
-- Saving and loading the native, folder-based memmap format, including its
-  on-disk layout (`.pmsh` for `Mesh`, `.pdmsh` for `DomainMesh`)
-
-### Tutorial 9: Mesh Generation
-
-**File**: `tutorial_9_mesh_generation.ipynb`
-
-Generate simulation-ready volume meshes from scratch in two ways.
-
-**From an explicit boundary** (`fill_interior`):
-
-- Filling multiply-connected boundary meshes with per-boundary provenance data
-- Verifying the minimum-angle guarantee across resolutions
-
-**From an implicit function** (`mesh_implicit_domain`, `marching_cubes`):
-
-- Using implicit CSG, raw level sets, and the coverage guard
-- Pinning sharp corners with `feature_points`
-- Tetrahedralizing 3D implicit domains
-- Extracting isosurfaces with `marching_cubes`
-- Computing shape gradients through the mesh (differentiable meshing)
-
-## Assets
-
-The `assets/` directory contains pre-saved meshes for use in tutorials:
-
-- `bunny.pt` - Stanford bunny mesh (coarse, use `.subdivide()` for detail)
-
-## Additional Resources
-
-- [PhysicsNeMo Documentation](https://docs.nvidia.com/deeplearning/physicsnemo)
-- [physicsnemo.mesh Module Reference](../../../physicsnemo/mesh/README.md)
-- [PyTorch TensorDict](https://github.com/pytorch/tensordict)
-- [PyVista](https://pyvista.org/)
+- [PhysicsNeMo-Mesh User Guide](https://docs.nvidia.com/physicsnemo/latest/user-guide/mesh.html)
+- [PhysicsNeMo-Mesh API Reference](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api/mesh/index.html)
+- [physicsnemo.mesh README](../../../physicsnemo/mesh/README.md)
+- [TensorDict](https://github.com/pytorch/tensordict) and
+  [PyVista](https://pyvista.org/)

@@ -32,8 +32,9 @@ over edges:
 
 where :math:`w_{vw} = |{\star}e|/|e|` are the FEM cotangent weights and
 :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume. This is exact for
-linear vector fields at interior vertices and first-order convergent on
-smooth fields.
+linear vector fields at interior vertices of 1D meshes and of uniform grids.
+On irregular triangle or tetrahedral meshes it is not exact for linear fields,
+and its pointwise error need not shrink as the mesh refines.
 
 Physical interpretation: net flux through the dual cell boundary per unit
 volume, with the PDP-flat providing the edge flux estimate.

@@ -2008,6 +2008,9 @@ def install_aot_plain_tangent_coercion() -> None:
     ``Replicate`` boundary, so rebuilding via ``__tensor_unflatten__`` is lossless. Scoped to
     ShardTensor, idempotent, degrades gracefully; a general AOT gap pending an upstream hook."""
     try:
+        # ``torch._dynamo`` must load before ``runtime_wrappers``: importing them the other
+        # way round breaks ``torch.compile`` for the process (pytorch/pytorch#201689).
+        import torch._dynamo  # noqa: F401
         from torch._functorch._aot_autograd.runtime_wrappers import (
             AOTDispatchAutograd,
         )

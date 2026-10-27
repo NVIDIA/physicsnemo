@@ -21,11 +21,14 @@ The shim rebuilds a ShardTensor from a plain runtime tangent + traced
 These tests guard the shim install and its lossless reconstruction.
 """
 
+import subprocess
+import sys
+
 import pytest
 import torch
 from torch.distributed.tensor.placement_types import Replicate
 
-from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel import ShardTensor, shard_tensor
 from physicsnemo.domain_parallel.shard_tensor import (
     install_aot_plain_tangent_coercion,
 )
@@ -40,6 +43,67 @@ def test_aot_plain_tangent_shim_installed_and_idempotent() -> None:
 
     install_aot_plain_tangent_coercion()  # idempotent
     assert AOTDispatchAutograd.process_runtime_tangent is fn
+
+
+# Runs in a fresh interpreter: loads only ``install_aot_plain_tangent_coercion`` from
+# ``shard_tensor.py`` (path in ``sys.argv[1]``), so nothing imports ``torch._dynamo`` first.
+_FRESH_INSTALL_SNIPPET = """
+import ast
+import sys
+
+import torch
+
+path = sys.argv[1]
+with open(path) as f:
+    tree = ast.parse(f.read(), filename=path)
+(fn,) = [
+    node
+    for node in tree.body
+    if isinstance(node, ast.FunctionDef)
+    and node.name == "install_aot_plain_tangent_coercion"
+]
+
+
+class ShardTensor(torch.Tensor):
+    pass
+
+
+namespace = {"torch": torch, "ShardTensor": ShardTensor}
+exec(compile(ast.Module(body=[fn], type_ignores=[]), path, "exec"), namespace)
+
+assert "torch._dynamo" not in sys.modules, "torch._dynamo was imported too early"
+namespace["install_aot_plain_tangent_coercion"]()
+
+out = torch.compile(lambda x: x + 1, backend="eager")(torch.ones(1))
+assert out.item() == 2, out
+
+from torch._functorch._aot_autograd.runtime_wrappers import AOTDispatchAutograd
+
+assert getattr(
+    AOTDispatchAutograd.process_runtime_tangent, "_shardtensor_plain_tangent_shim", False
+)
+"""
+
+
+@pytest.mark.timeout(300)
+def test_aot_plain_tangent_shim_install_keeps_compile_working() -> None:
+    """Installing the shim first in a fresh process leaves ``torch.compile`` working.
+
+    The shim imports a private AOTAutograd module. Imported before ``torch._dynamo``,
+    that module leaves ``torch._dynamo`` half-initialized, and every later
+    ``torch.compile`` raises (pytorch/pytorch#201689). Importing
+    ``physicsnemo.domain_parallel`` cannot test this: its dependencies, such as
+    tensordict, may import ``torch._dynamo`` first and hide the bug. So the test
+    parses ``shard_tensor.py``, executes only this function in a new interpreter where
+    ``torch._dynamo`` is not loaded, and then checks ``torch.compile``.
+    """
+    result = subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
+        [sys.executable, "-c", _FRESH_INSTALL_SNIPPET, shard_tensor.__file__],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def run_flatten_unflatten_roundtrip_is_lossless(mesh):

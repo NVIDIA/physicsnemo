@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.utils._tracing import is_tracing
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -95,7 +97,7 @@ def sample_random_points_on_cells(
         )
 
     ### Validate indices
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if len(cell_indices) > 0:
             if cell_indices.min() < 0:
                 raise IndexError(
@@ -120,7 +122,7 @@ def sample_random_points_on_cells(
             rate=torch.ones((), device=mesh.points.device, dtype=dtype),
         )
     else:
-        if torch.compiler.is_compiling():
+        if is_tracing():
             raise NotImplementedError(
                 f"alpha={alpha!r} is not supported under torch.compile.\n"
                 f"PyTorch does not yet support sampling from a Gamma distribution\n"

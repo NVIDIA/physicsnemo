@@ -101,7 +101,7 @@ def _unique_rows(rows):
     n, w = rows.shape
     bits = 63 // w
     if n > 0 and rows.max() < (1 << bits):
-        packed = rows[:, 0].clone()
+        packed = rows[:, 0].to(torch.int64)
         for i in range(1, w):
             packed = (packed << bits) | rows[:, i]
         uniq_p, inverse, counts = torch.unique(

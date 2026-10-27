@@ -205,6 +205,7 @@ physicsnemo/utils/capture.py @nickgeneva @ktangsali
 physicsnemo/utils/checkpoint.py @CharlelieLrt @negin513
 physicsnemo/utils/insolation.py @pzharrington
 physicsnemo/utils/memory.py @coreyjadams
+physicsnemo/utils/weighted_multinomial.py @peterdsharpe
 physicsnemo/utils/zenith_angle.py @pzharrington
 
 # Logging utilities

@@ -627,6 +627,10 @@ def match_points(
     >>> tgt_idx
     tensor([0])
     """
+    if source.shape[0] == 0 or target.shape[0] == 0:
+        # No pairs can exist; some kNN backends reject empty point sets.
+        empty = torch.empty(0, dtype=torch.long, device=source.device)
+        return empty, empty.clone()
     indices, distances = knn(points=target, queries=source, k=1)
     indices = indices[:, 0]  # (M,)
     distances = distances[:, 0]  # (M,)

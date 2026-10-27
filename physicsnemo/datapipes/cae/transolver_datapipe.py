@@ -44,7 +44,8 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
-from physicsnemo.nn.functional import signed_distance_field, weighted_multinomial
+from physicsnemo.nn.functional import signed_distance_field
+from physicsnemo.utils import weighted_multinomial
 
 
 @dataclass

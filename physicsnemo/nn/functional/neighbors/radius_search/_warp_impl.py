@@ -45,6 +45,11 @@ wp.init()
 
 BLOCK_DIM = 32
 
+# Hash grid shape for points with 1, 2, or 3 coordinates. Each shape has about
+# 2**21 cells, and all of them lie in the subspace of the zero-padded points.
+# The 128**3 grid would put 1D points in only 128 of its cells.
+_GRID_DIMS = {1: (2**21, 1, 1), 2: (1448, 1448, 1), 3: (128, 128, 128)}
+
 
 def count_neighbors(
     grid: wp.HashGrid,
@@ -192,6 +197,7 @@ def radius_search_impl(
     max_points: int | None = None,
     return_dists: bool = False,
     return_points: bool = False,
+    num_coords: int = 3,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Find and return the nearest neighbors in `points` using locations from `queries`.
@@ -209,6 +215,8 @@ def radius_search_impl(
         max_points (int | None, optional): The maximum number of points to return per query. If None, unlimited.
         return_dists (bool, optional): Whether to return the distances of the neighbors.
         return_points (bool, optional): Whether to return the points of the neighbors.
+        num_coords (int, optional): The number of coordinates before zero-padding
+            to 3, which sets the shape of the hash grid. It affects only speed.
 
     Returns:
         tuple[torch.Tensor, ...]: (indices, points, distances, num_neighbors)
@@ -242,7 +250,7 @@ def radius_search_impl(
             qrs_b = queries[b].contiguous()
             wp_pts_b = wp.from_torch(pts_b, dtype=wp.vec3)
             wp_qrs_b = wp.from_torch(qrs_b, dtype=wp.vec3, return_ctype=True)
-            grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_pts_b.device)
+            grid = wp.HashGrid(*_GRID_DIMS[num_coords], device=wp_pts_b.device)
             grid.reserve(N_queries)
             grid.build(points=wp_pts_b, radius=0.5 * radius)
             grids.append(grid)
@@ -354,12 +362,20 @@ def radius_search_impl(
                 grid_ids_tensor, dtype=wp.uint64, return_ctype=True
             )
 
-            # Convert batched points/queries to warp 2D arrays
+            # Convert batched points/queries to warp 2D arrays. They can be the
+            # caller's own tensors, so requires_grad=False keeps Warp from
+            # assigning a new gradient to their .grad.
             wp_points_2d = wp.from_torch(
-                points.contiguous(), dtype=wp.vec3, return_ctype=True
+                points.contiguous(),
+                dtype=wp.vec3,
+                requires_grad=False,
+                return_ctype=True,
             )
             wp_queries_2d = wp.from_torch(
-                queries.contiguous(), dtype=wp.vec3, return_ctype=True
+                queries.contiguous(),
+                dtype=wp.vec3,
+                requires_grad=False,
+                return_ctype=True,
             )
 
             # Allocate outputs with batch dimension
@@ -444,6 +460,7 @@ def radius_search_impl_fake(
     max_points: int | None = None,
     return_dists: bool = False,
     return_points: bool = False,
+    num_coords: int = 3,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Fake implementation for torch.compile/fake tensor support.
@@ -509,7 +526,7 @@ def setup_radius_search_context(
         inputs (tuple): The input arguments to the forward function.
         output (tuple): The output tensors from the forward function.
     """
-    points, queries, radius, max_points, return_dists, return_points = inputs
+    points, queries, radius, max_points, return_dists, return_points, _ = inputs
 
     indexes, ret_points, distances, num_neighbors = output
 
@@ -559,7 +576,7 @@ def backward_radius_search(
     else:
         point_grads = None
 
-    return point_grads, None, None, None, None, None
+    return point_grads, None, None, None, None, None, None
 
 
 @torch.library.custom_op(
@@ -731,11 +748,14 @@ def radius_search(
     """
     Perform a radius search between points and queries.
 
-    Accepts both unbatched (N, 3) and batched (B, N, 3) inputs.
+    Accepts both unbatched (N, D) and batched (B, N, D) inputs, with D from 1
+    to 3. The kernels use 3D points, so 1D and 2D inputs are padded with zero
+    coordinates, which leaves distances unchanged, and the hash grid is shaped
+    for D. Returned points are sliced back to D coordinates.
 
     Args:
-        points (torch.Tensor): The input points tensor, (N, 3) or (B, N, 3).
-        queries (torch.Tensor): The query points tensor, (M, 3) or (B, M, 3).
+        points (torch.Tensor): The input points tensor, (N, D) or (B, N, D).
+        queries (torch.Tensor): The query points tensor, (M, D) or (B, M, D).
         radius (float): The search radius.
         max_points (int | None): The maximum number of neighbors per query, or
             None for unlimited.
@@ -747,7 +767,22 @@ def radius_search(
         The formatted radius search results, whose contents depend on
         ``return_dists`` and ``return_points``.
     """
+    # Validate before padding, which would hide unsupported shapes.
+    validate_inputs(points, queries)
+    dim = points.shape[-1]
+    if dim > 3:
+        raise ValueError(
+            f"the Warp backend of radius_search supports points with 1, 2, or 3 "
+            f"coordinates, got {dim}. Use implementation='torch' for more."
+        )
+
+    if dim < 3:
+        points = torch.nn.functional.pad(points, (0, 3 - dim))
+        queries = torch.nn.functional.pad(queries, (0, 3 - dim))
+
     indices, points_out, distances, _ = radius_search_impl(
-        points, queries, radius, max_points, return_dists, return_points
+        points, queries, radius, max_points, return_dists, return_points, dim
     )
+    if dim < 3:
+        points_out = points_out[..., :dim].contiguous()
     return format_returns(indices, points_out, distances, return_dists, return_points)

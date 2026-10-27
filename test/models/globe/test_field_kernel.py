@@ -244,6 +244,40 @@ def test_kernel_refuses_declarations_it_does_not_implement(schemas, match):
         Kernel(n_spatial_dims=3, **({"output_schema": {"p": {"rank": 0}}} | schemas))
 
 
+def test_kernel_column_order():
+    """The kernel's input and output columns must keep their order.
+
+    Trained checkpoints depend on this order.  These names sort differently
+    as dotted names and as nested keys (``-`` < ``.`` < ``_``), and with 11
+    harmonics the string order of their old keys (``10`` before ``2``)
+    differs from the natural order.  The literals are the order of earlier
+    versions.
+    """
+    nested = {"a": {"b": {"rank": 0}, "v": {"rank": 1}}}
+    global_schema = nested | {"a-c": {"rank": 0}, "a-w": {"rank": 1}}
+    kernel = Kernel(
+        n_spatial_dims=3,
+        output_schema=global_schema,
+        source_schema=global_schema | {"a_": {"rank": 0}},
+        global_schema=global_schema,
+        n_spherical_harmonics=11,
+        hidden_layer_sizes=[8],
+    )
+
+    ### Source fields by dotted name, global fields by nested key; scalars
+    ### first in both.
+    assert kernel._source_layout.keys == (
+        "a-c",
+        ("a", "b"),
+        "a_",
+        "a-w",
+        ("a", "v"),
+    )
+    assert kernel._global_layout.keys == (("a", "b"), "a-c", ("a", "v"), "a-w")
+    assert kernel.output_layout.keys == ("a-c", "a-w", "a.b", "a.v")
+    assert kernel._harmonic_order == (0, 1, 10, 2, 3, 4, 5, 6, 7, 8, 9)
+
+
 output_fields_params = pytest.mark.parametrize(
     "output_fields",
     [

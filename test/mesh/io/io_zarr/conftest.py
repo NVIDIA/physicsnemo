@@ -75,6 +75,28 @@ def make_domain_mesh(seed: int = 3) -> DomainMesh:
     )
 
 
+def write_unfinished_store(obj: Mesh | DomainMesh, store) -> None:
+    """Run to_zarr with the 4th array write failing, as a full disk would."""
+    from physicsnemo.mesh.io import to_zarr
+
+    create_array = zarr.Group.create_array
+    n_calls = 0
+
+    def failing_create_array(self, *args, **kwargs):
+        nonlocal n_calls
+        n_calls += 1
+        if n_calls == 4:
+            raise OSError("simulated full disk")
+        return create_array(self, *args, **kwargs)
+
+    zarr.Group.create_array = failing_create_array
+    try:
+        with pytest.raises(OSError, match="simulated full disk"):
+            to_zarr(obj, store)
+    finally:
+        zarr.Group.create_array = create_array
+
+
 def assert_meshes_equal(a: Mesh, b: Mesh) -> None:
     """Bitwise comparison of two meshes, including nested field trees."""
     assert torch.equal(a.points, b.points)

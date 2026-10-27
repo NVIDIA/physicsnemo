@@ -1051,8 +1051,8 @@ class _Triangulation:
                     "input segments cross each other; loops must be disjoint "
                     "simple polygons"
                 )
-            u = tv[base + (1, 2, 0)[i]]  # left of (a, b) by construction
-            v = tv[base + (2, 0, 1)[i]]  # right of (a, b)
+            u = tv[base + (1, 2, 0)[i]]  # right of (a, b) by construction
+            v = tv[base + (2, 0, 1)[i]]  # left of (a, b)
             pipe.append((u, v))
             n = tn[base + i]
             if n < 0:
@@ -1071,9 +1071,11 @@ class _Triangulation:
             if ow == 0.0:
                 return ("vertex", w)
             # Continue through the far triangle: its slots are (k: w, k+1: v,
-            # k+2: u); the next crossed edge keeps w on the side it fell on.
+            # k+2: u). If w is left of (a, b), like v, the segment leaves
+            # through edge (w, u), opposite slot k+1; otherwise through
+            # (v, w), opposite slot k+2.
             t = n
-            i = (k + 2) % 3 if ow > 0.0 else (k + 1) % 3
+            i = (k + 1) % 3 if ow > 0.0 else (k + 2) % 3
         raise RuntimeError("segment pipe walk did not terminate")
 
     def recover_segment(self, a: int, b: int) -> None:

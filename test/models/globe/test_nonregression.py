@@ -38,17 +38,34 @@ from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
 DATA_DIR = Path(__file__).parent / "data"
 SEED = 42
-ATOL = 1e-5
+### The C_f outputs are about 1e-5, so an ATOL of 1e-5 hid row and column
+### mix-ups.  Unchanged code matches the reference to about 1e-11.
+ATOL = 1e-9
 RTOL = 1e-5
+
+### Reference file of each configuration, with its extra GLOBE arguments.
+### The second reaches the far-target centroids and ``_compress_latents``.
+### Its scale is 1e-2, not the examples' 100.0, which changes the outputs
+### of this small model by only about 1e-12.
+CONFIGS = {
+    "globe_nonregression_output.pth": {},
+    "globe_nonregression_output_no_far_expansion_compression_1e-2.pth": {
+        "expand_far_targets": False,
+        "latent_compression_scale": 1e-2,
+    },
+}
 
 
 def _make_globe_and_inputs(
     device: torch.device,
+    **globe_kwargs,
 ) -> tuple[GLOBE, dict]:
     """Construct a GLOBE model and inputs matching the DrivAerML config.
 
     Uses small mesh sizes for fast test execution while exercising all
     interaction phases (near-field, far-field, cross-BC communication).
+
+    ``globe_kwargs`` are passed on to :class:`GLOBE`.
 
     Returns the model and a dict of forward-pass keyword arguments.
     """
@@ -70,6 +87,7 @@ def _make_globe_and_inputs(
         n_spherical_harmonics=4,
         theta=2.0,
         leaf_size=4,
+        **globe_kwargs,
     ).to(device)
     model.eval()
 
@@ -111,17 +129,20 @@ def _load_reference(path: Path, device: torch.device) -> dict[str, torch.Tensor]
 
 
 @pytest.mark.parametrize("device", ["cpu"])
-def test_globe_nonregression(device: str) -> None:
+@pytest.mark.parametrize(
+    ("ref_name", "globe_kwargs"), CONFIGS.items(), ids=list(CONFIGS)
+)
+def test_globe_nonregression(device: str, ref_name: str, globe_kwargs: dict) -> None:
     """Full GLOBE forward pass must reproduce saved reference output.
 
     On first run, generates the reference file.  On subsequent runs,
     compares output against the saved reference with tight tolerances.
     Any numerical change from refactoring will cause this test to fail.
     """
-    ref_path = DATA_DIR / "globe_nonregression_output.pth"
+    ref_path = DATA_DIR / ref_name
     device_obj = torch.device(device)
 
-    model, forward_kwargs = _make_globe_and_inputs(device_obj)
+    model, forward_kwargs = _make_globe_and_inputs(device_obj, **globe_kwargs)
 
     with torch.no_grad():
         output_mesh = model(**forward_kwargs)

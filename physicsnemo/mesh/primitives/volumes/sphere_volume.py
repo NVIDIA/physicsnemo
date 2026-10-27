@@ -43,7 +43,9 @@ def load(
 ) -> Mesh[3, 3]:
     """Create a tetrahedral volume mesh of a sphere.
 
-    The sphere is filled with tetrahedra using PyVista's delaunay_3d filter.
+    The interior is filled with a fan of tetrahedra from the center to each
+    triangle of a PyVista sphere surface. The sphere is convex, so the
+    tetrahedra fill it without overlap.
 
     Parameters
     ----------
@@ -62,15 +64,16 @@ def load(
     from physicsnemo.mesh.generate._simplex_ops import orient_positive
     from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
-    ### Create a sphere surface and fill it with tetrahedra
+    ### Create a sphere surface
     sphere = pv.Sphere(
         radius=radius, theta_resolution=resolution, phi_resolution=resolution
     )
+    # Weld coincident points, with a tolerance relative to the size
+    surface = from_pyvista(sphere).clean(tolerance=1e-6 * radius)
 
-    ### Use delaunay_3d to fill the interior with tetrahedra
-    volume = sphere.delaunay_3d()
-
-    ### Convert to physicsnemo Mesh; VTK 9.7+ can emit inverted tetrahedra
-    mesh = from_pyvista(volume)
-    mesh = mesh.with_cells(orient_positive(mesh.points, mesh.cells))
+    ### Fill the convex surface with a fan of tetrahedra from its center
+    points = torch.cat([surface.points, surface.points.new_zeros(1, 3)], dim=0)
+    center = torch.full((surface.n_cells, 1), surface.n_points, dtype=torch.int64)
+    cells = torch.cat([center, surface.cells], dim=1)
+    mesh = Mesh(points=points, cells=orient_positive(points, cells))
     return mesh.to(device=device)

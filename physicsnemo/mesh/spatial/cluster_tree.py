@@ -59,8 +59,7 @@ criterion, dual-tree traversal, and far-field monopole approximation.
 """
 
 import logging
-import math
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -75,6 +74,7 @@ from physicsnemo.mesh.spatial._lbvh import (
 )
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
+from physicsnemo.utils._tracing import is_tracing
 
 logger = logging.getLogger("mesh.spatial.cluster_tree")
 
@@ -157,7 +157,7 @@ class DualInteractionPlan(TensorClass):
 
         Verifies shape pairing, non-negativity, and fn_broadcast bounds.
         Raises ``ValueError`` on any inconsistency.  Intended to be called
-        behind a ``not torch.compiler.is_compiling()`` guard so it is
+        behind a ``not is_tracing()`` guard so it is
         zero-cost under ``torch.compile``.
 
         Raises
@@ -692,6 +692,11 @@ class ClusterTree(TensorClass):
     The tree supports both boundary face centroids and prediction point clouds
     (same construction algorithm, same data structure).
 
+    A ClusterTree can also be a forest: :meth:`merge` lays several trees end
+    to end, with their nodes and points one after another, and lists the root
+    of each in ``root_ids``. Every traversal starts from all of the roots, on
+    either side, and ``n_sources`` counts the points of every tree.
+
     Attributes
     ----------
     node_aabb_min : torch.Tensor
@@ -727,6 +732,10 @@ class ClusterTree(TensorClass):
         Original source point coordinates, shape ``(n_sources, D)``.
     max_depth : torch.Tensor
         Scalar tensor storing the tree depth (for fixed-iteration traversal).
+    root_ids : torch.Tensor
+        Root node of each tree, in order, shape ``(n_roots,)``: ``[0]`` for
+        a tree from :meth:`from_points`, empty for an empty tree, one per
+        nonempty tree for a forest from :meth:`merge`.
     """
 
     node_aabb_min: torch.Tensor
@@ -742,6 +751,7 @@ class ClusterTree(TensorClass):
     sorted_source_order: torch.Tensor
     source_points: torch.Tensor
     max_depth: torch.Tensor
+    root_ids: torch.Tensor
 
     @property
     def n_nodes(self) -> int:
@@ -831,6 +841,7 @@ class ClusterTree(TensorClass):
                 sorted_source_order=empty_long,
                 source_points=points.detach(),
                 max_depth=torch.tensor(0, dtype=torch.long, device=device),
+                root_ids=empty_long,
                 batch_size=torch.Size([]),
             )
 
@@ -890,8 +901,108 @@ class ClusterTree(TensorClass):
             sorted_source_order=sorted_order,
             source_points=points_detached,
             max_depth=torch.full((), topo.max_depth, dtype=torch.long, device=device),
+            root_ids=torch.zeros(1, dtype=torch.long, device=device),
             batch_size=torch.Size([]),
         )
+
+    @classmethod
+    def merge(cls, trees: Sequence["ClusterTree"]) -> "ClusterTree":
+        r"""Combine trees into one forest.
+
+        The forest holds each tree's nodes and points after those of the
+        trees before it, with every node, range and point index shifted to
+        match, so its points are the trees' points laid end to end. Its
+        ``root_ids`` are the roots of every input, shifted the same way, so
+        merging a forest keeps all of its roots. A traversal of the forest,
+        as source or target, starts from every root and makes the same
+        decisions as one traversal per tree, in one pass: its plan is the
+        per-tree plans joined, indexing the concatenated points.
+
+        Parameters
+        ----------
+        trees : Sequence[ClusterTree]
+            Trees with the same spatial dimension, dtype and device.
+
+        Returns
+        -------
+        ClusterTree
+            The combined trees; its ``max_depth`` is the largest of theirs.
+
+        Raises
+        ------
+        ValueError
+            If ``trees`` is empty, or the trees differ in device or spatial
+            dimension.
+        TypeError
+            If the trees differ in dtype.
+
+        Examples
+        --------
+        >>> a = ClusterTree.from_points(torch.rand(30, 3))
+        >>> b = ClusterTree.from_points(torch.rand(20, 3) + 2.0)
+        >>> forest = ClusterTree.merge([a, b])
+        >>> forest.n_sources, forest.root_ids.tolist() == [0, a.n_nodes]
+        (50, True)
+        """
+        if not trees:
+            raise ValueError("merge needs at least one tree")
+        ### Checked from metadata only, so without a host sync.
+        for name, error, values in (
+            ("dtype", TypeError, [t.node_aabb_min.dtype for t in trees]),
+            ("device", ValueError, [t.node_aabb_min.device for t in trees]),
+            ("n_spatial_dims", ValueError, [t.n_spatial_dims for t in trees]),
+        ):
+            differ = [i for i, v in enumerate(values) if v != values[0]]
+            if differ:
+                raise error(
+                    f"merge needs trees of one {name}: trees {differ} differ "
+                    f"from trees[0], got {values}"
+                )
+        node_offsets: list[int] = []
+        point_offsets: list[int] = []
+        n_nodes = n_points = 0
+        for tree in trees:
+            node_offsets.append(n_nodes)
+            point_offsets.append(n_points)
+            n_nodes += tree.n_nodes
+            n_points += tree.n_sources
+
+        def shifted(name: str, offsets: list[int], *, keep_negative: bool = False):
+            parts = []
+            for tree, offset in zip(trees, offsets):
+                ids = getattr(tree, name)
+                if keep_negative:  # -1 marks "no child" / "not a leaf"
+                    ids = torch.where(ids >= 0, ids + offset, ids)
+                else:
+                    ids = ids + offset
+                parts.append(ids)
+            return torch.cat(parts)
+
+        def joined(name: str) -> torch.Tensor:
+            return torch.cat([getattr(tree, name) for tree in trees])
+
+        forest = cls(
+            node_aabb_min=joined("node_aabb_min"),
+            node_aabb_max=joined("node_aabb_max"),
+            node_diameter_sq=joined("node_diameter_sq"),
+            node_left_child=shifted(
+                "node_left_child", node_offsets, keep_negative=True
+            ),
+            node_right_child=shifted(
+                "node_right_child", node_offsets, keep_negative=True
+            ),
+            leaf_start=shifted("leaf_start", point_offsets, keep_negative=True),
+            leaf_count=joined("leaf_count"),
+            node_range_start=shifted("node_range_start", point_offsets),
+            node_range_count=joined("node_range_count"),
+            node_total_area=joined("node_total_area"),
+            sorted_source_order=shifted("sorted_source_order", point_offsets),
+            source_points=joined("source_points"),
+            max_depth=torch.stack([tree.max_depth for tree in trees]).max(),
+            root_ids=shifted("root_ids", node_offsets),
+            batch_size=torch.Size([]),
+        )
+        return forest
 
     def compute_source_aggregates(
         self,
@@ -915,12 +1026,18 @@ class ClusterTree(TensorClass):
             Per-source area weights, shape :math:`(N,)`.
         source_data : TensorDict or None
             Per-source features (normals, latents, etc.) with
-            ``batch_size=(N,)``. ``None`` if no per-source features.
+            ``batch_size=(N,)``, all of one dtype. ``None`` if no per-source
+            features.
 
         Returns
         -------
         SourceAggregates
             Per-node aggregated centroids and source data.
+
+        Raises
+        ------
+        TypeError
+            If the leaves of ``source_data`` have different dtypes.
 
         Notes
         -----
@@ -965,19 +1082,15 @@ class ClusterTree(TensorClass):
         # ``cumsum`` along a non-innermost dimension runs one thread per
         # column, serially over all ``N`` rows (12 ms for ``(80_000, 3)`` in
         # fp64 on a GB300, against 0.24 ms along the innermost dimension).
-        n_sources = source_points.shape[0]
+        # The leaves are gathered before they are packed: a gather of packed
+        # rows a multiple of 16 bytes wide is 10-20x slower on CUDA
+        # (pytorch/pytorch#200939).
         sorted_points = source_points[self.sorted_source_order]
         sorted_areas = areas[self.sorted_source_order]
-        leaf_keys: list = []
-        leaf_tensors: list[torch.Tensor] = []
+        packed = sorted_points
         if source_data is not None:
-            sorted_source_data = source_data[self.sorted_source_order]
-            for key in sorted_source_data.keys(include_nested=True, leaves_only=True):
-                leaf_keys.append(key)
-                leaf_tensors.append(sorted_source_data[key])
-        packed = torch.cat(
-            [sorted_points] + [t.reshape(n_sources, -1) for t in leaf_tensors], dim=1
-        )
+            data_flat, layout = source_data[self.sorted_source_order].pack()
+            packed = torch.cat([sorted_points, data_flat], dim=1)
         # Both the numerator and denominator must use the call-time weights.
         weighted_64 = (packed * sorted_areas.unsqueeze(-1)).double()
 
@@ -998,21 +1111,9 @@ class ClusterTree(TensorClass):
         centroid_buf = node_means[:, :D].to(dtype)
         node_source_data: TensorDict | None = None
         if source_data is not None:
-            nested: dict = {}
-            offset = D
-            for key, tensor in zip(leaf_keys, leaf_tensors):
-                width = math.prod(tensor.shape[1:])
-                value = node_means[:, offset : offset + width]
-                value = value.reshape((n_nodes,) + tensor.shape[1:]).to(tensor.dtype)
-                offset += width
-                *parents, name = (key,) if isinstance(key, str) else key
-                level = nested
-                for parent in parents:
-                    level = level.setdefault(parent, {})
-                level[name] = value.contiguous()
-            node_source_data = TensorDict(
-                nested, batch_size=[n_nodes], device=source_data.device
-            )
+            node_source_data = layout.unpack(
+                node_means[:, D:].to(data_flat.dtype)
+            ).apply(torch.Tensor.contiguous)
 
         return SourceAggregates(
             node_centroid=centroid_buf.contiguous(),
@@ -1044,11 +1145,15 @@ class ClusterTree(TensorClass):
         This accounts for approximation error on both the target and
         source sides.
 
+        The traversal starts from every (target root, source root) pair, so
+        either tree may be a forest from :meth:`merge`: the plan is then the
+        per-tree plans joined, indexing the concatenated points.
+
         Parameters
         ----------
         target_tree : ClusterTree
-            Tree over target points.  For self-interaction (communication
-            layers), this is the same object as ``self``.
+            Tree or forest over target points.  For self-interaction
+            (communication layers), this is the same object as ``self``.
         theta : float
             Barnes-Hut opening angle.  Larger = more aggressive.
             ``theta = 0`` forces all interactions to be exact.
@@ -1131,14 +1236,19 @@ class ClusterTree(TensorClass):
                 fn_expanded_target_ids=empty.clone(),
                 fn_expanded_pair_ids=empty.clone(),
             )
-            if validate and not torch.compiler.is_compiling():
+            if validate and not is_tracing():
                 plan.validate()
             return plan
 
         with record_function("cluster_tree::dual_traversal"):
-            ### Initialize: root-to-root pair
-            active_tgt_nodes = torch.zeros(1, dtype=torch.long, device=device)
-            active_src_nodes = torch.zeros(1, dtype=torch.long, device=device)
+            ### Initialize: every (target root, source root) pair, target-major;
+            ### the one pair (0, 0) for two single trees.
+            n_tgt_roots = target_tree.root_ids.shape[0]
+            n_src_roots = source_tree.root_ids.shape[0]
+            active_tgt_nodes = target_tree.root_ids.repeat_interleave(
+                n_src_roots, output_size=n_tgt_roots * n_src_roots
+            )
+            active_src_nodes = source_tree.root_ids.repeat(n_tgt_roots)
 
             ### Output streams.  All per-iteration outputs use a
             ### deferred-compaction protocol: the per-element tensor is
@@ -1533,7 +1643,7 @@ class ClusterTree(TensorClass):
             fn_expanded_pair_ids=fn_exp_pairs,
         )
 
-        if validate and not torch.compiler.is_compiling():
+        if validate and not is_tracing():
             plan.validate()
 
         is_self = target_tree is self
@@ -1562,8 +1672,9 @@ class ClusterTree(TensorClass):
         r"""Find near-field pairs and far-field (point, node) pairs for individual
         target points by a single-tree walk.
 
-        Every target point walks the source tree (``self``) from the root. A
-        node is admitted to the far field when ``D_S / r < theta``, with
+        Every target point walks the source tree (``self``) from its root, or
+        from every root in order when ``self`` is a forest from :meth:`merge`.
+        A node is admitted to the far field when ``D_S / r < theta``, with
         ``D_S`` its AABB diagonal and ``r`` the minimum distance from the point
         to its AABB: the source-side half of the dual criterion, since a point
         has no extent. A leaf that is not admitted contributes its sources
@@ -1623,7 +1734,7 @@ class ClusterTree(TensorClass):
                 far_target_ids=empty,
                 far_source_node_ids=empty.clone(),
             )
-            if validate and not torch.compiler.is_compiling():
+            if validate and not is_tracing():
                 plan.validate()
             return plan
 
@@ -1632,12 +1743,15 @@ class ClusterTree(TensorClass):
             box, kids = _traversal_tables(self)
             points = targets.detach().to(box.dtype).t().contiguous()  # (D, M)
 
-            ### Every target starts at the root. Outputs follow the dual
-            ### traversal's deferred-compaction protocol: per-iteration
-            ### tensors with validity masks, one compaction per stream after
-            ### the loop, one readback for the sizes.
-            active_t = torch.arange(n_targets, device=device)
-            active_s = torch.zeros(n_targets, dtype=torch.long, device=device)
+            ### Every target starts at every root, target-major. Outputs follow
+            ### the dual traversal's deferred-compaction protocol:
+            ### per-iteration tensors with validity masks, one compaction per
+            ### stream after the loop, one readback for the sizes.
+            n_roots = self.root_ids.shape[0]
+            active_t = torch.arange(n_targets, device=device).repeat_interleave(
+                n_roots, output_size=n_targets * n_roots
+            )
+            active_s = self.root_ids.repeat(n_targets)
             far_t_list: list[torch.Tensor] = []
             far_s_list: list[torch.Tensor] = []
             far_validity_list: list[torch.Tensor] = []
@@ -1723,7 +1837,7 @@ class ClusterTree(TensorClass):
             far_target_ids=far_t,
             far_source_node_ids=far_s,
         )
-        if validate and not torch.compiler.is_compiling():
+        if validate and not is_tracing():
             plan.validate()
         logger.debug(
             "point traversal: %d near + %d far pairs for %d targets, theta=%.2f, %d iterations",

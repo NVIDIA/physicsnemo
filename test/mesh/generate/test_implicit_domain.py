@@ -252,6 +252,16 @@ def test_boundary_on_zero_set():
     assert float(DISK_2D(mesh.points[~bnd]).max()) < 0.0
 
 
+def test_boundary_vertex_mask_int32_cells():
+    """int32 connectivity gives the same boundary vertices as int64."""
+    points, cells = kuhn_lattice([0, 0, 0], [1, 1, 1], 0.5)
+    # A 3x3x3 lattice: every vertex but the center lies on the cube's surface
+    expected = ((points == 0) | (points == 1)).any(dim=1)
+    assert int(expected.sum()) == 26
+    assert torch.equal(boundary_vertex_mask(points, cells), expected)
+    assert torch.equal(boundary_vertex_mask(points, cells.int()), expected)
+
+
 def test_volume_converges_to_analytic():
     mesh = mesh_implicit_domain(DISK_2D, ([-1, -1], [1, 1]), 0.05)
     vol = float(signed_volumes(mesh.points, mesh.cells).sum())

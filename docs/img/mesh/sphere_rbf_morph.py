@@ -14,13 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Render exact thin-plate-spline RBF deformation of a sphere."""
+"""Render one-handle and two-handle thin-plate-spline RBF deformations of a sphere."""
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import torch
+from _style import (
+    ACCENT_LIGHTING,
+    FIXED,
+    RESULT,
+    SURFACE,
+    SURFACE_EDGE,
+    TEXT,
+    mesh_label,
+    save,
+    spheres,
+)
+from matplotlib.lines import Line2D
 
 from physicsnemo.mesh.io import to_pyvista
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
@@ -29,9 +42,7 @@ pv.OFF_SCREEN = True
 
 OUTPUT = Path(__file__).parent / "sphere_rbf_morph.png"
 
-MESH_COLOR = "lightblue"
-ANCHOR_COLOR = "#c36a2d"
-HANDLE_COLOR = "#5b9f00"
+CAMERA = [(5.0, -5.0, 3.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
 
 
 def _controls(points: torch.Tensor) -> torch.Tensor:
@@ -61,53 +72,100 @@ def _radial_basis_function_deform(mesh, controls, displacements):
     )
 
 
-def _add_controls(plotter, controls, displacements, labels=()):
-    """Draw fixed anchors and annotate moved handles on the deformed surface."""
-    controls_np = controls.detach().cpu().numpy()
-    displacements_np = displacements.detach().cpu().numpy()
-    active = np.linalg.norm(displacements_np, axis=1) > 0.0
+def _render(actors, camera):
+    """Render PyVista actors from a fixed camera, so that panels share one scale."""
 
-    if np.any(~active):
-        plotter.add_points(
-            controls_np[~active],
-            color=ANCHOR_COLOR,
-            point_size=12.0,
-            render_points_as_spheres=True,
-        )
-    if not np.any(active):
-        return
+    plotter = pv.Plotter(off_screen=True, window_size=(900, 900))
+    plotter.enable_anti_aliasing("ssaa")
+    plotter.set_background("white")
+    for dataset, kwargs in actors:
+        plotter.add_mesh(dataset, **{"ambient": 0.35, **kwargs})
+    plotter.camera_position = camera
+    image = plotter.screenshot(return_img=True)
+    plotter.close()
+    return image
 
-    vectors = displacements_np[active]
-    destinations = controls_np[active] + vectors
-    annotation_vectors = 0.3 * vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-    plotter.add_points(
-        destinations,
-        color=HANDLE_COLOR,
-        point_size=14.0,
-        render_points_as_spheres=True,
+
+def _surface(mesh):
+    """Return the shaded surface actor of a mesh."""
+
+    return (
+        to_pyvista(mesh),
+        {
+            "color": SURFACE,
+            "show_edges": True,
+            "edge_color": SURFACE_EDGE,
+            "line_width": 0.6,
+            "diffuse": 0.7,
+        },
     )
-    plotter.add_arrows(
-        destinations,
-        annotation_vectors,
-        mag=1.0,
-        color=HANDLE_COLOR,
-    )
-    if labels:
-        label_positions = destinations + annotation_vectors
-        label_positions[:, 0] += 0.08
-        plotter.add_point_labels(
-            label_positions,
-            list(labels),
-            text_color="#397000",
-            font_size=18,
-            bold=True,
-            shape=None,
-            show_points=False,
+
+
+def _arrows(starts, vectors, color):
+    """Draw displacement arrows as solid geometry."""
+
+    arrows = [
+        pv.Arrow(
+            start=start,
+            direction=vector,
+            scale=float(np.linalg.norm(vector)),
+            tip_radius=0.18,
+            shaft_radius=0.06,
+            tip_length=0.35,
         )
+        for start, vector in zip(starts, vectors, strict=True)
+    ]
+    return (pv.merge(arrows), {"color": color, **ACCENT_LIGHTING})
+
+
+def _legend(figure, entries):
+    """Add a marker legend at the bottom center."""
+
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor=color,
+            markeredgecolor="white",
+            markersize=12,
+            label=label,
+        )
+        for label, color in entries
+    ]
+    figure.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False)
+
+
+def _panel(mesh, controls, displacements):
+    """Render a deformed sphere with fixed anchors, moved handles, and arrows."""
+
+    controls = controls.numpy()
+    displacements = displacements.numpy()
+    active = np.linalg.norm(displacements, axis=1) > 0.0
+    actors = [_surface(mesh)]
+    if not active.any():
+        # Before any move, a control is neither an anchor nor a handle.
+        actors.append((spheres(controls, 0.06), {"color": TEXT, **ACCENT_LIGHTING}))
+        return _render(actors, CAMERA)
+    actors.append(
+        (spheres(controls[~active], 0.06), {"color": FIXED, **ACCENT_LIGHTING})
+    )
+    if active.any():
+        destinations = controls[active] + displacements[active]
+        actors.append(
+            (spheres(destinations, 0.07), {"color": RESULT, **ACCENT_LIGHTING})
+        )
+        directions = displacements[active] / np.linalg.norm(
+            displacements[active], axis=1, keepdims=True
+        )
+        actors.append(_arrows(destinations, 0.35 * directions, RESULT))
+    return _render(actors, CAMERA)
 
 
 def main():
     """Generate the documentation image."""
+
     sphere = sphere_icosahedral.load(radius=1.0, subdivisions=3)
     controls = _controls(sphere.points)
 
@@ -122,53 +180,21 @@ def main():
     stretched = _radial_basis_function_deform(sphere, controls, two_handles)
 
     panels = (
-        (
-            "Original\nRBF controls",
-            sphere,
-            torch.zeros_like(controls),
-            (),
-        ),
-        (
-            "One exact handle\nfive fixed anchors",
-            pulled,
-            one_handle,
-            ("+0.55 z",),
-        ),
-        (
-            "Two exact handles\nfour fixed anchors",
-            stretched,
-            two_handles,
-            ("+0.55 z", "-0.55 z"),
-        ),
+        ("sphere_icosahedral, six controls", sphere, torch.zeros_like(controls)),
+        ("one handle +0.55 z, five anchors", pulled, one_handle),
+        ("two handles +0.55 z and -0.55 z, four anchors", stretched, two_handles),
     )
-
-    plotter = pv.Plotter(shape=(1, 3), window_size=(1400, 650))
-    for column, (title, mesh, displacements, labels) in enumerate(panels):
-        plotter.subplot(0, column)
-        plotter.add_mesh(
-            to_pyvista(mesh),
-            color=MESH_COLOR,
-            show_edges=True,
-            line_width=0.5,
-        )
-        _add_controls(plotter, controls, displacements, labels)
-        plotter.add_text(
-            title,
-            position="upper_edge",
-            font_size=13,
-            color="black",
-        )
-        plotter.camera_position = [
-            (5.0, -5.0, 3.8),
-            (0.0, 0.0, 0.3),
-            (0.0, 0.0, 1.0),
-        ]
-
-    plotter.set_background("white")
-    plotter.render()
-    plotter.screenshot(OUTPUT, transparent_background=False)
-    plotter.close()
-    print(f"Saved {OUTPUT}")
+    figure, axes = plt.subplots(1, 3, figsize=(13.5, 5.6))
+    for axis, (title, mesh, displacements) in zip(axes, panels, strict=True):
+        axis.imshow(_panel(mesh, controls, displacements))
+        axis.set_title(f"{title}\n{mesh_label(mesh)}")
+        axis.set_axis_off()
+    _legend(
+        figure,
+        (("controls", TEXT), ("fixed anchors", FIXED), ("moved handles", RESULT)),
+    )
+    figure.subplots_adjust(left=0.0, right=1.0, bottom=0.07, top=0.88, wspace=0.02)
+    save(figure, OUTPUT)
 
 
 if __name__ == "__main__":

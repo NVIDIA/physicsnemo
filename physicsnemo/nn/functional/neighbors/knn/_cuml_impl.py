@@ -39,6 +39,12 @@ if CUML_AVAILABLE and CUPY_AVAILABLE:
                 f"`knn` cuml implementation does not support CPU, got {points.device=}"
             )
         validate_inputs(points, queries)
+        if queries.shape[0] == 0:
+            # cuML raises a CUDA error on an empty query set.
+            return (
+                torch.empty((0, k), dtype=torch.int64, device=queries.device),
+                torch.empty((0, k), dtype=queries.dtype, device=queries.device),
+            )
         restore_dtype = points.dtype
         if restore_dtype == torch.bfloat16:
             points = points.to(torch.float32)

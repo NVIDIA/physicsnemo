@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Timeout configuration and real NCCL initialization for DistributedManager."""
+"""Launcher configuration (timeouts, SLURM rendezvous host) and real NCCL
+initialization for DistributedManager."""
 
 import os
 import socket
@@ -26,6 +27,7 @@ import torch
 import torch.distributed as dist
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed.manager import _first_slurm_host
 
 _TIMEOUT_ENV = "PHYSICSNEMO_DIST_TIMEOUT_S"
 _LAUNCHER_ENV = {
@@ -35,6 +37,7 @@ _LAUNCHER_ENV = {
         "SLURM_NPROCS": "2",
         "SLURM_LOCALID": "0",
         "SLURM_LAUNCH_NODE_IPADDR": "localhost",
+        "SLURM_STEP_NODELIST": "localhost",
     },
     "OPENMPI": {
         "OMPI_COMM_WORLD_RANK": "0",
@@ -90,6 +93,57 @@ def _configure_launcher(monkeypatch, launcher, forced=False):
         monkeypatch.setenv(key, value)
     if forced:
         monkeypatch.setenv("PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD", launcher)
+
+
+@pytest.mark.parametrize(
+    ("nodelist", "host"),
+    [
+        ("node07", "node07"),
+        ("node07,node03", "node07"),
+        ("nvl72d037-T[12,18]", "nvl72d037-T12"),
+        ("gpu[03-05,07],cpu1", "gpu03"),
+        ("rack[2-3]-node[1-4]", "rack2-node1"),
+    ],
+)
+def test_first_slurm_host(nodelist, host):
+    """The first host of a Slurm host list, with ranges and several prefixes."""
+    assert _first_slurm_host(nodelist) == host
+
+
+def test_slurm_rendezvous_on_first_step_node(monkeypatch, mock_process_group):
+    """Rank 0, and so the rendezvous, runs on the step's first node (issue #2168).
+    That need not be the node that ran srun."""
+    _configure_launcher(monkeypatch, "SLURM")
+    monkeypatch.setenv("SLURM_LAUNCH_NODE_IPADDR", "10.0.0.18")
+    monkeypatch.setenv("SLURM_STEP_NODELIST", "node[12,18]")
+
+    DistributedManager.initialize()
+
+    assert os.environ["MASTER_ADDR"] == "node12"
+
+
+def test_slurm_rendezvous_falls_back_to_launch_node(monkeypatch, mock_process_group):
+    """Without a step node list, the rendezvous uses srun's launch node address."""
+    _configure_launcher(monkeypatch, "SLURM")
+    monkeypatch.setenv("SLURM_LAUNCH_NODE_IPADDR", "10.0.0.18")
+    monkeypatch.delenv("SLURM_STEP_NODELIST")
+
+    DistributedManager.initialize()
+
+    assert os.environ["MASTER_ADDR"] == "10.0.0.18"
+
+
+def test_slurm_batch_script_without_srun(monkeypatch, mock_process_group):
+    """A batch script run without srun has no step node list or launch address.
+    It runs on the job's first node, so the rendezvous goes there."""
+    _configure_launcher(monkeypatch, "SLURM")
+    monkeypatch.delenv("SLURM_STEP_NODELIST")
+    monkeypatch.delenv("SLURM_LAUNCH_NODE_IPADDR")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "node[03-04]")
+
+    DistributedManager.initialize()
+
+    assert os.environ["MASTER_ADDR"] == "node03"
 
 
 @pytest.mark.parametrize("launcher", ["ENV", "SLURM", "OPENMPI"])
