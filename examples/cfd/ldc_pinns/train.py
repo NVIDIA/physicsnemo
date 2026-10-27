@@ -34,6 +34,7 @@ from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from physicsnemo.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
 from omegaconf import DictConfig
 from torch.nn import MSELoss
+from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Adam, lr_scheduler
 
 
@@ -81,7 +82,8 @@ def ldc_trainer(cfg: DictConfig) -> None:
 
     # initialize monitoring
     log = PythonLogger(name="ldc")
-    log.file_logging()
+    if dist.rank == 0:
+        log.file_logging()
 
     # domain geometry using physicsnemo.mesh
     height = 0.1
@@ -124,6 +126,16 @@ def ldc_trainer(cfg: DictConfig) -> None:
     model = FullyConnected(
         in_features=2, out_features=3, num_layers=6, layer_size=512
     ).to(dist.device)
+
+    # distributed data parallel for multi-GPU training
+    if dist.world_size > 1:
+        model = DistributedDataParallel(
+            model,
+            device_ids=[dist.local_rank],
+            output_device=dist.device,
+            broadcast_buffers=dist.broadcast_buffers,
+            find_unused_parameters=dist.find_unused_parameters,
+        )
 
     ns = NavierStokes(nu=0.01, rho=1.0, dim=2, time=False)
     phy_inf = PhysicsInformer(
@@ -207,7 +219,7 @@ def ldc_trainer(cfg: DictConfig) -> None:
         optimizer.step()
         scheduler.step()
 
-        if i % 1000 == 0:
+        if i % 1000 == 0 and dist.rank == 0:
             with torch.no_grad():
                 inf_out = model(
                     torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1)], dim=1)

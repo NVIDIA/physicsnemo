@@ -707,6 +707,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `torch.unbind` on a `Partial` `ShardTensor` resolves the pending reduction
   before slicing instead of silently dropping it.
 - Fixed autocasting bugs for some attention operations in domain parallelism.
+- The lid-driven cavity PINN example (`ldc_pinns`) trains one model with
+  `DistributedDataParallel` on several GPUs, and only rank 0 writes the log
+  file, prints the loss, and saves plots. Before, each rank trained its own
+  copy and all ranks wrote the same outputs
+  ([#2160](https://github.com/NVIDIA/physicsnemo/issues/2160)).
 
 ### Security
 
