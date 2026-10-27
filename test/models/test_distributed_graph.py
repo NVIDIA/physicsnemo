@@ -339,9 +339,10 @@ def run_test_distributed_graph(
                     assert torch.allclose(grad_local, torch.ones_like(local_edge_feat))
 
 
-def test_partition_graph_with_id_mapping_local_graph():
+@pytest.mark.parametrize("dtype", [torch.int64, torch.int32])
+def test_partition_graph_with_id_mapping_local_graph(dtype):
     """Each rank keeps the incoming edges of its destination nodes, in CSC order,
-    and its local graph points at the right source nodes."""
+    and receives from each rank the source nodes its local graph points at."""
     from physicsnemo.nn.module.gnn_layers import partition_graph_with_id_mapping
 
     num_src_nodes, num_dst_nodes, partition_size = 50, 40, 3
@@ -351,17 +352,25 @@ def test_partition_graph_with_id_mapping_local_graph():
     src_ranks = torch.arange(num_src_nodes) % partition_size
     dst_ranks = torch.randint(0, partition_size, (num_dst_nodes,))
     dst_ranks[:partition_size] = torch.arange(partition_size)
-    for rank in range(partition_size):
-        partition = partition_graph_with_id_mapping(
-            offsets, indices, src_ranks, dst_ranks, partition_size, rank, "cpu"
-        )
+    graph = [t.to(dtype) for t in (offsets, indices, src_ranks, dst_ranks)]
+    partitions = [
+        partition_graph_with_id_mapping(*graph, partition_size, rank, "cpu")
+        for rank in range(partition_size)
+    ]
+    assert all(p.sizes == partitions[0].sizes for p in partitions)
+    for rank, partition in enumerate(partitions):
         dst = partition.map_partitioned_dst_ids_to_global
         edges = torch.cat([torch.arange(offsets[d], offsets[d + 1]) for d in dst])
         assert torch.equal(partition.map_partitioned_edge_ids_to_global, edges)
         assert torch.equal(partition.local_offsets.diff(), degree[dst])
-        # local source IDs number the source nodes by owning rank, then by ID
-        src = indices[edges].unique()
-        src = src[torch.argsort(src_ranks[src], stable=True)]
+        # what each rank sends this one, in rank order, as indexed_all_to_all_v does
+        received = [
+            p.map_partitioned_src_ids_to_global[p.scatter_indices[rank]]
+            for p in partitions
+        ]
+        assert [len(r) for r in received] == [s[rank] for s in partition.sizes]
+        src = torch.cat(received)
+        assert torch.equal(src.sort().values, indices[edges].unique())
         assert torch.equal(src[partition.local_indices], indices[edges])
 
 
