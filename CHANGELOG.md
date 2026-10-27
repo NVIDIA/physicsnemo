@@ -297,7 +297,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells, even on fine grids.
 - Unified external aero recipe: training steps no longer wait for the GPU to
   log each step's loss. Each step's values are read back without blocking and
-  logged once they land, so the datapipe's prefetch now overlaps compute.
+  logged once they reach the host, so the datapipe's prefetch now overlaps
+  compute. The logged `step_time_s` now includes the host's wait for the GPU
+  inside the step, so it reads higher than before even though steps are
+  faster; use epoch wall time per step to compare speed.
 
 ### Deprecated
 
