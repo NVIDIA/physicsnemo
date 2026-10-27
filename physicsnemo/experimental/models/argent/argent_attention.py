@@ -158,7 +158,7 @@ class RotaryLinearCrossAttentionND(nn.Module):
         Key/value coordinates of shape :math:`(B, L_{kv}, n_{axes})`.
     padding_kv : torch.Tensor, optional
         Boolean or float mask of shape :math:`(B, L_{kv})` or
-        :math:`(B, L_{kv}, 1)`. Nonzero entries mark valid tokens; padded
+        :math:`(B, L_{kv}, 1)`. Any nonzero entry marks a valid token; padded
         tokens are excluded from :math:`K^\top V` and from :math:`N`.
 
     Outputs
@@ -282,7 +282,10 @@ class RotaryLinearCrossAttentionND(nn.Module):
                     f"Expected pos_kv of shape ({B}, {L_kv}, {self.n_axes}) "
                     f"but got tensor of shape {tuple(pos_kv.shape)}"
                 )
-            if padding_kv is not None and padding_kv.numel() != B * L_kv:
+            if padding_kv is not None and padding_kv.shape not in (
+                (B, L_kv),
+                (B, L_kv, 1),
+            ):
                 raise ValueError(
                     f"Expected padding_kv of shape ({B}, {L_kv}) or ({B}, {L_kv}, 1) "
                     f"but got tensor of shape {tuple(padding_kv.shape)}"
@@ -328,11 +331,13 @@ class RotaryLinearCrossAttentionND(nn.Module):
             k = torch.cat(k_chunks, dim=-1)
 
         # Zero padded K/V tokens and normalize by the number of valid tokens.
+        # masked_fill keeps the dtype of k/v and also clears non-finite values.
         if padding_kv is not None:
-            mask = padding_kv.reshape(B, 1, L_kv, 1).float()
-            k = k * mask
-            v = v * mask
-            n_valid = mask.sum(dim=-2, keepdim=True).clamp(min=1.0)  # (B, 1, 1, 1)
+            valid = padding_kv.reshape(B, 1, L_kv, 1) != 0
+            k = k.masked_fill(~valid, 0.0)
+            v = v.masked_fill(~valid, 0.0)
+            # Integer count; dividing by it keeps the dtype of the output.
+            n_valid = valid.sum(dim=-2, keepdim=True).clamp(min=1)  # (B, 1, 1, 1)
         else:
             n_valid = float(max(L_kv, 1))
 
@@ -344,7 +349,7 @@ class RotaryLinearCrossAttentionND(nn.Module):
         return self.out_proj(out)
 
 
-class GeGELU(nn.Module):
+class _GeGELU(nn.Module):
     r"""GELU-gated linear unit (GEGLU, `Shazeer, 2020
     <https://arxiv.org/abs/2002.05202>`_).
 
@@ -366,12 +371,14 @@ class GeGELU(nn.Module):
         super().__init__()
         self.gelu = nn.GELU()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "... two_c"]
+    ) -> Float[torch.Tensor, "... c"]:
         c = x.shape[-1] // 2
         return self.gelu(x[..., :c]) * x[..., c:]
 
 
-class FeedForward(nn.Module):
+class _FeedForward(nn.Module):
     r"""Two-layer feed-forward block with GEGLU activation.
 
     Parameters
@@ -398,17 +405,19 @@ class FeedForward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(dim, hidden_dim * 2),
-            GeGELU(),
+            _GeGELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, dim),
             nn.Dropout(dropout),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch len dim"]
+    ) -> Float[torch.Tensor, "batch len dim"]:
         return self.net(x)
 
 
-class ReLUFeedForward(nn.Module):
+class _ReLUFeedForward(nn.Module):
     r"""Two-layer feed-forward block with ReLU activation.
 
     Parameters
@@ -441,7 +450,9 @@ class ReLUFeedForward(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch len dim"]
+    ) -> Float[torch.Tensor, "batch len dim"]:
         return self.net(x)
 
 
@@ -470,7 +481,7 @@ class MultiLayerCrossAttention(nn.Module):
     max_freq : float, optional, default=64.0
         RoPE frequency scale.
     use_relu_mlp : bool, optional, default=False
-        If ``True``, use :class:`ReLUFeedForward`; otherwise :class:`FeedForward`.
+        If ``True``, use ReLU feed-forward blocks; otherwise GEGLU.
 
     Forward
     -------
@@ -504,7 +515,7 @@ class MultiLayerCrossAttention(nn.Module):
         use_relu_mlp: bool = False,
     ) -> None:
         super().__init__()
-        ffn_cls = ReLUFeedForward if use_relu_mlp else FeedForward
+        ffn_cls = _ReLUFeedForward if use_relu_mlp else _FeedForward
         self.layers = nn.ModuleList(
             nn.ModuleList(
                 [
