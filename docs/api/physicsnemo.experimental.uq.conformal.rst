@@ -222,7 +222,8 @@ one to widen the band where the model is uncertain:
 :class:`NormalizedErrorScore` divides the error by a predicted ``sigma``,
 and ``scale=AuxScale(key)`` multiplies a functional or risk-control
 band by any per-point ``aux`` entry without a new score. A custom score
-scales each element, not each point, and works with every calibrator.
+can shape the interval element by element, and works with every
+calibrator.
 
 The Contract
 ^^^^^^^^^^^^
