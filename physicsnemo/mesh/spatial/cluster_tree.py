@@ -62,7 +62,7 @@ import functools
 import importlib.util
 import itertools
 import logging
-from typing import Callable, Literal, NamedTuple, Sequence
+from typing import Callable, Literal, NamedTuple, Sequence, overload
 
 import torch
 import torch.nn.functional as F
@@ -2076,6 +2076,32 @@ class ClusterTree(TensorClass):
         )
 
         return plan
+
+    @overload
+    def find_point_interaction_pairs(
+        self,
+        targets: Float[torch.Tensor, "n_targets n_dims"],
+        theta: float = 1.0,
+        *,
+        validate: bool = True,
+        source_admissible: torch.Tensor | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+        count_only: Literal[False] = False,
+    ) -> PointInteractionPlan:
+        """The plan."""
+
+    @overload
+    def find_point_interaction_pairs(
+        self,
+        targets: Float[torch.Tensor, "n_targets n_dims"],
+        theta: float = 1.0,
+        *,
+        validate: bool = True,
+        source_admissible: torch.Tensor | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+        count_only: Literal[True],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Each target's numbers of near and far entries."""
 
     def find_point_interaction_pairs(
         self,
