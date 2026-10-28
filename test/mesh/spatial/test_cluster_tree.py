@@ -228,6 +228,190 @@ def test_plan_covers_every_pair_exactly_once_cross(device, theta, leaf_size):
     )
 
 
+def _plan_entries(plan):
+    """Each stream of a plan as a sorted list of its entries (order-free)."""
+    far = list(
+        zip(plan.far_target_node_ids.tolist(), plan.far_source_node_ids.tolist())
+    )
+    fn = list(zip(plan.fn_target_node_ids.tolist(), plan.fn_source_ids.tolist()))
+    return {
+        "near": sorted(
+            zip(plan.near_target_ids.tolist(), plan.near_source_ids.tolist())
+        ),
+        "nf": sorted(
+            zip(plan.nf_target_ids.tolist(), plan.nf_source_node_ids.tolist())
+        ),
+        "far": sorted(far),
+        "fn": sorted(fn),
+        "far_broadcast": sorted(
+            (t, *far[p])
+            for t, p in zip(
+                plan.far_broadcast_target_ids.tolist(),
+                plan.far_broadcast_pair_ids.tolist(),
+            )
+        ),
+        "fn_expanded": sorted(
+            (t, *fn[p])
+            for t, p in zip(
+                plan.fn_expanded_target_ids.tolist(), plan.fn_expanded_pair_ids.tolist()
+            )
+        ),
+    }
+
+
+### What each id of a stream's entries indexes: "t" or "s" for the target
+### or source side, then "p" or "n" for a point or node id.
+_ENTRY_SIDES = {
+    "near": ("tp", "sp"),
+    "nf": ("tp", "sn"),
+    "far": ("tn", "sn"),
+    "fn": ("tn", "sp"),
+    "far_broadcast": ("tp", "tn", "sn"),
+    "fn_expanded": ("tp", "tn", "sp"),
+}
+
+
+def _joined_entries(parts):
+    """Join per-tree plan entries into the entries of one forest plan.
+
+    ``parts`` holds ``(entries, offsets)`` per (target tree, source tree)
+    pair, with ``offsets`` mapping ``"tp"``, ``"tn"``, ``"sp"`` and ``"sn"``
+    to that pair's point and node offsets in the forests.
+    """
+    joined = {name: [] for name in _ENTRY_SIDES}
+    for entries, offsets in parts:
+        for name, sides in _ENTRY_SIDES.items():
+            for entry in entries[name]:
+                joined[name].append(
+                    tuple(i + offsets[side] for i, side in zip(entry, sides))
+                )
+    return {name: sorted(v) for name, v in joined.items()}
+
+
+def _forest_offsets(trees):
+    """Point and node offset of each tree in the forest of ``trees``."""
+    offsets, n_points, n_nodes = [], 0, 0
+    for tree in trees:
+        offsets.append((n_points, n_nodes))
+        n_points += tree.n_sources
+        n_nodes += tree.n_nodes
+    return offsets
+
+
+def _forest_trees(device, seed, sizes, leaf_size=2):
+    """Trees over separate random clouds of the given sizes."""
+    return [
+        ClusterTree.from_points(
+            _points(n, 3, device, seed=seed + i) * (0.1 + i) + 1.5 * i,
+            leaf_size=leaf_size,
+        )
+        for i, n in enumerate(sizes)
+    ]
+
+
+def _assert_forest_plan(tgt_trees, src_trees, target, source, kwargs):
+    """The forest plan is the per-tree plans joined and covers every pair once."""
+    plan = source.find_dual_interaction_pairs(target, **kwargs)
+    plan.validate()
+    parts = []
+    for tgt, (tp, tn) in zip(tgt_trees, _forest_offsets(tgt_trees)):
+        for src, (sp, sn) in zip(src_trees, _forest_offsets(src_trees)):
+            part = src.find_dual_interaction_pairs(tgt, **kwargs)
+            parts.append((_plan_entries(part), dict(tp=tp, tn=tn, sp=sp, sn=sn)))
+    assert _plan_entries(plan) == _joined_entries(parts)
+    count = _coverage_counts(plan, target, source, target.n_sources, source.n_sources)
+    assert (count == 1).all()
+
+
+@pytest.mark.parametrize("theta", [0.0, 1.0, 1.5])
+@pytest.mark.parametrize("expand_far_targets", [False, True])
+def test_forest_plan_is_the_joined_per_tree_plans(device, theta, expand_far_targets):
+    """One traversal against a merged forest plans what one per tree would.
+
+    The target trees (one of them empty) are merged; a traversal from the
+    forest's roots must give, stream by stream, the per-tree plans with
+    target ids and target-node ids shifted to the concatenated points.
+    """
+    src_tree = ClusterTree.from_points(_points(40, 3, device, seed=4), leaf_size=2)
+    target_sets = [
+        _points(35, 3, device, seed=5),
+        _points(0, 3, device, seed=6),
+        _points(22, 3, device, seed=7) + 1.5,
+        _points(9, 3, device, seed=8) * 0.1,
+    ]
+    trees = [ClusterTree.from_points(p, leaf_size=2) for p in target_sets]
+    forest = ClusterTree.merge(trees)
+    assert forest.n_sources == sum(p.shape[0] for p in target_sets)
+    assert forest.root_ids.tolist() == [
+        0,
+        trees[0].n_nodes,
+        trees[0].n_nodes + trees[2].n_nodes,
+    ]
+    kwargs = dict(theta=theta, expand_far_targets=expand_far_targets)
+    _assert_forest_plan(trees, [src_tree], forest, src_tree, kwargs)
+
+
+@pytest.mark.parametrize("theta", [0.0, 1.0, 1.5])
+@pytest.mark.parametrize("expand_far_targets", [False, True])
+def test_forest_source_plan_is_the_joined_per_tree_plans(
+    device, theta, expand_far_targets
+):
+    """A forest as the source plans what one traversal per source tree would."""
+    tgt_tree = ClusterTree.from_points(_points(25, 3, device, seed=9), leaf_size=2)
+    trees = _forest_trees(device, 10, [30, 0, 20, 7])
+    forest = ClusterTree.merge(trees)
+    kwargs = dict(theta=theta, expand_far_targets=expand_far_targets)
+    _assert_forest_plan([tgt_tree], trees, tgt_tree, forest, kwargs)
+
+
+@pytest.mark.parametrize("theta", [0.0, 1.0, 1.5])
+@pytest.mark.parametrize("expand_far_targets", [False, True])
+def test_forest_to_forest_plan_is_the_joined_per_tree_plans(
+    device, theta, expand_far_targets
+):
+    """Forest to forest, and a forest to itself, plans every pair of trees."""
+    src_trees = _forest_trees(device, 20, [30, 20, 7])
+    tgt_trees = _forest_trees(device, 30, [12, 0, 26])
+    src_forest = ClusterTree.merge(src_trees)
+    tgt_forest = ClusterTree.merge(tgt_trees)
+    kwargs = dict(theta=theta, expand_far_targets=expand_far_targets)
+    _assert_forest_plan(tgt_trees, src_trees, tgt_forest, src_forest, kwargs)
+    _assert_forest_plan(src_trees, src_trees, src_forest, src_forest, kwargs)
+
+
+def test_nested_merge_keeps_every_root(device):
+    """Merging a forest keeps its roots and gives the flat merge."""
+    a, empty, b, c = _forest_trees(device, 40, [30, 0, 20, 15])
+    assert a.root_ids.tolist() == [0] and empty.root_ids.tolist() == []
+    nested = ClusterTree.merge([ClusterTree.merge([a, empty, b]), c])
+    flat = ClusterTree.merge([a, b, c])
+    assert nested.root_ids.tolist() == [0, a.n_nodes, a.n_nodes + b.n_nodes]
+    assert (nested.to_tensordict() == flat.to_tensordict()).all()
+    s = ClusterTree.from_points(_points(25, 3, device, seed=44), leaf_size=2)
+    for target, source in [(s, nested), (nested, s), (nested, nested)]:
+        flat_target = flat if target is nested else s
+        flat_source = flat if source is nested else s
+        assert _plan_entries(
+            source.find_dual_interaction_pairs(target)
+        ) == _plan_entries(flat_source.find_dual_interaction_pairs(flat_target))
+
+
+def test_merge_rejects_mismatched_trees(device):
+    """merge checks dtype, device and spatial dimension, and needs a tree."""
+    tree = ClusterTree.from_points(_points(10, 3, device, seed=50))
+    other_dtype = ClusterTree.from_points(
+        _points(10, 3, device, seed=51, dtype=torch.float64)
+    )
+    with pytest.raises(TypeError, match=r"dtype: trees \[1\]"):
+        ClusterTree.merge([tree, other_dtype])
+    with pytest.raises(ValueError, match=r"device: trees \[2\]"):
+        ClusterTree.merge([tree, tree, tree.to("meta")])
+    with pytest.raises(ValueError, match=r"n_spatial_dims: trees \[1\]"):
+        ClusterTree.merge([tree, ClusterTree.from_points(_points(10, 2, device))])
+    with pytest.raises(ValueError, match="at least one tree"):
+        ClusterTree.merge([])
+
+
 @pytest.mark.parametrize("theta", [0.0, 1.0])
 def test_plan_covers_every_pair_exactly_once_self(device, theta):
     """Self-interaction plans (target_tree is source_tree) are also exact."""
@@ -882,6 +1066,56 @@ def test_source_aggregates_use_call_time_weights(device):
         )
 
 
+def test_source_aggregates_keep_nested_keys_dtype_and_contiguity(device):
+    """Nested leaves come back under their keys, in their dtype, contiguous."""
+    n = 40
+    points = _points(n, 3, device, seed=3)
+    areas = _areas(n, device)
+    data = TensorDict(
+        {
+            "normals": _points(n, 3, device, seed=4),
+            "latent": {"s": _points(n, 1, device, seed=5)[:, 0]},
+        },
+        batch_size=[n],
+        device=device,
+    )
+    tree = ClusterTree.from_points(points, leaf_size=4, areas=areas)
+    aggregates = tree.compute_source_aggregates(points, areas, data)
+
+    node_data = aggregates.node_source_data
+    assert set(node_data.keys(include_nested=True, leaves_only=True)) == {
+        "normals",
+        ("latent", "s"),
+    }
+    for key in ("normals", ("latent", "s")):
+        value = node_data[key]
+        assert value.shape == (tree.n_nodes, *data[key].shape[1:])
+        assert value.dtype == data[key].dtype
+        assert value.is_contiguous()
+    ### The root aggregates every source.
+    root = int(torch.argmax(tree.node_range_count))
+    expected = (data["normals"] * areas[:, None]).sum(0) / areas.sum()
+    torch.testing.assert_close(node_data["normals"][root], expected)
+
+
+def test_source_aggregates_reject_mixed_dtypes(device):
+    """Source data is packed into one tensor, so its leaves must share a dtype."""
+    n = 8
+    points = _points(n, 3, device)
+    areas = _areas(n, device)
+    data = TensorDict(
+        {
+            "a": torch.zeros(n, device=device),
+            "b": torch.zeros(n, dtype=torch.float64, device=device),
+        },
+        batch_size=[n],
+        device=device,
+    )
+    tree = ClusterTree.from_points(points, leaf_size=2, areas=areas)
+    with pytest.raises(TypeError, match="different dtypes"):
+        tree.compute_source_aggregates(points, areas, data)
+
+
 # ---------------------------------------------------------------------------
 # Edge cases and validation
 # ---------------------------------------------------------------------------
@@ -1069,6 +1303,33 @@ def test_point_plan_covers_every_pair_exactly_once(device, theta, leaf_size, n_d
         assert plan.n_far == 0 and plan.n_near == n_t * n_s
     else:
         assert plan.n_far > 0
+
+
+@pytest.mark.parametrize("theta", [0.0, 0.7, 1.5])
+def test_point_plan_with_a_forest_source(device, theta):
+    """A forest source plans what one walk per source tree would, joined."""
+    trees = _forest_trees(device, 60, [30, 0, 20, 7])
+    forest = ClusterTree.merge(trees)
+    targets = _points(41, 3, device, seed=33)
+    targets[::5] += 30.0
+    plan = forest.find_point_interaction_pairs(targets, theta=theta)
+    count = _point_plan_counts(plan, forest, targets.shape[0], forest.n_sources)
+    assert (count == 1).all(), f"min={count.min()}, max={count.max()}"
+
+    def entries(plan, point_offset=0, node_offset=0):
+        near = zip(plan.near_target_ids.tolist(), plan.near_source_ids.tolist())
+        far = zip(plan.far_target_ids.tolist(), plan.far_source_node_ids.tolist())
+        return (
+            sorted((t, s + point_offset) for t, s in near),
+            sorted((t, n + node_offset) for t, n in far),
+        )
+
+    near, far = [], []
+    for tree, (sp, sn) in zip(trees, _forest_offsets(trees)):
+        part = entries(tree.find_point_interaction_pairs(targets, theta=theta), sp, sn)
+        near += part[0]
+        far += part[1]
+    assert entries(plan) == (sorted(near), sorted(far))
 
 
 def test_point_plan_far_admissions_satisfy_mac_in_float64(device):

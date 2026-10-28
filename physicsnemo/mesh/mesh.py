@@ -18,7 +18,7 @@ import dataclasses
 import itertools
 import math
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -67,12 +67,13 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 from physicsnemo.mesh.utilities._gather import gather_rows
+from physicsnemo.mesh.utilities._normalization import safe_normalize
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
-from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.utils._tracing import is_tracing
 
 ### slice_points remaps cells through a full-mesh lookup table unless the mesh
 ### has more than this many points per cell-vertex entry, in which case it
@@ -120,7 +121,7 @@ _64_BIT_INTEGER_DTYPES = frozenset({torch.int64, torch.uint64})
 
 def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
     """Check tensor values eagerly or retain the assertion in a compiled graph."""
-    if torch.compiler.is_compiling() or valid.device.type == "meta":
+    if is_tracing() or valid.device.type == "meta":
         torch._assert_async(valid, message)
         return
 
@@ -432,7 +433,9 @@ class Mesh(
     ``mesh.cell_normals`` computes and caches the result; subsequent calls
     return the cached value). Because ``Mesh`` is effectively immutable (see
     above), cached values never go stale -- they remain valid for the
-    lifetime of the ``Mesh`` instance.
+    lifetime of the ``Mesh`` instance. Under ``torch.compile``, geometric
+    properties compute from ``points`` and ``cells`` without reading or
+    filling ``_cache``.
 
     Geometric transforms (``translate``, ``rotate``, ``scale``, ``transform``)
     carry forward applicable cache entries to the new ``Mesh`` rather than
@@ -532,6 +535,17 @@ class Mesh(
                 if value.batch_size != batch_size:
                     value.batch_size = batch_size
                 continue
+            if value is None:
+                # An empty container needs no validation; the checked constructor
+                # dominates the construction time of small meshes
+                setattr(
+                    self,
+                    field_name,
+                    TensorDict._new_unsafe(
+                        batch_size=batch_size, device=self.points.device
+                    ),
+                )
+                continue
             setattr(
                 self,
                 field_name,
@@ -545,17 +559,21 @@ class Mesh(
         ### _cache: default empty cache structure
         if self._cache is None:
             device = self.points.device
-            self._cache = TensorDict(
+            empty = TensorDict._new_unsafe  # as for the empty data containers above
+            self._cache = empty(
                 {
-                    "cell": TensorDict({}, batch_size=[self.n_cells], device=device),
-                    "point": TensorDict({}, batch_size=[self.n_points], device=device),
-                    "topology": TensorDict({}, device=device),
+                    "cell": empty(batch_size=torch.Size([self.n_cells]), device=device),
+                    "point": empty(
+                        batch_size=torch.Size([self.n_points]), device=device
+                    ),
+                    "topology": empty(batch_size=torch.Size([]), device=device),
                 },
+                batch_size=torch.Size([]),
                 device=device,
             )
 
         ### Validate shapes and dtypes
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if self.points.ndim != 2:
                 raise ValueError(
                     f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
@@ -997,11 +1015,10 @@ class Mesh(
         torch.Tensor
             Tensor of shape (n_cells, n_spatial_dims) containing the centroid of each cell.
         """
-        cached = self._cache.get(("cell", "centroids"), None)
-        if cached is None:
-            cached = gather_rows(self.points, self.cells).mean(dim=1)
-            self._cache["cell", "centroids"] = cached
-        return cached
+        return self._cached(
+            ("cell", "centroids"),
+            lambda: gather_rows(self.points, self.cells).mean(dim=1),
+        )
 
     @property
     def cell_areas(self) -> torch.Tensor:
@@ -1026,15 +1043,14 @@ class Mesh(
         torch.Tensor
             Tensor of shape (n_cells,) containing the volume of each cell.
         """
-        cached = self._cache.get(("cell", "areas"), None)
-        if cached is None:
+
+        def compute() -> torch.Tensor:
             cell_vertices = gather_rows(self.points, self.cells)
             relative_vectors = cell_vertices[:, 1:] - cell_vertices[:, :1]
             del cell_vertices
-            cached = compute_cell_areas(relative_vectors)
-            self._cache["cell", "areas"] = cached
+            return compute_cell_areas(relative_vectors)
 
-        return cached
+        return self._cached(("cell", "areas"), compute)
 
     @property
     def cell_normals(self) -> torch.Tensor:
@@ -1059,8 +1075,8 @@ class Mesh(
         ValueError
             If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
         """
-        cached = self._cache.get(("cell", "normals"), None)
-        if cached is None:
+
+        def compute() -> torch.Tensor:
             if self.codimension != 1:
                 raise ValueError(
                     f"cell normals are only defined for codimension-1 manifolds.\n"
@@ -1068,10 +1084,9 @@ class Mesh(
                     f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
                     f"Current codimension: {self.codimension}"
                 )
-            cached = _compute_cell_normals_from_points(self.points, self.cells)
-            self._cache["cell", "normals"] = cached
+            return _compute_cell_normals_from_points(self.points, self.cells)
 
-        return cached
+        return self._cached(("cell", "normals"), compute)
 
     @property
     def point_normals(self) -> torch.Tensor:
@@ -1112,12 +1127,11 @@ class Mesh(
         >>> # Normals are unit vectors (or zero for isolated points)
         >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
-        cached = self._cache.get(("point", "normals"), None)
-        if cached is None:
-            weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
-            cached = self.compute_point_normals(weighting=weighting)
-            self._cache["point", "normals"] = cached
-        return cached
+        weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
+        return self._cached(
+            ("point", "normals"),
+            lambda: self.compute_point_normals(weighting=weighting),
+        )
 
     def compute_point_normals(
         self,
@@ -1188,7 +1202,7 @@ class Mesh(
         --------
         >>> # Triangle mesh in 3D
         >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
-        >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
+        >>> normals = mesh.compute_point_normals()  # angle-area-weighted (default)  # doctest: +SKIP
         >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
         >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
         >>> # Normals are unit vectors (or zero for isolated points)
@@ -1329,14 +1343,11 @@ class Mesh(
         >>> K = sphere.gaussian_curvature_vertices
         >>> # K.mean() approx 0.25 (= 1 / 2.0^2)
         """
-        cached = self._cache.get(("point", "gaussian_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import gaussian_curvature_vertices
+        from physicsnemo.mesh.curvature import gaussian_curvature_vertices
 
-            cached = gaussian_curvature_vertices(self)
-            self._cache["point", "gaussian_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("point", "gaussian_curvature"), lambda: gaussian_curvature_vertices(self)
+        )
 
     @property
     def gaussian_curvature_cells(self) -> torch.Tensor:
@@ -1359,14 +1370,11 @@ class Mesh(
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> K_cells = mesh.gaussian_curvature_cells
         """
-        cached = self._cache.get(("cell", "gaussian_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import gaussian_curvature_cells
+        from physicsnemo.mesh.curvature import gaussian_curvature_cells
 
-            cached = gaussian_curvature_cells(self)
-            self._cache["cell", "gaussian_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("cell", "gaussian_curvature"), lambda: gaussian_curvature_cells(self)
+        )
 
     @property
     def mean_curvature_vertices(self) -> torch.Tensor:
@@ -1407,14 +1415,11 @@ class Mesh(
         >>> H = sphere.mean_curvature_vertices
         >>> # H.mean() ≈ 0.5 (= 1/2.0)
         """
-        cached = self._cache.get(("point", "mean_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import mean_curvature_vertices
+        from physicsnemo.mesh.curvature import mean_curvature_vertices
 
-            cached = mean_curvature_vertices(self)
-            self._cache["point", "mean_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("point", "mean_curvature"), lambda: mean_curvature_vertices(self)
+        )
 
     @classmethod
     def merge(
@@ -1447,7 +1452,7 @@ class Mesh(
             If tensors from different meshes reside on different devices.
         """
         ### Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
             elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
@@ -1524,7 +1529,11 @@ class Mesh(
         return cls(
             points=torch.cat([m.points for m in meshes], dim=0),
             cells=torch.cat(
-                [m.cells + offset for m, offset in zip(meshes, cell_index_offsets)],
+                [
+                    # The first mesh's offset is 0: cat its cells without a copy
+                    m.cells if i == 0 else m.cells + offset
+                    for i, (m, offset) in enumerate(zip(meshes, cell_index_offsets))
+                ],
                 dim=0,
             ),
             point_data=TensorDict.cat([m.point_data for m in meshes], dim=0),
@@ -1727,11 +1736,12 @@ class Mesh(
         Notes
         -----
         Slicing shares unsliced data with the source by reference rather than
-        copying: the returned mesh shares ``points``, ``point_data``, and
-        ``global_data`` with this mesh, and the no-op selections ``None`` /
-        ``Ellipsis`` return this mesh itself. Mutating any shared field on the
-        result therefore also mutates the source; clone first if you need an
-        independent copy.
+        copying: the returned mesh shares ``points`` and the field tensors of
+        ``point_data`` and ``global_data`` with this mesh (in new containers,
+        so adding or removing a field does not affect the source), and the
+        no-op selections ``None`` / ``Ellipsis`` return this mesh itself.
+        Mutating a shared tensor in place on the result therefore also mutates
+        the source; clone first if you need an independent copy.
 
         A one-dimensional CUDA boolean mask requires one host-device
         synchronization to determine the output cell count. Integer index
@@ -1781,9 +1791,10 @@ class Mesh(
         return Mesh(
             points=self.points,
             cells=self.cells[indices],
-            point_data=self.point_data,
+            # Shallow copies: shared field tensors, independent containers
+            point_data=self.point_data.copy(),
             cell_data=new_cell_data,
-            global_data=self.global_data,
+            global_data=self.global_data.copy(),
             _cache=new_cache,
         )
 
@@ -2250,9 +2261,10 @@ class Mesh(
                 )
 
         ### Convert each cell data field to point data via scatter aggregation
-        new_point_data = self.point_data.clone()
+        # A shallow copy: with_data shares the unchanged leaves anyway
+        new_point_data = self.point_data.copy()
 
-        # Get flat list of point indices and corresponding cell indices
+        # Get flat list of point indices
         # self.cells shape: (n_cells, n_vertices_per_cell)
         n_vertices_per_cell = self.cells.shape[1]
 
@@ -2260,20 +2272,35 @@ class Mesh(
         # Shape: (n_cells * n_vertices_per_cell,)
         point_indices = self.cells.flatten()
 
-        # Corresponding cell index for each point
-        # Shape: (n_cells * n_vertices_per_cell,)
-        cell_indices = torch.arange(
-            self.n_cells, device=self.points.device
-        ).repeat_interleave(n_vertices_per_cell)
+        # Number of cells using each point, counted once for every field
+        device = self.points.device
+        vertex_degree = torch.zeros(self.n_points, dtype=torch.int64, device=device)
+        vertex_degree.scatter_add_(
+            0,
+            point_indices,
+            torch.ones((), dtype=torch.int64, device=device).expand_as(point_indices),
+        )
+        # Points in no cell have zero sums, which divided by 1 stay the same zero
+        # that scatter_aggregate's epsilon-clamped count gives
+        vertex_degree = vertex_degree.clamp_(min=1)
 
-        converted = fields.apply(
-            lambda cell_values: scatter_aggregate(
-                src_data=cell_values[cell_indices],
+        def _mean_over_point_cells(cell_values: torch.Tensor) -> torch.Tensor:
+            """Average a single cell field over the cells around each point."""
+            # Same arithmetic as scatter_aggregate's unweighted mean, which would
+            # recount the vertex degree for every field
+            if not cell_values.is_floating_point() and not cell_values.is_complex():
+                cell_values = cell_values.to(torch.float64)
+            sums = scatter_aggregate(
+                # Each cell's value once per vertex, lined up with point_indices
+                src_data=cell_values.repeat_interleave(n_vertices_per_cell, dim=0),
                 src_to_dst_mapping=point_indices,
                 n_dst=self.n_points,
-                weights=None,
-                aggregation="mean",
-            ),
+                aggregation="sum",
+            )
+            return sums.div_(vertex_degree.view(-1, *([1] * (sums.ndim - 1))))
+
+        converted = fields.apply(
+            _mean_over_point_cells,
             batch_size=torch.Size([self.n_points]),
         )
         new_point_data.update(converted)
@@ -2330,19 +2357,34 @@ class Mesh(
                 )
 
         ### Convert each point data field to cell data by averaging over cell vertices
-        new_cell_data = self.cell_data.clone()
+        # A shallow copy: with_data shares the unchanged leaves anyway
+        new_cell_data = self.cell_data.copy()
+        n_vertices_per_cell = self.cells.shape[1]
 
         def _mean_over_cell_vertices(point_values: torch.Tensor) -> torch.Tensor:
             """Average a single point field over the vertices of each cell."""
-            # Shape: (n_cells, n_vertices_per_cell, *data_shape)
-            cell_values = point_values[self.cells]
-            # Promote integer/bool fields to float first: torch.mean rejects
-            # integer dtypes, and a mean of integers is real-valued anyway.
-            # Casting after the gather rather than the point field before it
-            # keeps the gather on the narrow source dtype, which measures faster.
-            if not cell_values.is_floating_point() and not cell_values.is_complex():
-                cell_values = cell_values.to(torch.float64)
-            return cell_values.mean(dim=1)
+            # Promote integer/bool fields to float first: a mean of integers is
+            # real-valued, and an integer sum could overflow.
+            if not point_values.is_floating_point() and not point_values.is_complex():
+                point_values = point_values.to(torch.float64)
+            # Accumulate one vertex at a time over the static vertex count rather
+            # than gathering an (n_cells, n_vertices_per_cell, *data_shape)
+            # tensor. The sum runs in the order of mean(dim=1), which it matches
+            # bitwise on CPU. Like mean(dim=1), floats narrower than float32
+            # accumulate in float32 and round once at the end.
+            field_dtype = point_values.dtype
+            accumulate_dtype = (
+                torch.float32
+                if point_values.is_floating_point() and point_values.element_size() < 4
+                else field_dtype
+            )
+            # index_select rather than indexing: same values, but its backward is
+            # an index_add_ instead of CUDA's sort-based index_put_
+            cell_values = point_values.index_select(0, self.cells[:, 0])
+            cell_values = cell_values.to(accumulate_dtype)
+            for j in range(1, n_vertices_per_cell):
+                cell_values += point_values.index_select(0, self.cells[:, j])
+            return cell_values.div_(n_vertices_per_cell).to(field_dtype)
 
         converted = fields.apply(
             _mean_over_cell_vertices,
@@ -2554,6 +2596,11 @@ class Mesh(
         codimension-1 facet (e.g., cells sharing an edge in 2D or a face in
         3D).  The parent mesh's ``cell_data`` becomes the ``point_data`` of the
         returned Mesh, since each dual-graph node corresponds to a parent cell.
+        As in ``to_point_cloud(point_source="cell_centroids")``, each node also
+        carries its parent cell's measure in ``point_data["_effective_measure"]``,
+        and ``global_data["_point_measure_dimension"]`` records the parent's
+        manifold dimension. ``integrate_samples`` reads these reserved fields,
+        so it integrates node values over the parent mesh.
 
         Returns
         -------
@@ -2650,6 +2697,25 @@ class Mesh(
     is_manifold = is_manifold
 
     is_watertight = is_watertight
+
+    def _cached(
+        self, key: tuple[str, str], compute: Callable[[], torch.Tensor]
+    ) -> torch.Tensor:
+        """Return ``_cache[key]``, computing and storing it on a miss.
+
+        While this call is traced (see ``is_tracing``), it always calls
+        ``compute()`` and leaves ``_cache`` alone: Dynamo guards on the cache's
+        contents, so each cache state would need its own graph, and it would
+        replay the write onto the caller's mesh. Other threads keep their
+        caches meanwhile, which carry cell areas through transforms.
+        """
+        if is_tracing():
+            return compute()
+        cached = self._cache.get(key, None)
+        if cached is None:
+            cached = compute()
+            self._cache[key] = cached
+        return cached
 
     def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
         r"""Look up or compute-and-cache a topological adjacency.
@@ -2827,6 +2893,7 @@ class Mesh(
         - Points: Additional points at the last existing point (preserves bounding box)
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
         - cell data: NaN-valued padding for all cell data fields (default)
+        - explicit effective measures: zero, so padding adds nothing to integrals
 
         Parameters
         ----------
@@ -2860,7 +2927,7 @@ class Mesh(
         >>> padded.n_cells   # 256  # doctest: +SKIP
         """
         # Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if target_n_points is not None and target_n_points < self.n_points:
                 raise ValueError(f"{target_n_points=} must be >= {self.n_points=}")
             if target_n_cells is not None and target_n_cells < self.n_cells:
@@ -2876,11 +2943,7 @@ class Mesh(
         if target_n_cells is None:
             target_n_cells = self.n_cells
 
-        if (
-            not torch.compiler.is_compiling()
-            and target_n_cells > 0
-            and target_n_points == 0
-        ):
+        if not is_tracing() and target_n_cells > 0 and target_n_points == 0:
             raise ValueError("Cannot pad cells without at least one mesh point.")
 
         def _pad_data(tensor: torch.Tensor, size: int) -> torch.Tensor:
@@ -2892,6 +2955,20 @@ class Mesh(
             ):
                 value = 0.0
             return _pad_with_value(tensor, size, value)
+
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        def _pad_fields(data: TensorDict, size: int) -> TensorDict:
+            padded = data.apply(
+                lambda x: _pad_data(x, size), batch_size=torch.Size([size])
+            )
+            # Padding elements contribute nothing to integrals, whatever the
+            # padding value of ordinary fields.
+            if EFFECTIVE_MEASURE_KEY in data.keys():
+                padded[EFFECTIVE_MEASURE_KEY] = _pad_with_value(
+                    data[EFFECTIVE_MEASURE_KEY], size, 0.0
+                )
+            return padded
 
         padded_cell_cache = self._cache["cell"].apply(
             lambda x: _pad_with_value(x, target_n_cells, 0.0),
@@ -2913,14 +2990,8 @@ class Mesh(
             cells=_pad_with_value(
                 self.cells, target_n_cells, max(self.n_points - 1, 0)
             ),
-            point_data=self.point_data.apply(
-                lambda x: _pad_data(x, target_n_points),
-                batch_size=torch.Size([target_n_points]),
-            ),
-            cell_data=self.cell_data.apply(
-                lambda x: _pad_data(x, target_n_cells),
-                batch_size=torch.Size([target_n_cells]),
-            ),
+            point_data=_pad_fields(self.point_data, target_n_points),
+            cell_data=_pad_fields(self.cell_data, target_n_cells),
             global_data=self.global_data,
             _cache=TensorDict(
                 {
@@ -2975,10 +3046,10 @@ class Mesh(
         >>> mesh = Mesh(points, cells)  # 100 points, 200 cells  # doctest: +SKIP
         >>> padded = mesh.pad_to_next_power(power=1.5)  # doctest: +SKIP
         >>> # Points padded to floor(1.5^n) >= 100, cells to floor(1.5^m) >= 200
-        >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 216 cells
+        >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 291 cells
         >>> # Padding cells have zero area and don't affect computations
         """
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if power <= 1:
                 raise ValueError(f"power must be > 1, got {power=}")
 
@@ -2992,6 +3063,11 @@ class Mesh(
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
             n = math.ceil(math.log(safe_size) / math.log(base))
+            # The logarithm is only an estimate; check the actual floored powers.
+            while n > 0 and int(base ** (n - 1)) >= safe_size:
+                n -= 1
+            while int(base**n) < safe_size:
+                n += 1
             return int(base**n)
 
         target_n_points = next_power_size(self.n_points, power)

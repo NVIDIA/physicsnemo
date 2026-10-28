@@ -331,11 +331,11 @@ uses PhysicsNeMo domain parallelism should also cite
 ## Share Your Research
 
 Publishing a paper that uses PhysicsNeMo? Add it to our
-[Research and Publications Using PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md)
+[Research and Publications Using PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst)
 page so the community can find it. Open a
 [research paper submission](https://github.com/NVIDIA/physicsnemo/issues/new?template=research_paper.yml)
 with your paper's details, or edit
-[`docs/research.md`](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md)
+[`docs/research.rst`](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst)
 directly and open a pull request.
 
 ## License

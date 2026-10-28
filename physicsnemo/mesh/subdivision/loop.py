@@ -99,8 +99,11 @@ def reposition_original_vertices_2d(
     # Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
     # Shape: (n_points,)
 
-    cos_term = 3.0 / 8.0 + 0.25 * torch.cos(2.0 * torch.pi / valences.float())
-    beta_else = (1.0 / valences.float()) * (5.0 / 8.0 - cos_term * cos_term)
+    # Weights are computed in the points' dtype, but at least float32
+    weight_dtype = torch.promote_types(mesh.points.dtype, torch.float32)
+    valences_float = valences.to(weight_dtype)
+    cos_term = 3.0 / 8.0 + 0.25 * torch.cos(2.0 * torch.pi / valences_float)
+    beta_else = (1.0 / valences_float) * (5.0 / 8.0 - cos_term * cos_term)
     beta = torch.where(valences == 3, 3.0 / 16.0, beta_else)
     # Handle isolated vertices (valence=0) - beta should be 0 to keep original position
     beta = torch.where(valences > 0, beta, 0.0)
@@ -140,7 +143,7 @@ def reposition_original_vertices_2d(
     ### Apply the interior Loop formula for all points at once
     # new_pos = (1 - n*beta) * old_pos + beta * sum(neighbors)
     # Shape: (n_points, n_spatial_dims)
-    valences_expanded = valences.unsqueeze(-1).float()  # (n_points, 1)
+    valences_expanded = valences_float.unsqueeze(-1)  # (n_points, 1)
     beta_expanded = beta.unsqueeze(-1)  # (n_points, 1)
 
     interior_new_positions = (
@@ -157,7 +160,7 @@ def reposition_original_vertices_2d(
     # special-cases boundary *edges*; this makes the *vertex* rule consistent.)
     from physicsnemo.mesh.boundaries import get_boundary_edges
 
-    boundary_edges = get_boundary_edges(mesh)  # (n_boundary_edges, 2)
+    boundary_edges = get_boundary_edges(mesh).long()  # (n_boundary_edges, 2)
 
     if len(boundary_edges) == 0:
         return interior_new_positions
@@ -380,7 +383,7 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
 
     ### Generate child cells
-    child_cells, parent_indices = generate_child_cells(
+    child_cells = generate_child_cells(
         parent_cells=mesh.cells,
         edge_inverse=edge_inverse,
         n_original_points=n_original_points,
@@ -390,8 +393,8 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     ### Propagate cell_data
     new_cell_data = propagate_cell_data_to_children(
         cell_data=mesh.cell_data,
-        parent_indices=parent_indices,
-        n_total_children=len(child_cells),
+        n_children_per_parent=subdivision_pattern.shape[0],
+        device=mesh.cells.device,
     )
 
     ### Create and return subdivided mesh
@@ -400,10 +403,18 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
         cells=child_cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
-        global_data=mesh.global_data,
+        global_data=mesh.global_data.copy(),  # Shared tensors, own container
     )
 
-    from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+    from physicsnemo.mesh.calculus.measure import (
+        EFFECTIVE_MEASURE_KEY,
+        _transfer_cell_measures,
+    )
 
-    _transfer_cell_measures(mesh, result, parent_indices)
+    if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+        # Only explicit measures need each child's parent index
+        parent_indices = torch.arange(
+            mesh.n_cells, device=mesh.cells.device
+        ).repeat_interleave(subdivision_pattern.shape[0])
+        _transfer_cell_measures(mesh, result, parent_indices)
     return result

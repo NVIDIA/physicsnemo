@@ -305,29 +305,53 @@ reference the same tree).
 When multiple BC types are present, communication layers also evaluate
 cross-BC interactions: source BC "A" contributes to destination BC "B" and
 vice versa.  For cross-BC pairs, the source tree and target tree are different
-objects (built from different point sets), and a separate
-`DualInteractionPlan` is computed for each (source BC, destination BC) pair.
-This produces B^2 plans for B BC types.  Since B is small in practice (1-4),
-the additional traversal cost is negligible.
+objects (built from different point sets), and each (source BC, destination
+BC) pair needs its own plan: B^2 plans for B BC types.
+
+GLOBE finds them in B traversals rather than B^2.  `ClusterTree.merge`
+combines the B trees into one forest whose points are the B centroid sets laid
+end to end and whose `root_ids` list the root of each tree.
+`find_dual_interaction_pairs(target_tree=forest)` traverses a source tree
+against all B trees at once, starting from each tree's root.  It makes the
+same decisions as B separate traversals, and its plan is their plans joined:
+one `DualInteractionPlan` per source BC that indexes the centroids of every BC.
+Each traversal pays a host sync and a few dozen kernel launches per tree level,
+so cutting their number matters at small N.
 
 ### 4.5 Caching Interaction Plans
 
 The interaction plan depends only on the geometric positions of sources and
 targets, not on the source data or strengths.  For communication hyperlayers,
-all B^2 plans (covering both self-interaction and cross-BC pairs) are computed
-once and reused across all layers.  For the final prediction evaluation,
+the B joined plans (covering both self-interaction and cross-BC pairs) are
+computed once and reused across all layers.  For the final prediction evaluation,
 separate plans are computed from each source BC tree to the prediction-point
 target tree.  This eliminates redundant traversals.
 
 ---
 
-## 5. Two-Phase Kernel Evaluation
+## 5. Kernel Evaluation Phases
 
-`BarnesHutKernel.forward()` evaluates near-field and far-field interactions in
-two distinct phases, each with its own gather-evaluate-scatter pipeline.  The
-same `_evaluate_interactions()` method handles both - it operates on generic
+`BarnesHutKernel._evaluate_plan()` evaluates the plan's four interaction
+streams in four phases, each with its own gather-evaluate-scatter pipeline:
+near-field pairs (Phase A), far-field node pairs (Phase B), target points
+against source nodes (Phase C, chunked like Phase A), and target nodes
+against source points (Phase D, broadcast like Phase B).  The same
+`_evaluate_packed()` method handles all four - it operates on generic
 `(N_pairs, ...)` tensors and is agnostic to whether the pairs are individual
 points or node centroids.
+
+The features arrive packed: before any phase runs, the kernel packs the
+scalar leaves and then the vector leaves of `source_data` into one
+`(N_sources, n_scalars + n_vectors * D)` tensor, and those of `global_data`
+into one vector, with `TensorDict.pack` and a `PackLayout` that the kernel
+builds from its schemas, so the column order is fixed.  The node aggregates
+are computed from the packed tensor and stay packed.  Each phase then gathers
+one row per pair, and the feature engineering works on
+`(N_pairs, n_vectors, D)` and `(N_pairs, n_scalars)` tensors: one operation
+per step for all features, where a TensorDict of features would take one per
+leaf.  The outputs are packed too, one column per scalar field and D per
+vector field, and a `tensordict.PackLayout` turns the packed result back into
+named fields.
 
 ### 5.1 Phase A: Near-Field (Individual Pairs)
 
@@ -336,9 +360,9 @@ kernel evaluation.  They are processed in chunks:
 
 1. **Chunk the pair arrays**: Slice `near_target_ids[start:end]` and
    `near_source_ids[start:end]`.
-2. **Gather**: Index into the shared source/target point arrays and feature
-   data to build per-chunk float tensors.
-3. **Evaluate**: Run `_evaluate_interactions()` (feature engineering + MLP +
+2. **Gather**: Index into the shared source/target point arrays and the
+   packed feature tensor to build per-chunk float tensors.
+3. **Evaluate**: Run `_evaluate_packed()` (feature engineering + MLP +
    post-processing).
 4. **Weight and scatter**: Multiply by per-source strengths, then
    `scatter_add` into the output buffer at the target indices.
@@ -351,7 +375,7 @@ approximation with target-side broadcast:
 1. **Gather**: Index into node centroids and aggregate features for both
    the target nodes (`far_target_node_ids`) and source nodes
    (`far_source_node_ids`).
-2. **Evaluate**: Run `_evaluate_interactions()` at the centroid pair, yielding
+2. **Evaluate**: Run `_evaluate_packed()` at the centroid pair, yielding
    one result per node pair.
 3. **Weight**: Multiply by total source-node strength.
 4. **Broadcast to targets**: For each target node, use `_ragged_arange` to
@@ -362,18 +386,18 @@ The broadcast step uses the target tree's `node_range_start` and
 `node_range_count` arrays to find which individual targets belong to each
 target node, and `sorted_source_order` to map back to original target indices.
 
-### 5.3 The _evaluate_interactions() Factoring
+### 5.3 The _evaluate_packed() Factoring
 
 The core feature engineering pipeline (vector magnitudes, spherical harmonics,
 network evaluation, far-field decay, vector reprojection) lives in a shared
-`_evaluate_interactions()` method.  This method operates on generic
+`_evaluate_packed()` method.  This method operates on generic
 `(*interaction_dims, ...)` tensors - it does not know or care whether the
 interactions are dense `(N_tgt, N_src)` or sparse `(N_chunk,)`.
 
 - `Kernel.forward()` calls it with `interaction_dims = (N_tgt, N_src)` (dense,
   brute-force evaluation)
-- `BarnesHutKernel.forward()` calls it with `interaction_dims = (N_chunk,)` in
-  both Phase A and Phase B
+- `BarnesHutKernel._evaluate_plan()` calls it with
+  `interaction_dims = (N_chunk,)` in every phase
 
 This avoids duplicating the ~250-line feature engineering pipeline.
 
@@ -392,12 +416,18 @@ reduction in checkpoint-saved memory per chunk.
 
 ### 6.2 Auto-Chunk Sizing
 
-`_auto_chunk_size()` estimates peak memory per interaction pair from the
+`_auto_chunk_count()` estimates peak memory per interaction pair from the
 kernel's feature engineering pipeline (counting intermediate floats for
-spatial vectors, scalar features, MLP layers, and post-processing) and sizes
-chunks to fit within ~50% of free GPU memory.  During training, a 5x
-multiplier accounts for autograd tensor retention; during inference, this
+spatial vectors, scalar features, MLP layers, and post-processing) and picks
+enough chunks to fit within a fixed fraction of GPU memory.  During training,
+a 5x multiplier accounts for autograd tensor retention; during inference, this
 multiplier is dropped, allowing larger chunks.
+
+Under `torch.compile` the chunk loop is unrolled, so the chunk count is part
+of the compiled graph.  It is therefore a power of two, and a new geometry
+recompiles only when its pair count crosses a power of two in chunks.  All
+chunks but the last have the same size, and the last ends at the pair count,
+so the compiled graph does not depend on how evenly the pairs divide.
 
 ### 6.3 Branch-Level Checkpointing
 
@@ -411,19 +441,19 @@ than O(n_branches \* n_pairs \* features).
 The branch-level and chunk-level checkpoints nest correctly:
 `use_reentrant=False` composes via `saved_tensors_hooks`.
 
-### 6.4 Chunk-Size Determinism
+### 6.4 Chunk-Count Determinism
 
-`_auto_chunk_size()` derives the chunk count from a static fraction of
+`_auto_chunk_count()` derives the chunk count from a static fraction of
 total device memory (cached `torch.cuda.get_device_properties.total_memory`)
 rather than current free memory.  This avoids the synchronizing
-`torch.cuda.mem_get_info` driver query and gives a deterministic chunk size
+`torch.cuda.mem_get_info` driver query and gives a deterministic chunk count
 across forward and checkpoint-replay backward passes.
 
-`MultiscaleKernel.forward()` still precomputes each branch's chunk size
-**outside** the checkpoint boundary and passes it as a fixed input via the
-`near_chunk_size` kwarg, so future changes that re-introduce dynamic sizing
-won't break the outer (branch-level) checkpoint by changing intermediate
-shapes between the forward pass and its replay.
+`MultiscaleKernel.forward_packed()` still precomputes each branch's chunk
+count **outside** the checkpoint boundary and passes it as a fixed input via
+the `near_chunk_count` kwarg, so future changes that re-introduce dynamic
+sizing won't break the outer (branch-level) checkpoint by changing
+intermediate shapes between the forward pass and its replay.
 
 ---
 
@@ -434,15 +464,18 @@ shapes between the forward pass and its replay.
 Within a single `GLOBE.forward()` call:
 
 1. **Phase 1 (init)**: Build one `ClusterTree` per boundary condition type
-   from the cell centroids.  Compute `DualInteractionPlan`s for communication
-   covering all (source BC, destination BC) pairs - B^2 plans for B BC types.
-   For self-interaction pairs (source == destination), the target tree is the
-   same object as the source tree.  All trees and plans are cached for the
-   duration of the forward pass.
+   from the cell centroids.  Compute one joined `DualInteractionPlan` per
+   source BC, against a forest of all BC trees (Section 4.4).  All trees and
+   plans are cached for the duration of the forward pass.
 
 2. **Phase 2 (communication)**: For each communication hyperlayer, reuse the
-   cached trees and plans.  Only source aggregates are recomputed (the latent
-   features change between layers).
+   cached trees and plans.  Each source BC's kernel runs once, for the cell
+   centroids of all BCs at once, so a layer makes B kernel calls rather than
+   B^2.  Only source aggregates are recomputed (the latent features change
+   between layers).  The kernels return their fields packed; GLOBE adds the
+   sources' packed outputs, compresses them, and unpacks each boundary
+   mesh's rows into its new `cell_data`, so each mesh carries its strengths
+   and latents to the next layer.
 
 3. **Phase 3 (prediction)**: Build a single target tree for prediction points
    and compute one interaction plan per source BC type (B plans total).
@@ -451,13 +484,15 @@ Within a single `GLOBE.forward()` call:
 Tree construction and plan finding are decorated with
 `@torch.compiler.disable` because they involve irregular control flow (Morton
 code bit operations, data-dependent loop termination) that `torch.compile`
-cannot trace.  The kernel evaluation inside `_evaluate_interactions` compiles
+cannot trace.  The kernel evaluation inside `_evaluate_packed` compiles
 normally.
 
 ### 7.2 Shared Aggregates Across Branches
 
-`MultiscaleKernel` computes source aggregates once and passes them to all
-`BarnesHutKernel` branches via the `source_aggregates` parameter.  Since
+`MultiscaleKernel` packs the features and computes source aggregates once,
+with the setup that `BarnesHutKernel.forward()` uses too
+(`_prepare_plan_inputs`), and passes them to all `BarnesHutKernel` branches
+(`_evaluate_plan`).  Since
 aggregates depend only on geometry and source data (both shared across
 branches), this eliminates redundant computation.  Only per-node strength
 summation (which depends on per-branch strengths) is computed per-branch.
@@ -574,31 +609,44 @@ dense pairs.
 GLOBE.forward()
   |
   +-- _build_trees_and_plans()              [outside torch.compile]
-  |     Build ClusterTree per BC type (B trees)
-  |     Find DualInteractionPlan for all (src, dst) BC pairs (B^2 plans)
+  |     Build ClusterTree per BC type (B trees), merge them into a forest
+  |     Find one joined DualInteractionPlan per source BC (B traversals)
   |
   +-- Phase 2: Communication hyperlayers (repeat n_comm times)
   |     |
-  |     +-- _evaluate_hyperlayer()
+  |     +-- _evaluate_hyperlayer()             [targets: all BCs' centroids]
   |           |
-  |           +-- MultiscaleKernel.forward()
+  |           +-- MultiscaleKernel.forward_packed()   [once per source BC]
   |                 |
-  |                 +-- compute_source_aggregates()  [once, shared across branches]
-  |                 +-- precompute near_chunk_sizes  [outside checkpoint boundary]
+  |                 +-- BarnesHutKernel._prepare_plan_inputs()
+  |                 |     pack source and global features
+  |                 |     compute_source_aggregates()  [once, shared across branches]
+  |                 +-- precompute near_chunk_counts [outside checkpoint boundary]
   |                 |
   |                 +-- for each branch:
-  |                       checkpoint(BarnesHutKernel.forward(), ...)
+  |                       BarnesHutKernel._evaluate_plan()
+  |                       [in checkpoint() only if use_branch_ckpt]
   |                       |
   |                       +-- _compute_node_strengths()
   |                       |
-  |                       +-- Phase A: Near-field
+  |                       +-- Phase A: near (target points x source points)
   |                       |     for each chunk:
   |                       |       checkpoint(_gather_and_evaluate())
   |                       |       weight by strength, scatter_add to output
   |                       |
-  |                       +-- Phase B: Far-field
-  |                             checkpoint(_gather_and_evaluate())  [node centroids]
-  |                             weight by node strength
+  |                       +-- Phase B: far (target nodes x source nodes)
+  |                       |     checkpoint(_gather_and_evaluate())  [node centroids]
+  |                       |     weight by node strength
+  |                       |     broadcast to individual targets via scatter_add
+  |                       |
+  |                       +-- Phase C: nf (target points x source nodes)
+  |                       |     for each chunk:
+  |                       |       checkpoint(_gather_and_evaluate())
+  |                       |       weight by node strength, scatter_add to output
+  |                       |
+  |                       +-- Phase D: fn (target nodes x source points)
+  |                             checkpoint(_gather_and_evaluate())  [target centroids]
+  |                             weight by strength
   |                             broadcast to individual targets via scatter_add
   |
   +-- _build_prediction_plans()             [outside torch.compile]

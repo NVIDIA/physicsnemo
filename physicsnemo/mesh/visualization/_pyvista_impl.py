@@ -169,19 +169,19 @@ def draw_mesh_pyvista(
     ### Add mesh to plotter
     # PyVista's add_mesh handles different mesh types appropriately
     scalar_bar_args = {"title": scalar_label} if scalar_label else None
-    plotter.add_mesh(
-        pv_mesh,
-        scalars=scalars,
-        cmap=cmap,
-        color=color,
-        opacity=alpha_cells,
-        show_edges=show_edges,
-        edge_color="black",
-        line_width=1.0 if show_edges else 0,
-        clim=clim,
-        scalar_bar_args=scalar_bar_args,
-        **kwargs,
-    )
+    # Backend options override the defaults rather than colliding with them.
+    add_mesh_kwargs = {
+        "scalars": scalars,
+        "cmap": cmap,
+        "color": color,
+        "opacity": alpha_cells,
+        "show_edges": show_edges,
+        "edge_color": "black",
+        "line_width": 1.0 if show_edges else 0,
+        "clim": clim,
+        "scalar_bar_args": scalar_bar_args,
+    } | kwargs
+    plotter.add_mesh(pv_mesh, **add_mesh_kwargs)
 
     ### Add points as a separate actor if needed
     # PyVista's point rendering can be controlled via render_points_as_spheres

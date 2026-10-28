@@ -201,15 +201,16 @@ def signed_distance_field_impl(
         # zero copy the vertices, indices, and input points to warp. Detach
         # the float inputs: from_torch would otherwise allocate a .grad buffer
         # on any input that requires grad. Gradients come from the registered
-        # backward instead.
+        # backward instead. Warp's vec3 needs contiguous rows, which a strided
+        # view (e.g. a transpose) does not have.
         wp_vertices = wp.from_torch(
-            mesh_vertices.detach().to(torch.float32), dtype=wp.vec3
+            mesh_vertices.detach().to(torch.float32).contiguous(), dtype=wp.vec3
         )
         wp_indices = wp.from_torch(
             mesh_indices.to(torch.int32).contiguous(), dtype=wp.int32
         )
         wp_input_points = wp.from_torch(
-            input_points.detach().to(torch.float32), dtype=wp.vec3
+            input_points.detach().to(torch.float32).contiguous(), dtype=wp.vec3
         )
 
         # Convert output points:

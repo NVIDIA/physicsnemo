@@ -38,7 +38,8 @@ from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._device import to_device
-from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.mesh.utilities._normalization import safe_normalize
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -92,6 +93,14 @@ def _transform_tensordict(
         if len(shape) == 0:
             return value
 
+        ### Each field keeps its dtype: VTK files often pair float64 points
+        ### (and so a float64 matrix) with float32 fields.
+        field_matrix = (
+            matrix.to(value.dtype)
+            if value.is_floating_point() or value.is_complex()
+            else matrix
+        )
+
         ### Validate spatial dimension compatibility
         if shape[0] != n_spatial_dims:
             raise ValueError(
@@ -103,14 +112,14 @@ def _transform_tensordict(
 
         ### Vector field: v' = v @ M^T
         if len(shape) == 1:
-            return value @ matrix.T
+            return value @ field_matrix.T
 
         ### Rank-2 tensor field: T' = M @ T @ M^T (e.g., stress tensors)
         if shape == (n_spatial_dims, n_spatial_dims):
             if has_batch_dim:
-                return torch.einsum("ij,bjk,lk->bil", matrix, value, matrix)
+                return torch.einsum("ij,bjk,lk->bil", field_matrix, value, field_matrix)
             else:
-                return torch.einsum("ij,jk,lk->il", matrix, value, matrix)
+                return torch.einsum("ij,jk,lk->il", field_matrix, value, field_matrix)
 
         ### Higher-rank tensor field: apply transformation to each spatial index
         if all(s == n_spatial_dims for s in shape):
@@ -133,7 +142,7 @@ def _transform_tensordict(
                     for i in range(len(shape))
                 )
                 einsum_str = f"{chars[dim_idx].upper()}z,{batch_prefix}{input_indices}->{batch_prefix}{output_indices}"
-                result = torch.einsum(einsum_str, matrix, result)
+                result = torch.einsum(einsum_str, field_matrix, result)
 
             return result
 
@@ -171,6 +180,7 @@ def _build_rotation_matrix(
     angle: float | Float[torch.Tensor, ""],
     axis: Float[torch.Tensor, " n_spatial_dims"] | None,
     device: torch.device,
+    dtype: torch.dtype,
     assume_valid_axis: bool = False,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
     """Build rotation matrix for 2D or 3D.
@@ -185,6 +195,9 @@ def _build_rotation_matrix(
         :func:`_resolve_rotation_axis`.
     device : device
         Target device for the output matrix.
+    dtype : torch.dtype
+        Dtype of the output matrix. The trigonometry runs in this dtype, or in
+        ``float32`` for reduced-precision dtypes.
     assume_valid_axis : bool
         Skip the check that ``axis`` has non-zero length. See :func:`rotate`.
 
@@ -194,7 +207,7 @@ def _build_rotation_matrix(
         Rotation matrix: :math:`(2, 2)` if axis is None,
         :math:`(3, 3)` if axis has shape :math:`(3,)`.
     """
-    angle = to_device(angle, device)
+    angle = to_device(angle, device, torch.promote_types(dtype, torch.float32))
     c, s = torch.cos(angle), torch.sin(angle)
 
     if axis is None:
@@ -331,6 +344,7 @@ def rotation_matrix(
         angle=angle,
         axis=resolved,
         device=device,
+        dtype=dtype,
         assume_valid_axis=assume_valid_axis,
     ).to(dtype=dtype)
 
@@ -368,7 +382,7 @@ def scale_matrix(
     factor_t = to_device(factor, device, dtype)
     if factor_t.ndim == 0:
         factor_t = factor_t.expand(n_spatial_dims)
-    elif not torch.compiler.is_compiling() and factor_t.shape[-1] != n_spatial_dims:
+    elif not is_tracing() and factor_t.shape[-1] != n_spatial_dims:
         raise ValueError(
             f"factor must be scalar or shape ({n_spatial_dims},), got {factor_t.shape}"
         )
@@ -442,12 +456,27 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
     -- preserve angles. Angle-based vertex-normal weighting is therefore invariant
     under them, so the inverse-transpose cache propagation of point normals is exact.
     Shears and non-uniform scales fail this test.
+
+    The test divides :math:`M` by its largest absolute entry, then compares
+    :math:`M^\top M / c` with :math:`I`, so its outcome is independent of the
+    overall scale. The zero map (:math:`c = 0`) passes, as a uniform scale by
+    zero; maps with non-finite entries fail.
     """
     n = matrix.shape[-1]
+    peak = matrix.abs().amax()
+    matrix = matrix / torch.where(peak > 0, peak, 1)
     gram = matrix.T @ matrix
     scale = gram.diagonal(dim1=-2, dim2=-1).mean()
+    nonzero = scale != 0
     identity = torch.eye(n, device=matrix.device, dtype=matrix.dtype)
-    return bool(torch.allclose(gram, scale * identity, atol=atol, rtol=1e-5))
+    return bool(
+        torch.allclose(
+            gram / torch.where(nonzero, scale, 1),
+            nonzero * identity,
+            atol=atol,
+            rtol=1e-5,
+        )
+    )
 
 
 def _scale_assumptions(
@@ -475,9 +504,12 @@ def _scale_assumptions(
     if isinstance(factor, numbers.Real):
         return abs(math.prod([factor] * n_spatial_dims)) > 1e-10, True
     values = [float(f) for f in factor]
-    squares = [v * v for v in values]
+    peak = max(abs(v) for v in values)
+    squares = [(v / peak) * (v / peak) if peak > 0 else v * v for v in values]
     mean = sum(squares) / len(squares)
-    is_similarity = all(abs(s - mean) <= 1e-6 + 1e-5 * mean for s in squares)
+    # _is_similarity_transform's torch.allclose(..., I, atol=1e-6, rtol=1e-5)
+    # bounds each diagonal entry by atol + rtol * 1.
+    is_similarity = mean == 0 or all(abs(s / mean - 1) <= 1e-6 + 1e-5 for s in squares)
     return abs(math.prod(values)) > 1e-10, is_similarity
 
 
@@ -571,7 +603,7 @@ def transform(
         - centroids: Always transformed
         - normals: For square invertible matrices, transformed by inverse-transpose
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2D, got shape {matrix.shape}")
         if matrix.shape[1] != mesh.n_spatial_dims:
@@ -644,10 +676,7 @@ def transform(
                     or (
                         assume_similarity
                         if assume_similarity is not None
-                        else (
-                            not torch.compiler.is_compiling()
-                            and _is_similarity_transform(matrix)
-                        )
+                        else (not is_tracing() and _is_similarity_transform(matrix))
                     )
                 ):
                     transformed = v @ inverse
@@ -731,7 +760,7 @@ def translate(
     """
     offset = to_device(offset, mesh.points.device, mesh.points.dtype)
 
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if offset.shape[-1] != mesh.n_spatial_dims:
             raise ValueError(
                 f"offset must have shape ({mesh.n_spatial_dims},), got {offset.shape}"

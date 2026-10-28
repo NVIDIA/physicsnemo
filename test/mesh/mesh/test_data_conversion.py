@@ -359,6 +359,27 @@ class TestPointDataToCellData:
         assert result.dtype == dtype
         torch.testing.assert_close(result, torch.tensor([7.0 / 3.0]).to(dtype))
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16], ids=str)
+    @pytest.mark.parametrize("n_vertices_per_cell", [2, 3, 4])
+    def test_reduced_precision_field_matches_mean(self, dtype, n_vertices_per_cell):
+        """Half-precision fields round once, exactly as ``mean(dim=1)`` does."""
+        generator = torch.Generator().manual_seed(0)
+        n_points = 50
+        point_values = (torch.randn(n_points, 3, generator=generator) * 20).to(dtype)
+        cells = torch.randint(
+            0, n_points, (200, n_vertices_per_cell), generator=generator
+        )
+        mesh = Mesh(
+            points=torch.randn(n_points, 3, generator=generator),
+            cells=cells,
+            point_data={"field": point_values},
+        )
+
+        result = mesh.point_data_to_cell_data().cell_data["field"]
+
+        assert result.dtype == dtype
+        assert torch.equal(result, point_values[cells].mean(dim=1))
+
     def test_preserves_original_data(self):
         """Test that original point data is preserved."""
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])

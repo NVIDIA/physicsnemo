@@ -75,8 +75,8 @@ def draw(
         - "pyvista": Force PyVista backend (requires n_spatial_dims <= 3)
     show : bool
         Whether to display the plot immediately (calls plt.show() or
-        plotter.show()). If False, returns the plotter/axes for further
-        customization before display.
+        plotter.show()). The axes or plotter is returned in either case;
+        pass False to customize it before display.
     point_scalars : torch.Tensor or str or tuple[str, ...] or None, optional
         Scalar data to color points. Mutually exclusive with
         cell_scalars. Can be:
@@ -89,8 +89,12 @@ def draw(
         Scalar data to color cells. Mutually exclusive with
         point_scalars. Can be:
 
-        - None: Cells use neutral color (lightblue if no scalars,
-          lightgray if point_scalars active)
+        - None: If point_scalars is also None, cells are lightblue.
+          If point_scalars is active, cells take their color from the
+          point scalars: matplotlib fills each triangle with the mean of its
+          vertex colors, and PyVista interpolates across each cell.
+          Line segments that matplotlib draws in 1D or 3D space stay
+          lightgray.
         - torch.Tensor: Direct scalar values, shape (n_cells,) or
           (n_cells, ...) where trailing dimensions are L2-normed
         - str or tuple[str, ...]: Key to lookup in mesh.cell_data

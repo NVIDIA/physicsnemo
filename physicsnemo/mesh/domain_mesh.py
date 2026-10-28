@@ -30,6 +30,7 @@ from physicsnemo.mesh.mesh import (
 )
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -187,7 +188,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             )
 
         ### Validate types and dimensional consistency
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if not isinstance(self.interior, Mesh):
                 raise TypeError(
                     f"`interior` must be a Mesh, got {type(self.interior).__name__}."
@@ -259,7 +260,9 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             self,
             interior=fn(self.interior) if interior else self.interior.clone(),
             boundaries=(
-                self.boundaries.apply(fn, call_on_nested=True)
+                # device=None keeps each result on the device fn put it on,
+                # rather than casting it back to the container's device.
+                self.boundaries.apply(fn, call_on_nested=True, device=None)
                 if boundaries
                 else self.boundaries.clone()
             ),

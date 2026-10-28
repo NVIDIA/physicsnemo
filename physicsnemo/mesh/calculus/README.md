@@ -1,46 +1,145 @@
 # Discrete Calculus on Simplicial Meshes
 
-## Overview
+`physicsnemo.mesh.calculus` computes gradients, divergence, curl, the
+Laplacian, and integrals of fields on simplicial meshes of any dimension. Every
+operator runs on the device of the mesh and works with autograd. For the API
+reference, refer to the [calculus page](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api/mesh/calculus.html).
 
-This module implements differential operators (gradient, divergence, curl,
-Laplacian) for simplicial meshes using two complementary approaches:
+## Choosing Between DEC and LSQ
 
-1. **Discrete Exterior Calculus (DEC)** - Rigorous differential geometry
-   framework based on Desbrun et al. (2005) and Hirani (2003)
-2. **Weighted Least-Squares (LSQ)** - Practical CFD/FEM approach for general
-   use cases
+Two methods compute the derivatives. Weighted least squares (LSQ) fits a linear
+function to the values at the neighbors of each vertex, as computational fluid
+dynamics (CFD) codes do. Discrete exterior calculus (DEC) works on the
+circumcentric dual mesh, after Desbrun et al. (2005) and Hirani (2003):
 
----
+![Two panels on the same triangle mesh. Left, labeled method="lsq", a vertex
+with arrows to its six neighbors. Right, labeled method="dec", the
+circumcenters of the triangles, the shaded dual cell of the vertex, and one
+primal edge crossed by its dual edge.](../../../docs/img/mesh/dec_primal_dual.png)
+
+*The stencils behind the two methods. LSQ fits a linear function to the values
+at the neighbors of a vertex. In DEC, the dual cell of a vertex joins the
+circumcenters of its triangles, and its area is the dual volume. Each primal
+edge has a dual edge that joins the circumcenters of its two triangles, and the
+cotangent weight is the ratio of their lengths.*
+
+Pick the method by what you need:
+
+<!-- markdownlint-disable MD013 -->
+| You Need | Method |
+| -------- | ------ |
+| A general-purpose gradient, divergence, or curl | LSQ, the default |
+| Derivatives on irregular or poor-quality meshes | LSQ |
+| Derivatives of tensor fields | LSQ |
+| Values at cell centers | LSQ (`compute_gradient_cells_lsq` and related functions) |
+| A Laplacian on a manifold | DEC (`compute_laplacian_points_dec`) |
+| Discrete structure, such as $d \circ d = 0$ and the discrete Stokes theorem | DEC |
+| Differential geometry, such as curvature | DEC |
+| Divergence or a Laplacian in more than three spatial dimensions | DEC |
+<!-- markdownlint-enable MD013 -->
+
+Both methods are first-order accurate, $O(h)$, for gradients of smooth fields.
+Their errors are larger near the boundary, where the neighborhood is one-sided:
+
+![Maps of the gradient error of LSQ and DEC on a jittered grid. A log-log plot
+shows the error of both methods falling as O(h) with the mesh spacing h, in
+the interior and on the boundary.](../../../docs/img/mesh/calculus_lsq_vs_dec.png)
+
+On irregular meshes, the pointwise error of the DEC divergence and of the DEC
+Laplacian does not shrink as the mesh refines. The gradients of both methods
+converge.
+
+## Setup
+
+The examples on this page run in order. This block defines the mesh and the
+fields that the later blocks use. The mesh is a sphere (a 2D surface in 3D)
+with a scalar field and a vector field at its vertices.
+
+```python
+import torch
+from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+mesh = sphere_icosahedral.load(subdivisions=3).to(torch.float64)
+x, y, z = mesh.points.unbind(dim=-1)
+
+scalar_field = x * y + z  # (n_points,)
+vector_field = torch.stack([-y, x, z], dim=-1)  # (n_points, 3)
+cell_values = mesh.cell_centroids[:, 0]  # (n_cells,)
+
+mesh.point_data["pressure"] = scalar_field
+mesh.point_data["temperature"] = z**2
+```
+
+## The Mesh Methods
+
+For one field, the `Mesh` methods `gradient`, `divergence`, `curl`, and
+`laplacian` return the result tensor. They accept a data key or a tensor:
+
+```python
+grad_p = mesh.gradient("pressure", gradient_type="extrinsic")  # (n_points, 3)
+div_v = mesh.divergence(vector_field, method="dec")  # (n_points,)
+curl_v = mesh.curl(vector_field)  # (n_points, 3)
+lap_p = mesh.laplacian("pressure")  # (n_points,)
+```
+
+`compute_point_derivatives` computes gradients of several `point_data` fields
+at once and stores them as `<key>_gradient`:
+
+```python
+# Unified interface for gradients of point_data fields
+mesh_with_grad = mesh.compute_point_derivatives(
+    keys=["pressure", "temperature"],
+    method="lsq",  # or "dec"
+    gradient_type="extrinsic",  # "intrinsic" (the default), "extrinsic", or "both"
+)
+
+# Access results
+grad_p = mesh_with_grad.point_data["pressure_gradient"]  # (n_points, n_spatial_dims)
+```
+
+`mesh.compute_cell_derivatives` does the same for `cell_data` with LSQ. The
+sections below call each operator by name.
 
 ## Discrete Exterior Calculus (DEC)
 
-DEC provides a mathematically rigorous framework where discrete operators
-satisfy exact discrete versions of continuous theorems (Stokes, Gauss-Bonnet,
-etc.).
+DEC builds discrete operators that satisfy discrete versions of continuous
+theorems. The exterior derivative satisfies the discrete Stokes theorem
+exactly, and the angle-defect Gaussian curvature satisfies Gauss-Bonnet
+exactly on closed surfaces.
 
-### Core DEC Operators
-
-#### Laplace-Beltrami Operator
+### Laplace-Beltrami Operator
 
 ```python
 from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
 # Intrinsic Laplacian:
-#   Lap_f(v) = -(1 / |star v|) sum (|star e| / |e|) * (f_neighbor - f_v)
+#   Lap_f(v) = (1 / |star v|) sum (|star e| / |e|) * (f_neighbor - f_v)
 laplacian = compute_laplacian_points_dec(mesh, scalar_field)
 ```
 
-**Properties**:
+The sign convention is the analyst's: the Laplacian of $x^2$ on a line is
+$+2$, and the operator is negative semidefinite.
 
-- Uses cotangent weights derived from the FEM stiffness matrix (see below).
+Properties:
+
+- Uses cotangent weights derived from the finite element method (FEM)
+  stiffness matrix, as described below.
 - In 2D: equivalent to $\tfrac{1}{2}(\cot \alpha + \cot \beta)$[^meyer2003-eq5].
 - In 1D: gives $1/|e|$ (standard finite-difference second derivative).
-- In 3D+: gives exact dihedral-angle-based weights via Gram matrix inverse.
-- Normalized by circumcentric dual volumes (Voronoi cells).
-- Exact for linear functions at interior vertices.
+- In 3D and higher: gives the dihedral-angle cotangent weights, computed from
+  the inverse Gram matrix.
+- Normalized by the dual 0-cell volumes $|\star v|$: circumcentric (Voronoi)
+  volumes in 1D and 2D, a barycentric approximation in 3D and higher (refer to
+  [Circumcentric Dual Volumes](#circumcentric-dual-volumes-voronoi-cells)).
+- Exact for linear functions at interior vertices of flat meshes
+  (codimension 0, where the manifold dimension equals the spatial dimension).
+  Boundary vertices have an incomplete 1-ring and give large errors.
 - Works on manifolds of any dimension embedded in any ambient space.
 
-**Cotangent weights via FEM stiffness matrix** (n-dimensional):
+<!-- markdownlint-disable MD033 -->
+<details>
+<summary>Cotangent Weights from the FEM Stiffness Matrix</summary>
+<!-- markdownlint-enable MD033 -->
 
 For an $n$-simplex with vertices $v_0, \ldots, v_n$, the cotangent weight
 for edge $(i, j)$ is
@@ -50,8 +149,7 @@ w_{ij} = -|\sigma| \, (\nabla \lambda_i \cdot \nabla \lambda_j),
 $$
 
 where $\lambda_i$ are barycentric coordinate functions and $|\sigma|$ is
-the cell volume. The gradient dot products are computed from the inverse
-Gram matrix:
+the cell volume. The inverse Gram matrix gives the gradient dot products:
 
 $$
 \begin{aligned}
@@ -65,7 +163,46 @@ G &= E E^\top
 $$
 
 This generalizes the classical 2D cotangent formula to arbitrary
-dimensions. See [^hirani2003-eq642] and [^meyer2003-eq8].
+dimensions. Refer to [^hirani2003-eq642] and [^meyer2003-eq8].
+
+<!-- markdownlint-disable MD033 -->
+</details>
+<!-- markdownlint-enable MD033 -->
+
+### Gradient and Divergence
+
+```python
+from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+# Computes: grad(f) = sharp(df)
+grad_f = compute_gradient_points_dec(mesh, scalar_field)  # (n_points, 3)
+```
+
+This composes the exterior derivative and the sharp operator. It is exact for
+linear functions on flat meshes (codimension 0), including at boundary
+vertices.
+
+```python
+from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
+
+div_v = compute_divergence_points_dec(mesh, vector_field)  # (n_points,)
+```
+
+This computes $\star_0^{-1}\, d^{\ast}\, \star_1\, \flat(X)$: the net flux
+through the boundary of each dual cell, per unit dual volume. It is exact for
+linear vector fields at interior vertices of uniform grids and of 1D meshes.
+On irregular triangle or tetrahedral meshes, it is not exact, and its pointwise
+error does not shrink as the mesh refines.
+
+### Exterior Derivative, Hodge Star, Sharp, and Flat
+
+The DEC gradient and divergence are built from four lower-level operators in
+private modules. Most code never needs them.
+
+<!-- markdownlint-disable MD033 -->
+<details>
+<summary>The DEC building blocks, with their properties</summary>
+<!-- markdownlint-enable MD033 -->
 
 #### Exterior Derivative
 
@@ -77,20 +214,21 @@ from physicsnemo.mesh.calculus._exterior_derivative import (
 
 # d: Omega^0 -> Omega^1 (0-forms to 1-forms)
 #   df([vi, vj]) = f(vj) - f(vi)
-edge_1form, edges = exterior_derivative_0(mesh, vertex_values)
+edge_1form, edges = exterior_derivative_0(mesh, scalar_field)
 
 # d: Omega^1 -> Omega^2 (1-forms to 2-forms; circulation around faces)
+# Requires n_manifold_dims >= 2.
 face_2form, faces = exterior_derivative_1(mesh, edge_1form, edges)
 ```
 
-**Properties**:
+Properties:
 
 - $d \circ d = 0$ (exact by construction).
 - Discrete Stokes theorem:
   $\langle d\alpha, c\rangle = \langle \alpha, \partial c\rangle$
   (true by definition).
 
-See [^desbrun2005-s5] and [^hirani2003-ch3].
+Refer to [^desbrun2005-s5] and [^hirani2003-ch3].
 
 #### Hodge Star
 
@@ -99,21 +237,26 @@ from physicsnemo.mesh.calculus._hodge_star import hodge_star_0, hodge_star_1
 
 # star: Omega^0 -> Omega^n (vertex values to dual n-cells)
 #   star_f(star v) = f(v) * |star v|
-star_f = hodge_star_0(mesh, f)
+star_f = hodge_star_0(mesh, scalar_field)
+
+# star: Omega^1 -> Omega^(n-1) (edge values to dual (n-1)-cells)
+star_df = hodge_star_1(mesh, edge_1form, edges)
 ```
 
-**Properties**:
+Properties:
 
-- Preserves averages between primal and dual cells (see equation below).
+- Preserves averages between primal and dual cells, as the following equation
+  shows.
 - $\star\star\alpha = (-1)^{k(n-k)} \alpha$.
-- Uses circumcentric (Voronoi) dual cells, NOT barycentric.
+- Uses circumcentric (Voronoi) dual cells in 1D and 2D, with mixed areas for
+  obtuse triangles, and a barycentric approximation in 3D and higher.
 
 $$
 \frac{\langle \alpha, \sigma\rangle}{|\sigma|}
   = \frac{\langle \star\alpha, \star\sigma\rangle}{|\star\sigma|}
 $$
 
-See [^hirani2003-def411] and [^desbrun2005-s6].
+Refer to [^hirani2003-def411] and [^desbrun2005-s6].
 
 #### Sharp and Flat Operators
 
@@ -121,42 +264,32 @@ See [^hirani2003-def411] and [^desbrun2005-s6].
 from physicsnemo.mesh.calculus._sharp_flat import sharp, flat
 
 # sharp: Omega^1 -> X (1-forms to vector fields)
-grad_vector = sharp(mesh, df, edges)
+grad_vector = sharp(mesh, edge_1form, edges)  # (n_points, n_spatial_dims)
 
 # flat: X -> Omega^1 (vector fields to 1-forms)
-one_form = flat(mesh, vector_field, edges)
+one_form = flat(mesh, vector_field, edges)  # (n_edges,)
 ```
 
-**Implementation**:
+Implementation:
 
-- **Sharp ($\sharp$)**: equation 5.8.1 with support volume intersections and
+- Sharp ($\sharp$): equation 5.8.1 with support volume intersections and
   barycentric gradients[^hirani2003-eq581].
-- **Flat ($\flat$)**: PDP-flat with averaged endpoint vectors[^hirani2003-s56].
+- Flat ($\flat$): PDP-flat with averaged endpoint vectors[^hirani2003-s56].
 
-**Note**: Sharp and flat are NOT exact inverses in discrete
-DEC[^hirani2003-prop553]. This is a fundamental property of the discrete
-theory, not a bug.
+Sharp and flat are not exact inverses in
+DEC[^hirani2003-prop553]. This is a property of the discrete theory, not a
+bug.
 
-See [^hirani2003-ch5].
+Refer to [^hirani2003-ch5].
 
-### Gradient via DEC
-
-```python
-from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
-
-# Computes: grad(f) = sharp(df)
-grad_f = compute_gradient_points_dec(mesh, scalar_field)
-```
-
-Combines exterior derivative and sharp operator to produce gradient vector
-field.
-
----
+<!-- markdownlint-disable MD033 -->
+</details>
+<!-- markdownlint-enable MD033 -->
 
 ## Weighted Least-Squares (LSQ) Methods
 
-LSQ methods provide general-purpose operators that work robustly on arbitrary
-meshes.
+LSQ methods fit a local linear model at each vertex or cell. They work on
+irregular meshes and on tensor-valued fields.
 
 ### Gradient
 
@@ -170,38 +303,46 @@ from physicsnemo.mesh.calculus.gradient import (
 grad = compute_gradient_points_lsq(
     mesh,
     scalar_field,
-    weight_power=2.0,  # Inverse distance weighting
+    weight_power=2.0,  # Inverse-distance weighting exponent (the default)
     intrinsic=False,  # Set True for tangent-space gradients on manifolds
 )
 
 # At cell centers
-grad_cells = compute_gradient_cells_lsq(mesh, cell_values)
+grad_cells = compute_gradient_cells_lsq(mesh, cell_values)  # (n_cells, 3)
 ```
 
-**Properties**:
+Properties:
 
-- Exact for constant and linear fields
-- First-order accurate $O(h)$ for smooth fields
-- Supports intrinsic (tangent-space) computation for embedded manifolds
-- Works for both scalar and tensor fields
+- Exact for constant and linear fields on flat meshes (codimension 0),
+  including at boundary vertices.
+- First-order accurate, $O(h)$, for smooth fields.
+- Supports intrinsic (tangent-space) gradients for curves and surfaces in any
+  spatial dimension. Codimension-1 meshes (curves in 2D, surfaces in 3D) use
+  the vertex normals. Higher codimensions use a principal component analysis
+  (PCA) estimate of the tangent space.
+- Works for scalar and tensor fields: a field of shape `(n_points, ...)` gives
+  a gradient of shape `(n_points, n_spatial_dims, ...)`.
+- Extrinsic LSQ (the default, `intrinsic=False`) requires
+  `n_spatial_dims <= 3`.
 
 ### Divergence
 
 ```python
 from physicsnemo.mesh.calculus.divergence import compute_divergence_points_lsq
 
-div_v = compute_divergence_points_lsq(mesh, vector_field)
+div_v = compute_divergence_points_lsq(mesh, vector_field)  # (n_points,)
 ```
 
-Computes the divergence
+It computes the divergence
 
 $$
 \operatorname{div}(v) = \partial_x v_x + \partial_y v_y + \partial_z v_z
 $$
 
-via component gradients.
+as the trace of the LSQ Jacobian. `compute_divergence_cells_lsq` does the same
+at cell centers.
 
-### Curl (3D Only)
+### Curl (3D only)
 
 ```python
 from physicsnemo.mesh.calculus.curl import compute_curl_points_lsq
@@ -209,13 +350,25 @@ from physicsnemo.mesh.calculus.curl import compute_curl_points_lsq
 curl_v = compute_curl_points_lsq(mesh, vector_field)  # Requires n_spatial_dims = 3
 ```
 
-Computes curl from antisymmetric part of Jacobian matrix.
+It computes the curl from the antisymmetric part of the LSQ Jacobian.
+`compute_curl_cells_lsq` does the same at cell centers.
 
----
+## Integration
+
+```python
+from physicsnemo.mesh.calculus import integrate
+
+# P1 quadrature of a point field; exact for piecewise-linear fields
+total = integrate(mesh, "pressure", data_source="points")
+```
+
+`integrate_flux`, `integrate_moment`, and the measure helpers in
+`physicsnemo.mesh.calculus.measure` complete the integration API.
 
 ## Circumcentric Dual Volumes (Voronoi Cells)
 
-### Implementation
+DEC divides by the dual volume $|\star v|$ of each vertex, the area of its dual
+cell in the figure above:
 
 ```python
 from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
@@ -223,22 +376,30 @@ from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
 dual_vols = compute_dual_volumes_0(mesh)  # |star v| for each vertex
 ```
 
-**Algorithm** (dimension-specific):
+In every dimension, the dual volumes tile the mesh:
+$\sum_v |\star v| = |M|$ up to floating-point rounding.
 
-**1D manifolds (edges)**:
+<!-- markdownlint-disable MD033 -->
+<details>
+<summary>The formula in each dimension</summary>
+<!-- markdownlint-enable MD033 -->
+
+Algorithm (dimension-specific):
+
+1D manifolds (edges):
 
 - Each vertex gets half the length of each incident edge.
-- Exact for piecewise linear 1-manifolds.
+- Exact for piecewise-linear 1-manifolds.
 
-**2D manifolds (triangles)**:
+2D manifolds (triangles):
 
-- **Acute triangles**: circumcentric Voronoi formula[^meyer2003-eq7],
+- Acute triangles: circumcentric Voronoi formula[^meyer2003-eq7],
 
 $$
 |\star v| = \tfrac{1}{8} \sum_{e \ni v} \|e\|^2 \cot \theta_{\mathrm{opp}}(e).
 $$
 
-- **Obtuse triangles**: mixed-area subdivision[^meyer2003-fig4],
+- Obtuse triangles: mixed-area subdivision[^meyer2003-fig4],
 
 $$
 |\star v| = \begin{cases}
@@ -247,166 +408,64 @@ $$
 \end{cases}
 $$
 
-**3D+ manifolds (tetrahedra, etc.)**:
+3D and higher manifolds (such as tetrahedra):
 
 - Barycentric approximation: $|\star v| = \sum_{\sigma \ni v} |\sigma| / (n + 1)$.
-- Note: rigorous circumcentric dual requires "well-centered"
+- A rigorous circumcentric dual requires "well-centered"
   meshes[^desbrun2005].
 
-**Property**: perfect tiling, $\sum_v |\star v| = |M|$ (conservation
-holds exactly).
+Refer to [^meyer2003-s32_34], [^desbrun2005-s3], and [^hirani2003-def245].
 
-See [^meyer2003-s32_34], [^desbrun2005-s3], and [^hirani2003-def245].
-
----
-
-### Known Behavior (Not Bugs)
-
-**$\operatorname{div}(\nabla f)$ is approximately $\Delta f$ but not exactly**:
-
-- In discrete DEC, sharp ($\sharp$) and flat ($\flat$) are NOT exact
-  inverses[^hirani2003-prop553].
-- Therefore $\operatorname{div}(\nabla f)$ and $\Delta f$ may differ by
-  ~2-3x on coarse meshes.
-- Both are $O(h)$ accurate; the difference goes to 0 as the mesh refines.
-- This is a fundamental property of discrete exterior calculus.
-
-**3D dual volumes use barycentric approximation**:
-
-- Rigorous circumcentric requires "well-centered" meshes[^desbrun2005].
-- Mixed volume formula for obtuse tetrahedra doesn't exist in literature.
-- Current barycentric approximation is standard practice and works well.
-
----
-
-## API Reference
-
-### High-Level Interface
-
-```python
-# Unified interface for derivatives
-mesh_with_grad = mesh.compute_point_derivatives(
-    keys=["pressure", "temperature"],
-    method="lsq",  # or 'dec' for Laplacian only
-    gradient_type="extrinsic",  # or 'intrinsic' for manifolds
-    weight_power=2.0,
-)
-
-# Access results
-grad_p = mesh_with_grad.point_data["pressure_gradient"]  # (n_points, n_spatial_dims)
-```
-
-### Direct Operator Calls
-
-```python
-from physicsnemo.mesh.calculus import (
-    compute_gradient_points_lsq,
-    compute_divergence_points_lsq,
-    compute_curl_points_lsq,
-    compute_laplacian_points_dec,
-)
-
-# Gradient (LSQ or DEC)
-grad = compute_gradient_points_lsq(mesh, f, weight_power=2.0, intrinsic=False)
-grad = compute_gradient_points_dec(mesh, f)  # DEC method
-
-# Divergence
-div = compute_divergence_points_lsq(mesh, vector_field)
-
-# Curl (3D only)
-curl = compute_curl_points_lsq(mesh, vector_field)
-
-# Laplacian (DEC method)
-laplacian = compute_laplacian_points_dec(mesh, scalar_field)
-```
-
----
-
-## Performance
-
-All operations are **fully vectorized** (no Python loops over mesh elements):
-
-- **Gradient/Divergence/Curl**: `O(n_points * avg_degree)`
-- **Laplacian**: `O(n_edges)`, very efficient
-- **Dual volumes**: `O(n_cells)`, one-time computation with caching
-
-**Memory**: Minimal overhead, intermediate results cached in `TensorDict`
-
-**Scaling**: Designed for massive meshes (100M+ points on GB200-class GPUs)
-
----
-
-## Module Structure
-
-```text
-src/physicsnemo.mesh/calculus/
-├── __init__.py                    # Public API
-├── derivatives.py                 # High-level interface (compute_point_derivatives)
-├── gradient.py                    # Gradient (LSQ + DEC)
-├── divergence.py                  # Divergence (LSQ + DEC)
-├── curl.py                        # Curl (LSQ, 3D only)
-├── laplacian.py                   # Laplace-Beltrami (DEC)
-│
-├── _exterior_derivative.py        # DEC: exterior derivative d
-├── _hodge_star.py                 # DEC: Hodge star
-├── _sharp_flat.py                 # DEC: sharp and flat operators
-│
-├── _lsq_reconstruction.py         # LSQ: gradient reconstruction (ambient space)
-└── _lsq_intrinsic.py             # LSQ: intrinsic gradients (tangent space)
-```
-
-```text
-src/physicsnemo.mesh/geometry/
-├── dual_meshes.py                 # Unified dual 0-cell volumes (Voronoi cells)
-├── support_volumes.py             # Support volume intersections for DEC
-└── interpolation.py               # Barycentric function gradients
-```
-
----
+<!-- markdownlint-disable MD033 -->
+</details>
+<!-- markdownlint-enable MD033 -->
 
 ## Usage Examples
 
-### Example 1: Laplace-Beltrami on Curved Surface
+### Example 1: Laplace-Beltrami on a Curved Surface
 
 ```python
-import torch
-from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
-# Create surface mesh (e.g., sphere, imported mesh, etc.)
-mesh = ...  # 2D surface in 3D
-
-# Add scalar field (e.g., temperature distribution)
+# Scalar field on the sphere from the setup block
 temperature = mesh.point_data["temperature"]
 
-# Compute intrinsic Laplacian
+# Compute the intrinsic Laplacian
 laplacian = compute_laplacian_points_dec(mesh, temperature)
 
 # Use for diffusion: dT/dt = kappa * Lap T
 mesh.point_data["laplacian_T"] = laplacian
 ```
 
-### Example 2: Gradient on Manifold (Intrinsic)
+### Example 2: Gradient on a Manifold (Intrinsic)
 
 ```python
 from physicsnemo.mesh.calculus.gradient import compute_gradient_points_lsq
 
-# Compute gradient in tangent space (for surface in 3D)
+# Compute the gradient in the tangent space of the surface
 grad_intrinsic = compute_gradient_points_lsq(
     mesh,
     scalar_field,
     intrinsic=True,  # Solves in tangent space
 )
 
-# Result is guaranteed perpendicular to surface normal
+# The result is perpendicular to the vertex normals
 assert torch.allclose(
     (grad_intrinsic * mesh.point_normals).sum(dim=-1),
-    torch.zeros(mesh.n_points),
+    torch.zeros(mesh.n_points, dtype=mesh.points.dtype),
     atol=1e-6,
 )
 ```
 
 ### Example 3: Vector Calculus Identities
+
+The continuous identities $\nabla \times \nabla f = 0$ and
+$\nabla \cdot (\nabla \times v) = 0$ hold for LSQ operators only
+approximately. They hold to rounding error for linear fields. For the
+quadratic fields below on `cube_volume.load(subdivisions=4)`, a 5 x 5 x 5
+grid of vertices, the residuals are at rounding level at the center vertex and
+at a few other vertices. They reach about 0.10 one layer in from the boundary
+and 0.35 at the boundary.
 
 ```python
 from physicsnemo.mesh.calculus import (
@@ -414,135 +473,92 @@ from physicsnemo.mesh.calculus import (
     compute_divergence_points_lsq,
     compute_curl_points_lsq,
 )
+from physicsnemo.mesh.primitives.volumes import cube_volume
 
-# Verify curl(grad(f)) = 0
-grad_f = compute_gradient_points_lsq(mesh, scalar_field)
-curl_grad_f = compute_curl_points_lsq(mesh, grad_f)
-assert torch.allclose(curl_grad_f, torch.zeros_like(curl_grad_f), atol=1e-5)
+volume = cube_volume.load(subdivisions=4).to(torch.float64)
+vx, vy, vz = volume.points.unbind(dim=-1)
 
-# Verify div(curl(v)) = 0
-curl_v = compute_curl_points_lsq(mesh, vector_field)
-div_curl_v = compute_divergence_points_lsq(mesh, curl_v)
-assert torch.allclose(div_curl_v, torch.zeros_like(div_curl_v), atol=1e-5)
+# curl(grad(f)) for a linear f: zero to rounding error
+f_linear = vx + 2 * vy + 3 * vz
+curl_grad_f = compute_curl_points_lsq(
+    volume, compute_gradient_points_lsq(volume, f_linear)
+)
+assert curl_grad_f.abs().max() < 1e-10
+
+# div(curl(v)) for a quadratic v: not zero near the boundary
+v_quadratic = torch.stack([vy * vz, vx**2, vx * vy], dim=-1)
+div_curl_v = compute_divergence_points_lsq(
+    volume, compute_curl_points_lsq(volume, v_quadratic)
+)
+print(f"max |div(curl v)| = {div_curl_v.abs().max():.2f}")  # 0.35
 ```
-
----
 
 ## Dimension Support
 
-| Operator | 1D | 2D | 3D | nD |
-| ---------- | ---- | ---- | ---- | ---- |
-| Gradient (LSQ) | ✓ | ✓ | ✓ | ✓ |
-| Gradient (DEC) | ✓ | ✓ | ✓ | ✓ |
-| Divergence | ✓ | ✓ | ✓ | ✓ |
-| Curl (LSQ) | - | - | ✓ | - |
-| Laplacian (DEC) | ✓ | ✓ | ✓† | - |
-| Hodge star | ✓ | ✓ | ✓* | ✓* |
+The following table shows which operators run, by manifold dimension $n$
+(columns) and spatial dimension $d$. Codimension is $d - n$. Each entry lists
+the supported spatial dimensions, and a "-" means that the call raises an
+error:
 
-*Uses barycentric approximation for $n \geq 3$.
+<!-- markdownlint-disable MD013 -->
+| Operator | $n = 1$ | $n = 2$ | $n = 3$ | $n \geq 4$ |
+| -------- | ------- | ------- | ------- | ---------- |
+| Gradient (extrinsic) and divergence (LSQ) | $d \leq 3$ | $d \leq 3$ | $d = 3$ | - |
+| Gradient (LSQ, `intrinsic=True`) | any $d$ | any $d$ | $d = 3$ | - |
+| Curl (LSQ) | $d = 3$ | $d = 3$ | $d = 3$ | - |
+| Gradient (DEC) | any $d$ | $d \leq 3$ | $d = 3$ | - |
+| Divergence (DEC) | any $d$ | any $d$ | any $d$ | any $d$ |
+| Laplacian (DEC) | any $d$ | any $d$ | any $d$ | any $d$ |
+| Hodge star, dual volumes | any $d$ | any $d$ | any $d$\* | any $d$\* |
+| `exterior_derivative_1` | - | any $d$ | any $d$ | any $d$ |
+<!-- markdownlint-enable MD013 -->
 
-†3D Laplacian uses an inverse-edge-length approximation rather than true
-dihedral-angle cotangent weights. Accuracy degrades on poorly-shaped
-tetrahedra. Not implemented for $n > 3$.
+\*Dual volumes use the barycentric approximation for $n \geq 3$.
 
----
+The extrinsic LSQ operators require $d \leq 3$. The intrinsic LSQ gradient
+fits in the tangent space instead, so curves and surfaces work in any $d$.
+The DEC gradient needs barycentric gradients, which exist for segments in any
+$d$, triangles in $d \leq 3$, and tetrahedra in $d = 3$. The DEC Laplacian
+uses the FEM cotangent weights in every dimension.
 
-## Choosing Between DEC and LSQ
+## Known Behavior
 
-**Use DEC when**:
+$\operatorname{div}(\nabla f)$ is close to $\Delta f$, but not equal to it:
 
-- Need mathematically rigorous operators
-- Working with differential geometry (curvatures, etc.)
-- Require exact discrete theorems (Stokes, Gauss-Bonnet)
-- Computing Laplacian on manifolds
+- In DEC, sharp ($\sharp$) and flat ($\flat$) are not exact
+  inverses[^hirani2003-prop553].
+- Therefore, the composed operator differs from
+  `compute_laplacian_points_dec`. Away from the boundary of a regular mesh,
+  both converge to $\Delta f$ as the mesh refines. On irregular meshes, the
+  pointwise error of either one need not go to zero.
+- To compute a Laplacian, call `compute_laplacian_points_dec` directly.
 
-**Use LSQ when**:
+3D dual volumes use a barycentric approximation:
 
-- Need general-purpose gradient/divergence/curl
-- Working with irregular/poor-quality meshes
-- Need robust performance on all mesh types
-- Computing derivatives of tensor fields
+- A rigorous circumcentric dual requires "well-centered" meshes[^desbrun2005].
+- No mixed-volume formula for obtuse tetrahedra exists in the literature.
+- The barycentric approximation is standard practice.
 
-**Both methods**:
+Boundary vertices have incomplete 1-ring neighborhoods:
 
-- Are first-order accurate $O(h)$.
-- Work on irregular meshes.
-- Are fully vectorized.
-- Support GPU acceleration.
-
----
-
-## Limitations and Future Work
-
-### Current Limitations
-
-1. **3D+ Dual Volumes**: uses barycentric approximation (standard practice).
-   - Rigorous circumcentric requires "well-centered" meshes.
-   - Mixed volume for obtuse tets is an open research problem.
-   - The Laplacian cotangent *weights* are exact for all dimensions (via FEM
-     stiffness matrix); only the dual volume *normalization* uses
-     approximation.
-
-2. **Sharp/Flat Not Exact Inverses**: $\sharp \circ \flat \neq \mathrm{id}$
-   in discrete DEC.
-   - This is fundamental to the discrete theory[^hirani2003-prop553].
-   - Causes $\operatorname{div}(\nabla) \approx \Delta$ (not exact).
-
-3. **Boundary Effects**: cotangent Laplacian assumes complete 1-ring
-   neighborhoods.
-   - Boundary vertices may show artifacts.
-   - Set `include_boundary=False` in curvature computations.
-
-### Future Enhancements
-
-1. **Well-centered mesh detection** for rigorous 3D dual volumes.
-2. **Additional DEC operators**: wedge product, interior product, Lie
-   derivative.
-3. **Higher-order LSQ** with extended stencils.
-4. **Convergence analysis**: verify $O(h^2)$ error as mesh refines.
-5. **Alternative sharp/flat combinations** (DPP-flat, etc.).
-
----
-
-## Mathematical Foundations
-
-### Discrete Exterior Calculus
-
-- Exterior forms as cochains[^hirani2003-ch3].
-- Circumcentric dual complexes[^desbrun2005-s3][^hirani2003-s24].
-- Hodge star via volume ratios[^hirani2003-def411].
-- Sharp/flat with support volumes[^hirani2003-ch5].
-
-### Discrete Differential Geometry
-
-- Meyer mixed Voronoi areas for curvature[^meyer2003-s32_34].
-- Cotangent Laplacian for mean curvature[^meyer2003-eq8].
-- Angle defect for Gaussian curvature[^meyer2003-eq9].
-
-### Key Theorems Preserved
-
-- Discrete Stokes theorem (exact).
-- Gauss-Bonnet theorem (< 0.001 percent error numerically).
-- Conservation of dual volumes (exact).
-- Vector calculus identities: $\nabla \times \nabla f = 0$ and
-  $\nabla \cdot (\nabla \times v) = 0$ (exact).
-
----
+- The cotangent Laplacian gives large errors there.
+- `mean_curvature_vertices` returns `NaN` at boundary vertices by default
+  (`include_boundary=False`).
 
 ## References
 
 The three primary works are:
 
-1. **Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H.** (2003).
-   *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
-   In: Visualization and Mathematics III, pp. 35-57.
-2. **Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E.** (2005).
-   *Discrete Exterior Calculus*. arXiv:math/0508341v2.
-3. **Hirani, A. N.** (2003). *Discrete Exterior Calculus*. PhD thesis,
-   California Institute of Technology.
+- Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
+  In: Visualization and Mathematics III, pp. 35–57.
+- Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E. (2005).
+  *Discrete Exterior Calculus*. arXiv:math/0508341v2.
+- Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis,
+  California Institute of Technology.
 
-Footnotes throughout this document point to specific sections / equations
-within these works.
+Footnotes throughout this document point to specific sections and equations
+in these works.
 
 [^meyer2003-eq5]: Meyer et al. (2003), *Discrete Differential-Geometry
 Operators for Triangulated 2-Manifolds*, Eq. 5 (cotangent weights).
@@ -550,11 +566,9 @@ Operators for Triangulated 2-Manifolds*, Eq. 5 (cotangent weights).
 for acute triangles).
 [^meyer2003-eq8]: Meyer et al. (2003), Eq. 8 (cotangent Laplacian for mean
 curvature).
-[^meyer2003-eq9]: Meyer et al. (2003), Eq. 9 (angle defect for Gaussian
-curvature).
 [^meyer2003-fig4]: Meyer et al. (2003), Fig. 4 (mixed-area subdivision for
 obtuse triangles).
-[^meyer2003-s32_34]: Meyer et al. (2003), §3.2-3.4 (mixed Voronoi areas).
+[^meyer2003-s32_34]: Meyer et al. (2003), §3.2–3.4 (mixed Voronoi areas).
 [^desbrun2005]: Desbrun et al. (2005), *Discrete Exterior Calculus*,
 arXiv:math/0508341v2.
 [^desbrun2005-s3]: Desbrun et al. (2005), §3 (Primal Simplicial Complex and
@@ -562,8 +576,6 @@ Dual Cell Complex; circumcentric duals).
 [^desbrun2005-s5]: Desbrun et al. (2005), §5 (Differential Forms and
 Exterior Derivative).
 [^desbrun2005-s6]: Desbrun et al. (2005), §6 (Hodge Star and Codifferential).
-[^hirani2003-s24]: Hirani (2003), *Discrete Exterior Calculus* (PhD thesis),
-§2.4 (Dual Complex; circumcentric dual cells).
 [^hirani2003-def245]: Hirani (2003), Definition 2.4.5 (Circumcentric Dual
 Cell).
 [^hirani2003-ch3]: Hirani (2003), Chapter 3 (Discrete Forms and Exterior

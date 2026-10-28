@@ -27,6 +27,7 @@ to be powers of 2, which doesn't work for triangles (3 vertices) or tets (4 vert
 The pure PyTorch implementation here is highly optimized and performs excellently.
 """
 
+import operator
 from typing import TYPE_CHECKING, Literal
 
 import torch
@@ -262,9 +263,12 @@ def extract_candidate_facets(
     # The table is built in pageable host memory, which CUDA stages before an
     # asynchronous copy returns, so ``non_blocking`` is safe here and avoids the
     # device synchronization of a blocking host-to-device copy.
+    # ``operator.index`` specializes on the (small, fixed) cell width. Under
+    # ``torch.compile(dynamic=True)`` it is otherwise a symbolic size, which
+    # ``itertools.combinations`` cannot trace (issue #2138).
     combination_indices = _generate_combination_indices(
-        n_vertices_per_cell,
-        n_vertices_per_subsimplex,
+        operator.index(n_vertices_per_cell),
+        operator.index(n_vertices_per_subsimplex),
     ).to(cells.device, non_blocking=True)
     n_combinations = len(combination_indices)
 
@@ -548,9 +552,15 @@ def extract_facet_mesh_data(
         device=parent_mesh.points.device,
     )
 
+    ### Explicit measures have the parent's dimension, so they are not data of
+    # lower-dimensional facets, which fall back to their geometric measures.
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
     if data_source == "cells":
         ### Aggregate data from parent cells
         filtered_cell_data = parent_mesh.cell_data
+        if manifold_codimension > 0:
+            filtered_cell_data = filtered_cell_data.exclude(EFFECTIVE_MEASURE_KEY)
         if len(filtered_cell_data.keys()) > 0:
             ### Compute facet centroids if needed for inverse_distance
             facet_centroids = None
@@ -590,9 +600,10 @@ def extract_facet_mesh_data(
 
     elif data_source == "points":
         ### Aggregate data from facet vertices
-        if len(parent_mesh.point_data.keys()) > 0:
+        filtered_point_data = parent_mesh.point_data.exclude(EFFECTIVE_MEASURE_KEY)
+        if len(filtered_point_data.keys()) > 0:
             facet_cell_data = _aggregate_point_data_to_facets(
-                point_data=parent_mesh.point_data,
+                point_data=filtered_point_data,
                 candidate_facets=candidate_facets,
                 inverse_indices=inverse_indices,
                 n_unique_facets=n_unique_facets,

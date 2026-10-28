@@ -217,6 +217,16 @@ class TestApplyToMeshes:
         dm2 = tet_domain.apply_to_meshes(lambda m: m)
         assert isinstance(dm2, DomainMesh)
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_results_keep_the_device_fn_chose(self, tet_domain):
+        """Boundaries are not moved back to the device of the source domain."""
+        on_cuda = tet_domain.to("cuda")
+        dm2 = on_cuda.apply_to_meshes(lambda m: m.to("cpu"))
+        assert dm2.interior.points.device.type == "cpu"
+        for name in tet_domain.boundary_names:
+            assert dm2.boundaries[name].points.device.type == "cpu"
+            assert dm2.boundaries[name].cells.device.type == "cpu"
+
     def test_interior_only(self, tet_domain):
         """apply_to_meshes with boundaries=False should leave boundaries unchanged."""
         dm2 = tet_domain.apply_to_meshes(

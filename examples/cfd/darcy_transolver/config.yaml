@@ -47,8 +47,8 @@ normaliser:
     mean: 1.25
     std_dev: .75
   darcy:
-    mean: 4.52E-2
-    std_dev: 2.79E-2
+    mean: 3.63E-2
+    std_dev: 2.44E-2
 
 scheduler:
   initial_lr: 1.E-3
