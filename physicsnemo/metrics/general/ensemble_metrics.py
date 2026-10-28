@@ -28,9 +28,16 @@ Tensor = torch.Tensor
 
 
 class StreamingStatistic(ABC):
-    """Base class for statistics computed incrementally
+    """Base interface for statistics accumulated across successive inputs.
 
-    Can be helpful for distributed and sequential computations of metrics.
+    Subclasses maintain statistical state: ``__call__`` initializes or replaces
+    it, ``update`` incorporates additional observations, and ``finalize`` computes
+    a result from the accumulated state. Observations may represent ensemble
+    members, time steps, or other samples, as defined by the concrete statistic.
+
+    This base provides shape, device, and dtype configuration. Subclasses define
+    their reduction axes, state representation, and distributed behavior;
+    inheriting this interface does not implement accumulation or communication.
 
     Parameters
     ----------
@@ -68,19 +75,21 @@ class StreamingStatistic(ABC):
 
     def __call__(self, *args):
         """
-        Initial calculation for stored information. Will also overwrite previously stored data.
+        Initialize statistical state from inputs, replacing any previous state.
         """
         raise NotImplementedError("Class member must implement a __call__ method.")
 
     def update(self, *args):
         """
-        Update initial or stored calculation with additional information.
+        Incorporate additional observations into the statistical state.
         """
         raise NotImplementedError("Class member must implement an update method.")
 
     def finalize(self, *args):
         """
-        Marks the end of the sequential calculation, used to finalize any computations.
+        Compute a result from the accumulated state.
+
+        The concrete statistic defines the return value and any state changes.
         """
         raise NotImplementedError("Class member must implement a finalize method.")
 
@@ -125,14 +134,22 @@ def _update_mean(
 
 
 class Mean(StreamingStatistic):
-    """Utility class that computes the mean over a batched or ensemble dimension
+    """Accumulate a mean across successive batches of observations.
 
-    This is particularly useful for distributed environments and sequential computation.
+    Keep a running sum and observation count. Call the statistic with an initial
+    batch, pass additional batches to ``update``, and read the result with
+    ``finalize``. In the standard layout ``(B, *input_shape)``, the leading
+    dimension holds observations and the remaining dimensions identify values
+    whose means are accumulated separately.
+
+    When PhysicsNeMo's distributed manager and a process group are initialized,
+    each call and update reduces the incoming sum and count across the default
+    process group. ``finalize`` divides the accumulated sum by the count.
 
     Parameters
     ----------
     input_shape : Union[Tuple, List]
-        Shape of broadcasted dimensions
+        Shape of each observation, excluding the leading batch dimension.
     """
 
     def __init__(self, input_shape: Union[Tuple, List], **kwargs):
@@ -285,14 +302,23 @@ def _update_var(
 
 
 class Variance(StreamingStatistic):
-    """Utility class that computes the variance over a batched or ensemble dimension
+    """Accumulate a variance across successive batches of observations.
 
-    This is particularly useful for distributed environments and sequential computation.
+    Keep an observation count, sum, and sum of squared deviations. Call the
+    statistic with an initial batch, then pass additional batches to ``update``.
+    Each batch has shape ``(B, *input_shape)``: observations occupy the leading
+    dimension and variances are accumulated separately for the remaining values.
+    ``finalize`` returns the unbiased variance, or its square root with
+    ``std=True``, and requires at least two observations.
+
+    When PhysicsNeMo's distributed manager and a process group are initialized,
+    each call and update combines incoming statistics across the default process
+    group. ``finalize`` computes the result from the accumulated state.
 
     Parameters
     ----------
     input_shape : Union[Tuple, List]
-        Shape of broadcasted dimensions
+        Shape of each observation, excluding the leading batch dimension.
 
     Note
     ----
