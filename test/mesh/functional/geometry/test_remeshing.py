@@ -25,20 +25,20 @@ import pytest
 import torch
 import warp as wp
 
-from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral
-from physicsnemo.nn.functional import remeshing
-from physicsnemo.nn.functional.geometry import Remeshing
-from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
+from physicsnemo.mesh.functional import remeshing
+from physicsnemo.mesh.functional.geometry import Remeshing
+from physicsnemo.mesh.functional.geometry.remeshing._warp_impl._kernels import (
     assign_vertices,
     project_centroids_to_surface,
     update_centroids,
 )
-from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward import (
+from physicsnemo.mesh.functional.geometry.remeshing._warp_impl.launch_forward import (
     _adaptive_seed_masses_and_radius_factor,
     _apply_vertex_density,
     _remove_nonmanifold_faces,
     _voxel_representatives,
 )
+from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral
 
 
 def test_remeshing_function_spec_contract():
@@ -240,8 +240,8 @@ def test_remeshing_rejects_invalid_vertex_density_values(value, match):
 @pytest.mark.parametrize(
     "imports",
     [
-        "import physicsnemo.mesh.remeshing; import physicsnemo.nn.functional.geometry",
-        "import physicsnemo.nn.functional.geometry; import physicsnemo.mesh.remeshing",
+        "import physicsnemo.mesh.remeshing; import physicsnemo.mesh.functional.geometry",
+        "import physicsnemo.mesh.functional.geometry; import physicsnemo.mesh.remeshing",
     ],
 )
 def test_remeshing_import_order(imports):
@@ -294,7 +294,7 @@ def test_remeshing_cpu_torch_compile():
 
 @pytest.mark.parametrize("density_exponent", [None, 1.0, 4.0])
 def test_remeshing_cpu_custom_op_contract(density_exponent):
-    from physicsnemo.nn.functional.geometry.remeshing._warp_impl import remeshing_warp
+    from physicsnemo.mesh.functional.geometry.remeshing._warp_impl import remeshing_warp
 
     source = sphere_icosahedral.load(subdivisions=1)
     vertex_density = (
@@ -646,7 +646,7 @@ def test_remeshing_public_api_torch_compile():
 
 @pytest.mark.cuda
 def test_remeshing_custom_op_contract():
-    from physicsnemo.nn.functional.geometry.remeshing._warp_impl import remeshing_warp
+    from physicsnemo.mesh.functional.geometry.remeshing._warp_impl import remeshing_warp
 
     source = sphere_icosahedral.load(subdivisions=2, device="cuda")
     # Break exact symmetries that put projected centroids on triangle ties.

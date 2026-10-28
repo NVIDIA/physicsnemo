@@ -97,7 +97,7 @@ def _compute_point_gradients_lsq_intrinsic(
     their factorization; each field is then solved on its own, so the peak
     memory is that of one field. The systems are assembled and solved at once
     where the normal equations solve them, as in
-    :func:`~physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl._mesh_lsq_gradients_torch`;
+    :func:`~physicsnemo.mesh.functional.derivatives.mesh_lsq_gradient._torch_impl._mesh_lsq_gradients_torch`;
     otherwise, or with ``grouped``, in groups of one neighbor count each.
     """
     n_points = mesh.n_points

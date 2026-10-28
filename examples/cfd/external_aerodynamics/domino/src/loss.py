@@ -21,7 +21,7 @@ import torch.cuda.nvtx as nvtx
 
 from physicsnemo.models.domino.utils import unnormalize
 from physicsnemo.models.domino.utils import *
-from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
+from physicsnemo.mesh.functional.derivatives import mesh_lsq_gradient
 
 
 def _build_csr_from_neighbors(neighbors_list, device):

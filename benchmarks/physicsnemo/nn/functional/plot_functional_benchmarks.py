@@ -80,12 +80,12 @@ def _spec_category(spec: type[FunctionSpec]) -> str:
     """Infer functional category from a FunctionSpec module path."""
 
     module = spec.__module__
-    prefix = "physicsnemo.nn.functional."
-    if module.startswith(prefix):
-        relative = module[len(prefix) :]
-        category = relative.split(".", maxsplit=1)[0]
-        if category:
-            return category
+    for prefix in ("physicsnemo.nn.functional.", "physicsnemo.mesh.functional."):
+        if module.startswith(prefix):
+            relative = module[len(prefix) :]
+            category = relative.split(".", maxsplit=1)[0]
+            if category:
+                return category
     return "misc"
 
 

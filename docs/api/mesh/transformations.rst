@@ -133,8 +133,8 @@ Deformations
 
 The ``deform`` namespace provides six deformation families. Each one is also
 a :class:`~physicsnemo.mesh.mesh.Mesh` method, and each wraps a tensor
-functional in ``physicsnemo.nn.functional``, such as
-:func:`~physicsnemo.nn.functional.morph_points` for :func:`morph`.
+functional in ``physicsnemo.mesh.functional``, such as
+:func:`~physicsnemo.mesh.functional.morph_points` for :func:`morph`.
 
 Pick a family by what you control:
 

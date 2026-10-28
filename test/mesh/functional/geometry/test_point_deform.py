@@ -22,11 +22,11 @@ from typing import Literal, get_type_hints
 import pytest
 import torch
 
-import physicsnemo.nn.functional as functional
+import physicsnemo.mesh.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import displace_points, morph_points
-from physicsnemo.nn.functional.geometry import DisplacePoints, MorphPoints
-from physicsnemo.nn.functional.geometry.deform import deform as deform_module
+from physicsnemo.mesh.functional import displace_points, morph_points
+from physicsnemo.mesh.functional.geometry import DisplacePoints, MorphPoints
+from physicsnemo.mesh.functional.geometry.deform import deform as deform_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 
@@ -74,10 +74,10 @@ def test_public_exports_and_function_specs():
     assert displace_points.__name__ == "displace_points"
     assert morph_points.__name__ == "morph_points"
     assert displace_points.__module__ == (
-        "physicsnemo.nn.functional.geometry.deform.deform"
+        "physicsnemo.mesh.functional.geometry.deform.deform"
     )
     assert morph_points.__module__ == (
-        "physicsnemo.nn.functional.geometry.deform.deform"
+        "physicsnemo.mesh.functional.geometry.deform.deform"
     )
     assert issubclass(DisplacePoints, FunctionSpec)
     assert issubclass(MorphPoints, FunctionSpec)
@@ -749,7 +749,7 @@ def test_torch_chunk_checkpoint_bounds_retained_autograd_storage(monkeypatch):
     import gc
     import weakref
 
-    from physicsnemo.nn.functional.geometry.deform import _torch_impl
+    from physicsnemo.mesh.functional.geometry.deform import _torch_impl
 
     # Force several small query/control blocks without making the test expensive.
     monkeypatch.setattr(_torch_impl, "_PAIRWISE_TEMPORARY_BYTE_BUDGET", 32 * 1024)
@@ -819,7 +819,7 @@ def test_torch_control_chunked_gradients_match_unchunked_on_ties(monkeypatch):
     gradient-invariant.
     """
 
-    from physicsnemo.nn.functional.geometry.deform import _torch_impl
+    from physicsnemo.mesh.functional.geometry.deform import _torch_impl
 
     dtype = torch.float64
     points = torch.tensor([[0.0, 0.0], [0.1, 0.2]], dtype=dtype)
@@ -855,7 +855,7 @@ def test_compiled_torch_training_checkpoints_pairwise_activations():
     import gc
     import weakref
 
-    from physicsnemo.nn.functional.geometry.deform._torch_impl import (
+    from physicsnemo.mesh.functional.geometry.deform._torch_impl import (
         compact_shepard_field_torch,
     )
 
@@ -1024,7 +1024,7 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
 
 @requires_module("warp")
 def test_warp_custom_ops_opcheck():
-    from physicsnemo.nn.functional.geometry.deform._warp_impl import (
+    from physicsnemo.mesh.functional.geometry.deform._warp_impl import (
         compact_shepard_field_warp_impl,
     )
 
@@ -1470,7 +1470,7 @@ def test_public_api_fake_tensor_propagation_with_tensor_options(
 def test_warp_raw_custom_op_fake_strides_match_noncontiguous_real_outputs(device):
     from torch._subclasses.fake_tensor import FakeTensorMode
 
-    from physicsnemo.nn.functional.geometry.deform._warp_impl import (
+    from physicsnemo.mesh.functional.geometry.deform._warp_impl import (
         compact_shepard_field_warp_impl,
     )
 
@@ -1499,7 +1499,7 @@ def test_warp_raw_custom_op_fake_strides_match_noncontiguous_real_outputs(device
 
 @requires_module("warp")
 def test_warp_no_grad_uses_forward_only_field(monkeypatch, device):
-    from physicsnemo.nn.functional.geometry.deform._warp_impl import op as warp_op
+    from physicsnemo.mesh.functional.geometry.deform._warp_impl import op as warp_op
 
     device = torch.device(device)
     points = torch.tensor(
@@ -1526,7 +1526,7 @@ def test_warp_no_grad_uses_forward_only_field(monkeypatch, device):
 def test_warp_zero_controls_bypass_launches_and_keep_zero_gradients(
     monkeypatch, device
 ):
-    from physicsnemo.nn.functional.geometry.deform._warp_impl import op as warp_op
+    from physicsnemo.mesh.functional.geometry.deform._warp_impl import op as warp_op
 
     device = torch.device(device)
     points = torch.randn((1, 4, 3), device=device, requires_grad=True)
@@ -1558,7 +1558,7 @@ def test_warp_zero_controls_bypass_launches_and_keep_zero_gradients(
 
 @requires_module("warp")
 def test_warp_control_displacement_only_pullback_returns_requested_gradient(device):
-    from physicsnemo.nn.functional.geometry.deform._warp_impl import op as warp_op
+    from physicsnemo.mesh.functional.geometry.deform._warp_impl import op as warp_op
 
     device = torch.device(device)
     points = torch.rand((1, 5, 3), device=device)

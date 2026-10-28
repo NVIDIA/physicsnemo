@@ -24,11 +24,11 @@ import warnings
 import pytest
 import torch
 
-import physicsnemo.nn.functional as functional
+import physicsnemo.mesh.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import sobolev_deform_points
-from physicsnemo.nn.functional.geometry import SobolevDeformPoints
-from physicsnemo.nn.functional.geometry.deform._sobolev_torch_impl import (
+from physicsnemo.mesh.functional import sobolev_deform_points
+from physicsnemo.mesh.functional.geometry import SobolevDeformPoints
+from physicsnemo.mesh.functional.geometry.deform._sobolev_torch_impl import (
     _assemble_p1_operators,
 )
 
@@ -91,8 +91,8 @@ def _dense_helmholtz_reference(
 
 
 def test_public_exports_and_signature():
-    geometry = importlib.import_module("physicsnemo.nn.functional.geometry")
-    deform = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
+    geometry = importlib.import_module("physicsnemo.mesh.functional.geometry")
+    deform = importlib.import_module("physicsnemo.mesh.functional.geometry.deform")
 
     assert functional.sobolev_deform_points is sobolev_deform_points
     assert geometry.sobolev_deform_points is sobolev_deform_points
@@ -135,7 +135,7 @@ def test_public_exports_and_signature():
 
 def test_default_dispatch_selects_device_backend(device, monkeypatch):
     sobolev_module = importlib.import_module(
-        "physicsnemo.nn.functional.geometry.deform.sobolev"
+        "physicsnemo.mesh.functional.geometry.deform.sobolev"
     )
     device = torch.device(device)
     points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], device=device)

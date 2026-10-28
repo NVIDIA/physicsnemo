@@ -25,9 +25,9 @@ from typing import Literal, get_type_hints
 import pytest
 import torch
 
-import physicsnemo.nn.functional as functional
+import physicsnemo.mesh.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import (
+from physicsnemo.mesh.functional import (
     closed_surface_volume_energy,
     radial_basis_function_deform_points,
     simplex_inversion_energy,
@@ -36,7 +36,7 @@ from physicsnemo.nn.functional import (
     surface_bending_energy,
     total_measure_energy,
 )
-from physicsnemo.nn.functional.geometry import (
+from physicsnemo.mesh.functional.geometry import (
     ClosedSurfaceVolumeEnergy,
     SimplexInversionEnergy,
     SimplexMeasureEnergy,
@@ -44,7 +44,7 @@ from physicsnemo.nn.functional.geometry import (
     SurfaceBendingEnergy,
     TotalMeasureEnergy,
 )
-from physicsnemo.nn.functional.geometry.deform import energy as energy_module
+from physicsnemo.mesh.functional.geometry.deform import energy as energy_module
 from test.conftest import requires_module
 
 LOCAL_ENERGY_FUNCTIONS = (
@@ -1903,7 +1903,7 @@ def test_warp_activates_tensor_device_for_multigpu_stream_guards(monkeypatch):
 
 @requires_module("warp")
 def test_warp_custom_ops_pass_pytorch_opcheck():
-    from physicsnemo.nn.functional.geometry.deform._warp_impl.energy_op import (
+    from physicsnemo.mesh.functional.geometry.deform._warp_impl.energy_op import (
         closed_surface_volume_contributions_warp_impl,
         hinge_bending_terms_warp_impl,
         simplex_inversion_terms_warp_impl,

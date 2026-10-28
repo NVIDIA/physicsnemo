@@ -181,7 +181,7 @@ following dropdown:
 
    .. code:: python
 
-      from physicsnemo.nn.functional import remeshing
+      from physicsnemo.mesh.functional import remeshing
 
       linear_resolution = resolution
       if linear_resolution.element_size() < 4:

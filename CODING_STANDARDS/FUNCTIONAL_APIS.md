@@ -198,12 +198,15 @@ def my_op(x):
 **Description:**
 
 Functionals live under `physicsnemo/nn/functional` and must be re-exported from
-`physicsnemo/nn/functional/__init__.py`.
+`physicsnemo/nn/functional/__init__.py`. Functionals that only meshes use live
+under `physicsnemo/mesh/functional` instead, with the same layout, and are
+re-exported from `physicsnemo/mesh/functional/__init__.py`.
 
 **Rationale:**
 
-Keeping functionals in a single location makes them easy to discover and keeps
-the public API consistent.
+Keeping functionals in a single location per library makes them easy to
+discover and keeps the public API consistent. Mesh functionals ship with
+`physicsnemo.mesh` when it becomes its own library.
 
 **Example:**
 
@@ -412,8 +415,9 @@ def make_inputs_forward(cls, device="cpu"):
 
 **Description:**
 
-Add tests under `test/nn/functional/` to validate selection, optional
-dependencies, and output correctness.
+Add tests under `test/nn/functional/` (`test/mesh/functional/` for mesh
+functionals) to validate selection, optional dependencies, and output
+correctness.
 
 Use a consistent test layout when possible. This is **highly recommended** for
 readability and review speed, but it is **not strictly required** when a

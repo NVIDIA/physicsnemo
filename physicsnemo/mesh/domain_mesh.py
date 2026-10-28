@@ -811,7 +811,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             components, point_weights, control_points, "control_points"
         )
 
-        from physicsnemo.nn.functional.geometry.deform import morph_points
+        from physicsnemo.mesh.functional.geometry.deform import morph_points
 
         def apply_field(
             combined_points: Float[torch.Tensor, "n_points n_spatial_dims"],
@@ -937,11 +937,11 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
                 "a common point_data key/path, not a raw tensor"
             )
 
+        from physicsnemo.mesh.functional.geometry.deform import (
+            radial_basis_function_deform_points,
+        )
         from physicsnemo.mesh.transformations.deform._utils import (
             _resolve_domain_point_weights,
-        )
-        from physicsnemo.nn.functional.geometry.deform import (
-            radial_basis_function_deform_points,
         )
 
         components: list[tuple[str, Mesh]] = [("interior", self.interior)]
@@ -1083,11 +1083,11 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
                 "point_data key/path, not a raw tensor"
             )
 
+        from physicsnemo.mesh.functional.geometry.deform import free_form_deform_points
         from physicsnemo.mesh.transformations.deform._utils import (
             _resolve_domain_point_weights,
         )
         from physicsnemo.mesh.transformations.deform.ffd import _default_lattice_box
-        from physicsnemo.nn.functional.geometry.deform import free_form_deform_points
 
         components: list[tuple[str, Mesh]] = [("interior", self.interior)]
         components.extend(

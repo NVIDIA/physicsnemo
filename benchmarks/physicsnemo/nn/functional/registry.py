@@ -17,11 +17,24 @@
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
 from physicsnemo.core.function_spec import FunctionSpec
+from physicsnemo.mesh.functional.derivatives import (
+    MeshGreenGaussGradient,
+    MeshLSQGradient,
+)
+from physicsnemo.mesh.functional.geometry import (
+    DisplacePoints,
+    FreeFormDeformPoints,
+    MeshPoissonDiskSample,
+    MeshToVoxelFraction,
+    MorphPoints,
+    RadialBasisFunctionDeformPoints,
+    RayMeshIntersect,
+    ShrinkwrapPoints,
+    SobolevDeformPoints,
+)
 from physicsnemo.mesh.utilities._normalization import SafeNormalize
 from physicsnemo.nn.functional.derivatives import (
-    MeshGreenGaussGradient,
     MeshlessFDDerivatives,
-    MeshLSQGradient,
     RectilinearGridCurl,
     RectilinearGridDivergence,
     RectilinearGridGradient,
@@ -42,17 +55,8 @@ from physicsnemo.nn.functional.fourier_spectral import (
     ViewAsComplex,
 )
 from physicsnemo.nn.functional.geometry import (
-    DisplacePoints,
     FarthestPointSampling,
-    FreeFormDeformPoints,
-    MeshPoissonDiskSample,
-    MeshToVoxelFraction,
-    MorphPoints,
-    RadialBasisFunctionDeformPoints,
-    RayMeshIntersect,
-    ShrinkwrapPoints,
     SignedDistanceField,
-    SobolevDeformPoints,
 )
 from physicsnemo.nn.functional.interpolation import (
     GridToPointInterpolation,

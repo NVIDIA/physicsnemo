@@ -76,7 +76,7 @@ from physicsnemo.utils.profiling import profile, Profiler
 # Profiler().initialize()
 
 
-from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
+from physicsnemo.mesh.functional.derivatives import mesh_lsq_gradient
 
 
 def _build_csr_from_neighbors(neighbors_list, device):

@@ -70,6 +70,7 @@ docs/api/datapipes/physicsnemo.datapipes.transforms.rst @megnvidia @coreyjadams
 
 # Mesh documentation
 docs/api/mesh/ @megnvidia @peterdsharpe
+docs/api/mesh/functional.rst @megnvidia @loliverhennigh @peterdsharpe
 
 # Metrics documentation
 docs/api/physicsnemo.metrics.rst @megnvidia @dallasfoster @nickgeneva
@@ -145,7 +146,6 @@ physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @l
 physicsnemo/nn/functional/equivariant_ops.py @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/natten.py @pzharrington
 physicsnemo/nn/functional/geometry/sdf.py @peterdsharpe @loliverhennigh
-physicsnemo/nn/functional/geometry/deform/ @mehdiataei @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh
@@ -223,6 +223,8 @@ physicsnemo/utils/profiling/ @coreyjadams
 
 physicsnemo/mesh/ @peterdsharpe
 physicsnemo/mesh/transformations/deform/ @mehdiataei @loliverhennigh @peterdsharpe
+physicsnemo/mesh/functional/ @loliverhennigh @peterdsharpe
+physicsnemo/mesh/functional/geometry/deform/ @mehdiataei @loliverhennigh @peterdsharpe
 
 # ==============================================================================
 # METRICS

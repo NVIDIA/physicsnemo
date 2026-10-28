@@ -42,7 +42,7 @@ from physicsnemo.mesh.deformation import (
 )
 from physicsnemo.mesh.io import to_pyvista
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from physicsnemo.nn.functional import radial_basis_function_deform_points
+from physicsnemo.mesh.functional import radial_basis_function_deform_points
 
 pv.OFF_SCREEN = True
 

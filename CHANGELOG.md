@@ -176,7 +176,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rounding.
 - Mesh LSQ gradients (`Mesh.gradient`, `curl`, `divergence`,
   `compute_point_derivatives`, `compute_cell_derivatives`, and the torch
-  backend of `physicsnemo.nn.functional.mesh_lsq_gradient`) solve the float32
+  backend of `physicsnemo.mesh.functional.mesh_lsq_gradient`) solve the float32
   systems of all points or cells at once rather than one neighbor count at a
   time, and the derivatives of several fields share their least-squares
   systems. On a GB200, the gradient of a 5.1M-tet mesh is 2.4x faster and
@@ -255,7 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subsequent multiplication by geometric areas.
 
 - LSQ point gradients on large surface meshes are about 2x faster on GPU, and
-  LSQ gradients (`Mesh` and `physicsnemo.nn.functional.mesh_lsq_gradient`)
+  LSQ gradients (`Mesh` and `physicsnemo.mesh.functional.mesh_lsq_gradient`)
   synchronize the GPU much less often. LSQ and DEC derivatives also need less
   peak memory.
 
@@ -328,6 +328,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
+- Mesh functionals moved from `physicsnemo.nn.functional` to the new
+  `physicsnemo.mesh.functional`, so that `physicsnemo.mesh` can become its own
+  library. They are `mesh_lsq_gradient`, `mesh_green_gauss_gradient`,
+  `remeshing`, `ray_mesh_intersect`, `mesh_poisson_disk_sample`,
+  `mesh_to_voxel_fraction`, and the point deformations and deformation
+  energies, such as `morph_points` and `simplex_strain_energy`.
 
 ### Deprecated
 

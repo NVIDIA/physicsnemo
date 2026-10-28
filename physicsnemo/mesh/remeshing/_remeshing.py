@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, TypeAlias
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.nn.functional.geometry.remeshing.remeshing import (
+from physicsnemo.mesh.functional.geometry.remeshing.remeshing import (
     _remeshing_with_mapping,
 )
 
@@ -296,7 +296,7 @@ def remesh(
     Projection can map distinct cluster centroids to the same surface position.
     Output vertices are compacted by connectivity but are not welded by
     position. Backend-specific tuning remains available through
-    :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
+    :func:`physicsnemo.mesh.functional.remeshing`. These advanced parameters may
     change as the implementation evolves.
     """
     from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY

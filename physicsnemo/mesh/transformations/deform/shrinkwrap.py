@@ -142,7 +142,7 @@ def shrinkwrap(
         )
     )
 
-    from physicsnemo.nn.functional.geometry.deform import shrinkwrap_points
+    from physicsnemo.mesh.functional.geometry.deform import shrinkwrap_points
 
     points = shrinkwrap_points(
         mesh.points,

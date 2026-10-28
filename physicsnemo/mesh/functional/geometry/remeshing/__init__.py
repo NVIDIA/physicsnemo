@@ -16,9 +16,9 @@
 
 """Advanced tensor-level surface-remeshing API.
 
-The function is also available from ``physicsnemo.nn.functional``, and both the
-function and its :class:`Remeshing` specification are available from
-``physicsnemo.nn.functional.geometry``. Most users should use
+The function is also available from ``physicsnemo.mesh.functional``, and both
+the function and its :class:`Remeshing` specification are available from
+``physicsnemo.mesh.functional.geometry``. Most users should use
 :mod:`physicsnemo.mesh.remeshing`. The tensor functional exposes
 backend-specific tuning parameters that may change as the implementation
 evolves.
