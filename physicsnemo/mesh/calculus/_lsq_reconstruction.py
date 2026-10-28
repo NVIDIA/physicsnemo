@@ -37,21 +37,23 @@ if TYPE_CHECKING:
 
 
 def _lsq_gradients(
-    mesh: "Mesh",
     points: Float[torch.Tensor, "n_entities n_spatial_dims"],
     values: Sequence[Float[torch.Tensor, "n_entities ..."]],
     adjacency: "Adjacency",
     weight_power: float,
     min_neighbors: int,
     implementation: Literal["torch", "warp"] | None,
+    neighbors_span: bool,
 ) -> list[Float[torch.Tensor, "n_entities n_spatial_dims ..."]]:
     """LSQ gradients of several fields of one dtype, on the chosen backend.
 
-    ``None`` picks Warp, which is faster, wherever it is as accurate as PyTorch.
-    PyTorch keeps ``float64`` data (Warp computes in ``float32``), more than
-    three dimensions, empty inputs, and curves or surfaces in a
-    higher-dimensional space, whose ill-conditioned systems lose accuracy in
-    Warp's ``float32`` normal equations.
+    ``None`` picks Warp, which is faster, where it gives PyTorch's answer:
+    ``float32`` data in one to three dimensions, where every neighborhood
+    spans the space (``neighbors_span``). Where the neighbors do not determine
+    every gradient component, Warp returns zero and PyTorch the minimum-norm
+    solution. The ill-conditioned systems of curves and surfaces in a
+    higher-dimensional space also lose accuracy in Warp's ``float32`` normal
+    equations.
     """
     from physicsnemo.mesh.calculus._lsq_gradient import (
         MeshLSQGradient,
@@ -60,11 +62,11 @@ def _lsq_gradients(
 
     if implementation is None:
         use_warp = (
-            "warp" in MeshLSQGradient.available_implementations()
+            neighbors_span
+            and "warp" in MeshLSQGradient.available_implementations()
             and points.device.type in ("cpu", "cuda")
             and 0 < points.shape[0]
             and points.shape[1] <= 3
-            and not 0 < mesh.n_manifold_dims < mesh.n_spatial_dims
             and torch.float64 not in {points.dtype, *(v.dtype for v in values)}
         )
         implementation = "warp" if use_warp else "torch"
@@ -185,16 +187,18 @@ def _compute_point_gradients_lsq(
 ) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at vertices, by
     :func:`compute_point_gradient_lsq`, sharing their LSQ systems."""
+    # A vertex of a cell that fills the space has neighbors spanning it.
+    neighbors_span = adjacency is None and mesh.n_manifold_dims == mesh.n_spatial_dims
     if adjacency is None:
         adjacency = mesh.get_point_to_points_adjacency()
     return _lsq_gradients(
-        mesh,
         mesh.points,
         point_values,
         adjacency,
         weight_power,
         min_neighbors,
         implementation,
+        neighbors_span,
     )
 
 
@@ -242,11 +246,11 @@ def _compute_cell_gradients_lsq(
     """Gradients of several fields of one dtype at cells, by
     :func:`compute_cell_gradient_lsq`, sharing their LSQ systems."""
     return _lsq_gradients(
-        mesh,
         mesh.cell_centroids,
         cell_values,
         mesh.get_cell_to_cells_adjacency(adjacency_codimension=1),
         weight_power,
         0,  # Cells may have fewer neighbors than points.
         implementation,
+        neighbors_span=False,  # A boundary cell may have just one neighbor.
     )

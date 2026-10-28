@@ -83,15 +83,29 @@ def backends(monkeypatch):
         ("surface", torch.float32, "torch"),
     ],
 )
-def test_none_picks_warp_where_it_is_as_accurate(backends, name, dtype, expected):
-    """Warp for float32 meshes whose cells fill the space; PyTorch for float64
-    and for surfaces in 3D, whose extrinsic systems are ill-conditioned."""
+def test_none_picks_warp_where_it_gives_the_same_answer(
+    backends, name, dtype, expected
+):
+    """Warp for point gradients of float32 meshes whose cells fill the space;
+    PyTorch for float64, for surfaces in 3D, whose extrinsic systems are
+    ill-conditioned, and for cell gradients."""
     mesh = MESHES[name]()
     mesh = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
     values = mesh.points.sum(dim=1)
     compute_gradient_points_lsq(mesh, values)
     compute_gradient_cells_lsq(mesh, mesh.cell_centroids.sum(dim=1))
-    assert backends == [expected, expected]
+    assert backends == [expected, "torch"]
+
+
+def test_cells_with_one_neighbor_keep_the_minimum_norm_gradient():
+    """Two tetrahedra sharing a face each have one neighbor, which determines
+    only the gradient along it. Warp would return zero there."""
+    points = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1, 1, 1]]
+    )
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]]))
+    gradient = compute_gradient_cells_lsq(mesh, mesh.cell_centroids.sum(dim=1))
+    torch.testing.assert_close(gradient, torch.ones(2, 3))
 
 
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
@@ -104,9 +118,10 @@ def test_implementation_overrides_the_choice(backends, implementation):
     assert backends == [implementation, implementation]
 
 
-@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("implementation", [None, "torch", "warp"])
 def test_custom_adjacency_on_a_point_cloud(implementation):
-    """A point cloud differentiates on the neighbor graph it is given."""
+    """A point cloud differentiates on the neighbor graph it is given. ``None``
+    uses PyTorch, since a given graph's neighbors may not span the space."""
     cloud, adjacency = _point_cloud()
     values = torch.sin(cloud.points).sum(dim=1)
     gradient = compute_gradient_points_lsq(
@@ -117,7 +132,7 @@ def test_custom_adjacency_on_a_point_cloud(implementation):
         values,
         adjacency.offsets,
         adjacency.indices,
-        implementation=implementation,
+        implementation=implementation or "torch",
     )
     torch.testing.assert_close(gradient, expected, rtol=0, atol=0)
 
@@ -173,6 +188,30 @@ def test_second_derivatives_through_warp_match_torch():
         )
 
     for warp, reference in zip(second_derivatives("warp"), second_derivatives("torch")):
+        torch.testing.assert_close(
+            warp, reference, rtol=1e-4, atol=1e-4 * reference.abs().max().item()
+        )
+
+
+def test_warp_backward_with_values_computed_from_points():
+    """When values depend on points, the derivatives through Warp count that
+    path once, also when building the graph for second derivatives."""
+    mesh = MESHES["volume"]()
+
+    def derivatives(implementation):
+        points = mesh.points.clone().requires_grad_()
+        gradient = compute_gradient_points_lsq(
+            Mesh(points=points, cells=mesh.cells),
+            points.square().sum(dim=1),
+            implementation=implementation,
+        )
+        (first,) = torch.autograd.grad(
+            gradient.square().sum(), points, create_graph=True
+        )
+        (second,) = torch.autograd.grad(first.square().sum(), points)
+        return first, second
+
+    for warp, reference in zip(derivatives("warp"), derivatives("torch")):
         torch.testing.assert_close(
             warp, reference, rtol=1e-4, atol=1e-4 * reference.abs().max().item()
         )

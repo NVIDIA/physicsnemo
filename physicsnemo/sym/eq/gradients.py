@@ -318,7 +318,9 @@ class GradientsLeastSquares(torch.nn.Module):
         adjacency = Adjacency(offsets=connectivity[0], indices=connectivity[1])
 
         values = input_dict[self.invar].squeeze(-1)
-        first_grads = compute_gradient_points_lsq(cloud, values, adjacency=adjacency)
+        first_grads = compute_gradient_points_lsq(
+            cloud, values, adjacency=adjacency, implementation="warp"
+        )
 
         result: Dict[str, torch.Tensor] = {}
 
@@ -335,7 +337,10 @@ class GradientsLeastSquares(torch.nn.Module):
             second_grads = []
             for a in range(self.dim):
                 sg = compute_gradient_points_lsq(
-                    cloud, derivs[a].squeeze(-1), adjacency=adjacency
+                    cloud,
+                    derivs[a].squeeze(-1),
+                    adjacency=adjacency,
+                    implementation="warp",
                 )
                 second_grads.append(sg)
 

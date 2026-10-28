@@ -102,11 +102,14 @@ def compute_gradient_points_lsq(
         may be directed.
     implementation : {"torch", "warp"} or None, optional
         Backend for the ambient-space solve. ``None`` picks Warp, which is
-        faster, except for ``float64`` data, more than three dimensions, or a
-        curve or surface in a higher-dimensional space; those use PyTorch,
-        which is more accurate there. Warp computes in ``float32``, and
-        higher-order autograd through it differentiates the PyTorch solve.
-        Intrinsic gradients always use PyTorch.
+        faster, for ``float32`` data on a mesh whose cells fill a space of at
+        most three dimensions, with the mesh's own neighbors, and PyTorch
+        otherwise. Warp computes in ``float32``, loses accuracy on curves and
+        surfaces in a higher-dimensional space, and returns zero where the
+        neighbors do not determine the gradient, where PyTorch returns the
+        minimum-norm solution. For speed, pass ``"warp"`` with an
+        ``adjacency`` whose neighborhoods span the space, such as a
+        k-nearest-neighbor graph. Intrinsic gradients always use PyTorch.
 
     Returns
     -------
@@ -179,11 +182,10 @@ def compute_gradient_cells_lsq(
     weight_power : float
         Exponent for inverse-distance weighting.
     implementation : {"torch", "warp"} or None, optional
-        Backend for the ambient-space solve. ``None`` picks Warp, which is
-        faster, except for ``float64`` data, more than three dimensions, or a
-        curve or surface in a higher-dimensional space; those use PyTorch,
-        which is more accurate there. Warp computes in ``float32``, and
-        higher-order autograd through it differentiates the PyTorch solve.
+        Backend for the solve. ``None`` picks PyTorch, because a cell near the
+        boundary may have too few neighbors to determine the gradient: PyTorch
+        then returns the minimum-norm solution, and Warp returns zero. Warp is
+        faster and computes in ``float32``.
 
     Returns
     -------

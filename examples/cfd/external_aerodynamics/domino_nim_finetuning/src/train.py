@@ -60,6 +60,9 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
 )
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.models.domino.utils import *
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+from physicsnemo.mesh.neighbors import Adjacency
 
 # This is included for GPU memory tracking:
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
@@ -74,11 +77,6 @@ from physicsnemo.utils.profiling import profile, Profiler
 
 # Profiler().enable("line_profiler")
 # Profiler().initialize()
-
-
-from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.calculus import compute_gradient_points_lsq
-from physicsnemo.mesh.neighbors import Adjacency
 
 
 def _build_csr_from_neighbors(neighbors_list, device):
@@ -146,7 +144,7 @@ def compute_physics_loss(
         coords_b = coords_total_unnormalized[b].detach()
         values_b = output_total_unnormalized[b]
         grads_b = compute_gradient_points_lsq(
-            Mesh(points=coords_b), values_b, adjacency=adjacency
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
         )
         first_grads_list.append(grads_b)
     grad_neighbors_center = torch.stack(first_grads_list)
@@ -158,7 +156,7 @@ def compute_physics_loss(
         coords_b = coords_total_unnormalized[b].detach()
         values_b = grad_flat[b]
         sg_b = compute_gradient_points_lsq(
-            Mesh(points=coords_b), values_b, adjacency=adjacency
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
         )
         second_grads_list.append(sg_b)
     ggrad_all = torch.stack(second_grads_list)

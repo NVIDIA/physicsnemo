@@ -328,10 +328,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
-- Mesh LSQ gradients, and the derivative, divergence, and curl functions built on
-  them, run on Warp by default for `float32` data on volumes, planar meshes, and
-  point clouds, where it is faster and as accurate. `float64` data and curves or
-  surfaces in higher dimensions keep PyTorch. Pass `implementation=` to
+- Mesh LSQ point gradients, and the derivative, divergence, and curl functions
+  built on them, run on Warp by default for `float32` volumes and planar meshes,
+  where it is faster and gives the same answer. Pass `implementation=` to
   `compute_gradient_points_lsq` or `compute_gradient_cells_lsq` to choose a
   backend.
 
@@ -344,7 +343,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.mesh` modules that use them, as private kernels behind their
   `Mesh` operations, so that `physicsnemo.mesh` can become its own library. For
   `mesh_lsq_gradient` on a point cloud, pass its neighbor graph as `adjacency=` to
-  `physicsnemo.mesh.calculus.compute_gradient_points_lsq`. Their old names in
+  `physicsnemo.mesh.calculus.compute_gradient_points_lsq`, with
+  `implementation="warp"` for its default backend. Their old names in
   `physicsnemo.nn.functional` and its `derivatives` and `geometry` subpackages
   still work but emit `LegacyFeatureWarning`.
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is

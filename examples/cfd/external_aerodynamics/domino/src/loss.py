@@ -94,7 +94,7 @@ def compute_physics_loss(
         coords_b = coords_total_unnormalized[b].detach()
         values_b = output_total_unnormalized[b]
         grads_b = compute_gradient_points_lsq(
-            Mesh(points=coords_b), values_b, adjacency=adjacency
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
         )
         first_grads_list.append(grads_b)
     grad_neighbors_center = torch.stack(first_grads_list)
@@ -107,7 +107,7 @@ def compute_physics_loss(
         coords_b = coords_total_unnormalized[b].detach()
         values_b = grad_flat[b]
         sg_b = compute_gradient_points_lsq(
-            Mesh(points=coords_b), values_b, adjacency=adjacency
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
         )
         second_grads_list.append(sg_b)
     ggrad_all = torch.stack(second_grads_list)

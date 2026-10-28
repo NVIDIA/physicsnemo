@@ -42,7 +42,8 @@ _USE_INSTEAD = {
     "mesh_green_gauss_gradient": None,
     "mesh_lsq_gradient": (
         "physicsnemo.mesh.calculus.compute_gradient_points_lsq on a Mesh, with"
-        " adjacency= for your own neighbor graph,"
+        " adjacency= for your own neighbor graph and implementation='warp' for"
+        " the same backend,"
     ),
     "displace_points": f"{_DEFORM}.displace on a Mesh",
     "free_form_deform_points": f"{_DEFORM}.free_form_deform on a Mesh",

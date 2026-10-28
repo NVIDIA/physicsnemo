@@ -979,6 +979,9 @@ def backward_mesh_lsq_gradient(
     if torch.is_grad_enabled():
         from ._torch_impl import mesh_lsq_gradient_torch
 
+        # Fresh views, so that the gradient for ``points`` leaves out the path
+        # through ``values`` when ``values`` was computed from ``points``.
+        points, values = points.view_as(points), values.view_as(values)
         inputs = [
             t
             for t, needed in ((points, needs_points), (values, needs_values))
