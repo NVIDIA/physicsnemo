@@ -328,18 +328,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
-- Mesh functionals moved from `physicsnemo.nn.functional` to the new
-  `physicsnemo.mesh.functional`, so that `physicsnemo.mesh` can become its own
-  library. They are `mesh_lsq_gradient`, `mesh_green_gauss_gradient`,
-  `remeshing`, `ray_mesh_intersect`, `mesh_poisson_disk_sample`,
-  `mesh_to_voxel_fraction`, and the point deformations and deformation
-  energies, such as `morph_points` and `simplex_strain_energy`.
 
 ### Deprecated
 
 - `weighted_multinomial` and `WeightedMultinomial` moved from
   `physicsnemo.nn.functional` to `physicsnemo.utils`. Importing them from
   `physicsnemo.nn.functional` still works but emits `LegacyFeatureWarning`.
+- Mesh functionals moved from `physicsnemo.nn.functional` to the new
+  `physicsnemo.mesh.functional`, so that `physicsnemo.mesh` can become its own
+  library. They are `mesh_lsq_gradient`, `mesh_green_gauss_gradient`,
+  `remeshing`, `ray_mesh_intersect`, `mesh_poisson_disk_sample`,
+  `mesh_to_voxel_fraction`, and the point deformations and deformation
+  energies, such as `morph_points` and `simplex_strain_energy`. Importing them
+  from `physicsnemo.nn.functional` still works but emits `LegacyFeatureWarning`.
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is
   deprecated in favour of `relative_mse`, which names what it always
   computed (target-normalized relative MSE, no square root) and delegates

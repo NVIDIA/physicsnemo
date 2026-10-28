@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .._moved_to_mesh import MOVED_TO_MESH, moved_to_mesh
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
 from .sdf import SignedDistanceField, signed_distance_field
 
@@ -23,3 +24,10 @@ __all__ = [
     "farthest_point_sampling",
     "signed_distance_field",
 ]
+# Deprecated aliases of the mesh functionals, also resolved by __getattr__.
+__all__ += MOVED_TO_MESH[__name__]
+
+
+def __getattr__(name):
+    # Lazy legacy re-exports of the functionals moved to physicsnemo.mesh.
+    return moved_to_mesh(__name__, name)

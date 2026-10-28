@@ -14,17 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the deprecated nn.functional names of functionals moved to utils."""
+"""Tests for the deprecated nn.functional names of functionals moved to utils or mesh."""
 
+import importlib
 import re
 import subprocess
 import sys
 
 import pytest
 
+import physicsnemo.mesh.functional
 import physicsnemo.utils
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import functional
+from physicsnemo.nn.functional._moved_to_mesh import MOVED_TO_MESH
 
 MOVED_TO_UTILS = ["weighted_multinomial", "WeightedMultinomial"]
 
@@ -49,6 +52,32 @@ def test_from_import_of_moved_name_warns():
     assert weighted_multinomial is physicsnemo.utils.weighted_multinomial
 
 
+@pytest.mark.parametrize(
+    ("module", "name"),
+    [(module, name) for module, names in MOVED_TO_MESH.items() for name in names],
+)
+def test_moved_to_mesh_name_warns_and_returns_mesh_object(module, name):
+    """The old name warns at the caller, names the new import, and returns the
+    object from physicsnemo.mesh.functional."""
+    new_module = module.replace("nn.functional", "mesh.functional")
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape(f"from {new_module} import {name}")
+    ) as record:
+        legacy = getattr(importlib.import_module(module), name)
+
+    caller = next(w for w in record if issubclass(w.category, LegacyFeatureWarning))
+    assert caller.filename == __file__
+    assert legacy is getattr(importlib.import_module(new_module), name)
+
+
+def test_from_import_of_moved_mesh_name_warns():
+    """The import that the DoMINO examples used still works, with a warning."""
+    with pytest.warns(LegacyFeatureWarning, match="mesh.functional.derivatives"):
+        from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
+
+    assert mesh_lsq_gradient is physicsnemo.mesh.functional.mesh_lsq_gradient
+
+
 def test_wildcard_import_keeps_moved_names():
     """``import *`` still provides the moved names, with the warning."""
     namespace = {}
@@ -57,12 +86,15 @@ def test_wildcard_import_keeps_moved_names():
 
     for name in MOVED_TO_UTILS:
         assert namespace[name] is getattr(physicsnemo.utils, name)
+    for name in MOVED_TO_MESH["physicsnemo.nn.functional"]:
+        assert namespace[name] is getattr(physicsnemo.mesh.functional, name)
 
 
-def test_unknown_name_raises_attribute_error():
+@pytest.mark.parametrize("module", list(MOVED_TO_MESH))
+def test_unknown_name_raises_attribute_error(module):
     """Other names raise AttributeError; safe_normalize never shipped here."""
     with pytest.raises(AttributeError, match="no attribute 'safe_normalize'"):
-        functional.safe_normalize  # noqa: B018
+        getattr(importlib.import_module(module), "safe_normalize")
 
 
 def test_library_imports_do_not_use_deprecated_names():
@@ -83,9 +115,21 @@ def test_library_imports_do_not_use_deprecated_names():
         "    import physicsnemo.nn.functional\n"
         "leaked = [\n"
         "    str(w.message) for w in caught\n"
-        "    if \"from 'physicsnemo.nn.functional' is deprecated\" in str(w.message)\n"
+        '    if "from \'physicsnemo.nn.functional" in str(w.message)\n'
         "]\n"
         "assert not leaked, leaked\n"
+    )
+    subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
+        [sys.executable, "-c", snippet], check=True
+    )
+
+
+def test_nn_functional_import_does_not_load_mesh():
+    """The mesh aliases resolve lazily, so importing nn.functional never imports mesh."""
+    snippet = (
+        "import sys\n"
+        "import physicsnemo.nn.functional\n"
+        "assert not [m for m in sys.modules if m.startswith('physicsnemo.mesh')]\n"
     )
     subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
         [sys.executable, "-c", snippet], check=True

@@ -18,6 +18,7 @@ import warnings
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 
+from ._moved_to_mesh import MOVED_TO_MESH, moved_to_mesh
 from .derivatives import (
     meshless_fd_derivatives,
     rectilinear_grid_curl,
@@ -105,11 +106,14 @@ __all__ = [
     "weight_fact",
     "wireframe_render",
 ]
+# Deprecated aliases of the mesh functionals, also resolved by __getattr__.
+__all__ += MOVED_TO_MESH[__name__]
 
 
 def __getattr__(name):
-    # Lazy legacy re-export: these moved to physicsnemo.utils, and warning only
-    # on access keeps plain 'import physicsnemo.nn.functional' silent.
+    # Lazy legacy re-exports: these moved to physicsnemo.utils or
+    # physicsnemo.mesh.functional, and warning only on access keeps plain
+    # 'import physicsnemo.nn.functional' silent.
     if name in ("WeightedMultinomial", "weighted_multinomial"):
         warnings.warn(
             f"Importing {name!r} from 'physicsnemo.nn.functional' is deprecated. "
@@ -121,6 +125,4 @@ def __getattr__(name):
         from physicsnemo import utils
 
         return getattr(utils, name)
-    raise AttributeError(
-        f"module 'physicsnemo.nn.functional' has no attribute {name!r}"
-    )
+    return moved_to_mesh(__name__, name)
