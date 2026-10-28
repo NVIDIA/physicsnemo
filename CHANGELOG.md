@@ -158,6 +158,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Removed imports emit a warning and an error with the replacement import.
   `wasserstein_from_normal` remains available through both existing import paths.
 
+- The regional weather diffusion recipe compiles its loss with
+  `torch.compile` under domain parallelism too (it was turned off).
 - Partitioning a graph across GPUs (`partition_graph_with_id_mapping`, behind
   `DistributedGraph` and GraphCast's distributed mode) no longer loops over
   destination nodes in Python. A 1-million-node grid now takes well under a
