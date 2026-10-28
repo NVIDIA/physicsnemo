@@ -277,6 +277,64 @@ def _systematic_sample(
     return order[position].sort().values
 
 
+def _draw_inputs(
+    mesh: "Mesh",
+) -> tuple[
+    Float[torch.Tensor, " n_cells"], Float[torch.Tensor, "n_cells n_spatial_dims"]
+]:
+    """The float64 cell measures and centroids a draw reads, from the points as given.
+
+    The measure is the stored effective measure, read through ``cell_measures``
+    (which validates it and rejects the legacy ``_measure_weights``), else the
+    geometric measure; the centroid is the vertex mean. Neither comes from the
+    mesh's cached geometry, which is in the mesh's precision.
+    """
+    with torch.no_grad():
+        verts = gather_rows(mesh.points.detach().double(), mesh.cells)
+        if (
+            EFFECTIVE_MEASURE_KEY in mesh.cell_data
+            or "_measure_weights" in mesh.cell_data  # legacy: cell_measures raises
+        ):
+            measure = cell_measures(mesh)
+        else:
+            measure = compute_cell_areas(verts[:, 1:] - verts[:, :1])
+        return measure.detach().double(), verts.mean(dim=1)
+
+
+def _cell_line(
+    measures: Float[torch.Tensor, " n_cells"],
+    centroids: Float[torch.Tensor, "n_cells n_spatial_dims"],
+    share: Float[torch.Tensor, ""],
+    frame: Float[torch.Tensor, "n_spatial_dims n_spatial_dims"],
+) -> tuple[Float[torch.Tensor, " n_cells"], Int[torch.Tensor, " n_cells"]]:
+    """One group of cells on the systematic line: ``(pi, order)``, each ``(n_cells,)``.
+
+    ``pi`` is :func:`_pps_inclusion_probabilities` of the float64 ``measures`` for
+    ``share``, a float64 scalar of at most ``n_cells``. ``order`` is the Morton order
+    of the float64 ``centroids`` in ``frame``. Groups laid in one frame, each after
+    the ones before it, make one line for :func:`_systematic_sample`.
+    """
+    pi = _pps_inclusion_probabilities(measures, share)
+    ### More samples than positive-measure cells keeps every positive cell, and the
+    ### zero-measure cells fill the rest of the share equally, at Horvitz-Thompson
+    ### weight 0.
+    zero = measures == 0
+    n_cells = measures.shape[0]
+    n_pos = n_cells - zero.sum()
+    pi = torch.where(
+        zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
+    )
+    ### Morton order of the centroids on cubic cells, ties broken by index. The grid
+    ### spans the cells of positive measure (all if none), and the others are
+    ### clamped onto it, so padding leaves the order of the rest alone.
+    xyz = frame_coordinates(centroids, frame)
+    inside = (~zero | zero.all())[:, None]
+    lo = torch.where(inside, xyz, torch.inf).amin(0)
+    hi = torch.where(inside, xyz, -torch.inf).amax(0)
+    code = _compute_morton_codes(xyz.clamp(lo, hi), isotropic=True)
+    return pi, code.argsort(stable=True)
+
+
 def sample_cells_systematic(
     mesh: "Mesh",
     n_samples: int,
@@ -376,18 +434,7 @@ def sample_cells_systematic(
         start = torch.full((), start, dtype=torch.float64, device=device)
     start = torch.as_tensor(start, dtype=torch.float64, device=device)
     with torch.no_grad():
-        ### Measures and centroids in float64 from the points as given, never the
-        ### mesh's cached geometry, which is in the mesh's precision.
-        verts = gather_rows(mesh.points.detach().double(), mesh.cells)
-        if (
-            EFFECTIVE_MEASURE_KEY in mesh.cell_data
-            or "_measure_weights" in mesh.cell_data  # legacy: cell_measures raises
-        ):
-            measure = cell_measures(mesh)
-        else:
-            measure = compute_cell_areas(verts[:, 1:] - verts[:, :1])
-        measure = measure.detach().double()
-        centroids = verts.mean(dim=1)
+        measure, centroids = _draw_inputs(mesh)
         n_cells = measure.shape[0]
         if n_cells == 0:
             return (
@@ -400,24 +447,7 @@ def sample_cells_systematic(
         ### mesh leaves the line, and the draw, unchanged (up to roundoff and the
         ### frame's ties).
         frame = canonical_frame(centroids, measure)
-        pi = _pps_inclusion_probabilities(measure, share)
-        ### More samples than positive-measure cells keeps every positive cell, and
-        ### the zero-measure cells fill the rest of the count equally, at
-        ### Horvitz-Thompson weight 0.
-        zero = measure == 0
-        n_pos = n_cells - zero.sum()
-        pi = torch.where(
-            zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
-        )
-        ### Morton order of the centroids on cubic cells, ties broken by index. The
-        ### grid spans the cells of positive measure (all if none), and the others
-        ### are clamped onto it, so padding leaves the order of the rest alone.
-        xyz = frame_coordinates(centroids, frame)
-        inside = (~zero | zero.all())[:, None]
-        lo = torch.where(inside, xyz, torch.inf).amin(0)
-        hi = torch.where(inside, xyz, -torch.inf).amax(0)
-        code = _compute_morton_codes(xyz.clamp(lo, hi), isotropic=True)
-        order = code.argsort(stable=True)
+        pi, order = _cell_line(measure, centroids, share, frame)
         ### k = min(n_cells, n_samples) in integer division: 1 // (n_cells //
         ### n_samples + 1) is 1 when every cell is kept, else 0. A symbolic Min
         ### would be fixed to one side of n_samples when Inductor's FX-graph cache
