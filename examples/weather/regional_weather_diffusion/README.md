@@ -43,17 +43,17 @@ These models can make longer forecasts (more than one timestep) during inference
 
 ### Preliminaries
 
-1. Install PhysicsNeMo (if not already installed) with the `datapipes-extras`, `nn-extras`, and `utils-extras` optional dependency groups, along with the packages in `requirements.txt`. 
+1. Install PhysicsNeMo (if not already installed) with the `datapipes-extras` and `nn-extras` optional dependency groups, along with the packages in `requirements.txt`. 
 2. Copy this folder (`examples/weather/regional_weather_diffusion`) to a system with a GPU available. 
 3. Prepare a combined HRRR/ERA5 dataset in the form specified in `datasets/data_loader_hrrr_era5.py` or implement a custom dataset class as shown below under [Adding custom datasets](#adding-custom-datasets).
 
-PyTorch 2.10 or higher is recommended for this recipe and is _required_ to use domain parallelism. Tests using domain parallel features will likely fail with older PyTorch versions. 
-
-To install all requirements beyond those of PhysicsNeMo itself, you can run:
+To install the requirements not covered by PhysicsNeMo and these optional dependency groups, you can run:
 
 ```bash
 pip install -r requirements.txt
 ```
+
+`natten` (used by the DiT architecture) is built from source unless a pre-built wheel matching your PyTorch and CUDA versions is available. To install a pre-built wheel, use the `natten-cu12` or `natten-cu13` PhysicsNeMo extra, or see the [NATTEN installation instructions](https://natten.org/install/).
 
 ### Testing
 
