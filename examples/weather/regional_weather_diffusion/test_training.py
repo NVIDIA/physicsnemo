@@ -14,16 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pytest
 import torch
 import train
+import xarray as xr
+import zarr
+from datasets.xarray import XarrayDataset, write_example_files
 from hydra import compose, initialize
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from torch.distributed.tensor import DTensor
 from utils import parallel, trainer
@@ -859,6 +864,231 @@ def test_datapipes_backend_training(
     cfg.dataset.loader.backend = "datapipes"
     if "regression" in cfg.model.diffusion_conditions:
         cfg.model.diffusion_conditions.remove("regression")
+
+    train.main(cfg)
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+# XarrayDataset tests, using the files written by write_example_files: arrays
+# "hrrr" (t2m, u10, v10) and "era5" (msl, tcwv), hourly from 2020-01-01, with
+# invariants "orography" and "land_sea_mask" and a static mask.
+XARRAY_STATE = {"hrrr": {"channels": None, "time_steps": [1]}}
+XARRAY_BACKGROUND = {
+    "hrrr": {"channels": ["v10", "t2m"], "time_steps": [-1, 0]},
+    "era5": {"channels": None, "time_steps": [1]},
+}
+
+
+@pytest.fixture
+def xarray_files(tmp_path: Path) -> dict:
+    """Write the default example files for XarrayDataset."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: XarrayDataset tests are run with 1 process.")
+    return write_example_files(str(tmp_path / "data"))
+
+
+def _read_collated(
+    files: dict, access_patterns: dict, time: np.datetime64
+) -> tuple[np.ndarray, np.ndarray]:
+    """Collate a sample directly from the files, independently of XarrayDataset.
+
+    Returns the sample in physical units and normalized."""
+    with open(files["stats_path"]) as f:
+        stats = json.load(f)
+    datasets = [xr.load_dataset(path) for path in files["data_paths"]]
+    data = xr.concat(datasets, dim="time")
+    time_step = np.timedelta64(files["time_step_seconds"], "s")
+    (raw, normalized) = ([], [])
+    for array, pattern in access_patterns.items():
+        channels = pattern["channels"] or list(data[f"{array}_channel"].values)
+        mean = np.array([stats[array][ch]["mean"] for ch in channels])[:, None, None]
+        std = np.array([stats[array][ch]["std"] for ch in channels])[:, None, None]
+        for step in pattern["time_steps"]:
+            x = data[array].sel(
+                {"time": time + step * time_step, f"{array}_channel": channels}
+            )
+            raw.append(x.values)
+            normalized.append((x.values - mean) / std)
+    return (np.concatenate(raw), np.concatenate(normalized))
+
+
+@pytest.mark.parametrize(
+    "file_format, cache_location",
+    [("zarr", None), ("zarr", "memory"), ("zarr", "directory"), ("netcdf", None)],
+)
+def test_xarray_dataset_samples(
+    tmp_path: Path, *, file_format: str, cache_location: str | None
+):
+    """Samples match the data collated and normalized directly from the files."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: XarrayDataset tests are run with 1 process.")
+    if file_format == "netcdf":
+        pytest.importorskip("netCDF4")
+    files = write_example_files(str(tmp_path / "data"), file_format=file_format)
+    if cache_location == "directory":
+        cache_location = str(tmp_path / "cache")
+    params = {
+        **files,
+        "state_access_patterns": XARRAY_STATE,
+        "background_access_patterns": XARRAY_BACKGROUND,
+        "cache_location": cache_location,
+    }
+    dataset = XarrayDataset(params, train=True)
+
+    assert len(dataset) == 46  # 48 times, minus one at each end for steps -1 and 1
+    assert dataset.state_channels() == ["t2m_t+1", "u10_t+1", "v10_t+1"]
+    assert dataset.background_channels() == [
+        "v10_t-1",
+        "t2m_t-1",
+        "v10",
+        "t2m",
+        "msl_t+1",
+        "tcwv_t+1",
+    ]
+    with xr.open_dataset(files["invariants_path"]) as ds:
+        static_mask = ds["mask"].values[None]
+    invariants = dataset.get_invariants()
+    np.testing.assert_allclose(invariants.mean(axis=(1, 2)), 0.0, atol=1e-5)
+    np.testing.assert_allclose(invariants.std(axis=(1, 2)), 1.0, atol=1e-5)
+
+    # first and last sample, which are in different files, then the first again,
+    # which is read from the cache if enabled
+    for idx in (0, len(dataset) - 1, 0):
+        sample = dataset[idx]
+        time = dataset.times[idx]
+        for key, patterns, normalize in (
+            ("state", XARRAY_STATE, dataset.normalize_state),
+            ("background", XARRAY_BACKGROUND, dataset.normalize_background),
+        ):
+            (raw, expected) = _read_collated(files, patterns, time)
+            np.testing.assert_allclose(sample[key], expected, rtol=1e-5, atol=1e-5)
+            np.testing.assert_allclose(normalize(raw), expected, rtol=1e-5, atol=1e-5)
+        np.testing.assert_array_equal(sample["mask"], static_mask)
+
+    if cache_location == str(tmp_path / "cache"):
+        assert len(os.listdir(cache_location)) == len(files["data_paths"])
+
+
+def test_xarray_dataset_time_selection(tmp_path: Path):
+    """Sample times respect validity, exclusions, time ranges and access patterns."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: XarrayDataset tests are run with 1 process.")
+    files = write_example_files(
+        str(tmp_path / "data"), num_files=3, invariant_variables=[]
+    )
+    hour = np.timedelta64(1, "h")
+    start = np.datetime64("2020-01-01T00:00:00")
+    times = start + hour * np.arange(72)
+    zarr.open_array(os.path.join(files["data_paths"][1], "valid"), mode="r+")[5] = False
+    invalid = times[24 + 5]
+    excluded = times[10]
+
+    params = {
+        **files,
+        "time_step_seconds": None,  # inferred from the data
+        "state_access_patterns": {"hrrr": {"channels": None, "time_steps": [0]}},
+        "background_access_patterns": {
+            "era5": {"channels": None, "time_steps": [-2, -1]}
+        },
+        "exclude_times": [str(excluded)],
+        "time_range_train": [str(times[3]), str(times[48])],
+        "time_range_valid": [str(times[48]), str(start + 72 * hour)],
+    }
+    for train_split, (start_idx, end_idx) in ((True, (3, 48)), (False, (48, 72))):
+        in_range = set(times[start_idx:end_idx]) - {invalid, excluded}
+        expected = sorted(
+            t for t in in_range if all(t + s * hour in in_range for s in (-2, -1, 0))
+        )
+        dataset = XarrayDataset(params, train=train_split)
+        np.testing.assert_array_equal(dataset.times, np.array(expected))
+
+
+def test_xarray_dataset_nan_mask_and_crop(xarray_files: dict):
+    """NaNs are zeroed and masked out, combined with the cropped static mask."""
+    zarr.open_array(os.path.join(xarray_files["data_paths"][0], "hrrr"), mode="r+")[
+        3, 1, 10, 12
+    ] = np.nan
+    params = {
+        **xarray_files,
+        "state_access_patterns": {"hrrr": {"channels": None, "time_steps": [0]}},
+        "crop_window": [[4, 20], [8, 32]],
+        "nan_mask": True,
+    }
+    dataset = XarrayDataset(params, train=True)
+    with xr.open_dataset(xarray_files["invariants_path"]) as ds:
+        static_mask = ds["mask"].values[None, 4:20, 8:32]
+
+    sample = dataset[3]
+    assert sample["state"].shape == (3, 16, 24)
+    assert np.isfinite(sample["state"]).all()
+    assert sample["state"][1, 6, 4] == 0
+    expected_mask = static_mask.copy()
+    expected_mask[0, 6, 4] = False
+    np.testing.assert_array_equal(sample["mask"], expected_mask)
+    # the static mask must not be modified by the NaN mask of a previous sample
+    np.testing.assert_array_equal(dataset[4]["mask"], static_mask)
+
+
+@pytest.mark.parametrize(
+    "params, match",
+    [
+        (
+            {
+                "state_access_patterns": {
+                    "hrrr": {"channels": ["q2"], "time_steps": [0]}
+                }
+            },
+            r"Channels \['q2'\] of 'hrrr' not found",
+        ),
+        (
+            {"state_access_patterns": {"gfs": {"channels": None, "time_steps": [0]}}},
+            r"Arrays \['gfs'\] not found",
+        ),
+        (
+            {
+                "state_access_patterns": {
+                    "hrrr": {"channels": None, "time_steps": [0, 0]}
+                }
+            },
+            "must not contain duplicates",
+        ),
+        ({"time_range_train": ["2030-01-01", "2031-01-01"]}, "No samples left"),
+        ({"invariant_variables": ["lat"]}, "statistics for 'invariant' are missing"),
+    ],
+    ids=["unknown_channel", "missing_array", "duplicate_steps", "no_samples", "stats"],
+)
+def test_xarray_dataset_invalid_config(xarray_files: dict, params: dict, match: str):
+    """Configuration errors are reported at construction with a clear message."""
+    state = {"hrrr": {"channels": None, "time_steps": [0]}}
+    with pytest.raises(ValueError, match=match):
+        XarrayDataset(
+            {**xarray_files, "state_access_patterns": state, **params}, train=True
+        )
+
+
+def test_xarray_dataset_training(
+    tmp_path: Path, xarray_files: dict, cfg_diffusion_unet: DictConfig
+):
+    """Train end to end through the trainer with XarrayDataset."""
+    rundir = _setup_rundir(tmp_path, 1)
+    cfg = cfg_diffusion_unet.copy()
+    cfg.training.rundir = rundir
+    cfg.training.validation_plot_variables = ["t2m_t+1"]
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+    cfg.dataset = OmegaConf.create(
+        {
+            "name": "xarray.XarrayDataset",
+            "loader": {"backend": "torch"},
+            **xarray_files,
+            "state_access_patterns": XARRAY_STATE,
+            "background_access_patterns": XARRAY_BACKGROUND,
+        }
+    )
 
     train.main(cfg)
 
