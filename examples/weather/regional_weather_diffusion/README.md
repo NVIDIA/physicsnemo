@@ -3,41 +3,29 @@
 
 ## Problem Overview
 
-Convection-allowing models (CAMs) are essential tools for forecasting severe thunderstorms and
-mesoscale convective systems, which are responsible for some of the most extreme weather events.
-By resolving kilometer-scale convective dynamics, these models provide the precision needed for
-accurate hazard prediction. However, modeling the atmosphere at this scale is both challenging
-and expensive with traditional numerical weather prediction.
+The resolution of global weather and climate models is typically too coarse to resolve localized weather phenomena, such as severe thunderstorms and
+mesoscale convective systems, at sufficient detail. Therefore, high-resolution regional models are commonly used to model the area of interest in more detail. Modeling the atmosphere at this scale is both challenging and expensive with traditional numerical weather prediction. Simple loss functions also often limit the ability of AI-based atmospheric models to reproduce extreme events and characterize uncertainty. High-resolution diffusion models offer a solid foundation for realistic and probabilistic AI-based modeling of local weather.
 
-This example provides a toolkit for training and simple inference for regional AI high-resolution models
+This recipe provides a toolkit for training and simple inference for regional AI high-resolution models
 using diffusion. Examples of the types of models that can be trained with it include:
 
+- [CorrDiff](https://arxiv.org/html/2309.15214),
+a _downscaling_ model that generates local high-resolution weather samples probabilistically from a lower-resolution input at the same time. The regression+diffusion setup used in the [original CorrDiff](https://nvidia.github.io/earth2studio/main/modules/generated/models/dx/CorrDiffTaiwan/) is supported, while purely diffusion-based downscaling can also be trained. This recipe is now better supported and recommended over the [original CorrDiff recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/corrdiff).
+
 - [StormCast](https://arxiv.org/abs/2408.10958),
-a generative diffusion model designed to emulate NOAA’s High-Resolution Rapid Refresh (HRRR) model, a 3km
-operational CAM. StormCast autoregressively predicts multiple atmospheric state variables with remarkable
-accuracy, demonstrating ability to replicate storm dynamics, observed radar reflectivity, and realistic
-atmospheric structure through deep learning-based CAM emulation. StormCast enables high-resolution ML-driven
-regional weather forecasting and climate risk analysis.
+a generative diffusion model designed to emulate NOAA’s High-Resolution Rapid Refresh (HRRR) model, a 3 km
+operational convection-allowing model. StormCast autoregressively predicts multiple atmospheric state variables.
+The [original StormCast](https://nvidia.github.io/earth2studio/main/modules/generated/models/px/StormCast/) uses a regression+diffusion U-Net configuration similar to CorrDiff, while the [full-CONUS
+version](https://nvidia.github.io/earth2studio/main/modules/generated/models/px/StormCastCONUS/) uses a diffusion transformer without a regression stage.
 
 <p align="center">
 <img src="../../../docs/img/stormcast_rollout.gif"/>
 </p>
 
-- [Stormscope](https://arxiv.org/abs/2601.17268),
-a nowcasting/nearcasting model for clouds and precipitation, using GOES satellite radiances and MRMS
-radar measurements as training data. Stormscope's generative model architecture allows the uncertainty of
-the predicted variables to be accurately quantified.
+- [StormScope](https://arxiv.org/abs/2601.17268),
+a _nowcasting/nearcasting_ model for clouds and precipitation, using satellite radiances and radar measurements as training data. StormScope's generative model architecture allows the uncertainty of the predicted variables to be accurately quantified.
 
-
-The design of StormCast relies on two UNet-type neural networks:
-
-- A regression model, which provides a deterministic estimate of the next HRRR timestep given the previous timestep's HRRR and background ERA5 states.
-- A diffusion model, which is given the previous HRRR timestep as well as the estimate from the regression model, and provides a correction to the regression model estimate to produce a final high-quality prediction of the next high-resolution atmospheric state.
-The regression and diffusion components are trained separately (with the diffusion model training requiring a regression model as prerequisite), then coupled together in inference.
-
-Meanwhile, Stormscope omits the regression model in favor of a diffusion-only approach using a diffusion transformer (DiT) architecture.
-
-These models can make longer forecasts (more than one timestep) during inference by feeding their predictions back into the model as input for the next step (autoregressive rollout). Both models can be formulated in terms of a high-resolution state update guided by a low-resolution conditioning. In the code, we refer to the high-resolution training target in generic terms as `state` and to everything the model conditions on as `background`, including any past state history a forecasting model needs as input -- the dataset concatenates that onto `background` as extra channels rather than returning it as a separate tensor. See [Model types](#model-types) and [Adding custom datasets](#adding-custom-datasets) for details.
+All of the above models can be formulated in terms of a high-resolution state update guided by a conditioning. In the code, we refer to the high-resolution training target in generic terms as `state` and to everything the model conditions on as `background`, including any past state history a forecasting model needs as input. See [Model types](#model-types) and [Adding custom datasets](#adding-custom-datasets) for details.
 
 ## Getting Started
 
@@ -45,9 +33,9 @@ These models can make longer forecasts (more than one timestep) during inference
 
 1. Install PhysicsNeMo (if not already installed) with the `datapipes-extras` and `nn-extras` optional dependency groups, along with the packages in `requirements.txt`. 
 2. Copy this folder (`examples/weather/regional_weather_diffusion`) to a system with a GPU available. 
-3. Prepare a combined HRRR/ERA5 dataset in the form specified in `datasets/data_loader_hrrr_era5.py` or implement a custom dataset class as shown below under [Adding custom datasets](#adding-custom-datasets).
+3. Prepare a combined dataset in the form supported by `datasets/xarray.py` or implement a custom dataset class as shown below under [Adding custom datasets](#adding-custom-datasets).
 
-To install the requirements not covered by PhysicsNeMo and these optional dependency groups, you can run:
+To install the requirements not covered by PhysicsNeMo with the above-mentioned optional dependency groups, you can run:
 
 ```bash
 pip install -r requirements.txt
@@ -73,9 +61,7 @@ torchrun --standalone --nproc_per_node=2 --no-python pytest test_training.py
 
 The multi-GPU tests might produce some clutter because all processes write to the terminal, but the output should be readable.
 
-The tests take a while to run. 
-
-Potentially useful `pytest` options include `-k "test_training"` (run only the tests from the `test_training` function) and `-x` (stop at first failure).
+The tests take a while to run (around 15 min on H100 for the single-GPU tests). Potentially useful `pytest` options include `-k "test_training"` (run only the tests from the `test_training` function) and `-x` (stop at first failure).
 
 ### Configuration Basics
 
@@ -96,7 +82,7 @@ python train.py --config-name regression training.batch_size=4
 
 More extensive configuration modifications can be made by creating a new top-level configuration file similar to `regression` or `diffusion`. Refer to `diffusion.yaml` for an example of how to specify a top-level config that uses default configuration settings with additional custom modifications added on top.
 
-At runtime, hydra will parse the config subdirectory and command-line overrides into a runtime configuration object `cfg`, which will have all settings accessible through both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`. The actual content of the config will be validated using `pydantic` based on the guidelines specified in [`utils/config.py`](./utils/config.py).
+At runtime, hydra will parse the config subdirectory and command-line overrides into a runtime configuration object `cfg`, which will have all settings accessible through both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`. The actual content of the config will be validated using `pydantic` based on the guidelines specified in `[utils/config.py](./utils/config.py)`.
 
 The training script `train.py` will initialize the training experiment and launch the main training loop, which is defined in `utils/trainer.py`. Outputs (training logs, checkpoints) will be saved to a directory specified by the following `training` config items:
 
@@ -340,7 +326,7 @@ After you have implemented the custom dataset, create a configuration file in `c
 
 Every dataset serves batches through `make_loader(spec)`, where `spec` is a `LoaderSpec` describing what the trainer needs (batch size, worker count, device, an already rank-sharded sample stream, etc. -- see `datasets/dataset.py`). `StormCastDataset.make_loader` defaults to building the classic PyTorch `DataLoader` (fork worker processes), which is what every dataset in this recipe used before and requires no changes to keep using.
 
-A dataset can opt into a different loading strategy by overriding `make_loader`. `datasets/mock.py` shows both strategies side by side for exactly this reason: `make_loader` dispatches on `spec.backend` to either the default PyTorch path or a PhysicsNeMo [`datapipes`](../../../physicsnemo/datapipes/) loader (threads instead of forked processes, and, with `use_streams: true`, host-to-device copies and device-side transforms overlapped with training compute on a side CUDA stream). Which strategy actually runs is controlled entirely by config, not by which dataset class you pick.
+A dataset can opt into a different loading strategy by overriding `make_loader`. `datasets/mock.py` shows both strategies side by side for exactly this reason: `make_loader` dispatches on `spec.backend` to either the default PyTorch path or a PhysicsNeMo `[datapipes](../../../physicsnemo/datapipes/)` loader (threads instead of forked processes, and, with `use_streams: true`, host-to-device copies and device-side transforms overlapped with training compute on a side CUDA stream). Which strategy actually runs is controlled entirely by config, not by which dataset class you pick.
 
 When to use which:
 
