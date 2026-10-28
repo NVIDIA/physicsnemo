@@ -91,7 +91,7 @@ _LOGGED: set[tuple[str, ...]] = set()
 
 def _log_once(key: tuple[str, ...], message: str, *args) -> None:
     """Log ``message`` at info level the first time ``key`` is seen."""
-    if key not in _LOGGED and not torch.compiler.is_compiling():
+    if key not in _LOGGED and not is_tracing():
         _LOGGED.add(key)
         logger.info(message, *args)
 
@@ -2257,7 +2257,7 @@ class ClusterTree(TensorClass):
                     far_target_ids=walked[2],
                     far_source_node_ids=walked[3],
                 )
-                if validate and not torch.compiler.is_compiling():
+                if validate and not is_tracing():
                     plan.validate()
                 return plan
             reason = "a walk is too deep for its stack or a stream has 2**31 entries"
