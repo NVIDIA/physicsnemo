@@ -20,7 +20,7 @@ outdir: 'rundir' # Root path under which to save training outputs
 experiment_name: 'stormcast-training' # Name for the training experiment
 run_id: '0' # Unique ID to use for this training run
 rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiement outputs will be saved
-num_data_workers: 4 # Number of dataloader worker threads per proc
+num_data_workers: 4 # Number of dataloader worker processes per training process
 log_to_wandb: False # Whether or not to log to Weights & Biases (requires wandb account)
 wandb_mode: "online" # logging mode, "online" or "offline"
 log_to_tensorboard: False # Whether to log to TensorBoard (logs saved in rundir/tensorboard)
