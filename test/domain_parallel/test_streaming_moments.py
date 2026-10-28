@@ -308,3 +308,144 @@ def test_streamed_unequal_member_groups(distributed_mesh):
         == variance.finalize().placements
         == (Replicate(), Shard(0))
     )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize(
+    "simulation_sizes,space_sizes",
+    [((3, 2), (3, 7)), ((1, 0), (3, 7)), ((3, 2), (0, 10))],
+)
+def test_weighted_rule_uses_shared_accumulator(
+    distributed_mesh, simulation_sizes, space_sizes
+):
+    """An external rule preserves uneven spatial shards and handles empty ranks."""
+    from physicsnemo.metrics.general.tensor_accumulator import TensorAccumulator
+    from test._weighted_mean_rule import WeightedMeanRule
+
+    dm = DistributedManager()
+    if dm.world_size != 4:
+        pytest.skip("Acceptance topology requires four GPUs")
+    mesh = init_device_mesh("cuda", (2, 2), mesh_dim_names=("simulation", "space"))
+    si, di = mesh.get_coordinate()
+    kl, dl = simulation_sizes[si], space_sizes[di]
+    ks, ds = sum(simulation_sizes[:si]), sum(space_sizes[:di])
+    k, d = sum(simulation_sizes), sum(space_sizes)
+    shapes = {
+        0: [(n, dl, 2) for n in simulation_sizes],
+        1: [(kl, n, 2) for n in space_sizes],
+    }
+
+    def shard(values):
+        return ShardTensor.from_local(
+            values[ks : ks + kl, ds : ds + dl].clone(),
+            mesh,
+            [Shard(0), Shard(1)],
+            sharding_shapes=shapes,
+        )
+
+    state = TensorAccumulator(WeightedMeanRule())
+    tail = TensorAccumulator(WeightedMeanRule())
+    weighted_sums, weight_sums = [], []
+    for time in range(3):
+        values = (
+            torch.arange(k * d * 2, device=dm.device, dtype=torch.float64).reshape(
+                k, d, 2
+            )
+            / 7
+            + time
+        )
+        weights = (values.remainder(5) + time + 1) / 3
+        (state if time < 2 else tail).update(shard(values), weights=shard(weights))
+        weighted_sums.append((values * weights).sum(0))
+        weight_sums.append(weights.sum(0))
+    state.combine(tail)
+    result = state.finalize()
+    expected = torch.stack(weighted_sums).sum(0) / torch.stack(weight_sums).sum(0)
+    torch.testing.assert_close(result.to_local(), expected[ds : ds + dl])
+    assert result.placements == (Replicate(), Shard(0))
+    assert result._spec.sharding_shapes() == tail.finalize()._spec.sharding_shapes()
+    assert state.count == 3 * k
+    # A negative weight present on just one spatial/member partition is rejected
+    # consistently by every participant, including ranks with no local elements.
+    invalid_weights = weights.clone()
+    invalid_weights[0, 0, 0] = -1
+    with pytest.raises(ValueError, match="nonnegative"):
+        state.update(shard(values), weights=shard(invalid_weights))
+    assert state.count == 3 * k
+    torch.testing.assert_close(state.finalize().to_local(), expected[ds : ds + dl])
+    # A zero-weight output on one spatial shard is also rejected collectively.
+    zero_weight = weights.clone()
+    zero_weight[:, 0, :] = 0
+    bad_result = TensorAccumulator(WeightedMeanRule())
+    bad_result.update(shard(values), weights=shard(zero_weight))
+    with pytest.raises(ValueError, match="positive finite"):
+        bad_result.finalize()
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("tensor_kind", ["shard", "dtensor"])
+@pytest.mark.parametrize("empty_space", [False, True])
+def test_accumulator_result_ownership(
+    distributed_mesh, monkeypatch, tensor_kind, empty_space
+):
+    """Read-time ownership works on distributed state, including empty shards."""
+    from torch.distributed.tensor import DTensor
+
+    from physicsnemo.metrics.general.moment_rules import VarianceRule
+    from physicsnemo.metrics.general.tensor_accumulator import TensorAccumulator
+
+    dm = DistributedManager()
+    if dm.world_size != 4:
+        pytest.skip("Acceptance topology requires four GPUs")
+    mesh = init_device_mesh("cuda", (2, 2), mesh_dim_names=("simulation", "space"))
+    si, di = mesh.get_coordinate()
+    simulation_sizes = (3, 2)
+    if tensor_kind == "shard":
+        space_sizes = (0, 10) if empty_space else (3, 7)
+    else:
+        space_sizes = (1, 0) if empty_space else (5, 5)
+    kl, dl = simulation_sizes[si], space_sizes[di]
+    ks, ds = sum(simulation_sizes[:si]), sum(space_sizes[:di])
+    k, d = sum(simulation_sizes), sum(space_sizes)
+    values = torch.arange(k * d * 2, device=dm.device, dtype=torch.float64).reshape(
+        k, d, 2
+    )
+    local = values[ks : ks + kl, ds : ds + dl].clone().contiguous()
+    if tensor_kind == "shard":
+        field = ShardTensor.from_local(
+            local,
+            mesh,
+            [Shard(0), Shard(1)],
+            sharding_shapes={
+                0: [(n, dl, 2) for n in simulation_sizes],
+                1: [(kl, n, 2) for n in space_sizes],
+            },
+        )
+    else:
+        field = DTensor.from_local(
+            local,
+            mesh,
+            [Shard(0), Shard(1)],
+            shape=values.shape,
+            stride=values.stride(),
+        )
+    original = VarianceRule.result
+    returned = []
+
+    def capture(self, state, **options):
+        result = original(self, state, **options)
+        returned.append(result)
+        return result
+
+    monkeypatch.setattr(VarianceRule, "result", capture)
+    state = TensorAccumulator(VarianceRule())
+    state.update(field)
+    for statistic, expected in [("mean", values.mean(0)), ("variance", values.var(0))]:
+        result = state.finalize(statistic=statistic)
+        assert (result is returned[-1]) == (statistic == "variance")
+        assert result.placements == (Replicate(), Shard(0))
+        torch.testing.assert_close(result.to_local(), expected[ds : ds + dl])
+        result.to_local().fill_(-999)
+        torch.testing.assert_close(
+            state.finalize(statistic=statistic).to_local(), expected[ds : ds + dl]
+        )

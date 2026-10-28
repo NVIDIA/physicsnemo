@@ -9,6 +9,7 @@ feature extraction, and application decisions remain separate from statistics.
 ```bash
 python examples/minimal/uq/streaming_predictions.py
 python examples/minimal/uq/force_statistics.py
+python examples/minimal/uq/weighted_mean.py
 torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_moments.py
 ```
 
@@ -67,3 +68,36 @@ The four-GPU `distributed_moments.py` example also streams one member per update
 with unequal member counts (3 and 2) and spatial partitions (3 and 7). All ranks
 follow the same update schedule; exhausted groups contribute zero-length shards
 with per-step shard shapes. Skipping a collective update can deadlock.
+
+## Adding a statistic
+
+`Mean(mode="tensor")` and `Variance(mode="tensor")` compose a `TensorAccumulator`
+with `MeanRule` and `VarianceRule`. The accumulator owns detached input preparation,
+precision, per-field layout checks, observation counts, reset and state ownership.
+Rules provide only `summarize`, `merge` and `result`. Both summarization and result
+calculation receive `reduce_sum`, which completes pending distributed sums before
+nonlinear operations and preserves unreduced spatial shards.
+
+`weighted_mean.py` implements an external `WeightedMeanRule` with two sufficient
+statistics: weighted sum and weight sum. It uses the same accumulator without
+subclassing it or changing the library. Auxiliary tensors must match the values'
+shape and layout; broadcast weights explicitly if needed. Rule state may contain
+multiple tensor shapes and Python integers. Rules must be pure and compare equal
+only when their statistical configuration matches; a frozen dataclass works for
+these examples.
+
+```python
+from physicsnemo.metrics.general.tensor_accumulator import TensorAccumulator
+from weighted_mean import WeightedMeanRule  # Defined in this example directory
+
+stats = TensorAccumulator(WeightedMeanRule())
+stats.update(predictions, weights=weights, dim=0)
+weighted_mean = stats.finalize()
+```
+
+The weighted example checks for invalid weights across the whole logical tensor,
+so its `update` and `finalize` require every mesh rank to participate. These checks
+add collectives; this example demonstrates reuse and correctness, not improved
+performance. The generic accumulator does not make arbitrary statistical rules
+distributable automatically: each rule must have a valid merge operation for
+independent observations and use completed reductions before nonlinear arithmetic.
