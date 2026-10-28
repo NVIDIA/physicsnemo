@@ -368,9 +368,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The GLOBE DrivAerML and AirfRANS examples train under `torch.compile` again
-  on PyTorch 2.13 and 2.14. They now set `torch._dynamo.config.specialize_float`,
-  which avoids a Dynamo crash on GLOBE's Padé networks (pytorch/pytorch#193194).
+- The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
+  and 2.14. It and the AirfRANS example now set
+  `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
+  Padé networks (pytorch/pytorch#193194).
 - Multi-node jobs launched with `srun` no longer hang in
   `DistributedManager.initialize()` when Slurm starts rank 0 on a different node
   from the one that ran `srun`. The rendezvous now uses the job step's first node.
