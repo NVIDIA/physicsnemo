@@ -30,9 +30,12 @@ handling for:
   TensorDict, with clear error messages on shape / channel-count
   mismatches.
 - :func:`train._reduce_and_average`: averages rank-local loss / metric
-  sums over the global sample count (used per step and per epoch); its
+  sums over the global sample count (used per epoch); its
   single-process path must equal plain ``total_loss / n`` + per-leaf
   ``sum / n`` averaging.
+- :func:`train._run_epoch`: each step's values are read back without a
+  host sync (:func:`train._start_step_readback`), and every step is logged
+  once, in order, with the values the blocking per-step readback gave.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -41,8 +44,16 @@ this module's tensorboard skip guard.)
 
 from __future__ import annotations
 
+import os
+import socket
+from datetime import timedelta
+from types import SimpleNamespace
+
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from omegaconf import OmegaConf
 from tensordict import TensorDict
 
 ### `train.py` imports `torch.utils.tensorboard.SummaryWriter` at module
@@ -53,9 +64,11 @@ from tensordict import TensorDict
 ### directly (no skip).
 pytest.importorskip("tensorboard")
 
+import train  # noqa: E402  -- monkeypatch module globals in focused tests
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
     _reduce_and_average,
+    _run_epoch,
     _walk_batch_for_logging,
 )
 
@@ -244,3 +257,305 @@ class TestReduceAndAverage:
         )
         assert loss == pytest.approx(7.0)
         assert losses == {} and metrics == {}
+
+
+### ---------------------------------------------------------------------------
+### _run_epoch: per-step readback
+### ---------------------------------------------------------------------------
+
+_DEVICES = [
+    "cpu",
+    pytest.param(
+        "cuda",
+        marks=pytest.mark.skipif(
+            not torch.cuda.is_available(), reason="CUDA not available"
+        ),
+    ),
+]
+
+
+class _InFlight:
+    """A readback event that lands only when ``landed()`` says so (by default
+    never before the epoch's end, so every record goes through the epoch-end
+    drain); counts its waits. It wraps the real event, so a record's host copy
+    has always landed by the time it is read."""
+
+    def __init__(self, waits, landed, event):
+        self.waits = waits
+        self.landed = landed
+        self.event = event
+
+    def query(self):
+        if not self.landed():
+            return False
+        if self.event is not None:
+            self.event.synchronize()
+        return True
+
+    def synchronize(self):
+        self.waits.append(self)
+        if self.event is not None:
+            self.event.synchronize()
+
+
+def _hold_readbacks(monkeypatch, landed=lambda step: False):
+    """Patch :func:`train._start_step_readback` so a record lands before the
+    epoch's end only when ``landed(step)`` says so; returns the list of
+    drain waits, one per record."""
+    waits, steps = [], []
+    start = train._start_step_readback
+
+    def held(*args, **kwargs):
+        reduced, event = start(*args, **kwargs)
+        steps.append(step := len(steps))
+        return reduced, _InFlight(waits, lambda: landed(step), event)
+
+    monkeypatch.setattr(train, "_start_step_readback", held)
+    return waits
+
+
+def _run_test_epoch(
+    monkeypatch, loader, device, *, mode, profile=False, reference=True, writer=None
+):
+    """Run one :func:`train._run_epoch` with a one-weight model and SGD.
+
+    ``train.forward_pass`` is patched to return step-dependent loss and
+    metric values; returns ``(jsonl records, expected per-step records)``,
+    where the expected values come from the per-step blocking readback
+    (``_reduce_and_average`` with ``n_samples=1``, main's per-step path).
+    ``reference=False`` skips that readback, which syncs.
+    """
+    model = torch.nn.Linear(1, 1, bias=False).to(device)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+    expected = []
+
+    def forward(batch, *args, **kwargs):
+        loss = (model.weight.sum() - batch["k"]) ** 2 / 3
+        values = TensorDict({"loss/test": loss.detach() * 7})
+        metrics = TensorDict({"test_l2": loss.detach().sqrt()})
+        if reference:
+            expected.append(
+                _reduce_and_average(loss.detach(), values, metrics, 1, device=device)
+            )
+        return loss, values, metrics
+
+    monkeypatch.setattr(train, "forward_pass", forward)
+    records = []
+    cfg = OmegaConf.create(
+        {
+            "precision": "float32",
+            "profile": profile,
+            "training": {"scheduler_update_mode": "step"},
+        }
+    )
+    _run_epoch(
+        loader,
+        model,
+        None,
+        None,
+        SimpleNamespace(info=lambda *args, **kwargs: None),
+        0,
+        cfg,
+        SimpleNamespace(rank=0, world_size=1, device=torch.device(device)),
+        mode=mode,
+        output_type="tensors",
+        target_config={"pressure": "scalar"},
+        optimizer=optimizer,
+        scheduler=scheduler,
+        writer=writer,
+        log_jsonl=records.append,
+    )
+    return records, expected
+
+
+def _check_steps(records, expected, mode, n_steps):
+    """Every step is logged once, in order, bitwise equal to ``expected``."""
+    steps = [r for r in records if r["phase"] == f"{mode}_step"]
+    key = "global_step" if mode == "train" else "val_step"
+    assert [r[key] for r in steps] == list(range(n_steps))
+    for r, (loss, losses, metrics) in zip(steps, expected, strict=True):
+        assert r["loss"] == loss
+        assert {k: r[k] for k in losses} == losses
+        assert {k: r[k] for k in metrics} == metrics
+    assert records[-1]["phase"] == f"{mode}_summary"
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("mode", ["train", "val"])
+def test_every_step_logged_once_in_order_with_blocking_values(
+    monkeypatch, device, mode
+):
+    """Each of 10 steps is logged once, in order, with the per-step blocking
+    readback's loss, losses and metrics, bitwise (single process, so the
+    all-reduce is the identity on both paths). On CUDA the records log as
+    their copies land, and the epoch's end drains the rest."""
+    loader = [{"k": float(k)} for k in range(10)]
+    records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
+    _check_steps(records, expected, mode, 10)
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("mode", ["train", "val"])
+def test_epoch_end_drains_records_still_in_flight(monkeypatch, device, mode):
+    """With no copy landed before the loop ends, nothing is logged during the
+    steps and the epoch's end waits for and logs every record, in order."""
+    waits = _hold_readbacks(monkeypatch)
+    loader = [{"k": float(k)} for k in range(7)]
+    records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
+    _check_steps(records, expected, mode, 7)
+    assert len(waits) == 7
+
+
+def test_profile_stop_drains_its_records(monkeypatch):
+    """Under ``cfg.profile`` the loop stops after step ``_PROFILE_MAX_STEPS``
+    and the epoch's end still logs every step it ran."""
+    _hold_readbacks(monkeypatch)
+    loader = [{"k": float(k)} for k in range(train._PROFILE_MAX_STEPS + 5)]
+    records, _ = _run_test_epoch(monkeypatch, loader, "cpu", mode="train", profile=True)
+    steps = [r["global_step"] for r in records if r["phase"] == "train_step"]
+    assert steps == list(range(train._PROFILE_MAX_STEPS + 1))
+
+
+def test_error_logs_only_the_landed_records(monkeypatch):
+    """When a step raises, the records whose copies have landed are logged,
+    in order up to the first one still in flight, with no wait; nothing
+    after them is logged, and the error propagates."""
+    raised = False
+    waits = _hold_readbacks(monkeypatch, landed=lambda step: raised and step != 3)
+    scalars = []
+    writer = SimpleNamespace(
+        add_scalar=lambda tag, value, global_step: scalars.append((tag, global_step))
+    )
+
+    class Loader:
+        """Five batches, then an error, at which steps 0-2 and 4 have landed."""
+
+        def __len__(self):
+            return 7
+
+        def __iter__(self):
+            nonlocal raised
+            yield from ({"k": float(k)} for k in range(5))
+            raised = True
+            raise RuntimeError("step failed")
+
+    with pytest.raises(RuntimeError, match="step failed"):
+        _run_test_epoch(monkeypatch, Loader(), "cpu", mode="train", writer=writer)
+    assert [step for tag, step in scalars if tag == "iteration/lr"] == [0, 1, 2]
+    assert waits == []
+
+
+def test_lr_is_read_at_its_own_step(monkeypatch):
+    """A record logged late carries the lr right after its own step's
+    scheduler step, not the lr when it is logged."""
+    _hold_readbacks(monkeypatch)
+    scalars = []
+    writer = SimpleNamespace(
+        add_scalar=lambda tag, value, global_step: scalars.append(
+            (tag, value, global_step)
+        )
+    )
+    loader = [{"k": float(k)} for k in range(7)]
+    _run_test_epoch(monkeypatch, loader, "cpu", mode="train", writer=writer)
+    lrs = [(step, value) for tag, value, step in scalars if tag == "iteration/lr"]
+    assert lrs == [(i, 0.1 * 0.5 ** (i + 1)) for i in range(7)]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_train_steps_do_not_sync_with_the_device(monkeypatch):
+    """From the first batch to the loader's end, no step syncs the host with
+    the device: torch's sync debug mode raises on any flagged sync, and
+    explicit event, stream and device waits (which it does not flag) are
+    counted. Only the epoch-end drain may wait."""
+    waits = []
+    in_steps = False
+    for owner, name in (
+        (torch.cuda.Event, "synchronize"),
+        (torch.cuda.Stream, "synchronize"),
+        (torch.cuda, "synchronize"),
+    ):
+        original = getattr(owner, name)
+
+        def counted(*args, _original=original, _name=f"{owner}.{name}", **kwargs):
+            if in_steps:
+                waits.append(_name)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(owner, name, counted)
+
+    class Loader:
+        """Twelve batches, with the sync checks on while the loop runs."""
+
+        def __len__(self):
+            return 12
+
+        def __iter__(self):
+            nonlocal in_steps
+            in_steps = True
+            previous = torch.cuda.get_sync_debug_mode()
+            torch.cuda.set_sync_debug_mode("error")
+            try:
+                for k in range(12):
+                    yield {"k": float(k)}
+            finally:
+                torch.cuda.set_sync_debug_mode(previous)
+                in_steps = False
+
+    records, _ = _run_test_epoch(
+        monkeypatch, Loader(), "cuda", mode="train", reference=False
+    )
+    assert waits == []
+    steps = [r["global_step"] for r in records if r["phase"] == "train_step"]
+    assert steps == list(range(12))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_step_readback_lands_in_pinned_memory():
+    """The ``non_blocking`` copy targets pinned host memory; a pageable
+    target would make it synchronous."""
+    loss = torch.ones((), device="cuda")
+    reduced, event = train._start_step_readback(
+        loss,
+        TensorDict({"loss/test": loss * 2}),
+        TensorDict({"test_l2": loss * 3}),
+        device="cuda",
+    )
+    event.synchronize()
+    leaves = reduced.values(include_nested=True, leaves_only=True)
+    assert all(leaf.device.type == "cpu" and leaf.is_pinned() for leaf in leaves)
+
+
+def _readback_rank(rank, port):
+    """One rank of :func:`test_step_readback_is_the_all_rank_mean`."""
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port))
+    dist.init_process_group(
+        "gloo", rank=rank, world_size=2, timeout=timedelta(seconds=60)
+    )
+    try:
+        loss = torch.tensor(1.37 * (rank + 1))
+        losses = TensorDict({"loss/test": loss * 7})
+        metrics = TensorDict({"test_l2": loss.sqrt()})
+        host_values, _ = train._start_step_readback(loss, losses, metrics, device="cpu")
+        expected = _reduce_and_average(loss, losses, metrics, 1, device="cpu")
+        assert host_values["loss"].item() == expected[0]
+        assert {k: v.item() for k, v in host_values["losses"].items()} == expected[1]
+        assert {k: v.item() for k, v in host_values["metrics"].items()} == expected[2]
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.skipif(
+    not dist.is_available()
+    or not dist.is_gloo_available()
+    or "spawn" not in mp.get_all_start_methods(),
+    reason="needs gloo and the spawn start method",
+)
+def test_step_readback_is_the_all_rank_mean():
+    """Across two CPU ranks with different values, each step's readback is
+    the all-rank mean, equal to the blocking per-step readback
+    (``_reduce_and_average`` with ``n_samples=1``)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    mp.spawn(_readback_rank, args=(port,), nprocs=2)

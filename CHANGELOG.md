@@ -322,6 +322,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `perturbed_grid` primitive takes `perturbation_scale` as a fraction of
   the grid spacing (was an absolute length), so its default no longer folds
   cells, even on fine grids.
+- Unified external aero recipe: training steps no longer wait for the GPU to
+  log each step's loss. Each step's values are read back without blocking and
+  logged once they reach the host, so the datapipe's prefetch now overlaps
+  compute. The logged `step_time_s` now includes the host's wait for the GPU
+  inside the step, so it reads higher than before even though steps are
+  faster; use epoch wall time per step to compare speed.
 - `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
   the requested rows instead of all-gathering the source; no host sync, and
   `torch.compile` safe.
