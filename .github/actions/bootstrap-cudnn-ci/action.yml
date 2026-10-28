@@ -28,7 +28,7 @@ inputs:
       otherwise silently invalidate the wheel store). Bump in lockstep
       with the workflow's UV_VERSION env value.
     required: false
-    default: "0.12.20"
+    default: "0.13.5"
 runs:
   using: composite
   steps:
@@ -93,17 +93,6 @@ runs:
         echo "DISPLAY=:99" >> "$GITHUB_ENV"
         echo "Xvfb running on :99 (pid=${xvfb_pid})"
 
-    - name: Install Hugging Face CLI
-      shell: bash
-      env:
-        PIP_BREAK_SYSTEM_PACKAGES: "1"
-      run: |
-        set -euo pipefail
-        # typer >= 0.26 dropped click as a runtime dep, but huggingface_hub's
-        # `hf` CLI still does `import click`. Install click explicitly until
-        # upstream re-adds it (or the CLI stops importing click directly).
-        pip install --quiet huggingface_hub[hf_xet] click
-
     - name: Install uv (pinned)
       shell: bash
       env:
@@ -115,6 +104,17 @@ runs:
         curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
         # Modern uv (>= 0.5) installs to ~/.local/bin, not ~/.cargo/bin.
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Install Hugging Face CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Use the pinned uv, not Ubuntu's apt pip: that pip vendors a certifi
+        # that still trusts the compromised emSign root CA.
+        # typer >= 0.26 dropped click as a runtime dep, but huggingface_hub's
+        # `hf` CLI still does `import click`. Install click explicitly until
+        # upstream re-adds it (or the CLI stops importing click directly).
+        uv pip install --system --break-system-packages --quiet "huggingface_hub[hf_xet]" click
 
     - name: Print toolchain versions
       shell: bash

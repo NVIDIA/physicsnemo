@@ -16,9 +16,9 @@
 
 """Uncertainty quantification modules (experimental).
 
-This subpackage collects UQ building blocks that attach to existing backbones.
-It holds the Gaussian-process heads below; other UQ methods are expected to join
-them as the area develops.
+This subpackage collects UQ building blocks that attach to existing backbones:
+the Gaussian-process heads below, and post-hoc conformal prediction in
+:mod:`physicsnemo.experimental.uq.conformal`.
 
 For methodology and scientific results on UQ for geometry-conditioned neural
 surrogates, refer to `Predictive Uncertainty for Neural CAE Surrogates

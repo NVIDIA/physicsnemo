@@ -44,6 +44,9 @@ jobs:
     - uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
+        # Pick up CPython security releases (e.g. the emSign CA rejection)
+        # instead of the runner image's cached patch version.
+        check-latest: true
 
     - name: Install package with pip
       run: |
@@ -95,6 +98,9 @@ jobs:
       id: setup_python
       with:
         python-version: ${{ matrix.python-version }}
+        # Pick up CPython security releases (e.g. the emSign CA rejection)
+        # instead of the runner image's cached patch version.
+        check-latest: true
 
     # Set up MSVC compiler on Windows (does nothing on Linux/macOS)
     - uses: ilammy/msvc-dev-cmd@v1

@@ -27,6 +27,7 @@ from physicsnemo.mesh.calculus.measure import (
     EFFECTIVE_MEASURE_KEY,
     cell_measures,
     scale_measures,
+    set_cell_measures,
 )
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
 
@@ -124,6 +125,42 @@ class TestSamplingWeights:
             with torch._dynamo.config.patch(error_on_recompile=i > 0):
                 torch.testing.assert_close(
                     compiled(mesh_with(order)), torch.arange(1.0, 5.0)
+                )
+
+    def test_set_cell_measures_copies_cached_areas(self):
+        ### Storing the fallback measure must not alias the cached cell areas.
+        mesh = two_triangles_2d.load()
+        set_cell_measures(mesh, cell_measures(mesh))
+        stored = mesh.cell_data[EFFECTIVE_MEASURE_KEY]
+        areas = mesh.cell_areas.clone()
+        assert stored is not mesh.cell_areas
+        assert torch.equal(stored, areas)
+        stored.mul_(2.0)
+        assert torch.equal(mesh.cell_areas, areas)
+        ### Any other tensor is stored by reference.
+        values = torch.ones(mesh.n_cells)
+        set_cell_measures(mesh, values)
+        assert mesh.cell_data[EFFECTIVE_MEASURE_KEY] is values
+
+    def test_measure_from_cached_areas_does_not_recompile(self):
+        ### A compiled reader must not guard on the measure aliasing the cache.
+        def make(aliased: bool) -> Mesh:
+            mesh = make_triangle_strip(4)
+            measure = cell_measures(mesh)
+            set_cell_measures(mesh, measure if aliased else measure.clone())
+            return mesh
+
+        torch._dynamo.reset()
+        compiled = torch.compile(
+            lambda mesh: cell_measures(mesh.to(torch.float64)).sum(),
+            backend="eager",
+            dynamic=True,
+        )
+        with torch._dynamo.config.patch(error_on_recompile=True):
+            for aliased in (True, False):
+                mesh = make(aliased)
+                torch.testing.assert_close(
+                    compiled(mesh), cell_measures(mesh).double().sum()
                 )
 
 

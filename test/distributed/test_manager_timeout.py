@@ -122,6 +122,30 @@ def test_slurm_rendezvous_on_first_step_node(monkeypatch, mock_process_group):
     assert os.environ["MASTER_ADDR"] == "node12"
 
 
+def test_slurm_rendezvous_falls_back_to_launch_node(monkeypatch, mock_process_group):
+    """Without a step node list, the rendezvous uses srun's launch node address."""
+    _configure_launcher(monkeypatch, "SLURM")
+    monkeypatch.setenv("SLURM_LAUNCH_NODE_IPADDR", "10.0.0.18")
+    monkeypatch.delenv("SLURM_STEP_NODELIST")
+
+    DistributedManager.initialize()
+
+    assert os.environ["MASTER_ADDR"] == "10.0.0.18"
+
+
+def test_slurm_batch_script_without_srun(monkeypatch, mock_process_group):
+    """A batch script run without srun has no step node list or launch address.
+    It runs on the job's first node, so the rendezvous goes there."""
+    _configure_launcher(monkeypatch, "SLURM")
+    monkeypatch.delenv("SLURM_STEP_NODELIST")
+    monkeypatch.delenv("SLURM_LAUNCH_NODE_IPADDR")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "node[03-04]")
+
+    DistributedManager.initialize()
+
+    assert os.environ["MASTER_ADDR"] == "node03"
+
+
 @pytest.mark.parametrize("launcher", ["ENV", "SLURM", "OPENMPI"])
 @pytest.mark.parametrize("forced", [False, True], ids=["detected", "forced"])
 @pytest.mark.parametrize("legacy_signature", [False, True], ids=["current", "legacy"])

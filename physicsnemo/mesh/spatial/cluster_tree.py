@@ -74,6 +74,7 @@ from physicsnemo.mesh.spatial._lbvh import (
 )
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
+from physicsnemo.utils._tracing import is_tracing
 
 logger = logging.getLogger("mesh.spatial.cluster_tree")
 
@@ -156,7 +157,7 @@ class DualInteractionPlan(TensorClass):
 
         Verifies shape pairing, non-negativity, and fn_broadcast bounds.
         Raises ``ValueError`` on any inconsistency.  Intended to be called
-        behind a ``not torch.compiler.is_compiling()`` guard so it is
+        behind a ``not is_tracing()`` guard so it is
         zero-cost under ``torch.compile``.
 
         Raises
@@ -1235,7 +1236,7 @@ class ClusterTree(TensorClass):
                 fn_expanded_target_ids=empty.clone(),
                 fn_expanded_pair_ids=empty.clone(),
             )
-            if validate and not torch.compiler.is_compiling():
+            if validate and not is_tracing():
                 plan.validate()
             return plan
 
@@ -1642,7 +1643,7 @@ class ClusterTree(TensorClass):
             fn_expanded_pair_ids=fn_exp_pairs,
         )
 
-        if validate and not torch.compiler.is_compiling():
+        if validate and not is_tracing():
             plan.validate()
 
         is_self = target_tree is self
@@ -1733,7 +1734,7 @@ class ClusterTree(TensorClass):
                 far_target_ids=empty,
                 far_source_node_ids=empty.clone(),
             )
-            if validate and not torch.compiler.is_compiling():
+            if validate and not is_tracing():
                 plan.validate()
             return plan
 
@@ -1836,7 +1837,7 @@ class ClusterTree(TensorClass):
             far_target_ids=far_t,
             far_source_node_ids=far_s,
         )
-        if validate and not torch.compiler.is_compiling():
+        if validate and not is_tracing():
             plan.validate()
         logger.debug(
             "point traversal: %d near + %d far pairs for %d targets, theta=%.2f, %d iterations",

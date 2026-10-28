@@ -213,6 +213,10 @@ def partition_graph_with_id_mapping(
     num_dst_nodes_in_each_partition = [None] * partition_size
     num_src_nodes_in_each_partition = [None] * partition_size
 
+    # the ID maps below take these dtypes and store int64 node IDs
+    global_indices = global_indices.long()
+    mapping_src_ids_to_ranks = mapping_src_ids_to_ranks.long()
+    mapping_dst_ids_to_ranks = mapping_dst_ids_to_ranks.long()
     dtype = global_indices.dtype
     input_device = global_indices.device
 
@@ -305,17 +309,13 @@ def partition_graph_with_id_mapping(
             ]
         )
 
-        partitioned_edge_ids = torch.cat(
-            [
-                torch.arange(
-                    start=offset_start[i],
-                    end=offset_end[i],
-                    dtype=dtype,
-                    device=input_device,
-                )
-                for i in range(len(offset_start))
-            ]
-        )
+        # local edge j belongs to the destination node i with
+        # local_offsets[i] <= j < local_offsets[i + 1], and is its global edge
+        # offset_start[i] + j - local_offsets[i]
+        num_edges = int(local_offsets[-1])
+        partitioned_edge_ids = torch.repeat_interleave(
+            offset_start - local_offsets[:-1], degree, output_size=num_edges
+        ) + torch.arange(num_edges, device=input_device)
 
         ids = partitioned_edge_ids
         mapped_ids = torch.arange(
@@ -328,46 +328,24 @@ def partition_graph_with_id_mapping(
         graph_partition.map_concatenated_local_edge_ids_to_global[mapped_ids] = ids
         _edge_id_offset += ids.numel()
 
-        partitioned_src_ids = torch.cat(
-            [
-                global_indices[offset_start[i] : offset_end[i]].clone()
-                for i in range(len(offset_start))
-            ]
-        )
+        partitioned_src_ids = global_indices[partitioned_edge_ids]
 
         global_src_ids_on_rank, inverse_mapping = partitioned_src_ids.unique(
             sorted=True, return_inverse=True
         )
-        remote_local_src_ids_on_rank = _map_global_src_ids_to_local[
-            global_src_ids_on_rank
+        src_ranks_on_rank = mapping_src_ids_to_ranks[global_src_ids_on_rank]
+        # local source IDs number the source nodes by owning rank, then by global ID
+        order = torch.argsort(src_ranks_on_rank, stable=True)
+        local_indices = torch.argsort(order)[inverse_mapping]
+        num_src_ids_from_each_rank = torch.bincount(
+            src_ranks_on_rank, minlength=partition_size
+        )
+        for rank_offset, size in enumerate(num_src_ids_from_each_rank.tolist()):
+            graph_partition.sizes[rank_offset][rank] = size
+        # indices to send to this rank from this rank
+        graph_partition.scatter_indices[rank] = _map_global_src_ids_to_local[
+            global_src_ids_on_rank[src_ranks_on_rank == partition_rank]
         ]
-
-        _map_global_src_ids_to_local_graph = torch.zeros_like(mapping_src_ids_to_ranks)
-        _num_local_indices = 0
-        for rank_offset in range(partition_size):
-            mask = mapping_src_ids_to_ranks[global_src_ids_on_rank] == rank_offset
-            if partition_rank == rank_offset:
-                # indices to send to this rank from this rank
-                graph_partition.scatter_indices[rank] = (
-                    remote_local_src_ids_on_rank[mask]
-                    .detach()
-                    .clone()
-                    .to(dtype=torch.int64)
-                )
-            numel_mask = mask.sum().item()
-            graph_partition.sizes[rank_offset][rank] = numel_mask
-
-            tmp_ids = torch.arange(
-                _num_local_indices,
-                _num_local_indices + numel_mask,
-                device=input_device,
-                dtype=dtype,
-            )
-            _num_local_indices += numel_mask
-            tmp_map = global_src_ids_on_rank[mask]
-            _map_global_src_ids_to_local_graph[tmp_map] = tmp_ids
-
-        local_indices = _map_global_src_ids_to_local_graph[partitioned_src_ids]
         graph_partition.num_indices_in_each_partition[rank] = local_indices.size(0)
 
         if rank == partition_rank:

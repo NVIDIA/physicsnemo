@@ -34,6 +34,7 @@ from tensordict import TensorClass
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -125,8 +126,10 @@ def _compute_morton_codes(
         torch.float64 if centroids.dtype == torch.float64 else torch.float32
     )
     quantization_points = centroids.to(quantization_dtype)
-    cmin = quantization_points.min(dim=0).values  # (D,)
-    cmax = quantization_points.max(dim=0).values  # (D,)
+    ### Values only: Inductor splits these over thread blocks, but not a min or
+    ### max that also returns indices.
+    cmin = quantization_points.amin(dim=0)  # (D,)
+    cmax = quantization_points.amax(dim=0)  # (D,)
     extent = cmax - cmin
     if isotropic:
         extent = extent.amax().expand(D)
@@ -688,7 +691,7 @@ class BVH(TensorClass):
         # several times, so slicing multiplies those syncs and kernel launches
         # by the number of slices (about 30x slower validate at 10M cells).
         if (
-            not torch.compiler.is_compiling()
+            not is_tracing()
             and query_points.device.type == "cpu"
             and n_queries > _QUERY_CHUNK_SIZE
         ):

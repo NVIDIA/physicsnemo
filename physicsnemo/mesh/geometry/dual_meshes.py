@@ -739,11 +739,9 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_point
     Float[torch.Tensor, " n_points"]
         Dual volumes for vertices, shape ``(n_points,)``.
     """
-    cached = mesh._cache.get(("point", "dual_volumes_0"), None)
-    if cached is None:
-        cached = compute_dual_volumes_0(mesh)
-        mesh._cache["point", "dual_volumes_0"] = cached
-    return cached
+    return mesh._cached(
+        ("point", "dual_volumes_0"), lambda: compute_dual_volumes_0(mesh)
+    )
 
 
 def get_or_compute_circumcenters(
@@ -761,9 +759,7 @@ def get_or_compute_circumcenters(
     Float[torch.Tensor, "n_cells n_spatial_dims"]
         Circumcenters for all cells, shape ``(n_cells, n_spatial_dims)``.
     """
-    cached = mesh._cache.get(("cell", "circumcenters"), None)
-    if cached is None:
-        parent_cell_vertices = gather_rows(mesh.points, mesh.cells)
-        cached = compute_circumcenters(parent_cell_vertices)
-        mesh._cache["cell", "circumcenters"] = cached
-    return cached
+    return mesh._cached(
+        ("cell", "circumcenters"),
+        lambda: compute_circumcenters(gather_rows(mesh.points, mesh.cells)),
+    )
