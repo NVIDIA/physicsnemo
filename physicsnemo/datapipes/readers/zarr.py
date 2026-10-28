@@ -283,6 +283,10 @@ class ZarrReader(Reader):
             )
         return root, available_attrs
 
+    def _has_batch_axis(self, array) -> bool:
+        """Whether a sample of *array* has a batch dim (not a per-sample scalar)."""
+        return array.ndim > (1 if self._single_group_mode else 0)
+
     def _array_rows(self, array) -> int:
         """Row count of an array's batch dim (dim 1 in single-group mode)."""
         return array.shape[1] if self._single_group_mode else array.shape[0]
@@ -314,6 +318,8 @@ class ZarrReader(Reader):
         for field in self.fields:
             if field in root:
                 array = root[field]
+                if not self._has_batch_axis(array):
+                    continue  # per-sample scalar: read whole, replicated
                 n_rows = (
                     len(subsample_indices)
                     if subsample_indices is not None and field in target_keys_set
@@ -330,7 +336,14 @@ class ZarrReader(Reader):
         data: dict[str, torch.Tensor] = {}
         for field in self.fields:
             if field in root:
-                if self._single_group_mode:
+                if not self._has_batch_axis(root[field]):
+                    scalar = (
+                        root[field][index]
+                        if self._single_group_mode
+                        else root[field][()]
+                    )
+                    data[field] = torch.as_tensor(scalar)
+                elif self._single_group_mode:
                     # Single group mode: the sample is dim 0, the batch axis is dim 1.
                     data[field] = torch.from_numpy(root[field][index, selection[field]])
                 else:

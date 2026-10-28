@@ -139,6 +139,10 @@ class DomainParallelConfig:
     device_mesh: DeviceMesh
     auto_shard_size: int = DEFAULT_AUTO_SHARD_SIZE
     placements: Mapping[str, PlacementName] = field(default_factory=dict)
+    # Override keys already warned about: warn once per key, not per sample.
+    _warned: set[str] = field(
+        default_factory=set, init=False, repr=False, compare=False
+    )
 
     @classmethod
     def from_dict(
@@ -242,7 +246,10 @@ class DomainParallelConfig:
         """
         names = list(names)
         for key in self.placements:
+            if key in self._warned:
+                continue
             if not any(n == key or n.startswith(key + ".") for n in names):
+                self._warned.add(key)
                 logger.warning(
                     "domain_parallel.placements[%r] matches no batch axis of this "
                     "sample (axes: %s); check the key",
@@ -556,7 +563,7 @@ def wrap_sharded_leaves(
                 )
             else:
                 out[key] = value
-        return TensorDict(out, batch_size=[])
+        return TensorDict(out, batch_size=[], device=td.device)
 
     return wrap(tensors, ())
 

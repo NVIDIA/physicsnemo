@@ -362,6 +362,34 @@ def test_leaf_placements_pin_by_prefix_and_warn_unmatched(caplog):
     assert any("coordz" in rec.getMessage() for rec in caplog.records)
 
 
+def test_assemble_keeps_device():
+    """The assembled sample keeps the device of the payload it was built from."""
+    proto = ShardedProto(
+        tensors=TensorDict(
+            {"x": torch.zeros(2), "sub": TensorDict({"y": torch.zeros(3)})},
+            batch_size=[],
+            device="cpu",
+        ),
+        sharded={},
+        device_mesh=None,
+        kind="tensordict",
+    )
+    out = proto.assemble()
+    assert out.device == torch.device("cpu")
+    assert out["sub"].device == torch.device("cpu")
+
+
+def test_warn_unmatched_once_per_key(caplog):
+    """An unmatched override warns once per key, not on every sample."""
+    config = DomainParallelConfig.from_dict(
+        {"placements": {"coordz": "shard"}}, _StubMesh(2)
+    )
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            config.warn_unmatched(["coords"])
+    assert sum("coordz" in rec.getMessage() for rec in caplog.records) == 1
+
+
 class _NoDomainParallelReader(Reader):
     """A reader that does not implement rank-local reading."""
 

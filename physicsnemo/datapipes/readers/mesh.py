@@ -256,7 +256,7 @@ def _subsample_mesh(
 
 
 # ---------------------------------------------------------------------------
-# Rank-local (domain-parallel) reading
+# Domain-parallel (rank-local) reading
 # ---------------------------------------------------------------------------
 #
 # A mesh is read one of two ways: a lazy memmap ``Mesh`` (``Mesh.load``) whose
