@@ -10,12 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
+  a mesh's cells with probability proportional to their measure, with
+  Horvitz-Thompson weights for unbiased sums. The sample is spread over the
+  mesh, the same in every pose, bitwise the same from run to run on CPU and
+  on CUDA, and compiles to one graph.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
+- `MeshDataset(cache_host=True)` reads each sample once and serves repeats from
+  memory, for fitting runs on a few samples. `DomainMeshReader` gains
+  `interior_n_points_range` to draw the interior point count for each sample,
+  and `CenterMesh` gains `store_center_as` to keep the subtracted center in
+  `global_data`.
 - Adds a Rotor37 compressor blade example with GeoTransolver
   (`examples/cfd/rotor37_geotransolver`)
 - Adds an experimental, independently implemented SMART operator with sampled
   geometry encoding, reusable latent contexts, and chunked field decoding.
+- Adds `physicsnemo.experimental.uq.conformal`: post-hoc conformal prediction
+  for spatio-temporal fields with `PointwiseCalibrator`,
+  `FunctionalBandCalibrator`, `RiskControlCalibrator`, `ConformalPredictor`,
+  `CoverageAccumulator`, `AbsoluteErrorScore`, `NormalizedErrorScore`,
+  `QuantileRegressionScore`, and `AuxScale`. Custom scores subclass
+  `NonconformityScore` and register with `register_score`; `check_score`
+  tests them.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
@@ -92,9 +109,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `radius_search` accepts points with 1 or 2 coordinates, as well as 3, with
   both backends. The torch backend accepts any number of coordinates, and
   points with more than 3 use it by default.
+- `ShardTensor` ring attention, ring kNN and ring ball query run on functional
+  collectives; ring attention works under `torch.compile` as an eager
+  graph-break region, with uneven sequence shards and attention masks
+  sharded like the queries. In-place `detach_` on a `ShardTensor` is
+  supported.
+- `radius_search` on sharded inputs works under `torch.compile`.
 
 ### Changed
 
+- Partitioning a graph across GPUs (`partition_graph_with_id_mapping`, behind
+  `DistributedGraph` and GraphCast's distributed mode) no longer loops over
+  destination nodes in Python. A 1-million-node grid now takes well under a
+  second instead of half a minute or more.
 - `ClusterTree` builds tighter trees by default (`split="morton"`), so
   Barnes-Hut plans need 2-4x fewer interactions at the same `theta`.
   `split="midpoint"` gives the previous trees.
@@ -302,6 +329,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `perturbed_grid` primitive takes `perturbation_scale` as a fraction of
   the grid spacing (was an absolute length), so its default no longer folds
   cells, even on fine grids.
+- `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
+  the requested rows instead of all-gathering the source; no host sync, and
+  `torch.compile` safe.
+- The stream-based ring helpers `perform_ring_iteration_async` and
+  `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
+  `wait=False` and `finish_ring_iteration` for overlap.
 
 ### Deprecated
 
@@ -342,17 +375,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Multi-node jobs launched with `srun` no longer hang in
+  `DistributedManager.initialize()` when Slurm starts rank 0 on a different node
+  from the one that ran `srun`. The rendezvous now uses the job step's first node.
+- `DistributedManager.initialize()` works in a Slurm batch script run without
+  `srun`. It used to find no rendezvous address there and raise a `TypeError`.
 - `Mesh.get_point_to_points_adjacency()`, `get_facet_mesh()`, and
   `get_boundary_mesh()` compile with `torch.compile(fullgraph=True, dynamic=True)`.
   Facet extraction now specializes on the cell width instead of passing a
   symbolic size to `itertools.combinations`.
+- Compiled code that reads `Mesh` geometric properties, such as `cell_areas`
+  or curvatures, no longer recompiles when the input mesh's cache differs, and
+  no longer writes into that cache. `set_cell_measures` stores a copy of the
+  cached `cell_areas`, so a measure never aliases it. `physicsnemo.mesh` now
+  checks whether its own code is being traced, because since torch 2.13
+  `torch.compiler.is_compiling()` is True in every thread during a compile,
+  which made data-loading threads drop caches and skip validation.
 - GraphCast and MeshGraphNet run on graphs partitioned across GPUs again
   (`partition_size > 1`, or a `DistributedGraph` in place of the PyG graph),
   so the distributed shallow-water example works. This broke when the DGL
   backend was removed.
+- `partition_graph_with_id_mapping`, and so `partition_graph_nodewise`,
+  `partition_graph_by_coordinate_bbox` and `DistributedGraph`, accept `int32`
+  CSC indices and rank mappings. Before, they failed with a dtype mismatch.
 - `weighted_multinomial` with `replacement=True` accepts more than 2^24
   weights, instead of raising `torch.multinomial`'s category-limit error. So
   DoMINO's `sample_points_on_mesh` now works on meshes with over 2^24 faces.
+- `MeshDataset.close()` no longer raises `AttributeError` with a `MeshReader`
+  or `DomainMeshReader`. Both readers now have a `close()` method.
 - `GLOBE` accepts `boundary_meshes` as a TensorDict, as the DrivAerML example
   passes them. Before, every forward pass of that example failed.
 - Under `torch.compile`, GLOBE no longer recompiles on its second training
@@ -492,6 +542,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `text_1d_2d` outlines are closed loops; before, each ended in a zero-length
   edge. `text_2d_2d` fills curved glyphs fully: thin rings such as U+25CB lost
   part of their area.
+- Unified external aero recipe: GLOBE-volume trains on all the requested
+  vehicle surface cells, not about 4% of them.
 - Seeded `DomainMeshReader` subsamples select the same rows from Zarr stores
   as from memmap files. Before, boundaries read in full, and interiors read
   with `drop_interior_cells`, could differ between the two formats.
@@ -652,13 +704,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first step.
 - Importing `physicsnemo.domain_parallel` no longer breaks `torch.compile` for
   the whole process when nothing has imported `torch._dynamo` before it.
+- `MeshReader` and `DomainMeshReader` implement `close()`, so
+  `MeshDataset.close()` works on the mesh path.
+- Coordinated subsampling in the zarr readers picks its reference key in the
+  configured order rather than set order, so the rows read are deterministic.
+- `ShardTensor` fixes for domain parallelism: redistribute no longer grows an
+  unbounded planner cache for fixed shapes (step time was climbing with step
+  count),
+  `scatter_tensor` returns a shard that owns its storage, stream recording on
+  wrapped tensors works, and several `torch.compile` tracing issues are
+  resolved.
+- `torch.unbind` on a `Partial` `ShardTensor` resolves the pending reduction
+  before slicing instead of silently dropping it.
+- Fixed autocasting bugs for some attention operations in domain parallelism.
+- Backward through `ShardTensor.to_local()` adopts the gradient's shard order
+  along with its placements, so a sharded primal with a replicated cotangent
+  no longer trips a `DTensorSpec` assertion.
 
 ### Security
 
+- CI and the Docker image no longer trust the compromised eMudhra emSign root
+  CA ([advisory](https://discuss.python.org/t/109576)). uv is now 0.13.5 in
+  CI and the Dockerfile, the image upgrades `ca-certificates` and requires
+  `pip>=26.2.2` and `certifi>=2026.10.19`, and the lockfiles pin `certifi` 2026.10.23 and
+  `virtualenv` 21.14.13. The GPU CI bootstrap installs the Hugging Face CLI
+  with uv instead of Ubuntu's apt pip, and `install-ci` sets `check-latest`
+  so it uses the patched CPython releases.
+
 ### Dependencies
 
-- Requires TensorDict 0.15 (`tensordict[zarr]>=0.15.0,<0.16.0`). Building,
-  copying, and moving small meshes takes 20-50% less time on CPU.
+- Requires TensorDict 0.15.3 or later (`tensordict[zarr]>=0.15.3,<0.16.0`).
+  Building, copying, and moving small meshes takes 20-50% less time on CPU.
+  TensorDict's `torch.compile` fixes since 0.15.0 also stop compiled code from
+  recompiling when a `Mesh` holds the same fields in another order.
 - Drops `onnx`, `torchvision` and `pandas` from the required dependencies.
   `pandas` is now optional via `datapipes-extras` or `model-extras`.
 

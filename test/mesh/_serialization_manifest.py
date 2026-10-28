@@ -19,6 +19,11 @@
 import json
 from pathlib import Path
 
+# tensordict 0.15.3 (pytorch/tensordict#3114) writes these format markers into each
+# meta.json. They describe tensordict's file format, not the saved layout, so the
+# snapshot leaves them out and stays valid across tensordict releases.
+_TENSORDICT_FORMAT_KEYS = ("_format_version", "_class")
+
 
 def serialization_manifest(root: Path) -> dict[str, object]:
     """Describe file structure and metadata without copying tensor bytes."""
@@ -28,7 +33,10 @@ def serialization_manifest(root: Path) -> dict[str, object]:
             continue
         relative = path.relative_to(root).as_posix()
         if path.name == "meta.json":
-            described[relative] = json.loads(path.read_text())
+            meta = json.loads(path.read_text())
+            for key in _TENSORDICT_FORMAT_KEYS:
+                meta.pop(key, None)
+            described[relative] = meta
         else:
             described[relative] = path.stat().st_size
     return described

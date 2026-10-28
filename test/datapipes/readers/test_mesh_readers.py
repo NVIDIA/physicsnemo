@@ -211,6 +211,75 @@ class TestDomainMeshReader:
         with pytest.raises(ValueError, match="boundary_subsample"):
             DomainMeshReader(tmp_path, pattern="*.pdmsh", boundary_subsample="neither")
 
+    def test_interior_n_points_range(self, tmp_path):
+        """Query-count augmentation: the interior count is drawn per sample
+        from ``[lo, hi]``, reproducibly under ``set_epoch``; boundaries keep
+        their fixed sizes; ``None`` leaves the fixed behaviour unchanged."""
+        self._save_point_cloud_with_triangulated_wall(tmp_path, 2000, 5000)
+        lo, hi = 300, 900
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            subsample_n_cells=500,
+            interior_n_points_range=(lo, hi),
+        )
+        reader.set_generator(torch.Generator().manual_seed(0))
+        fixed = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            subsample_n_cells=500,
+            subsample_n_points=500,
+        )
+        fixed.set_generator(torch.Generator().manual_seed(0))
+        counts = []
+        for epoch in range(6):
+            reader.set_epoch(epoch)
+            dm = reader[0][0]
+            counts.append(dm.interior.n_points)
+            assert lo <= dm.interior.n_points <= hi
+            # Boundaries are not touched by the range: the cell subsample
+            # alone keeps exactly ``subsample_n_cells`` wall cells.
+            assert dm.boundaries["wall"].n_cells == 500
+        assert len(set(counts)) > 1, counts
+        # Reproducible: same epoch, same draw.
+        reader.set_epoch(3)
+        a = reader[0][0].interior.n_points
+        reader.set_epoch(4)
+        reader.set_epoch(3)
+        assert reader[0][0].interior.n_points == a
+        # Default None: fixed count unchanged.
+        assert fixed[0][0].interior.n_points == 500
+        with pytest.raises(ValueError):
+            DomainMeshReader(
+                tmp_path, pattern="*.pdmsh", interior_n_points_range=(900, 300)
+            )
+
+    def test_interior_n_points_range_overrides_subsample_n_points(self, tmp_path):
+        """The range replaces ``subsample_n_points`` for the interior only;
+        boundaries are still subsampled to ``subsample_n_points``."""
+        self._save_point_cloud_with_triangulated_wall(tmp_path, 2000, 5000)
+        lo, hi, k = 300, 900, 1000
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            subsample_n_points=k,
+            interior_n_points_range=[lo, hi],
+        )
+        reader.set_generator(torch.Generator().manual_seed(0))
+        for epoch in range(4):
+            reader.set_epoch(epoch)
+            dm = reader[0][0]
+            assert lo <= dm.interior.n_points <= hi
+            assert dm.boundaries["wall"].n_points == k
+
+    @pytest.mark.parametrize(
+        "bad", [(300.9, 900.2), (300, 900, 5), (300,), (0, 10), (900, 300), 300]
+    )
+    def test_interior_n_points_range_invalid(self, tmp_path, bad):
+        self._make_domain_mesh().save(tmp_path / "dm.pdmsh")
+        with pytest.raises(ValueError, match="interior_n_points_range"):
+            DomainMeshReader(tmp_path, pattern="*.pdmsh", interior_n_points_range=bad)
+
 
 class TestMeshDataset:
     """Tests for MeshDataset with mesh transforms."""
@@ -259,6 +328,18 @@ class TestMeshDataset:
             loaded.boundaries["wall"].points,
             torch.tensor([[2.0, 0.0, 0.0], [6.0, 0.0, 0.0]]),
         )
+
+    def test_close_closes_mesh_readers(self, tmp_path):
+        """MeshDataset.close() closes MeshReader and DomainMeshReader."""
+        two_triangles_2d.load().save(tmp_path / "m.pmsh")
+        DomainMesh(interior=Mesh(points=torch.randn(10, 3))).save(tmp_path / "dm.pdmsh")
+        for reader in (
+            MeshReader(tmp_path, pattern="*.pmsh"),
+            DomainMeshReader(tmp_path, pattern="*.pdmsh"),
+        ):
+            ds = MeshDataset(reader)
+            ds[0]
+            ds.close()
 
 
 class TestDomainMeshTransforms:
@@ -637,3 +718,159 @@ class TestCellSubsampleMeasureWeights:
             m, _ = reader[0]
             distinct_blocks.add(round(float(m.points[0, 0])))
         assert len(distinct_blocks) > 5
+
+
+class TestMeshReaderLifecycle:
+    """``close()`` on the mesh readers and its propagation from MeshDataset."""
+
+    def test_mesh_reader_close_is_noop_and_idempotent(self, tmp_path):
+        two_triangles_2d.load().save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh")
+        reader.close()
+        reader.close()
+        # Still usable: there is no reader-level resource to release.
+        m, _ = reader[0]
+        assert isinstance(m, Mesh)
+
+    def test_domain_mesh_reader_close_is_noop_and_idempotent(self, tmp_path):
+        DomainMesh(interior=Mesh(points=torch.randn(5, 3))).save(tmp_path / "d.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
+        reader.close()
+        reader.close()
+        dm, _ = reader[0]
+        assert isinstance(dm, DomainMesh)
+
+    @pytest.mark.parametrize("kind", ["mesh", "domain"])
+    def test_mesh_dataset_close_closes_reader(self, tmp_path, monkeypatch, kind):
+        if kind == "mesh":
+            two_triangles_2d.load().save(tmp_path / "m.pmsh")
+            reader = MeshReader(tmp_path, pattern="*.pmsh")
+        else:
+            DomainMesh(interior=Mesh(points=torch.randn(5, 3))).save(
+                tmp_path / "d.pdmsh"
+            )
+            reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
+
+        calls: list[int] = []
+        monkeypatch.setattr(reader, "close", lambda: calls.append(1))
+        ds = MeshDataset(reader)
+        _ = ds[0]
+        ds.close()
+        assert calls == [1]
+
+
+class TestMeshReaderMetadata:
+    """Metadata is assembled before pinning and honours include_index_in_metadata."""
+
+    @pytest.mark.parametrize("include_index", [True, False])
+    def test_mesh_reader_include_index(self, tmp_path, include_index):
+        two_triangles_2d.load().save(tmp_path / "m.pmsh")
+        reader = MeshReader(
+            tmp_path, pattern="*.pmsh", include_index_in_metadata=include_index
+        )
+        _, meta = reader[0]
+        assert "source_path" in meta
+        assert ("index" in meta) is include_index
+
+    @pytest.mark.parametrize("include_index", [True, False])
+    def test_domain_mesh_reader_include_index(self, tmp_path, include_index):
+        DomainMesh(interior=Mesh(points=torch.randn(5, 3))).save(tmp_path / "d.pdmsh")
+        reader = DomainMeshReader(
+            tmp_path, pattern="*.pdmsh", include_index_in_metadata=include_index
+        )
+        _, meta = reader[0]
+        assert "source_path" in meta
+        assert "boundary_names" in meta
+        assert ("index" in meta) is include_index
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_mesh_reader_pin_memory_keeps_metadata(self, tmp_path):
+        two_triangles_2d.load().save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", pin_memory=True)
+        m, meta = reader[0]
+        assert m.points.is_pinned()
+        assert meta["index"] == 0
+        assert "source_path" in meta
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_domain_mesh_reader_pin_memory_keeps_metadata(self, tmp_path):
+        dm = DomainMesh(
+            interior=Mesh(points=torch.randn(5, 3)),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        dm.save(tmp_path / "d.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh", pin_memory=True)
+        loaded, meta = reader[0]
+        assert loaded.interior.points.is_pinned()
+        assert meta["boundary_names"] == ["wall"]
+        assert meta["index"] == 0
+
+
+class TestDomainMeshReaderExtraBoundaryLoading:
+    """The split between locating/loading extra meshes and attaching them."""
+
+    def _case(self, tmp_path, *, n_extra: int = 1):
+        case_dir = tmp_path / "case"
+        case_dir.mkdir()
+        dm = DomainMesh(
+            interior=Mesh(points=torch.randn(10, 3)),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        dm.save(case_dir / "domain.pdmsh")
+        for i in range(n_extra):
+            Mesh(points=torch.randn(7 + i, 3)).save(case_dir / f"farfield_{i:03d}.pmsh")
+        return case_dir
+
+    def test_load_extra_boundary_meshes_returns_only_extras(self, tmp_path):
+        self._case(tmp_path)
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="**/*.pdmsh",
+            extra_boundaries={"farfield": {"pattern": "farfield*.pmsh"}},
+        )
+        extras = reader._load_extra_boundary_meshes(0)
+        assert set(extras) == {"farfield"}
+        assert extras["farfield"].n_points == 7
+
+    def test_load_extra_boundaries_keeps_existing_boundaries(self, tmp_path):
+        self._case(tmp_path)
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="**/*.pdmsh",
+            extra_boundaries={"farfield": {"pattern": "farfield*.pmsh"}},
+        )
+        loaded, meta = reader[0]
+        assert sorted(loaded.boundary_names) == ["farfield", "wall"]
+        assert sorted(meta["boundary_names"]) == ["farfield", "wall"]
+        assert loaded.boundaries["wall"].n_points == 3
+
+    def test_multiple_matches_warns_and_uses_first_sorted(self, tmp_path, caplog):
+        self._case(tmp_path, n_extra=2)
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="**/*.pdmsh",
+            extra_boundaries={"farfield": {"pattern": "farfield*.pmsh"}},
+        )
+        with caplog.at_level("WARNING"):
+            extras = reader._load_extra_boundary_meshes(0)
+        assert extras["farfield"].n_points == 7  # farfield_000
+        assert any("Multiple meshes" in rec.getMessage() for rec in caplog.records)
+
+    def test_zarr_directory_extra_boundary_uses_from_zarr(self, tmp_path):
+        pytest.importorskip("zarr")
+        from physicsnemo.mesh.io import to_zarr
+
+        case_dir = tmp_path / "case"
+        case_dir.mkdir()
+        DomainMesh(interior=Mesh(points=torch.randn(10, 3))).save(
+            case_dir / "domain.pdmsh"
+        )
+        to_zarr(Mesh(points=torch.randn(9, 3)), case_dir / "farfield.zarr")
+
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="**/*.pdmsh",
+            extra_boundaries={"farfield": {"pattern": "farfield*.zarr"}},
+        )
+        loaded, _ = reader[0]
+        assert loaded.boundaries["farfield"].n_points == 9

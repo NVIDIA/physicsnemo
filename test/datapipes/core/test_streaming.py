@@ -591,3 +591,68 @@ class TestCrossStreamMemoryLifetime:
             assert worst.item() == 0.0
         finally:
             dataset.close()
+
+    def test_record_consumer_stream_unwraps_to_local(self, monkeypatch):
+        """Distributed wrappers are recorded through their local tensor, never
+        via ``record_stream`` on the wrapper itself."""
+        from physicsnemo.datapipes.protocols import record_consumer_stream
+
+        recorded: list = []
+        monkeypatch.setattr(
+            torch.Tensor, "record_stream", lambda self, stream: recorded.append(self)
+        )
+
+        unwrapped: list = []
+
+        class _Wrapper(torch.Tensor):
+            def to_local(self):
+                unwrapped.append(self)
+                return torch.ones(3)
+
+        wrapper = torch.zeros(3).as_subclass(_Wrapper)
+        record_consumer_stream(wrapper, stream=object())
+        record_consumer_stream([wrapper, {"k": wrapper}], stream=object())
+        # to_local() was consulted for every leaf; the local tensor is on the
+        # CPU so nothing is recorded.
+        assert len(unwrapped) == 3
+        assert recorded == []
+
+    def test_record_consumer_stream_ignores_non_callable_to_local(self, monkeypatch):
+        from physicsnemo.datapipes.protocols import record_consumer_stream
+
+        recorded: list = []
+        monkeypatch.setattr(
+            torch.Tensor, "record_stream", lambda self, stream: recorded.append(self)
+        )
+
+        class _Tagged(torch.Tensor):
+            to_local = "not-a-method"
+
+        record_consumer_stream(torch.ones(2).as_subclass(_Tagged), stream=object())
+        assert recorded == []
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_record_consumer_stream_records_local_not_wrapper(self, monkeypatch):
+        from physicsnemo.datapipes.protocols import record_consumer_stream
+
+        recorded: list = []
+        monkeypatch.setattr(
+            torch.Tensor,
+            "record_stream",
+            lambda self, stream: recorded.append((self, stream)),
+        )
+
+        local = torch.ones(3, device="cuda")
+
+        class _Wrapper(torch.Tensor):
+            def to_local(self):
+                return local
+
+        # The wrapper lives on the CPU: only the unwrapped local tensor is CUDA,
+        # so a recording proves the unwrap happened.
+        wrapper = torch.zeros(3).as_subclass(_Wrapper)
+        stream = torch.cuda.Stream()
+        record_consumer_stream({"w": wrapper, "cpu": torch.ones(1)}, stream)
+        assert len(recorded) == 1
+        assert recorded[0][0] is local
+        assert recorded[0][1] is stream

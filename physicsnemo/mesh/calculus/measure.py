@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
+from physicsnemo.utils._tracing import is_tracing
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -99,8 +101,17 @@ def point_measures(mesh: "Mesh") -> torch.Tensor:
 
 
 def set_cell_measures(mesh: "Mesh", values: torch.Tensor) -> None:
-    """Set complete per-cell measures in place, without changing geometry."""
-    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = _validate_measures(mesh, values, "cells")
+    """Set complete per-cell measures in place, without changing geometry.
+
+    The cached ``cell_areas`` tensor is stored as a copy, so the measure never
+    aliases the cache.
+    """
+    values = _validate_measures(mesh, values, "cells")
+    # While traced, reading _cache would guard on it, and cell_measures then
+    # never returns the cached tensor anyway (see Mesh._cached).
+    if not is_tracing() and values is mesh._cache.get(("cell", "areas"), None):
+        values = values.clone()
+    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = values
 
 
 def set_point_measures(mesh: "Mesh", values: torch.Tensor, *, dimension: int) -> None:
@@ -136,7 +147,7 @@ def point_measure_dimension(mesh: "Mesh") -> torch.Tensor:
         raise ValueError(
             "Point measure dimension is missing or not scalar; use set_point_measures"
         )
-    if not torch.compiler.is_compiling() and not bool(
+    if not is_tracing() and not bool(
         (dimension >= 0)
         & (dimension <= mesh.n_spatial_dims)
         & (dimension == dimension.round())
@@ -199,9 +210,7 @@ def _transfer_cell_measures(
     old_areas = source.cell_areas
     if parents is not None:
         measures, old_areas = measures[parents], old_areas[parents]
-    if not torch.compiler.is_compiling() and bool(
-        ((old_areas == 0) & (measures != 0)).any()
-    ):
+    if not is_tracing() and bool(((old_areas == 0) & (measures != 0)).any()):
         raise ValueError(
             "Cannot transform nonzero effective measure on a zero-measure cell; supply replacement measures"
         )
