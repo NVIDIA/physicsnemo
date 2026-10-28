@@ -23,7 +23,15 @@ import torch.distributed as dist
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.metrics.general._moments import _check_correction, _StreamingMoments
+from physicsnemo.metrics.general.moment_rules import (
+    MeanRule,
+    VarianceRule,
+    _check_correction,
+)
+from physicsnemo.metrics.general.tensor_accumulator import (
+    StatisticRule,
+    TensorAccumulator,
+)
 
 Tensor = torch.Tensor
 
@@ -174,7 +182,7 @@ class _TensorModeMixin:
         return self
 
     def _init_tensor_mode(
-        self, *, variance: bool, like: Tensor | None, kwargs: dict
+        self, *, rule: StatisticRule, like: Tensor | None, kwargs: dict
     ) -> None:
         unknown = kwargs.keys() - {"dtype"}
         if unknown:
@@ -182,7 +190,10 @@ class _TensorModeMixin:
                 f"{type(self).__name__} got unexpected tensor-mode keyword(s): {', '.join(sorted(unknown))}"
             )
         dtype: torch.dtype | None = kwargs.get("dtype")
-        self._moments = _StreamingMoments(variance=variance, like=like, dtype=dtype)
+        self._moments = TensorAccumulator(rule, dtype=dtype)
+        if like is not None:
+            self._moments.update(like, dim=None)
+            self._moments.reset()
         self.input_shape = None
         self.device = None
         self.dtype = self._moments.dtype
@@ -286,7 +297,7 @@ class Mean(_TensorModeMixin, StreamingStatistic):
         if mode == "tensor":
             if input_shape is not None or "device" in kwargs:
                 raise ValueError("Tensor mode infers shape/device from inputs or like")
-            self._init_tensor_mode(variance=False, like=like, kwargs=kwargs)
+            self._init_tensor_mode(rule=MeanRule(), like=like, kwargs=kwargs)
             return
         if mode != "legacy" or like is not None:
             raise ValueError("Use mode='tensor' for tensor-aware streaming statistics")
@@ -398,7 +409,7 @@ class Mean(_TensorModeMixin, StreamingStatistic):
             Tensor-mode accumulator is empty.
         """
         if self._moments is not None:
-            return self._moments.read_mean()
+            return self._moments.finalize()
         self.mean = self.sum / self.n
 
         return self.mean
@@ -536,7 +547,7 @@ class Variance(_TensorModeMixin, StreamingStatistic):
         if mode == "tensor":
             if input_shape is not None or "device" in kwargs:
                 raise ValueError("Tensor mode infers shape/device from inputs or like")
-            self._init_tensor_mode(variance=True, like=like, kwargs=kwargs)
+            self._init_tensor_mode(rule=VarianceRule(), like=like, kwargs=kwargs)
             return
         if mode != "legacy" or like is not None or correction != 1:
             raise ValueError("Use mode='tensor' for tensor-aware streaming statistics")
@@ -659,7 +670,7 @@ class Variance(_TensorModeMixin, StreamingStatistic):
     def mean(self) -> Tensor:
         """Mean value"""
         if self._moments is not None:
-            return self._moments.read_mean()
+            return self._moments.finalize(statistic="mean")
         return self.sum / self.n
 
     def finalize(self, std: bool = False, *, correction: int | None = None) -> Tensor:
@@ -686,9 +697,13 @@ class Variance(_TensorModeMixin, StreamingStatistic):
             Correction is invalid or there are insufficient observations.
         """
         if self._moments is not None:
-            result = self._moments.read_variance(
-                self.correction if correction is None else correction
-            )
+            selected_correction = self.correction if correction is None else correction
+            _check_correction(selected_correction)
+            if self.count <= selected_correction:
+                raise ValueError(
+                    "Insufficient observations for the requested correction"
+                )
+            result = self._moments.finalize(correction=selected_correction)
             return result.sqrt() if std else result
         if correction is not None and correction != 1:
             raise ValueError("Legacy Variance uses correction=1")
