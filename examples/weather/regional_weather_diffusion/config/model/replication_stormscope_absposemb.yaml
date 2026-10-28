@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# StormScope model config - corresponds to versions of StormScope-GOES/MRMS
+# trained with absolute positional embedding and FP32 training, as well as
+# StormScope Meteosat EU.
+#
+# For new StormScope/nowcasting models, it is recommended to use the better-optimized
+# config of reference_dit.yaml instead of this one.
+
+
+# Model conditions
+regression_conditions: []
+diffusion_conditions: ["background", "invariant"] # list consisting of "regression", "background", "invariant".
+                                                   # The dataset's "background" tensor includes any past-state history.
+
+# Model hyperparameters
+architecture: "dit"
+hyperparameters:
+  depth: 16
+  hidden_size: 768
+  attn_kernel_size: 31
+  num_heads: 16
+  patch_size: 4
+  use_nan_mask_tokens: false

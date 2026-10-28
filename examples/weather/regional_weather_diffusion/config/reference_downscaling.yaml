@@ -13,14 +13,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+
+# Reference configuration for training downscaling models. This configuration trains
+# a diffusion-only downscaling model with DiT. For CorrDiff-style models, see
+# reference_corrdiff.yaml.
+
+
 # Defaults
 defaults:
 
   # Dataset
-  - dataset/hrrr_era5
+  - dataset/xarray  # replace with your own if using a custom dataset
 
   # Model
-  - model/stormcast
+  - model/reference_dit
 
   # Training
   - training/default
@@ -33,16 +40,20 @@ defaults:
 
   - _self_
 
-# Diffusion model specific changes
-model:
-  use_regression_net: True
-  regression_weights: "stormcast_checkpoints/regression/StormCastUNet.0.0.mdlus"
-  hyperparameters:
-    additive_pos_embed: True
+dataset: # remove if using custom dataset
+  # replace array names (hrrr, era5) and channels with your own
+  state_access_patterns: # the "state" (training target)
+    hrrr: {channels: [t2m, u10, v10], time_steps: [0]}
+  background_access_patterns: # the "background" (conditioning); {} for none
+    era5: {channels: null, time_steps: [0]}
 
 training:
   loss:
     type: 'edm'
-  total_train_steps: 450000 # use more training samples for diffusion training; follows StormCast paper
+  total_train_steps: 450000 # set according to your needs
   checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+  validation_plot_variables: [t2m, u10, v10] # state channels to plot during validation
+  perf:
+    fp_optimizations: amp-bf16
+    torch_compile: true

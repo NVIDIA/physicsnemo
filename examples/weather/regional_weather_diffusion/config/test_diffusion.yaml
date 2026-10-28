@@ -21,7 +21,7 @@ defaults:
   - dataset/mock
 
   # Model
-  - model/stormscope
+  - model: replication_stormscope_absposemb # learned absolute positional embedding, checked by test_checkpoint_integrity
 
   # Training
   - training/default

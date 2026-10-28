@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# CorrDiff model config - corresponds to the "normal" model size of the CorrDiff
+# recipe (examples/weather/corrdiff), used in the paper
+# Residual Corrective Diffusion Modeling for Km-scale Atmospheric Downscaling
+# (https://arxiv.org/abs/2309.15214).
+#
+# For new CorrDiff-type models, it is recommended to use reference_dit.yaml for a
+# diffusion-only model with DiT, or reference_unet.yaml if a regression+diffusion
+# U-Net is preferred.
+
+
+# Model conditions
+regression_conditions: ["background"] # list consisting of "background", "invariant"
+diffusion_conditions: ["regression", "background"] # list consisting of "regression", "background", "invariant"
+
+# Model hyperparameters
+architecture: unet
+hyperparameters:
+  model_type: "SongUNetPosEmbd" # U-Net with a positional embedding grid concatenated to the input
+  gridtype: "sinusoidal"
+  N_grid_channels: 4
+  embedding_type: "zero" # no noise level embedding, as in CorrDiff
+  model_channels: 128
+  channel_mult: [1, 2, 2, 2, 2]
+  attn_resolutions: [28]
+
+# Pretrained regression model
+regression_weights: null # Path to the pretrained regression checkpoint, required if "regression" is in diffusion_conditions.
+                         # Regression training saves it as <training.rundir>/checkpoints_regression/StormCastUNet.0.<step>.mdlus

@@ -29,7 +29,9 @@ from physicsnemo.distributed import DistributedManager
 from utils.trainer import Trainer
 
 
-@hydra.main(version_base=None, config_path="config", config_name="regression")
+@hydra.main(
+    version_base=None, config_path="config", config_name="reference_downscaling"
+)
 def main(cfg: DictConfig) -> None:
     """Train regression or diffusion models for use in the StormCast (https://arxiv.org/abs/2408.10958) ML-based weather model"""
 

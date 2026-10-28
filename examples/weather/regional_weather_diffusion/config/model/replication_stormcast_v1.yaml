@@ -15,8 +15,15 @@
 # limitations under the License.
 
 
-# Model name
-model_name: 'regression' # 'regression', 'diffusion', or custom model added by user
+# StormCast v1 model config - corresponds to the version in the paper
+# Kilometer-Scale Convection Allowing Model Emulation using Generative Diffusion Modeling
+# (https://arxiv.org/abs/2408.10958), available at
+# https://nvidia.github.io/earth2studio/main/modules/generated/models/px/StormCast/
+#
+# For new StormCast-type models, it is recommended to use the diffusion transformer
+# configuration from reference_dit.yaml, or reference_unet.yaml if a UNet is preferred,
+# instead of this one.
+
 
 # Model conditions
 regression_conditions: ["background", "invariant"] # list consisting of "background", "invariant" (default from StormCast paper).
@@ -24,17 +31,11 @@ regression_conditions: ["background", "invariant"] # list consisting of "backgro
 diffusion_conditions: ["regression", "invariant"] # list consisting of "regression", "background", "invariant" (default from StormCast paper)
 
 # Model hyperparameters
-model_type: "SongUNetPosEmbd" # Model class to use
-# Example overrides for architecture hyperparameters (uncomment to customize)
-# hyperparameters:
-#   channel_mult: [1, 2, 2]
-#   num_blocks: 2
-#   model_channels: 128
-#   attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention
-#   bottleneck_attention: false
-#   checkpoint_level: 0
-#   additive_pos_embed: false # Whether or not to add an additive position embed after the first conv in the U-Net
+architecture: unet
+hyperparameters:
+  model_type: "SongUNetPosEmbd" # Model class to use
+  channel_mult: [1, 2, 2]  # differs from SongUNet default
 
 # Pretrained regression model
-regression_weights: "stormcast_checkpoints/regression/UNet.0.0.mdlus" # Path to pretrained regression network,
-                                                                      # used if 'regression' is included in diffusion_conditions
+regression_weights: null # Path to the pretrained regression checkpoint, required if "regression" is in diffusion_conditions.
+                         # Regression training saves it as <training.rundir>/checkpoints_regression/StormCastUNet.0.<step>.mdlus

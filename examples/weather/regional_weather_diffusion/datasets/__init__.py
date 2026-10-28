@@ -26,6 +26,7 @@ from .dataset import (
     flatten_group_collate,
 )
 from .mock import MockDataset
+from .xarray import XarrayDataset
 
 # Find StormCastDataSource implementations (map-style StormCastDataset
 # subclasses, or lower-level StormCastDataSource implementations) in any
@@ -52,6 +53,7 @@ __all__ = [
     "MockDataset",
     "StormCastDataSource",
     "StormCastDataset",
+    "XarrayDataset",
     "dataset_classes",
     "default_torch_loader",
     "flatten_group_collate",

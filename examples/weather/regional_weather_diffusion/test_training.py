@@ -33,16 +33,18 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 from torch.distributed.tensor import DTensor
 from utils import parallel, trainer
 
+from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.nn import RopeNatten2DSelfAttention
 
 DistributedManager.initialize()
 
 
 # Retrieve and fixture configs
-def _load_config(config_name: str) -> DictConfig:
+def _load_config(config_name: str, overrides: tuple[str, ...] = ()) -> DictConfig:
     """Load a StormCast test configuration through Hydra."""
     with initialize(version_base=None, config_path="config", job_name="test_training"):
-        return compose(config_name=config_name)
+        return compose(config_name=config_name, overrides=list(overrides))
 
 
 @pytest.fixture
@@ -205,6 +207,49 @@ def test_training(
         rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
     )
     assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+@pytest.mark.parametrize(
+    "domain_parallel_size, force_sharding", [(1, False), (1, True), (2, False)]
+)
+def test_training_reference_dit(
+    tmp_path: Path, *, domain_parallel_size: int, force_sharding: bool
+):
+    """Train the reference DiT config (RoPE attention with qk_norm) in bf16."""
+    dist = DistributedManager()
+    if dist.world_size > domain_parallel_size:
+        pytest.skip(
+            f"Skipping: number of processes ({dist.world_size}) > domain_parallel_size ({domain_parallel_size})."
+        )
+    if domain_parallel_size > dist.world_size:
+        pytest.skip(
+            f"Skipping: not enough processes ({dist.world_size}) to use domain_parallel_size of {domain_parallel_size}."
+        )
+
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg = _load_config("test_diffusion.yaml", overrides=("model=reference_dit",))
+    cfg.training.rundir = rundir
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.force_sharding = force_sharding
+    cfg.training.perf.fp_optimizations = "amp-bf16"
+    train.main(cfg)
+
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+    # The checkpoint must restore the RoPE + qk_norm model, without an additive
+    # positional embedding
+    dit = Module.from_checkpoint(ckpt_path).model.model
+    assert dit.rope is not None
+    assert not isinstance(dit.tokenizer.pos_embed, torch.nn.Parameter)
+    for block in dit.blocks:
+        assert isinstance(block.attention, RopeNatten2DSelfAttention)
+        assert not isinstance(block.attention.q_norm, torch.nn.Identity)
 
 
 @pytest.mark.parametrize("net_architecture", ["unet", "dit"])
@@ -1058,8 +1103,16 @@ def test_xarray_dataset_nan_mask_and_crop(xarray_files: dict):
         ),
         ({"time_range_train": ["2030-01-01", "2031-01-01"]}, "No samples left"),
         ({"invariant_variables": ["lat"]}, "statistics for 'invariant' are missing"),
+        ({"invariants_path": None}, "invariants_path must be set"),
     ],
-    ids=["unknown_channel", "missing_array", "duplicate_steps", "no_samples", "stats"],
+    ids=[
+        "unknown_channel",
+        "missing_array",
+        "duplicate_steps",
+        "no_samples",
+        "stats",
+        "no_invariants_path",
+    ],
 )
 def test_xarray_dataset_invalid_config(xarray_files: dict, params: dict, match: str):
     """Configuration errors are reported at construction with a clear message."""

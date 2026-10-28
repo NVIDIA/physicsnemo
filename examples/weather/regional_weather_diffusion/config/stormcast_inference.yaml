@@ -21,7 +21,7 @@ defaults:
   - dataset/hrrr_era5
 
   # Model
-  - model/stormcast
+  - model/replication_stormcast_v1
 
   # Sampler
   - sampler/edm_deterministic

@@ -20,9 +20,6 @@ defaults:
   # Dataset
   - dataset/mock
 
-  # Model
-  # - model/stormcast
-
   # Training
   - training/default
 

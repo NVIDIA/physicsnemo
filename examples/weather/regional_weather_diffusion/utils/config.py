@@ -25,9 +25,6 @@ from pydantic.dataclasses import dataclass
 class ModelConfig:
     """Model configuration: cfg.model"""
 
-    model_name: Literal["regression", "diffusion"] = (
-        "diffusion"  # model type, "regression" or "diffusion"
-    )
     architecture: Literal["unet", "dit"] = "unet"  # model architecture, "unet" or "dit"
     regression_conditions: list[Literal["background", "invariant"]] = Field(
         default=["background", "invariant"]
@@ -35,10 +32,6 @@ class ModelConfig:
     diffusion_conditions: list[Literal["regression", "background", "invariant"]] = (
         Field(default=["regression", "invariant"])
     )
-    spatial_pos_embed: bool = False  # use spatial positional embedding for unet
-    attn_resolutions: list[int] = Field(
-        default=[]
-    )  # unet resolutions where global self-attention if computed
     regression_weights: str | None = (
         None  # file with weights of pre-trained regression model, set to None when training regression or diffusion-only model
     )
@@ -210,8 +203,8 @@ class TrainingConfig:
         default=1, ge=0
     )  # Number of batches to evaluate during validation
     validation_plot_variables: list[str] = Field(
-        default=["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]
-    )
+        default=[]
+    )  # State channels to plot during validation; empty to disable plotting
     validation_plot_background_channels: list[str] = Field(
         default=[]
     )  # Background channels to show in validation plots (list of names or indices)

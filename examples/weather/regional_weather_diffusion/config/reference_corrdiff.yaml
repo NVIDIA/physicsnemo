@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Reference configuration for training CorrDiff-style regression+diffusion
+# downscaling models. For most downscaling projects, diffusion-only models
+# with DiT are now recommended - see reference_downscaling.yaml
+
+
+# Defaults
+defaults:
+
+  # Dataset
+  - dataset/xarray  # replace with your own if using a custom dataset
+
+  # Model
+  - model/reference_unet
+
+  # Training
+  - training/default
+
+  # Sampler
+  - sampler/edm_deterministic
+
+  # Hydra
+  - hydra/default
+
+  - _self_
+
+model:
+  # Pretrained regression model, where regression training saves its final checkpoint
+  # when run with training.experiment_name=regression
+  regression_weights: "rundir/regression/0/checkpoints_regression/StormCastUNet.0.450000.mdlus"
+
+dataset: # remove if using custom dataset
+  # replace array names (hrrr, era5) and channels with your own (channels: null to use all channels)
+  state_access_patterns: # the "state" (training target)
+    hrrr: {channels: [t2m, u10, v10], time_steps: [0]}
+  background_access_patterns: # the "background" (conditioning); {} for none
+    era5: {channels: null, time_steps: [0]}
+
+training:
+  loss:
+    type: 'edm' # use "regression"/"edm" here to train your regression/diffusion model
+  total_train_steps: 450000 # set according to your needs
+  checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
+  validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+  validation_plot_variables: [t2m, u10, v10] # state channels to plot during validation
+  perf:
+    fp_optimizations: amp-bf16
+    torch_compile: true

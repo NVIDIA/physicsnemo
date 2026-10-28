@@ -41,8 +41,8 @@ batch_size_per_gpu: "auto" # Batch size on each GPU, set to an int to force smal
 total_train_steps: 16000 # Number of total training steps, 16000 with batch size 64 corresponds to StormCast paper regression
 clip_grad_norm: -1 # Threshold for gradient clipping, set to -1 to disable
 
-domain_parallel_size: 1
-force_sharding: False
+domain_parallel_size: 1 # how many GPUs to split each sample over
+force_sharding: False # force sharding mode even when domain_parallel_size == 1 (useful for testing)
 
 # Performance and optimization (like corrdiff perf section)
 perf:
@@ -85,7 +85,7 @@ scheduler:
 
 # Validation options
 validation_steps: 1 # Number of batches to evaluate during validation
-validation_plot_variables: ["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]
+validation_plot_variables: [] # State channels to plot during validation; empty to disable plotting
 validation_plot_background_channels: [] # Background channels to show in validation plots (list of names or indices)
 
 # Per-channel loss weights: a mapping from state channel name to scalar weight.

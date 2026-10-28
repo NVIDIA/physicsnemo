@@ -16,7 +16,8 @@
 
 # Defaults
 defaults:
-  - regression
+  - reference_downscaling # set to whichever other config you want to test
+  - _self_
 
 # Minimal training config with frequent printouts and checkpoint saving.
 # Can be used to test that training runs without errors.

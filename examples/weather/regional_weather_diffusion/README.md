@@ -74,13 +74,25 @@ Training is handled by `train.py`, configured using [hydra](https://hydra.cc/doc
  - `inference`: specifies inference-specific settings, such as which initial condition to run, which model checkpoints to use
  - `hydra`: specifies basic hydra settings, like where to store outputs (based on the training or inference outputs directories)
 
-Also in the `config` directory are several top-level configs, which show how to train a `regression` model or a `diffusion` model, and run inference (`stormcast-inference`). You can select any of these by specifying it as a config name at the command line (for example, `--config-name=regression`). Optionally, you can also override any specific items of interest uing the command line args, for example:
+Also in the `config` directory are several top-level configs:
+
+ - `reference_*`: recommended starting points for new projects:
+   - `reference_downscaling`: diffusion-only downscaling with a DiT (the default used by `train.py`)
+   - `reference_corrdiff`: CorrDiff-style regression+diffusion downscaling with a U-Net
+   - `reference_stormcast`: StormCast-style forecasting guided by low-resolution conditioning, with a DiT
+   - `reference_stormscope`: StormScope-style nowcasting with a DiT
+ - `replication_*`: configs for reproducing the training of published models (`replication_corrdiff_taiwan`, `replication_stormcast_v1`, `replication_stormcast_conus`, `replication_stormscope_v1`)
+ - `lite`: a minimal config with a small batch size and frequent printouts and checkpoints, for quickly testing that training runs without errors
+ - `test_*`: configs for testing training with synthetic data, without needing any data files
+ - `stormcast_inference`: runs inference with `inference.py`
+
+You can select any of these by specifying it as a config name at the command line (for example, `--config-name=reference_stormcast`). Optionally, you can also override any specific items of interest using the command line args, for example:
 
 ```bash
-python train.py --config-name regression training.batch_size=4
+python train.py --config-name reference_stormcast training.batch_size=4
 ```
 
-More extensive configuration modifications can be made by creating a new top-level configuration file similar to `regression` or `diffusion`. Refer to `diffusion.yaml` for an example of how to specify a top-level config that uses default configuration settings with additional custom modifications added on top.
+More extensive configuration modifications can be made by creating a new top-level configuration file. The `reference_*` configs show how to specify a top-level config that uses default configuration settings with additional custom modifications added on top.
 
 At runtime, hydra will parse the config subdirectory and command-line overrides into a runtime configuration object `cfg`, which will have all settings accessible through both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`. The actual content of the config will be validated using `pydantic` based on the guidelines specified in `[utils/config.py](./utils/config.py)`.
 
@@ -126,12 +138,12 @@ DiT-type models additionally support scalar conditions that are single numbers t
 
 You can skip this section if you plan to train a diffusion-only model such as Stormscope.
 
-To train the default StormCast regression model, specify the example `regression` config and an optional name for the training experiment:
+Regression models are trained by setting `training.loss.type` to `regression`. For example, to train the regression model of the original StormCast, use the `replication_stormcast_v1` config and an optional name for the training experiment:
 
 ```bash
-python train.py --config-name regression training.experiment_name=regression
+python train.py --config-name replication_stormcast_v1 training.loss.type=regression training.experiment_name=regression
 ```
-* Use `--config-name regression_lite`: To test StormCast training on a single-GPU machine, run a quick training with a small batch size (but not expected to produce useful checkpoints). Requires available StormCast training data.
+* Use the `lite` config: To test training on a single-GPU machine, run a quick training with a small batch size (but not expected to produce useful checkpoints). Requires available training data.
 
 * Use `--config-name test_regression_unet`: To test training with synthetic data.
 
@@ -139,26 +151,26 @@ To customize which inputs are used for the regression model, you can change the 
 
 ### Training Diffusion Models
 
-The method for launching a diffusion model training looks almost identical, and we just have to change the configuration name appropriately. Also, the inputs are specified by the `model.diffusion_conditions` option instead.
+The method for launching a diffusion model training looks almost identical, but with `training.loss.type` set to `edm` (the default). Also, the inputs are specified by the `model.diffusion_conditions` option instead.
 
 To train a diffusion model that uses the regression model output, there are two config items that must be defined:
   1. `'regression'` included in `model.diffusion_conditions`. This is included by default. If you want to train a diffusion-only model, you can disable it.
   2. `model.regression_weights` set to the path of a PhysicsNeMo (`.mdlus`) checkpoint with model weights for the pre-trained regression model. These are saved in the checkpoints directory during training.
      
-The reference `diffusion.yaml` top-level config shows an example of how to specify these settings.
+The `reference_corrdiff` and `replication_stormcast_v1` top-level configs show examples of how to specify these settings.
 
-With that, launching diffusion training for the default StormCast configuration looks something like:
+With that, launching diffusion training for the original StormCast configuration looks something like:
 
 ```bash
-python train.py --config-name diffusion training.experiment_name=diffusion
+python train.py --config-name replication_stormcast_v1 training.experiment_name=diffusion
 ```
 To test single GPU diffusion training:
 
-- Use `--config-name diffusion_lite` (U-Net with StormCast training data)
+- Use the `lite` config (requires training data)
 - Use `--config-name test_diffusion_unet` (U-Net without data) 
 - Use `--config-name test_diffusion` (DiT without data)
 
-The full training pipeline for StormCast diffusion model is fairly lengthy, requiring about 120 hours on 64 NVIDIA H100 GPUs. However, more lightweight training runs can still produce decent models if the diffusion model is not trained for as long. The example `regression` and `diffusion` configs use the configuration used in the StormCast paper. New configs can be added [as described above](#configuration-basics).
+The full training pipeline for StormCast v1 diffusion model is fairly lengthy, requiring about 120 hours on 64 NVIDIA H100 GPUs. However, more lightweight training runs can still produce decent models if the diffusion model is not trained for as long. The `replication_stormcast_v1` config uses the configuration used in the StormCast paper. New configs can be added [as described above](#configuration-basics).
 
 #### Sigma-bin Loss Tracking
 

@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Configuration for replicating the training of the StormCast CONUS diffusion-only
+# model. For new projects, reference_stormcast.yaml is recommended.
+
+
+# Defaults
+defaults:
+
+  # Dataset
+  - dataset/xarray  # replace with your own if using a custom dataset
+
+  # Model
+  - model/replication_stormcast_conus
+
+  # Training
+  - training/default
+
+  # Sampler
+  - sampler/edm_deterministic
+
+  # Hydra
+  - hydra/default
+
+  - _self_
+
+dataset: # variable naming follows Earth2Studio wrapper: https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py
+  state_access_patterns: # the "state" (training target)
+    hrrr:
+      channels: ['u10m', 'v10m', 't2m', 'msl', 'u1hl', 'u2hl', 'u3hl', 'u4hl', 'u5hl', 'u6hl', 'u7hl', 'u8hl', 'u9hl', 'u10hl', 'u11hl', 'u13hl', 'u15hl', 'u20hl', 'u25hl', 'u30hl', 'v1hl', 'v2hl', 'v3hl', 'v4hl', 'v5hl', 'v6hl', 'v7hl', 'v8hl', 'v9hl', 'v10hl', 'v11hl', 'v13hl', 'v15hl', 'v20hl', 'v25hl', 'v30hl', 't1hl', 't2hl', 't3hl', 't4hl', 't5hl', 't6hl', 't7hl', 't8hl', 't9hl', 't10hl', 't11hl', 't13hl', 't15hl', 't20hl', 't25hl', 't30hl', 'q1hl', 'q2hl', 'q3hl', 'q4hl', 'q5hl', 'q6hl', 'q7hl', 'q8hl', 'q9hl', 'q10hl', 'q11hl', 'q13hl', 'q15hl', 'q20hl', 'q25hl', 'q30hl', 'Z1hl', 'Z2hl', 'Z3hl', 'Z4hl', 'Z5hl', 'Z6hl', 'Z7hl', 'Z8hl', 'Z9hl', 'Z10hl', 'Z11hl', 'Z13hl', 'Z15hl', 'Z20hl', 'Z25hl', 'Z30hl', 'p1hl', 'p2hl', 'p3hl', 'p4hl', 'p5hl', 'p6hl', 'p7hl', 'p8hl', 'p9hl', 'p10hl', 'p11hl', 'p13hl', 'p15hl', 'p20hl', 'refc']
+      time_steps: [1]
+  background_access_patterns: # the "background" (conditioning)
+    hrrr:
+      channels: ${dataset.state_access_patterns.hrrr.channels}
+      time_steps: [0]
+    era5:
+      channels: ['u10m', 'v10m', 't2m', 'tcwv', 'sp', 'msl', 'u1000', 'u850', 'u500', 'u250', 'v1000', 'v850', 'v500', 'v250', 'z1000', 'z850', 'z500', 'z250', 't1000', 't850', 't500', 't250', 'q1000', 'q850', 'q500', 'q250']
+      time_steps: [1]
+  invariants_path: data/invariants.zarr # replace with your invariants file
+  invariant_variables: ["elev_mean", "elev_std", "lsm_mean"]
+
+training:
+  loss:
+    type: 'edm'
+  total_train_steps: 450000 # set according to your needs
+  checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
+  validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+  validation_plot_variables: [u10m_t+1, t2m_t+1, q5hl_t+1, refc_t+1] # state channels to plot during validation
+  perf:
+    fp_optimizations: fp32  # need fp32 for stable training without qk_norm
+    torch_compile: true
