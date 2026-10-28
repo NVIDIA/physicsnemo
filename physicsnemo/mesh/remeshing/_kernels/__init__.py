@@ -14,15 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Advanced tensor-level surface-remeshing API.
-
-The function is also available from ``physicsnemo.mesh.functional``, and both
-the function and its :class:`Remeshing` specification are available from
-``physicsnemo.mesh.functional.geometry``. Most users should use
-:mod:`physicsnemo.mesh.remeshing`. The tensor functional exposes
-backend-specific tuning parameters that may change as the implementation
-evolves.
-"""
+"""Tensor-level surface remeshing behind :func:`physicsnemo.mesh.remeshing.remesh`."""
 
 from .remeshing import Remeshing, remeshing
 

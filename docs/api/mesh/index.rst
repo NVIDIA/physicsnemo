@@ -454,9 +454,3 @@ in order:
 
    validation
    visualization
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Tensor Functionals
-
-   functional

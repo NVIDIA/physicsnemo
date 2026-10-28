@@ -345,7 +345,7 @@ def test_domain_ffd_evaluates_combined_components_once(monkeypatch):
     domain = _domain_with_coincident_points()
 
     deform_module = importlib.import_module(
-        "physicsnemo.mesh.functional.geometry.deform"
+        "physicsnemo.mesh.transformations.deform._kernels"
     )
     original = deform_module.free_form_deform_points
     calls: list[torch.Tensor] = []

@@ -23,11 +23,12 @@ from typing import Literal, get_type_hints
 import pytest
 import torch
 
-import physicsnemo.mesh.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.mesh.functional import free_form_deform_points
-from physicsnemo.mesh.functional.geometry import FreeFormDeformPoints
-from physicsnemo.mesh.functional.geometry.deform import ffd as ffd_module
+from physicsnemo.mesh.transformations.deform._kernels import (
+    FreeFormDeformPoints,
+    free_form_deform_points,
+)
+from physicsnemo.mesh.transformations.deform._kernels import ffd as ffd_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 
@@ -84,26 +85,19 @@ def _differentiable_case_tensors(args, kwargs):
 
 
 def test_public_exports_and_function_specs():
-    geometry = importlib.import_module("physicsnemo.mesh.functional.geometry")
-    deform = importlib.import_module("physicsnemo.mesh.functional.geometry.deform")
+    deform = importlib.import_module("physicsnemo.mesh.transformations.deform._kernels")
 
-    assert functional.free_form_deform_points is free_form_deform_points
-    assert geometry.free_form_deform_points is free_form_deform_points
     assert deform.free_form_deform_points is free_form_deform_points
-    assert geometry.FreeFormDeformPoints is FreeFormDeformPoints
     assert deform.FreeFormDeformPoints is FreeFormDeformPoints
     assert free_form_deform_points.__name__ == "free_form_deform_points"
     assert (
         free_form_deform_points.__module__
-        == "physicsnemo.mesh.functional.geometry.deform.ffd"
+        == "physicsnemo.mesh.transformations.deform._kernels.ffd"
     )
     assert issubclass(FreeFormDeformPoints, FunctionSpec)
-    assert not hasattr(functional, "FreeFormDeformPoints")
-    for module in (functional, geometry, deform):
-        assert "free_form_deform_points" in module.__all__
-        assert "ffd_points" not in module.__all__
-        assert not hasattr(module, "ffd_points")
-    assert not hasattr(geometry, "FFDPoints")
+    assert "free_form_deform_points" in deform.__all__
+    assert "ffd_points" not in deform.__all__
+    assert not hasattr(deform, "ffd_points")
     assert not hasattr(deform, "FFDPoints")
     assert list(inspect.signature(free_form_deform_points).parameters) == [
         "points",
@@ -839,7 +833,7 @@ def _run_ffd_with_gradients(implementation, device, dtype, basis):
 def test_ffd_torch_chunked_checkpoint_matches_unchunked(device, basis, monkeypatch):
     """One-point checkpointed chunks match unchunked outputs and gradients."""
 
-    from physicsnemo.mesh.functional.geometry.deform import _torch_impl
+    from physicsnemo.mesh.transformations.deform._kernels import _torch_impl
 
     device = torch.device(device)
     unchunked = _run_ffd_with_gradients("torch", device, torch.float64, basis)
@@ -930,7 +924,7 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
 
 @requires_module("warp")
 def test_warp_custom_ops_opcheck():
-    from physicsnemo.mesh.functional.geometry.deform._warp_impl import (
+    from physicsnemo.mesh.transformations.deform._kernels._warp_impl import (
         ffd_field_warp_impl,
     )
 

@@ -17,18 +17,16 @@
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.mesh.functional.derivatives import (
-    MeshGreenGaussGradient,
-    MeshLSQGradient,
-)
-from physicsnemo.mesh.functional.geometry import (
+from physicsnemo.mesh.calculus._green_gauss_gradient import MeshGreenGaussGradient
+from physicsnemo.mesh.calculus._lsq_gradient import MeshLSQGradient
+from physicsnemo.mesh.sampling._poisson_disk import MeshPoissonDiskSample
+from physicsnemo.mesh.spatial._ray_mesh_intersect import RayMeshIntersect
+from physicsnemo.mesh.spatial._voxel_fraction import MeshToVoxelFraction
+from physicsnemo.mesh.transformations.deform._kernels import (
     DisplacePoints,
     FreeFormDeformPoints,
-    MeshPoissonDiskSample,
-    MeshToVoxelFraction,
     MorphPoints,
     RadialBasisFunctionDeformPoints,
-    RayMeshIntersect,
     ShrinkwrapPoints,
     SobolevDeformPoints,
 )

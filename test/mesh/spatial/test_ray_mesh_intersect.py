@@ -17,9 +17,11 @@
 import pytest
 import torch
 
-from physicsnemo.mesh.functional import ray_mesh_intersect
-from physicsnemo.mesh.functional.geometry import RayMeshIntersect
-from physicsnemo.mesh.functional.geometry.ray_mesh_intersect._warp_impl import (
+from physicsnemo.mesh.spatial._ray_mesh_intersect import (
+    RayMeshIntersect,
+    ray_mesh_intersect,
+)
+from physicsnemo.mesh.spatial._ray_mesh_intersect._warp_impl import (
     op as ray_mesh_intersect_op,
 )
 from test.conftest import requires_module

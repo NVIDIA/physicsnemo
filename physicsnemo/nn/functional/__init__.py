@@ -112,7 +112,7 @@ __all__ += MOVED_TO_MESH[__name__]
 
 def __getattr__(name):
     # Lazy legacy re-exports: these moved to physicsnemo.utils or
-    # physicsnemo.mesh.functional, and warning only on access keeps plain
+    # physicsnemo.mesh, and warning only on access keeps plain
     # 'import physicsnemo.nn.functional' silent.
     if name in ("WeightedMultinomial", "weighted_multinomial"):
         warnings.warn(

@@ -1,8 +1,7 @@
 Derivative Functionals
 ======================
 
-The mesh gradients ``mesh_lsq_gradient`` and ``mesh_green_gauss_gradient`` are
-in :doc:`physicsnemo.mesh.functional <../../mesh/functional>`.
+``mesh_lsq_gradient`` moved to :func:`physicsnemo.mesh.calculus.mesh_lsq_gradient`.
 
 .. note::
 

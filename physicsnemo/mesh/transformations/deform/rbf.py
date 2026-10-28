@@ -140,7 +140,7 @@ def radial_basis_function_deform(
         else _resolve_point_field(mesh, point_weights, argument_name="point_weights")
     )
 
-    from physicsnemo.mesh.functional.geometry.deform import (
+    from physicsnemo.mesh.transformations.deform._kernels import (
         radial_basis_function_deform_points,
     )
 

@@ -131,7 +131,7 @@ def sobolev_deform(
         )
     )
 
-    from physicsnemo.mesh.functional.geometry.deform import sobolev_deform_points
+    from physicsnemo.mesh.transformations.deform._kernels import sobolev_deform_points
 
     points = sobolev_deform_points(
         mesh.points,

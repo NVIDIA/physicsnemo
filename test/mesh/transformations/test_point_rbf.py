@@ -24,9 +24,11 @@ import pytest
 import torch
 
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.mesh.functional import radial_basis_function_deform_points
-from physicsnemo.mesh.functional.geometry import RadialBasisFunctionDeformPoints
-from physicsnemo.mesh.functional.geometry.deform import rbf as rbf_module
+from physicsnemo.mesh.transformations.deform._kernels import (
+    RadialBasisFunctionDeformPoints,
+    radial_basis_function_deform_points,
+)
+from physicsnemo.mesh.transformations.deform._kernels import rbf as rbf_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 
@@ -97,7 +99,7 @@ def test_public_exports_signature_and_function_spec_contract():
         == "radial_basis_function_deform_points"
     )
     assert radial_basis_function_deform_points.__module__ == (
-        "physicsnemo.mesh.functional.geometry.deform.rbf"
+        "physicsnemo.mesh.transformations.deform._kernels.rbf"
     )
     assert issubclass(RadialBasisFunctionDeformPoints, FunctionSpec)
     assert list(inspect.signature(radial_basis_function_deform_points).parameters) == [
@@ -142,7 +144,7 @@ def test_exact_interpolation_at_controls(num_dims, implementation):
 
 
 def test_torch_query_chunking_preserves_outputs_and_gradients(monkeypatch):
-    from physicsnemo.mesh.functional.geometry.deform import _rbf_torch_impl
+    from physicsnemo.mesh.transformations.deform._kernels import _rbf_torch_impl
 
     dtype = torch.float64
     generator = torch.Generator().manual_seed(2011)

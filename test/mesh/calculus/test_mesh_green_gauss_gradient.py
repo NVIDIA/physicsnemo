@@ -17,9 +17,11 @@
 import pytest
 import torch
 
-from physicsnemo.mesh.functional import mesh_green_gauss_gradient
-from physicsnemo.mesh.functional.derivatives import MeshGreenGaussGradient
-from physicsnemo.mesh.functional.derivatives.mesh_green_gauss_gradient.utils import (
+from physicsnemo.mesh.calculus._green_gauss_gradient import (
+    MeshGreenGaussGradient,
+    mesh_green_gauss_gradient,
+)
+from physicsnemo.mesh.calculus._green_gauss_gradient.utils import (
     build_neighbors,
 )
 from test.conftest import requires_module

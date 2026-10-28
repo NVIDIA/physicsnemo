@@ -99,8 +99,8 @@ orientation loss.
         simplex_strain_energy,
         total_measure_energy,
     )
-    from physicsnemo.mesh.functional import radial_basis_function_deform_points
     from physicsnemo.mesh.primitives.planar import unit_square
+    from physicsnemo.mesh.transformations.deform import radial_basis_function_deform
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     implementation = "warp" if device == "cuda" else "torch"
@@ -133,12 +133,12 @@ orientation loss.
                 target_displacement.unsqueeze(0),
             )
         )
-        points = radial_basis_function_deform_points(
-            reference.points,
+        points = radial_basis_function_deform(
+            reference,
             controls,
             control_displacements,
             implementation=implementation,
-        )
+        ).points
         energy = (
             0.05 * simplex_strain_energy(reference, points)
             + 80.0 * total_measure_energy(reference, points)

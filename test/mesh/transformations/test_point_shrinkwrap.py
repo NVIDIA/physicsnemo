@@ -24,10 +24,11 @@ import math
 import pytest
 import torch
 
-import physicsnemo.mesh.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.mesh.functional import shrinkwrap_points
-from physicsnemo.mesh.functional.geometry import ShrinkwrapPoints
+from physicsnemo.mesh.transformations.deform._kernels import (
+    ShrinkwrapPoints,
+    shrinkwrap_points,
+)
 
 
 def _triangle(
@@ -94,10 +95,8 @@ def _differentiable_case(
 def test_public_api_and_function_spec_registration():
     assert shrinkwrap_points.__name__ == "shrinkwrap_points"
     assert shrinkwrap_points.__module__ == (
-        "physicsnemo.mesh.functional.geometry.deform.shrinkwrap"
+        "physicsnemo.mesh.transformations.deform._kernels.shrinkwrap"
     )
-    assert functional.shrinkwrap_points is shrinkwrap_points
-    assert not hasattr(functional, "ShrinkwrapPoints")
     assert issubclass(ShrinkwrapPoints, FunctionSpec)
     assert list(inspect.signature(shrinkwrap_points).parameters) == [
         "points",
@@ -153,7 +152,7 @@ def test_triangle_interior_edges_and_vertices(device: str, dtype: torch.dtype):
 
     assert output.shape == points.shape
     assert output.dtype == dtype
-    assert output.device == device
+    assert output.device.type == device.type
     torch.testing.assert_close(output, expected)
 
 
@@ -1648,7 +1647,7 @@ def test_benchmark_inputs_satisfy_backend_comparators(device: str):
 
 def test_warp_nearest_face_custom_op_opcheck():
     pytest.importorskip("warp")
-    from physicsnemo.mesh.functional.geometry.deform._warp_impl import (
+    from physicsnemo.mesh.transformations.deform._kernels._warp_impl import (
         nearest_surface_faces_warp_impl,
     )
 
@@ -1711,7 +1710,9 @@ def test_warp_unsafe_target_scale_uses_torch_fallback(
     query_base: list[list[float]],
 ):
     pytest.importorskip("warp")
-    from physicsnemo.mesh.functional.geometry.deform._warp_impl import shrinkwrap_op
+    from physicsnemo.mesh.transformations.deform._kernels._warp_impl import (
+        shrinkwrap_op,
+    )
 
     device = torch.device(device)
     target_points = (
@@ -1768,7 +1769,7 @@ def test_warp_float32_target_scale_gate(
     edge_scale: float,
     expected_safe: bool,
 ):
-    from physicsnemo.mesh.functional.geometry.deform._warp_impl.shrinkwrap_op import (
+    from physicsnemo.mesh.transformations.deform._kernels._warp_impl.shrinkwrap_op import (
         _float32_target_search_is_safe,
     )
 

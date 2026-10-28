@@ -23,7 +23,7 @@ import sys
 
 import pytest
 
-import physicsnemo.mesh.functional
+import physicsnemo.mesh.calculus
 import physicsnemo.utils
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import functional
@@ -57,25 +57,39 @@ def test_from_import_of_moved_name_warns():
     [(module, name) for module, names in MOVED_TO_MESH.items() for name in names],
 )
 def test_moved_to_mesh_name_warns_and_returns_mesh_object(module, name):
-    """The old name warns at the caller, names the new import, and returns the
-    object from physicsnemo.mesh.functional."""
-    new_module = module.replace("nn.functional", "mesh.functional")
+    """The old name warns at the caller and returns the object mesh defines."""
     with pytest.warns(
-        LegacyFeatureWarning, match=re.escape(f"from {new_module} import {name}")
+        LegacyFeatureWarning,
+        match=re.escape(f"Importing {name!r} from {module!r} is deprecated"),
     ) as record:
         legacy = getattr(importlib.import_module(module), name)
 
     caller = next(w for w in record if issubclass(w.category, LegacyFeatureWarning))
     assert caller.filename == __file__
-    assert legacy is getattr(importlib.import_module(new_module), name)
+    assert legacy.__module__.startswith("physicsnemo.mesh.")
+    assert getattr(importlib.import_module(legacy.__module__), name) is legacy
+
+
+@pytest.mark.parametrize(
+    ("name", "use_instead"),
+    [
+        ("mesh_lsq_gradient", "physicsnemo.mesh.calculus.mesh_lsq_gradient"),
+        ("morph_points", "physicsnemo.mesh.transformations.deform.morph on a Mesh"),
+        ("remeshing", "physicsnemo.mesh.remeshing.remesh on a Mesh"),
+    ],
+)
+def test_moved_to_mesh_warning_names_the_replacement(name, use_instead):
+    """Names with a public replacement say what to use instead."""
+    with pytest.warns(LegacyFeatureWarning, match=re.escape(f"Use {use_instead}")):
+        getattr(functional, name)
 
 
 def test_from_import_of_moved_mesh_name_warns():
     """The import that the DoMINO examples used still works, with a warning."""
-    with pytest.warns(LegacyFeatureWarning, match="mesh.functional.derivatives"):
+    with pytest.warns(LegacyFeatureWarning, match="mesh.calculus.mesh_lsq_gradient"):
         from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
 
-    assert mesh_lsq_gradient is physicsnemo.mesh.functional.mesh_lsq_gradient
+    assert mesh_lsq_gradient is physicsnemo.mesh.calculus.mesh_lsq_gradient
 
 
 def test_wildcard_import_keeps_moved_names():
@@ -87,7 +101,7 @@ def test_wildcard_import_keeps_moved_names():
     for name in MOVED_TO_UTILS:
         assert namespace[name] is getattr(physicsnemo.utils, name)
     for name in MOVED_TO_MESH["physicsnemo.nn.functional"]:
-        assert namespace[name] is getattr(physicsnemo.mesh.functional, name)
+        assert namespace[name].__module__.startswith("physicsnemo.mesh.")
 
 
 @pytest.mark.parametrize("module", list(MOVED_TO_MESH))

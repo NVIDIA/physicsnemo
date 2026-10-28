@@ -309,7 +309,7 @@ class GradientsLeastSquares(torch.nn.Module):
 
     def forward(self, input_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # Lazy import (see GradientsFiniteDifference.forward for rationale).
-        from physicsnemo.mesh.functional.derivatives import mesh_lsq_gradient
+        from physicsnemo.mesh.calculus import mesh_lsq_gradient
 
         coords = input_dict["coordinates"].detach()
         connectivity = input_dict["connectivity_tensor"]

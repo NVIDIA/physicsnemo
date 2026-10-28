@@ -25,7 +25,7 @@ layers =
 ignore_imports =
    # Deprecated nn.functional aliases of the mesh functionals; remove with
    # physicsnemo/nn/functional/_moved_to_mesh.py when mesh becomes a library.
-   physicsnemo.nn.functional._moved_to_mesh -> physicsnemo.mesh.functional
+   physicsnemo.nn.functional._moved_to_mesh -> physicsnemo.mesh.**
 
 [importlinter:contract:physicsnemo-core]
 name = Control Dependencies in PhysicsNeMo core
@@ -85,7 +85,7 @@ layers =
 ignore_imports =
    # Deprecated nn.functional aliases of the mesh functionals; remove with
    # physicsnemo/nn/functional/_moved_to_mesh.py when mesh becomes a library.
-   physicsnemo.nn.functional._moved_to_mesh -> physicsnemo.mesh.functional
+   physicsnemo.nn.functional._moved_to_mesh -> physicsnemo.mesh.**
 
 [importlinter:contract:physicsnemo-nn-gnn-layers]
 name = Control Internal Dependencies in PhysicsNeMo nn GNN Layers

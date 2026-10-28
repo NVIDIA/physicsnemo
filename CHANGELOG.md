@@ -176,7 +176,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rounding.
 - Mesh LSQ gradients (`Mesh.gradient`, `curl`, `divergence`,
   `compute_point_derivatives`, `compute_cell_derivatives`, and the torch
-  backend of `physicsnemo.mesh.functional.mesh_lsq_gradient`) solve the float32
+  backend of `physicsnemo.mesh.calculus.mesh_lsq_gradient`) solve the float32
   systems of all points or cells at once rather than one neighbor count at a
   time, and the derivatives of several fields share their least-squares
   systems. On a GB200, the gradient of a 5.1M-tet mesh is 2.4x faster and
@@ -255,7 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subsequent multiplication by geometric areas.
 
 - LSQ point gradients on large surface meshes are about 2x faster on GPU, and
-  LSQ gradients (`Mesh` and `physicsnemo.mesh.functional.mesh_lsq_gradient`)
+  LSQ gradients (`Mesh` and `physicsnemo.mesh.calculus.mesh_lsq_gradient`)
   synchronize the GPU much less often. LSQ and DEC derivatives also need less
   peak memory.
 
@@ -334,13 +334,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `weighted_multinomial` and `WeightedMultinomial` moved from
   `physicsnemo.nn.functional` to `physicsnemo.utils`. Importing them from
   `physicsnemo.nn.functional` still works but emits `LegacyFeatureWarning`.
-- Mesh functionals moved from `physicsnemo.nn.functional` to the new
-  `physicsnemo.mesh.functional`, so that `physicsnemo.mesh` can become its own
-  library: `mesh_lsq_gradient`, `mesh_green_gauss_gradient`, `remeshing`,
-  `ray_mesh_intersect`, `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`,
-  and the point deformations and deformation energies. Their old names in
-  `physicsnemo.nn.functional` and its `derivatives` and `geometry` subpackages
-  still work but emit `LegacyFeatureWarning`, and their old submodules are gone.
+- Mesh functionals moved from `physicsnemo.nn.functional` into the
+  `physicsnemo.mesh` modules that use them, so that `physicsnemo.mesh` can become
+  its own library. `mesh_lsq_gradient` is now
+  `physicsnemo.mesh.calculus.mesh_lsq_gradient`. The rest, such as `morph_points`
+  and `remeshing`, are private behind the `Mesh` operations that wrap them.
+  Their old names in `physicsnemo.nn.functional` and its `derivatives` and
+  `geometry` subpackages still work but emit `LegacyFeatureWarning`.
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is
   deprecated in favour of `relative_mse`, which names what it always
   computed (target-normalized relative MSE, no square root) and delegates

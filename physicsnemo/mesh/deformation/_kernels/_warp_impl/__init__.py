@@ -6,7 +6,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,11 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fixtures for the mesh functional tests.
+"""Warp backends for the deformation energies."""
 
-These tests moved here from ``test/nn/functional``. They keep the root
-``device`` fixture they were written for (``"cuda:0"``, collected only when
-CUDA is available) rather than the mesh one (``"cuda"``, always collected).
-"""
+from .energy_op import (
+    closed_surface_volume_contributions_warp,
+    hinge_bending_terms_warp,
+    simplex_inversion_terms_warp,
+    simplex_measure_components_warp,
+    simplex_stvk_terms_warp,
+)
 
-from test.conftest import device  # noqa: F401
+__all__ = [
+    "closed_surface_volume_contributions_warp",
+    "hinge_bending_terms_warp",
+    "simplex_inversion_terms_warp",
+    "simplex_measure_components_warp",
+    "simplex_stvk_terms_warp",
+]

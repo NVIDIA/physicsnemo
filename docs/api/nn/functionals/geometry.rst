@@ -1,9 +1,8 @@
 Geometry Functionals
 ====================
 
-The mesh geometry functionals (point deformation, deformation energies,
-remeshing, ray intersection, Poisson disk sampling, and voxel fractions) are in
-:doc:`physicsnemo.mesh.functional <../../mesh/functional>`.
+Point deformation, deformation energies, and surface remeshing moved into
+:doc:`PhysicsNeMo-Mesh <../../mesh/index>`, as operations on a ``Mesh``.
 
 Signed Distance Field
 ---------------------

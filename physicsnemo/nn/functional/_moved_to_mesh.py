@@ -16,38 +16,50 @@
 
 """Deprecated ``physicsnemo.nn.functional`` names of the mesh functionals.
 
-These functionals moved to ``physicsnemo.mesh.functional``. ``nn`` must not
-import ``mesh``, so the old names resolve lazily, on first access. Remove this
-module, the ``__getattr__`` hooks that call it, and its ``.importlinter``
-exception when ``physicsnemo.mesh`` becomes its own library.
+These functionals moved into the ``physicsnemo.mesh`` modules that use them:
+``mesh_lsq_gradient`` into ``physicsnemo.mesh.calculus``, the rest as private
+kernels. ``nn`` must not import ``mesh``, so the old names resolve lazily, on
+first access. Remove this module, the ``__getattr__`` hooks that call it, and
+its ``.importlinter`` exception when ``physicsnemo.mesh`` becomes its own
+library.
 """
 
 import warnings
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 
-_DERIVATIVES = ("mesh_green_gauss_gradient", "mesh_lsq_gradient")
-_GEOMETRY = (
+_DEFORM = "physicsnemo.mesh.transformations.deform"
+_ENERGIES = (
     "closed_surface_volume_energy",
-    "displace_points",
-    "free_form_deform_points",
-    "mesh_poisson_disk_sample",
-    "mesh_to_voxel_fraction",
-    "morph_points",
-    "radial_basis_function_deform_points",
-    "ray_mesh_intersect",
-    "remeshing",
-    "shrinkwrap_points",
     "simplex_inversion_energy",
     "simplex_measure_energy",
     "simplex_strain_energy",
-    "sobolev_deform_points",
     "surface_bending_energy",
     "total_measure_energy",
 )
 
-# Old module -> the names it exported that now live in the module of the same
-# path under physicsnemo.mesh.functional.
+# Each moved function -> its public replacement, or None if it has none.
+_USE_INSTEAD = {
+    "mesh_green_gauss_gradient": None,
+    "mesh_lsq_gradient": "physicsnemo.mesh.calculus.mesh_lsq_gradient",
+    "displace_points": f"{_DEFORM}.displace on a Mesh",
+    "free_form_deform_points": f"{_DEFORM}.free_form_deform on a Mesh",
+    "morph_points": f"{_DEFORM}.morph on a Mesh",
+    "radial_basis_function_deform_points": (
+        f"{_DEFORM}.radial_basis_function_deform on a Mesh"
+    ),
+    "shrinkwrap_points": f"{_DEFORM}.shrinkwrap on a Mesh",
+    "sobolev_deform_points": f"{_DEFORM}.sobolev_deform on a Mesh",
+    **{name: f"physicsnemo.mesh.deformation.{name} on a Mesh" for name in _ENERGIES},
+    "remeshing": "physicsnemo.mesh.remeshing.remesh on a Mesh",
+    "mesh_poisson_disk_sample": None,
+    "mesh_to_voxel_fraction": None,
+    "ray_mesh_intersect": None,
+}
+_DERIVATIVES = ("mesh_green_gauss_gradient", "mesh_lsq_gradient")
+_GEOMETRY = tuple(name for name in _USE_INSTEAD if name not in _DERIVATIVES)
+
+# Old module -> the names it exported that moved into physicsnemo.mesh.
 MOVED_TO_MESH = {
     "physicsnemo.nn.functional": _DERIVATIVES + _GEOMETRY,
     "physicsnemo.nn.functional.derivatives": _DERIVATIVES
@@ -75,7 +87,7 @@ MOVED_TO_MESH = {
 
 
 def moved_to_mesh(module: str, name: str):
-    """Return ``name`` from its new mesh module, with a deprecation warning.
+    """Return ``name`` from the mesh module that now holds it, with a warning.
 
     For a module ``__getattr__``: raises ``AttributeError`` for names that did
     not move.
@@ -83,18 +95,30 @@ def moved_to_mesh(module: str, name: str):
     if name not in MOVED_TO_MESH[module]:
         raise AttributeError(f"module {module!r} has no attribute {name!r}")
 
-    from physicsnemo.mesh import functional
+    from physicsnemo.mesh.calculus import _green_gauss_gradient, _lsq_gradient
+    from physicsnemo.mesh.deformation import _kernels as energies
+    from physicsnemo.mesh.remeshing import _kernels as remeshing
+    from physicsnemo.mesh.sampling import _poisson_disk
+    from physicsnemo.mesh.spatial import _ray_mesh_intersect, _voxel_fraction
+    from physicsnemo.mesh.transformations.deform import _kernels as deform
 
-    new_module = {
-        "physicsnemo.nn.functional": functional,
-        "physicsnemo.nn.functional.derivatives": functional.derivatives,
-        "physicsnemo.nn.functional.geometry": functional.geometry,
-    }[module]
+    homes = (
+        _green_gauss_gradient,
+        _lsq_gradient,
+        deform,
+        energies,
+        remeshing,
+        _poisson_disk,
+        _ray_mesh_intersect,
+        _voxel_fraction,
+    )
+    home = next(home for home in homes if name in home.__all__)
+    use_instead = _USE_INSTEAD.get(name)
     warnings.warn(
-        f"Importing {name!r} from {module!r} is deprecated. "
-        f"Use 'from {new_module.__name__} import {name}' instead. "
-        "This backward-compatibility shim will be removed in a future release.",
+        f"Importing {name!r} from {module!r} is deprecated and will stop working "
+        "in a future release."
+        + (f" Use {use_instead} instead." if use_instead else ""),
         LegacyFeatureWarning,
         stacklevel=3,
     )
-    return getattr(new_module, name)
+    return getattr(home, name)

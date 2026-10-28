@@ -199,8 +199,9 @@ def my_op(x):
 
 Functionals live under `physicsnemo/nn/functional` and must be re-exported from
 `physicsnemo/nn/functional/__init__.py`. Functionals that only meshes use live
-under `physicsnemo/mesh/functional` instead, with the same layout, and are
-re-exported from `physicsnemo/mesh/functional/__init__.py`.
+instead as private modules in the `physicsnemo.mesh` module that uses them.
+Export one from that module's `__init__.py` only when code outside mesh needs
+it.
 
 **Rationale:**
 
@@ -415,8 +416,8 @@ def make_inputs_forward(cls, device="cpu"):
 
 **Description:**
 
-Add tests under `test/nn/functional/` (`test/mesh/functional/` for mesh
-functionals) to validate selection, optional dependencies, and output
+Add tests under `test/nn/functional/` (for mesh functionals, the matching
+`test/mesh/` directory) to validate selection, optional dependencies, and output
 correctness.
 
 Use a consistent test layout when possible. This is **highly recommended** for
@@ -519,9 +520,10 @@ FUNCTIONAL_SPECS = (MyFunctionalWithoutInputs,)
 **Description:**
 
 Warp-backed functionals in `physicsnemo/nn/functional/**` and
-`physicsnemo/mesh/functional/**` must be integrated into PyTorch using `torch.library.custom_op`, `register_fake`, and (when
-backward is supported) `register_autograd`. Do not use
-`torch.autograd.Function` wrappers for Warp-backed functionals.
+`physicsnemo/mesh/**` must be integrated into PyTorch using
+`torch.library.custom_op`, `register_fake`, and (when backward is supported)
+`register_autograd`. Do not use `torch.autograd.Function` wrappers for
+Warp-backed functionals.
 
 If a functional has no meaningful backward path, `register_autograd` is not
 required; otherwise, the custom op must register a backward implementation.

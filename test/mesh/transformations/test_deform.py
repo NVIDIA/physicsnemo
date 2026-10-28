@@ -384,7 +384,7 @@ def test_domain_morph_evaluates_combined_components_once(monkeypatch):
     }
 
     deform_module = importlib.import_module(
-        "physicsnemo.mesh.functional.geometry.deform"
+        "physicsnemo.mesh.transformations.deform._kernels"
     )
     original = deform_module.morph_points
     calls: list[torch.Tensor] = []
@@ -415,7 +415,7 @@ def test_domain_morph_evaluates_combined_components_once(monkeypatch):
 def test_domain_morph_single_component_avoids_concatenation(monkeypatch):
     domain = DomainMesh(interior=_triangle_mesh())
     deform_module = importlib.import_module(
-        "physicsnemo.mesh.functional.geometry.deform"
+        "physicsnemo.mesh.transformations.deform._kernels"
     )
     original = deform_module.morph_points
     received_points: list[torch.Tensor] = []

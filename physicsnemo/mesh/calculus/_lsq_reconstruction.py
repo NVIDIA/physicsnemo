@@ -118,7 +118,7 @@ def _compute_point_gradients_lsq(
     adjacency = mesh.get_point_to_points_adjacency()
 
     ### Delegate LSQ solve to the torch backend of the functional API.
-    from physicsnemo.mesh.functional.derivatives.mesh_lsq_gradient._torch_impl import (
+    from physicsnemo.mesh.calculus._lsq_gradient._torch_impl import (
         _mesh_lsq_gradients_torch,
     )
 
@@ -181,7 +181,7 @@ def _compute_cell_gradients_lsq(
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
 
     ### Delegate LSQ solve to the torch backend of the functional API.
-    from physicsnemo.mesh.functional.derivatives.mesh_lsq_gradient._torch_impl import (
+    from physicsnemo.mesh.calculus._lsq_gradient._torch_impl import (
         _mesh_lsq_gradients_torch,
     )
 

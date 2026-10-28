@@ -23,8 +23,8 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.functional import sobolev_deform_points
 from physicsnemo.mesh.transformations.deform import sobolev_deform
+from physicsnemo.mesh.transformations.deform._kernels import sobolev_deform_points
 
 
 def _surface_mesh(*, requires_grad: bool = False) -> Mesh:

@@ -271,7 +271,7 @@ def free_form_deform(
         else _resolve_point_field(mesh, point_weights, argument_name="point_weights")
     )
     origin, extent = _default_lattice_box(mesh.points, origin, extent)
-    from physicsnemo.mesh.functional.geometry.deform import free_form_deform_points
+    from physicsnemo.mesh.transformations.deform._kernels import free_form_deform_points
 
     points = free_form_deform_points(
         mesh.points,

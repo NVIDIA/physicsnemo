@@ -70,7 +70,6 @@ docs/api/datapipes/physicsnemo.datapipes.transforms.rst @megnvidia @coreyjadams
 
 # Mesh documentation
 docs/api/mesh/ @megnvidia @peterdsharpe
-docs/api/mesh/functional.rst @megnvidia @loliverhennigh @peterdsharpe
 
 # Metrics documentation
 docs/api/physicsnemo.metrics.rst @megnvidia @dallasfoster @nickgeneva
@@ -223,8 +222,13 @@ physicsnemo/utils/profiling/ @coreyjadams
 
 physicsnemo/mesh/ @peterdsharpe
 physicsnemo/mesh/transformations/deform/ @mehdiataei @loliverhennigh @peterdsharpe
-physicsnemo/mesh/functional/ @loliverhennigh @peterdsharpe
-physicsnemo/mesh/functional/geometry/deform/ @mehdiataei @loliverhennigh @peterdsharpe
+physicsnemo/mesh/calculus/_green_gauss_gradient/ @loliverhennigh @peterdsharpe
+physicsnemo/mesh/calculus/_lsq_gradient/ @loliverhennigh @peterdsharpe
+physicsnemo/mesh/deformation/_kernels/ @mehdiataei @loliverhennigh @peterdsharpe
+physicsnemo/mesh/remeshing/_kernels/ @loliverhennigh @peterdsharpe
+physicsnemo/mesh/sampling/_poisson_disk/ @loliverhennigh @peterdsharpe
+physicsnemo/mesh/spatial/_ray_mesh_intersect/ @loliverhennigh @peterdsharpe
+physicsnemo/mesh/spatial/_voxel_fraction/ @loliverhennigh @peterdsharpe
 
 # ==============================================================================
 # METRICS

@@ -18,8 +18,10 @@ import numpy as np
 import pytest
 import torch
 
-from physicsnemo.mesh.functional import mesh_poisson_disk_sample
-from physicsnemo.mesh.functional.geometry import MeshPoissonDiskSample
+from physicsnemo.mesh.sampling._poisson_disk import (
+    MeshPoissonDiskSample,
+    mesh_poisson_disk_sample,
+)
 from test.conftest import requires_module
 
 
