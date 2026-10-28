@@ -171,7 +171,7 @@ def test_mean_does_not_retain_second_moment(device):
     value = torch.arange(12, device=device, dtype=torch.float32).reshape(4, 3)
     stats = Mean(mode="tensor")
     stats.update(value)
-    assert stats._moments.m2 is None
+    assert "m2" not in stats._moments._state
     snapshot = stats.finalize()
     snapshot.fill_(99)
     torch.testing.assert_close(stats.finalize(), value.mean(0))
@@ -249,13 +249,13 @@ def test_empty_updates_do_not_retain_extra_field(device, statistic, monkeypatch)
 
     monkeypatch.setattr(state, "finalize", forbidden_read)
     assert state.update(data[:0]) is None
-    assert state._moments.template is None
+    assert state._moments._template is None
     state.combine(statistic(mode="tensor", like=data[0]))
-    assert state._moments.template is None
+    assert state._moments._template is None
     actual = (
-        state._moments.read_mean()
+        state._moments.finalize()
         if statistic is Mean
-        else state._moments.read_variance(1)
+        else state._moments.finalize(correction=1)
     )
     torch.testing.assert_close(actual, expected)
 
@@ -354,3 +354,14 @@ def test_deprecated_base_wildcard_import(module_name, other_exports):
     assert isinstance(namespace["LegacyStatistic"]((3,)), StreamingStatistic)
     for name in other_exports:
         assert namespace[name] is getattr(module, name)
+
+
+@pytest.mark.parametrize("statistic", [Mean, Variance])
+def test_combine_empty_accumulator_retains_explicit_precision(device, statistic):
+    """Combining an empty configured accumulator still settles its precision."""
+    state = statistic(mode="tensor")
+    state.combine(statistic(mode="tensor", dtype=torch.float64))
+    assert state.count == 0
+    assert state.dtype == torch.float64
+    state.update(torch.ones(3, 2, device=device, dtype=torch.float32))
+    assert state.finalize().dtype == torch.float64

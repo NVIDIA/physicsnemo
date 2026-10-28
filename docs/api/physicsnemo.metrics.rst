@@ -233,7 +233,34 @@ float32 raise an error. An explicit ``dtype`` permits casts to that precision. `
 ``like=template`` can fix the output shape/device/layout before the first update.
 Empty reads and insufficient sample counts for the requested correction raise
 ``ValueError``. Tensor-mode ``update`` returns None; read results with ``finalize``
-(or ``Variance.mean``). Only elementwise, equally weighted moments are included.
+(or ``Variance.mean``). The built-in mean and variance rules compute elementwise, equally weighted moments.
+
+The tensor-mode implementation composes a ``TensorAccumulator`` with a
+``MeanRule`` or ``VarianceRule``. A new statistic can reuse the same machinery:
+
+.. code-block:: python
+
+    from physicsnemo.metrics.general.tensor_accumulator import TensorAccumulator
+    from physicsnemo.metrics.general.moment_rules import MeanRule
+
+    stats = TensorAccumulator(MeanRule())
+    stats.update(predictions, dim=0)
+    mean = stats.finalize()
+
+A rule implements three pure operations: ``summarize`` produces sufficient
+statistics, ``merge`` combines independent states, and ``result`` reads a result.
+State is a dictionary of floating-point tensors and Python integers. Tensor fields
+may have different shapes, but each field retains its own shape and layout.
+The supplied ``reduce_sum`` helper completes distributed reductions before the
+rule performs nonlinear arithmetic. Rules compare equal only when their
+statistical configuration matches; frozen dataclasses suit the built-in rules.
+
+The accumulator handles detachment, precision, layout validation, ownership and
+lifecycle. Additional tensor inputs must match the values' shape and layout.
+``examples/minimal/uq/weighted_mean.py`` demonstrates an external weighted-mean
+rule, including collective validation for invalid weights. Extensibility does not
+provide a distributed algorithm for arbitrary statistics: the rule must define a
+mathematically valid merge and respect collective participation.
 
 For a GP mixture, stream the component means through ``Variance(correction=0,
 mode="tensor")`` and component variances through ``Mean(mode="tensor")``.
