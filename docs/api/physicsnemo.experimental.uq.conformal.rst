@@ -3,23 +3,23 @@ PhysicsNeMo Conformal Prediction
 
 .. currentmodule:: physicsnemo.experimental.uq.conformal
 
-Post hoc uncertainty quantification with conformal prediction. The module
-turns the outputs of a trained model into calibrated prediction intervals.
-The model is not retrained.
+This module quantifies uncertainty after training, with conformal
+prediction. It turns the outputs of a trained model into calibrated
+prediction intervals. You do not need to retrain the model.
 
 .. warning::
 
-    This module is experimental. Its API may change without a deprecation
+    This module is experimental. Its API can change without a deprecation
     period.
 
 Overview
 --------
 
-A trained model returns a prediction, a scalar, a vector, or a field, but
-not how far that prediction can be from the truth. Conformal prediction
-measures the model's errors on a held-out *calibration set*, picks a
-threshold from those errors, and turns each new prediction into bounds
-``(lo, hi)`` that contain the true value with a stated probability.
+A trained model returns a prediction, such as a scalar, a vector, or a
+field, but not how far that prediction can be from the truth. Conformal
+prediction measures the model's errors on a held-out *calibration set* and
+picks a threshold from those errors. It then turns each new prediction into
+bounds ``(lo, hi)`` that contain the true value with a stated probability.
 
 The guarantee holds for any model and any data distribution. It needs one
 assumption. The calibration samples and the new samples are
@@ -36,8 +36,8 @@ The workflow has three steps.
 3. Call ``predictor.predict_interval`` on each new model output to get
    ``(lo, hi)``.
 
-The predictor can be saved, loaded elsewhere, and checked on held-out data
-with a :class:`CoverageAccumulator`.
+You can save the predictor, load it elsewhere, and check it on held-out
+data with a :class:`CoverageAccumulator`.
 
 
 Quick Start
@@ -70,7 +70,7 @@ The calibrator sets what the guarantee covers and how the band width varies
 across the output. Pick it by the guarantee your application needs and by
 whether every sample has the same output layout.
 
-.. list-table::
+.. list-table:: Calibrator Guarantees
    :header-rows: 1
    :widths: 18 30 34 18
 
@@ -89,12 +89,12 @@ whether every sample has the same output layout.
      - One threshold times the per-point scale from the score (sigma for
        ``NormalizedErrorScore``) or from an ``AuxScale``. Constant with
        ``AbsoluteErrorScore`` alone.
-     - May differ.
+     - Can differ.
    * - :class:`RiskControlCalibrator`
      - The fraction of missed points is at most 10% in expectation. A
        single case may exceed it.
      - Same as the functional band, and narrower.
-     - May differ.
+     - Can differ.
 
 Start with :class:`RiskControlCalibrator` when the output size changes
 between samples, such as CFD results on different geometries. Use
@@ -103,12 +103,13 @@ matters, for example to bound the worst-case error over a surface. Both
 treat a sample as a whole. The functional band must hold at every point and
 every channel. Risk control counts a point as missed when any of its
 channels falls outside the band. Separate ``TensorDict`` fields get separate
-thresholds and separate guarantees. Use :class:`PointwiseCalibrator` when
-every sample has the same output layout and you need an interval for each
-output element. The layout can be a grid, a mesh, or a fixed set of outputs
-such as drag, lift, and moment coefficients. For a mesh, pass the
-coordinates as ``points=`` on every call and the calibrator and predictor
-reject any other mesh.
+thresholds and separate guarantees.
+
+Use :class:`PointwiseCalibrator` when every sample has the same output
+layout and you need an interval for each output element. The layout can be
+a grid, a mesh, or a fixed set of outputs such as drag, lift, and moment
+coefficients. For a mesh, pass the coordinates as ``points=`` on every
+call. The calibrator and predictor then reject any other mesh.
 
 Non-Uniform Meshes
 ^^^^^^^^^^^^^^^^^^
@@ -163,7 +164,7 @@ The score sets the shape of the interval. Pick it by what the model
 outputs. The score reads any extra model outputs from the ``aux``
 argument.
 
-.. list-table::
+.. list-table:: Built-In Scores
    :header-rows: 1
    :widths: 28 30 22 20
 
@@ -186,7 +187,7 @@ argument.
 
 :math:`t` is the threshold the calibrator fits. :class:`NormalizedErrorScore`
 gives narrow intervals where the model is confident and wide intervals
-where it is not, so it is the better choice when the model has a
+where it is not. It is the better choice when the model has a
 :math:`\sigma` head, an MC-dropout spread, or an ensemble spread.
 
 Pass ``sigma`` the same way at calibration and at prediction.
@@ -228,7 +229,7 @@ The Contract
 ^^^^^^^^^^^^
 
 Subclass :class:`NonconformityScore`, implement two methods, and register
-the class with :func:`register_score`. The two methods are
+the class with :func:`register_score`. The two methods are the following:
 
 - ``score(prediction, target, *, aux=None)`` returns the per-element score,
   where larger is worse.
@@ -273,7 +274,7 @@ Class Attributes
 Four class attributes tell the calibrators and predictors how to treat the
 score. All default to empty or ``False``.
 
-.. list-table::
+.. list-table:: Score Class Attributes
    :header-rows: 1
    :widths: 20 46 34
 
@@ -292,7 +293,7 @@ score. All default to empty or ``False``.
      - The constructor takes arguments. Their values must be ``bool``,
        ``int``, ``float``, or ``str``.
    * - ``signed_threshold``
-     - Scores, and so the fitted threshold, may be negative. Otherwise
+     - Scores, and so the fitted threshold, can be negative. Otherwise
        predictors reject a negative threshold.
      - The score is signed, as in :class:`QuantileRegressionScore`, where a
        negative threshold shrinks the band.
@@ -337,11 +338,11 @@ What the Base Class Handles
 
 Do not override ``interval``. It checks that every entry in ``aux_keys`` is
 present, converts the prediction and the threshold to float64, calls
-``bounds``, and rounds the interval outward to the prediction's dtype, so
-low-precision inputs keep the guarantee without any work in ``bounds``. The
-``aux`` entries reach ``bounds`` in their original dtype. Repeat any
-dtype-dependent step of ``score``, such as a clamp, before converting them
-to float64, so the two methods agree.
+``bounds``, and rounds the interval outward to the prediction's dtype.
+Low-precision inputs therefore keep the guarantee without any work in
+``bounds``. The ``aux`` entries reach ``bounds`` in their original dtype.
+Repeat any dtype-dependent step of ``score``, such as a clamp, before
+converting them to float64, so the two methods agree.
 
 Checking a Score
 ^^^^^^^^^^^^^^^^
@@ -361,9 +362,9 @@ needs its own registration. A saved predictor stores the registered name
 and the ``config_fields`` values, which must be ``bool``, ``int``, ``float``,
 or ``str`` so the file loads with ``weights_only=True``. Import the module
 that registers the class before :meth:`ConformalPredictor.load`. Otherwise
-``load`` raises and lists the registered names. Registering the same class
-again under the same name is allowed, for example when a notebook cell is
-re-run. Registering a different class under a name in use raises
+``load`` raises and lists the registered names. You can register the same
+class again under the same name, for example when you rerun a notebook
+cell. Registering a different class under a name in use raises
 ``ValueError``.
 
 
@@ -410,7 +411,7 @@ Saving and Checking a Predictor
 
 A fitted predictor saves to a single file that loads with
 ``torch.load(..., weights_only=True)``. Check its coverage on held-out data
-that was not used for calibration. The coverage report measures the same
+that you did not use for calibration. The coverage report measures the same
 quantity the calibrator guarantees. This example continues the Quick Start
 predictor, which uses :class:`AbsoluteErrorScore`. A predictor fitted with
 :class:`NormalizedErrorScore` also needs ``aux={"sigma": ...}`` on every
@@ -445,14 +446,14 @@ Practical Notes
     one calibration set to the next.
 
 **Single process.**
-    Calibration does not communicate across ranks. Predictions may come
+    Calibration does not communicate across ranks. Predictions can come
     from many GPUs, but gather every calibration sample onto the process
     that calls ``finalize``, so there is one threshold. A rank that
     calibrates on its own share still gets a valid guarantee when the
-    share was chosen independently of the data, for example by shard index,
-    but from fewer samples and with a different threshold on every rank. A
-    share chosen by looking at the data, such as the hardest cases, has no
-    guarantee.
+    share was chosen independently of the data, for example by shard index.
+    That guarantee rests on fewer samples, and every rank gets a different
+    threshold. A share chosen by looking at the data, such as the hardest
+    cases, has no guarantee.
 
 **Memory.**
     :class:`PointwiseCalibrator` and :class:`RiskControlCalibrator` keep the
