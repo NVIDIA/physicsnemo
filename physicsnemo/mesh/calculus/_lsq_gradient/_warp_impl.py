@@ -951,17 +951,7 @@ def setup_mesh_lsq_gradient_context(
         dist_eps,
     ) = inputs
     _ = output
-    values_fp32 = values.to(dtype=torch.float32).contiguous()
-    n_entities = values_fp32.shape[0]
-    ctx.save_for_backward(
-        points.to(dtype=torch.float32).contiguous(),
-        values_fp32.reshape(n_entities, -1).contiguous(),
-        neighbor_offsets.to(dtype=torch.int32, device=points.device).contiguous(),
-        neighbor_indices.to(dtype=torch.int32, device=points.device).contiguous(),
-    )
-    ctx.points_dtype = points.dtype
-    ctx.value_shape = values.shape
-    ctx.values_dtype = values.dtype
+    ctx.save_for_backward(points, values, neighbor_offsets, neighbor_indices)
     ctx.weight_power = float(weight_power)
     ctx.min_neighbors = int(min_neighbors)
     ctx.reg_eps = float(reg_eps)
@@ -974,16 +964,52 @@ def backward_mesh_lsq_gradient(
 ) -> tuple[
     torch.Tensor | None, torch.Tensor | None, None, None, None, None, None, None
 ]:
-    """Backward pass for LSQ custom op."""
+    """Backward pass for LSQ custom op.
+
+    The Warp backward kernels are not differentiable. For higher-order autograd
+    (``create_graph=True``) the gradients come from differentiating the
+    equivalent PyTorch solve instead.
+    """
     needs_points = ctx.needs_input_grad[0]
     needs_values = ctx.needs_input_grad[1]
     if grad_output is None or (not needs_points and not needs_values):
         return None, None, None, None, None, None, None, None
 
-    points_fp32, values_flat_fp32, offsets_i32, indices_i32 = ctx.saved_tensors
-    grad_output_fp32 = grad_output.to(dtype=torch.float32).contiguous()
-    values_shape = ctx.value_shape
+    points, values, neighbor_offsets, neighbor_indices = ctx.saved_tensors
+    if torch.is_grad_enabled():
+        from ._torch_impl import mesh_lsq_gradient_torch
+
+        inputs = [
+            t
+            for t, needed in ((points, needs_points), (values, needs_values))
+            if needed
+        ]
+        output = mesh_lsq_gradient_torch(
+            points=points,
+            values=values,
+            neighbor_offsets=neighbor_offsets,
+            neighbor_indices=neighbor_indices,
+            weight_power=ctx.weight_power,
+            min_neighbors=ctx.min_neighbors,
+            safe_epsilon=ctx.dist_eps,
+        )
+        grads = iter(
+            torch.autograd.grad(output, inputs, grad_output, create_graph=True)
+        )
+        grad_points = next(grads) if needs_points else None
+        grad_values = next(grads) if needs_values else None
+        return grad_points, grad_values, None, None, None, None, None, None
+
+    values_shape = values.shape
     n_entities = values_shape[0]
+    points_fp32 = points.to(dtype=torch.float32).contiguous()
+    values_flat_fp32 = (
+        values.to(dtype=torch.float32).reshape(n_entities, -1).contiguous()
+    )
+    offsets_i32 = neighbor_offsets.to(dtype=torch.int32, device=points.device)
+    indices_i32 = neighbor_indices.to(dtype=torch.int32, device=points.device)
+    offsets_i32, indices_i32 = offsets_i32.contiguous(), indices_i32.contiguous()
+    grad_output_fp32 = grad_output.to(dtype=torch.float32).contiguous()
     value_shape = values_shape[1:]
     n_components = int(torch.tensor(value_shape).prod().item()) if value_shape else 1
 
@@ -1011,8 +1037,8 @@ def backward_mesh_lsq_gradient(
             wp_stream=wp_stream,
         )
         grad_points = grad_points_fp32
-        if grad_points.dtype != ctx.points_dtype:
-            grad_points = grad_points.to(dtype=ctx.points_dtype)
+        if grad_points.dtype != points.dtype:
+            grad_points = grad_points.to(dtype=points.dtype)
     if needs_values:
         grad_values_flat = torch.empty(
             (n_entities, n_components),
@@ -1036,8 +1062,8 @@ def backward_mesh_lsq_gradient(
     grad_values = None
     if needs_values and grad_values_flat is not None:
         grad_values = grad_values_flat.reshape(values_shape)
-        if grad_values.dtype != ctx.values_dtype:
-            grad_values = grad_values.to(dtype=ctx.values_dtype)
+        if grad_values.dtype != values.dtype:
+            grad_values = grad_values.to(dtype=values.dtype)
     return grad_points, grad_values, None, None, None, None, None, None
 
 

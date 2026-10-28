@@ -145,6 +145,7 @@ Two methods compute the operators:
 
       - Gradient, divergence, and curl
       - At points and at cells
+      - Point clouds with their own neighbor graph, through ``adjacency=``
       - ``method="lsq"``
 
       **Watch out:** LSQ has no Laplacian.
@@ -333,7 +334,6 @@ Summary
    compute_curl_points_lsq
    compute_curl_cells_lsq
    compute_laplacian_points_dec
-   mesh_lsq_gradient
 
 .. rubric:: Integration and Measures
 
@@ -391,8 +391,6 @@ Derivatives
 .. autofunction:: compute_curl_cells_lsq
 
 .. autofunction:: compute_laplacian_points_dec
-
-.. autofunction:: mesh_lsq_gradient
 
 Integration and Measures
 ^^^^^^^^^^^^^^^^^^^^^^^^

@@ -199,9 +199,10 @@ def my_op(x):
 
 Functionals live under `physicsnemo/nn/functional` and must be re-exported from
 `physicsnemo/nn/functional/__init__.py`. Functionals that only meshes use live
-instead as private modules in the `physicsnemo.mesh` module that uses them.
-Export one from that module's `__init__.py` only when code outside mesh needs
-it.
+instead as private modules in the `physicsnemo.mesh` module that uses them,
+behind its functions that take a `Mesh`. Expose a new capability as an argument
+of such a function, such as `adjacency=` or `implementation=`, rather than as a
+new public functional.
 
 **Rationale:**
 

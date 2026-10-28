@@ -17,8 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.mesh.calculus import mesh_lsq_gradient
-from physicsnemo.mesh.calculus._lsq_gradient import MeshLSQGradient
+from physicsnemo.mesh.calculus._lsq_gradient import MeshLSQGradient, mesh_lsq_gradient
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 

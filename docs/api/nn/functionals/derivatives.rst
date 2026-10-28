@@ -1,7 +1,8 @@
 Derivative Functionals
 ======================
 
-``mesh_lsq_gradient`` moved to :func:`physicsnemo.mesh.calculus.mesh_lsq_gradient`.
+For least-squares gradients on meshes and point clouds, use
+:func:`physicsnemo.mesh.calculus.compute_gradient_points_lsq`.
 
 .. note::
 

@@ -26,13 +26,82 @@ Reference: Standard in CFD literature (Barth & Jespersen, AIAA 1989)
 """
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+    from physicsnemo.mesh.neighbors import Adjacency
+
+
+def _lsq_gradients(
+    mesh: "Mesh",
+    points: Float[torch.Tensor, "n_entities n_spatial_dims"],
+    values: Sequence[Float[torch.Tensor, "n_entities ..."]],
+    adjacency: "Adjacency",
+    weight_power: float,
+    min_neighbors: int,
+    implementation: Literal["torch", "warp"] | None,
+) -> list[Float[torch.Tensor, "n_entities n_spatial_dims ..."]]:
+    """LSQ gradients of several fields of one dtype, on the chosen backend.
+
+    ``None`` picks Warp, which is faster, wherever it is as accurate as PyTorch.
+    PyTorch keeps ``float64`` data (Warp computes in ``float32``), more than
+    three dimensions, empty inputs, and curves or surfaces in a
+    higher-dimensional space, whose ill-conditioned systems lose accuracy in
+    Warp's ``float32`` normal equations.
+    """
+    from physicsnemo.mesh.calculus._lsq_gradient import (
+        MeshLSQGradient,
+        mesh_lsq_gradient,
+    )
+
+    if implementation is None:
+        use_warp = (
+            "warp" in MeshLSQGradient.available_implementations()
+            and points.device.type in ("cpu", "cuda")
+            and 0 < points.shape[0]
+            and points.shape[1] <= 3
+            and not 0 < mesh.n_manifold_dims < mesh.n_spatial_dims
+            and torch.float64 not in {points.dtype, *(v.dtype for v in values)}
+        )
+        implementation = "warp" if use_warp else "torch"
+    elif implementation not in ("torch", "warp"):
+        raise ValueError(
+            f"Invalid {implementation=!r}. Must be 'torch', 'warp', or None."
+        )
+
+    if implementation == "torch":
+        from physicsnemo.mesh.calculus._lsq_gradient._torch_impl import (
+            _mesh_lsq_gradients_torch,
+        )
+
+        return _mesh_lsq_gradients_torch(
+            points=points,
+            values=values,
+            neighbor_offsets=adjacency.offsets,
+            neighbor_indices=adjacency.indices,
+            weight_power=weight_power,
+            min_neighbors=min_neighbors,
+        )
+
+    ### One Warp call for all fields: flatten, stack, and split the result.
+    flat = [v.reshape(v.shape[0], -1) for v in values]
+    gradients = mesh_lsq_gradient(
+        points,
+        torch.cat(flat, dim=1),
+        adjacency.offsets,
+        adjacency.indices,
+        weight_power=weight_power,
+        min_neighbors=min_neighbors,
+        implementation="warp",
+    )
+    return [
+        g.reshape(*g.shape[:2], *v.shape[1:])
+        for g, v in zip(gradients.split([f.shape[1] for f in flat], dim=2), values)
+    ]
 
 
 def compute_point_gradient_lsq(
@@ -111,24 +180,21 @@ def _compute_point_gradients_lsq(
     point_values: Sequence[Float[torch.Tensor, "n_points ..."]],
     weight_power: float = 2.0,
     min_neighbors: int = 0,
+    adjacency: "Adjacency | None" = None,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at vertices, by
     :func:`compute_point_gradient_lsq`, sharing their LSQ systems."""
-    ### Get point-to-point adjacency
-    adjacency = mesh.get_point_to_points_adjacency()
-
-    ### Delegate LSQ solve to the torch backend of the functional API.
-    from physicsnemo.mesh.calculus._lsq_gradient._torch_impl import (
-        _mesh_lsq_gradients_torch,
-    )
-
-    return _mesh_lsq_gradients_torch(
-        points=mesh.points,
-        values=point_values,
-        neighbor_offsets=adjacency.offsets,
-        neighbor_indices=adjacency.indices,
-        weight_power=weight_power,
-        min_neighbors=min_neighbors,
+    if adjacency is None:
+        adjacency = mesh.get_point_to_points_adjacency()
+    return _lsq_gradients(
+        mesh,
+        mesh.points,
+        point_values,
+        adjacency,
+        weight_power,
+        min_neighbors,
+        implementation,
     )
 
 
@@ -171,25 +237,16 @@ def _compute_cell_gradients_lsq(
     mesh: "Mesh",
     cell_values: Sequence[Float[torch.Tensor, "n_cells ..."]],
     weight_power: float = 2.0,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> list[Float[torch.Tensor, "n_cells n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at cells, by
     :func:`compute_cell_gradient_lsq`, sharing their LSQ systems."""
-    ### Get cell-to-cell adjacency
-    adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
-
-    ### Get cell centroids
-    cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
-
-    ### Delegate LSQ solve to the torch backend of the functional API.
-    from physicsnemo.mesh.calculus._lsq_gradient._torch_impl import (
-        _mesh_lsq_gradients_torch,
-    )
-
-    return _mesh_lsq_gradients_torch(
-        points=cell_centroids,
-        values=cell_values,
-        neighbor_offsets=adjacency.offsets,
-        neighbor_indices=adjacency.indices,
-        weight_power=weight_power,
-        min_neighbors=0,  # Cells may have fewer neighbors than points.
+    return _lsq_gradients(
+        mesh,
+        mesh.cell_centroids,
+        cell_values,
+        mesh.get_cell_to_cells_adjacency(adjacency_codimension=1),
+        weight_power,
+        0,  # Cells may have fewer neighbors than points.
+        implementation,
     )

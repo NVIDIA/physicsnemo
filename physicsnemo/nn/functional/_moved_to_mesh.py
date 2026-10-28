@@ -16,10 +16,9 @@
 
 """Deprecated ``physicsnemo.nn.functional`` names of the mesh functionals.
 
-These functionals moved into the ``physicsnemo.mesh`` modules that use them:
-``mesh_lsq_gradient`` into ``physicsnemo.mesh.calculus``, the rest as private
-kernels. ``nn`` must not import ``mesh``, so the old names resolve lazily, on
-first access. Remove this module, the ``__getattr__`` hooks that call it, and
+These functionals moved into the ``physicsnemo.mesh`` modules that use them,
+as private kernels behind their ``Mesh`` operations. ``nn`` must not import
+``mesh``, so the old names resolve lazily, on first access. Remove this module, the ``__getattr__`` hooks that call it, and
 its ``.importlinter`` exception when ``physicsnemo.mesh`` becomes its own
 library.
 """
@@ -41,7 +40,10 @@ _ENERGIES = (
 # Each moved function -> its public replacement, or None if it has none.
 _USE_INSTEAD = {
     "mesh_green_gauss_gradient": None,
-    "mesh_lsq_gradient": "physicsnemo.mesh.calculus.mesh_lsq_gradient",
+    "mesh_lsq_gradient": (
+        "physicsnemo.mesh.calculus.compute_gradient_points_lsq on a Mesh, with"
+        " adjacency= for your own neighbor graph,"
+    ),
     "displace_points": f"{_DEFORM}.displace on a Mesh",
     "free_form_deform_points": f"{_DEFORM}.free_form_deform on a Mesh",
     "morph_points": f"{_DEFORM}.morph on a Mesh",

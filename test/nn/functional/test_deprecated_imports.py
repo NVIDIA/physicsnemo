@@ -23,9 +23,9 @@ import sys
 
 import pytest
 
-import physicsnemo.mesh.calculus
 import physicsnemo.utils
 from physicsnemo.core.warnings import LegacyFeatureWarning
+from physicsnemo.mesh.calculus import _lsq_gradient
 from physicsnemo.nn import functional
 from physicsnemo.nn.functional._moved_to_mesh import MOVED_TO_MESH
 
@@ -73,7 +73,10 @@ def test_moved_to_mesh_name_warns_and_returns_mesh_object(module, name):
 @pytest.mark.parametrize(
     ("name", "use_instead"),
     [
-        ("mesh_lsq_gradient", "physicsnemo.mesh.calculus.mesh_lsq_gradient"),
+        (
+            "mesh_lsq_gradient",
+            "physicsnemo.mesh.calculus.compute_gradient_points_lsq on a Mesh",
+        ),
         ("morph_points", "physicsnemo.mesh.transformations.deform.morph on a Mesh"),
         ("remeshing", "physicsnemo.mesh.remeshing.remesh on a Mesh"),
     ],
@@ -86,10 +89,10 @@ def test_moved_to_mesh_warning_names_the_replacement(name, use_instead):
 
 def test_from_import_of_moved_mesh_name_warns():
     """The import that the DoMINO examples used still works, with a warning."""
-    with pytest.warns(LegacyFeatureWarning, match="mesh.calculus.mesh_lsq_gradient"):
+    with pytest.warns(LegacyFeatureWarning, match="compute_gradient_points_lsq"):
         from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
 
-    assert mesh_lsq_gradient is physicsnemo.mesh.calculus.mesh_lsq_gradient
+    assert mesh_lsq_gradient is _lsq_gradient.mesh_lsq_gradient
 
 
 def test_wildcard_import_keeps_moved_names():
