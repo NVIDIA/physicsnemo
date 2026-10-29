@@ -20,10 +20,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
+from jaxtyping import Float, Shaped
 from tensordict import TensorDict
 
 import physicsnemo.core
 from physicsnemo.core import Module
+from physicsnemo.diffusion import (
+    DiffusionExtraOutputs,
+    DiffusionExtraTimes,
+)
 
 # Directory for test reference data
 DATA_DIR = Path(__file__).parent / "data"
@@ -75,6 +80,49 @@ class Conv3dX0Predictor(Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         t_bc = t.view(-1, 1, 1, 1, 1)
         return self.net(x) / (1 + t_bc)
+
+
+class CustomExtraTimes(DiffusionExtraTimes):
+    r"""Additional time fields that callers can supply independently."""
+
+    r1: Float[torch.Tensor, " B"] | None = None
+    r2: Float[torch.Tensor, " B"] | None = None
+
+
+class StructuredDiffusionModel(Module):
+    r"""Linear model with optional destination times and learned loss weights."""
+
+    def __init__(self, output: str = "tuple"):
+        super().__init__()
+        self.output = output
+        self.gain = torch.nn.Parameter(torch.tensor(0.75))
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+        condition: TensorDict | None = None,
+        *,
+        offset: float = 0.0,
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
+        r"""Return a prediction, optionally paired with its loss weight."""
+        t, extra_times = t if isinstance(t, tuple) else (t, None)
+        t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))  # (B, 1, ...)
+        prediction = self.gain * x + t_bc + offset
+        if extra_times is not None:
+            for time in extra_times.to_tensordict().values():
+                prediction = prediction + time.reshape(-1, *([1] * (x.ndim - 1)))
+        if condition is not None:
+            prediction = prediction + condition["shift"]
+        if self.output == "tensor":
+            return prediction
+        return prediction, DiffusionExtraOutputs(
+            logvar=self.gain * t, batch_size=[x.shape[0]]
+        )
 
 
 def make_input(
