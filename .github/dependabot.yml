@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Dependabot keeps CI action pins and Python dependencies fresh so they do not
+# silently rot (e.g. Node-20 action deprecations, stale pre-commit hook revs).
+# Updates are grouped to minimize PR noise and scheduled weekly.
+
+version: 2
+updates:
+  # GitHub Actions used by the workflows in .github/workflows and the composite
+  # actions under .github/actions. Keeps SHA/tag pins current and patches
+  # deprecated runner (Node) versions.
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/.github/actions/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Python dependencies managed by uv (pyproject.toml + uv.lock).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    groups:
+      # One PR for routine patch/minor bumps; majors still open individually
+      # so they get deliberate review.
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
