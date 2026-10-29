@@ -16,7 +16,7 @@
 import torch
 
 from physicsnemo.experimental.models.healda.scatter_aggregator import ScatterAggregator
-from test import common
+from physicsnemo.testing import common
 
 
 def test_scatter_aggregator_forward(device):

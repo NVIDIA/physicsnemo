@@ -21,7 +21,7 @@ import torch
 
 from physicsnemo.core.module import ModelMetaData, Module
 from physicsnemo.core.registry import ModelRegistry
-from test import common
+from physicsnemo.testing import common
 
 registry = ModelRegistry()
 

@@ -22,7 +22,7 @@ from physicsnemo.nn.functional.derivatives import MeshGreenGaussGradient
 from physicsnemo.nn.functional.derivatives.mesh_green_gauss_gradient.utils import (
     build_neighbors,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 

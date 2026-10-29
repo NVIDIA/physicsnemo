@@ -26,7 +26,7 @@ from physicsnemo.nn import (
     SquarePlus,
     Stan,
 )
-from test import common
+from physicsnemo.testing import common
 
 
 def test_activation_identity(device):

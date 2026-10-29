@@ -18,6 +18,7 @@
 
 import pytest
 import torch
+
 from conftest import (
     assert_meshes_equal,
     make_domain_mesh,
@@ -25,7 +26,6 @@ from conftest import (
     make_point_cloud,
     write_unfinished_store,
 )
-
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.io import from_zarr, to_zarr
 

@@ -29,7 +29,7 @@ from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 from .utils import collective_assert_close, sharded_to_local, validate_shard_tensor_spec
 

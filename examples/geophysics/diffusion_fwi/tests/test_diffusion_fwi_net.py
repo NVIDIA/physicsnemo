@@ -22,7 +22,7 @@ import pytest
 import torch
 
 import physicsnemo
-from test import common  # noqa: E402
+from physicsnemo.testing import common  # noqa: E402
 
 
 def _create_diffusion_fwi_net(arch_type: str = "fwi_small", **kwargs):

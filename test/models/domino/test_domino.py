@@ -30,9 +30,9 @@ import torch
 
 from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS as model_params
 from physicsnemo.models.domino.config import Config
-from test.common.fwdaccuracy import save_output
-from test.common.utils import compare_output
-from test.conftest import requires_module
+from physicsnemo.testing.common.fwdaccuracy import save_output
+from physicsnemo.testing.common.utils import compare_output
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def validate_domino(

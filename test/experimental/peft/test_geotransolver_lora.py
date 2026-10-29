@@ -24,7 +24,7 @@ wraps as the LoRA_te_LayerNormMLP residual.
 import pytest
 import torch
 
-from test.conftest import requires_module  # noqa: E402
+from physicsnemo.testing.pytest_plugin import requires_module  # noqa: E402
 
 _ATTN = r"blocks\.\d+\.Attn\.(in_project_x|in_project_fx|qkv_project|out_linear|cross_[qkv])"
 

@@ -38,7 +38,7 @@ from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (  # noqa: E
 from physicsnemo.datapipes.healpix.timeseries_dataset import (  # noqa: E402
     TimeSeriesDataset,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 # per-variable (mean, std); values are distinct so we can tell which scaling
 # entry (and thus which channel axis) was selected.

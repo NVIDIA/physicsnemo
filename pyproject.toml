@@ -223,6 +223,7 @@ packages = ["physicsnemo"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "/conftest.py",
     "/.github",
     "/docs",
     "/examples",
@@ -395,6 +396,7 @@ exclude = ["docs", "physicsnemo/experimental"]
 
 # Ignore `S101` (assertions) in all `test` files.
 "test/*.py" = ["S101"]
+"physicsnemo/testing/**/*.py" = ["S101"]
 "examples/**/test_*.py" = ["S101"]
 
 

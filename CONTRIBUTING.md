@@ -302,7 +302,7 @@ The pipeline has following stages:
     test, you will have to review your changes and fix the issues.
     To run pytest locally you can simply run `pytest` inside the `test` folder.
 
-    While writing these tests, we encourage you to make use of the [`@import_of_fail`](https://github.com/NVIDIA/physicsnemo/blob/main/test/pytest_utils.py#L25)
+    While writing these tests, we encourage you to make use of the [`@requires_module`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/testing/pytest_plugin.py)
     decorator to appropriately skip your tests for developers and users not having your
     test specific dependencies. This mechanism helps us provide a better developer and
     user experience when working with the unit tests.

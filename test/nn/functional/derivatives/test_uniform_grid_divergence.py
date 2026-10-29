@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import uniform_grid_divergence
 from physicsnemo.nn.functional.derivatives import UniformGridDivergence
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 

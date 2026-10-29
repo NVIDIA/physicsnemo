@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from test import common
+from physicsnemo.testing import common
 from test.nn.module.healpix_helpers import MulX
 
 

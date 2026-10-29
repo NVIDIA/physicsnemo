@@ -18,7 +18,7 @@
 import torch
 from einops import rearrange, repeat
 
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.module import validate_utils
 
 

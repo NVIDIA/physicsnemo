@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import vector_field_to_rgba
 from physicsnemo.nn.functional.rendering import VectorFieldToRGBA
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _vector_field(device: torch.device | str, grid_n: int = 6) -> torch.Tensor:

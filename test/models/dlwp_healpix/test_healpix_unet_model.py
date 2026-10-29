@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo.models.dlwp_healpix import HEALPixUNet
-from test import common
+from physicsnemo.testing import common
 from test.models.graphcast.utils import fix_random_seeds
 
 

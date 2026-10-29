@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import mesh_lsq_gradient
 from physicsnemo.nn.functional.derivatives import MeshLSQGradient
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 

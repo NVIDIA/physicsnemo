@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.experimental.peft.lora import LoRALinear
-from test.conftest import requires_module  # noqa: E402
+from physicsnemo.testing.pytest_plugin import requires_module  # noqa: E402
 
 
 def test_forward_equals_base_at_init():

@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 # Mock a minimal net class for testing

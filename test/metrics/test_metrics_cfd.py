@@ -24,7 +24,7 @@ from physicsnemo.metrics.cae.cfd import (
     compute_tke_spectrum,
     dominant_freq_calc,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 pv = pytest.importorskip("pyvista")
 

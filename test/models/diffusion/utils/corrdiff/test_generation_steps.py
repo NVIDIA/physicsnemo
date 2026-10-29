@@ -19,7 +19,7 @@ from typing import Callable, Optional
 
 import torch
 
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 # Mock network class

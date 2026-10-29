@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import mesh_to_voxel_fraction
 from physicsnemo.nn.functional.geometry import MeshToVoxelFraction
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 # Build a deterministic watertight mesh and voxel-grid setup for tests.

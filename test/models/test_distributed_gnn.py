@@ -22,7 +22,7 @@ import pytest
 import torch
 
 from physicsnemo.distributed import DistributedManager, mark_module_as_shared
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _init_distributed(rank, world_size):

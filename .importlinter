@@ -14,8 +14,8 @@ exhaustive_ignores =
 containers=
    physicsnemo
 layers = 
-   experimental
-   deploy | active_learning | diffusion | sym
+   experimental | testing
+   active_learning | diffusion | sym
    models : datapipes : metrics : domain_parallel : optim
    mesh
    nn
@@ -136,3 +136,24 @@ layers =
 name = Prevent Non-listed external imports in physicsnemo
 type = forbidden_import
 container = physicsnemo
+# Test helpers may use test-only packages (pytest, onnx, ...).
+exclude =
+   testing
+
+[importlinter:contract:physicsnemo-testing]
+name = Keep physicsnemo.testing dependent only on what moves with physicsnemo core
+type = forbidden
+source_modules =
+   physicsnemo.testing
+forbidden_modules =
+   physicsnemo.active_learning
+   physicsnemo.datapipes
+   physicsnemo.diffusion
+   physicsnemo.domain_parallel
+   physicsnemo.experimental
+   physicsnemo.mesh
+   physicsnemo.metrics
+   physicsnemo.models
+   physicsnemo.nn
+   physicsnemo.optim
+   physicsnemo.sym

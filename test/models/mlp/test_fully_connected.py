@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo.models.mlp import FullyConnected
-from test import common
+from physicsnemo.testing import common
 
 
 def test_fully_connected_forward(device):

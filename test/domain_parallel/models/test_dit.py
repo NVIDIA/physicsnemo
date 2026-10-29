@@ -47,7 +47,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
 from physicsnemo.models.dit import DiT
 from physicsnemo.nn.module.rope import build_axial_rope_cos_sin_2d
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.domain_parallel.models.harness import wrap_fsdp_spatial
 
 # Latent grid is 4x4; with a domain mesh of size 2 each rank owns 2 rows.

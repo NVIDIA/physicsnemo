@@ -26,7 +26,7 @@ try:
 except ImportError:
     pass
 
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def create_simple_graph():

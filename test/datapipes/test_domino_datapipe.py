@@ -31,7 +31,7 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataConfig,
     DoMINODataPipe,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 if not check_version_spec("zarr", hard_fail=False):
     pytest.skip(

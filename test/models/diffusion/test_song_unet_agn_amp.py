@@ -19,8 +19,8 @@ import pytest
 import torch
 
 from physicsnemo.models.diffusion_unets import SongUNet as UNet
-from test import common
-from test.conftest import requires_module
+from physicsnemo.testing import common
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @requires_module("apex")

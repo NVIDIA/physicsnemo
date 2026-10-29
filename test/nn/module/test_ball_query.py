@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.nn.module.ball_query import BQWarp
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @requires_module("warp")

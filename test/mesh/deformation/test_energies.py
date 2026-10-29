@@ -31,7 +31,7 @@ from physicsnemo.mesh.deformation import (
     total_measure_energy,
 )
 from physicsnemo.mesh.utilities._topology import extract_triangle_hinges
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _triangle_mesh_2d() -> Mesh:

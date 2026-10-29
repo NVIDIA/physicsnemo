@@ -22,7 +22,7 @@ from physicsnemo.nn import (
     GALE_FA,
     GALEBlock,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 # =============================================================================
 # GALE (Geometry-Aware Latent Embeddings) Attention Tests

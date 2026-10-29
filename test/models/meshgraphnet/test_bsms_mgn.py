@@ -18,8 +18,8 @@
 import pytest
 import torch
 
-from test.common import validate_forward_accuracy
-from test.conftest import requires_module
+from physicsnemo.testing.common import validate_forward_accuracy
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @pytest.fixture

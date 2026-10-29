@@ -22,7 +22,7 @@ from physicsnemo.nn.functional.derivatives import RectilinearGridLaplacian
 from physicsnemo.nn.functional.derivatives.rectilinear_grid_laplacian._torch_impl import (
     rectilinear_grid_laplacian_torch,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 

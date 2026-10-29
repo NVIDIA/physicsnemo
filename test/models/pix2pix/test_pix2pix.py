@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo.models.pix2pix import Pix2Pix
-from test import common
+from physicsnemo.testing import common
 
 
 def test_pix2pix_forward(device):

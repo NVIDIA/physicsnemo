@@ -27,7 +27,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import displace_points, morph_points
 from physicsnemo.nn.functional.geometry import DisplacePoints, MorphPoints
 from physicsnemo.nn.functional.geometry.deform import deform as deform_module
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 

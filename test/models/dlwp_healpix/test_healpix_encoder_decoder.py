@@ -18,7 +18,7 @@ import omegaconf
 import pytest
 import torch
 
-from test import common
+from physicsnemo.testing import common
 
 
 def _cln_conv_block(in_channels: int, cond_dim: int) -> omegaconf.DictConfig:

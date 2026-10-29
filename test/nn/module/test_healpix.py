@@ -34,8 +34,8 @@ from physicsnemo.nn.module.hpx.padding import (
 from physicsnemo.nn.module.hpx.tokenizer import (
     CalendarEmbedding,
 )
-from test import common
-from test.conftest import requires_module
+from physicsnemo.testing import common
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.module.healpix_helpers import MulX, distinct_face_tensor
 
 

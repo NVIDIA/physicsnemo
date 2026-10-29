@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 import torch
+
 from conftest import (
     assert_meshes_equal,
     make_domain_mesh,
@@ -29,7 +30,6 @@ from conftest import (
     make_point_cloud,
     write_unfinished_store,
 )
-
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,

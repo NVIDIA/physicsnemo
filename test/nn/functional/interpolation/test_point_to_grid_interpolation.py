@@ -24,7 +24,7 @@ from physicsnemo.nn.functional.interpolation import (
     GridToPointInterpolation,
     PointToGridInterpolation,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import assert_optional_match, clone_case
 
 _INTERPOLATION_TYPES = (

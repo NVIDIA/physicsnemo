@@ -28,8 +28,8 @@ import torch
 
 pytest.importorskip("torch_geometric")
 
-from test import common  # noqa: E402
-from test.conftest import requires_module  # noqa: E402
+from physicsnemo.testing import common  # noqa: E402
+from physicsnemo.testing.pytest_plugin import requires_module  # noqa: E402
 from test.models.meshgraphnet.utils import rand_graph
 
 
