@@ -76,6 +76,5 @@ model:
   functional_dim: 3   # coords (3)
   out_dim: 250        # (num_time_steps - 1) * 5 = 50 * 5
   global_dim: 3       # must match len(datapipe.global_features)
-  # To enable OOD guarding, wrap a constructed GeoTransolver with
-  # physicsnemo.experimental.guardrails.embedded.GuardedGeoTransolver —
-  # see this example's README.
+  # For OOD scoring, request geometry features from GeoTransolver and pass
+  # pooled tokens to experimental.uq.ood.KNNScorer; see the README.

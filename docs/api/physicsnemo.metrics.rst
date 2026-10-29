@@ -270,7 +270,7 @@ samples or cross-point covariance; pointwise variances cannot recover those
 correlations.
 
 See ``examples/minimal/uq`` for runnable local, distributed, GP, dropout, and
-observable compositions. No ``local()`` factory or metric-owned ``synchronize()``
+scoring compositions. No ``local()`` factory or metric-owned ``synchronize()``
 is required by this path. The default constructor still uses legacy behavior,
 including its existing implicit world-group reductions and return conventions.
 

@@ -20,9 +20,7 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("pyvista")
-
-from physicsnemo.experimental.guardrails.geometry import TorchPCEDensityModel
+from physicsnemo.experimental.uq.ood._pce import TorchPCEDensityModel
 
 
 def test_pce_auto_components():
