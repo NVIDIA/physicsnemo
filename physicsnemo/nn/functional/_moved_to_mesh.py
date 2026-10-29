@@ -17,10 +17,10 @@
 """Deprecated ``physicsnemo.nn.functional`` names of the mesh functionals.
 
 These functionals moved into the ``physicsnemo.mesh`` modules that use them,
-as private kernels behind their ``Mesh`` operations. ``nn`` must not import
-``mesh``, so the old names resolve lazily, on first access. Remove this module, the ``__getattr__`` hooks that call it, and
-its ``.importlinter`` exception when ``physicsnemo.mesh`` becomes its own
-library.
+as private kernels, most of them behind a ``Mesh`` operation. ``nn`` must not
+import ``mesh``, so the old names resolve lazily, on first access. Remove this
+module, the ``__getattr__`` hooks that call it, and its ``.importlinter``
+exception when ``physicsnemo.mesh`` becomes its own library.
 """
 
 import warnings

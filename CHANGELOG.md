@@ -340,13 +340,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.nn.functional` to `physicsnemo.utils`. Importing them from
   `physicsnemo.nn.functional` still works but emits `LegacyFeatureWarning`.
 - Mesh functionals moved from `physicsnemo.nn.functional` into the
-  `physicsnemo.mesh` modules that use them, as private kernels behind their
-  `Mesh` operations, so that `physicsnemo.mesh` can become its own library. For
-  `mesh_lsq_gradient` on a point cloud, pass its neighbor graph as `adjacency=` to
-  `physicsnemo.mesh.calculus.compute_gradient_points_lsq`, with
-  `implementation="warp"` for its default backend. Their old names in
+  `physicsnemo.mesh` modules that use them, as private kernels, so that
+  `physicsnemo.mesh` can become its own library. Their old names in
   `physicsnemo.nn.functional` and its `derivatives` and `geometry` subpackages
-  still work but emit `LegacyFeatureWarning`.
+  still work but emit `LegacyFeatureWarning`. For `mesh_lsq_gradient` on a point
+  cloud, pass its neighbor graph as `adjacency=` to
+  `physicsnemo.mesh.calculus.compute_gradient_points_lsq`, with
+  `implementation="warp"` for its default backend. `ray_mesh_intersect`,
+  `mesh_to_voxel_fraction`, `mesh_poisson_disk_sample`,
+  `mesh_green_gauss_gradient`, and the tuning arguments of `remeshing` such as
+  `hash_grid_resolution` have no public replacement.
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is
   deprecated in favour of `relative_mse`, which names what it always
   computed (target-normalized relative MSE, no square root) and delegates
