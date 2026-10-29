@@ -213,7 +213,7 @@ def _high_memory_bin_reduction_cdf(
     """
     for i in range(number_of_bins - 1):
         counts[i] += torch.count_nonzero(inputs < bin_edges[i + 1], dim=0)
-    counts[number_of_bins - 1] = inputs.shape[0]
+    counts[number_of_bins - 1] += inputs.shape[0]
     return counts
 
 
@@ -674,7 +674,7 @@ class Histogram(EnsembleMetrics):
         self.bin_edges, self.counts = _update_bins_counts(
             input, self.bin_edges, self.counts
         )
-        self.number_of_bins = self.bin_edges.shape[0]
+        self.number_of_bins = self.bin_edges.shape[0] - 1
         return self.bin_edges, self.counts
 
     def finalize(self, cdf: bool = False) -> Tuple[Tensor, Tensor]:
