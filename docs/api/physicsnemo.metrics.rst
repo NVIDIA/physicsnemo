@@ -194,6 +194,86 @@ variances, and histograms.
   tensor([-0.0545,  0.0267])
 
 
+Tensor-aware streaming moments
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``Mean`` and ``Variance`` retain their legacy interfaces. Opt into detached,
+layout-aware accumulation with ``mode="tensor"``:
+
+.. code-block:: python
+
+    from physicsnemo.metrics.general.ensemble_metrics import Mean, Variance
+
+    stats = Variance(mode="tensor", correction=0)
+    for prediction in predictions:
+        stats.update(prediction, dim=None)  # One field/observable per call
+    mean = stats.mean
+    variance = stats.finalize()
+
+    # A batch of observations along one axis:
+    other = Variance(mode="tensor", correction=0)
+    other.update(additional_predictions, dim=0)
+    stats.combine(other)  # Disjoint observations, same output elements/layout
+
+Ordinary tensors remain local even when ``DistributedManager`` is initialized.
+ShardTensor reductions follow the observation axis and mesh placements, completing
+pending reductions before nonlinear operations. Unreduced spatial shards stay
+sharded. All ranks in a participating mesh must follow the same update schedule;
+a rank with no observations supplies an empty shard of the global batch.
+
+``dim=None`` means one observation, not a reduction over all dimensions. To
+compute statistics of an observable, compute that observable for each member
+before updating its accumulator. For example, the variance of a spatial mean
+is not the spatial mean of pointwise variances.
+
+Accumulation detaches values, promotes float16/bfloat16 to float32, and retains
+float64 by default. The accumulation dtype settles from ``like`` or the first
+update. Later inputs may safely widen to that dtype; float64 inputs into inferred
+float32 raise an error. An explicit ``dtype`` permits casts to that precision. ``dtype=torch.float64`` explicitly requests higher precision.
+``like=template`` can fix the output shape/device/layout before the first update.
+Empty reads and insufficient sample counts for the requested correction raise
+``ValueError``. Tensor-mode ``update`` returns None; read results with ``finalize``
+(or ``Variance.mean``). The built-in mean and variance rules compute elementwise, equally weighted moments.
+
+The tensor-mode implementation composes a ``TensorAccumulator`` with a
+``MeanRule`` or ``VarianceRule``. A new statistic can reuse the same machinery:
+
+.. code-block:: python
+
+    from physicsnemo.metrics.general.tensor_accumulator import TensorAccumulator
+    from physicsnemo.metrics.general.moment_rules import MeanRule
+
+    stats = TensorAccumulator(MeanRule())
+    stats.update(predictions, dim=0)
+    mean = stats.finalize()
+
+A rule implements three pure operations: ``summarize`` produces sufficient
+statistics, ``merge`` combines independent states, and ``result`` reads a result.
+State is a dictionary of floating-point tensors and Python integers. Tensor fields
+may have different shapes, but each field retains its own shape and layout.
+The supplied ``reduce_sum`` helper completes distributed reductions before the
+rule performs nonlinear arithmetic. Rules compare equal only when their
+statistical configuration matches; frozen dataclasses suit the built-in rules.
+
+The accumulator handles detachment, precision, layout validation, ownership and
+lifecycle. Additional tensor inputs must match the values' shape and layout.
+``examples/minimal/uq/weighted_mean.py`` demonstrates an external weighted-mean
+rule, including collective validation for invalid weights. Extensibility does not
+provide a distributed algorithm for arbitrary statistics: the rule must define a
+mathematically valid merge and respect collective participation.
+
+For a GP mixture, stream the component means through ``Variance(correction=0,
+mode="tensor")`` and component variances through ``Mean(mode="tensor")``.
+Total predictive variance is the sum of these two results. A single GP already
+supplies both moments directly. Arbitrary field observables require joint
+samples or cross-point covariance; pointwise variances cannot recover those
+correlations.
+
+See ``examples/minimal/uq`` for runnable local, distributed, GP, dropout, and
+observable compositions. No ``local()`` factory or metric-owned ``synchronize()``
+is required by this path. The default constructor still uses legacy behavior,
+including its existing implicit world-group reductions and return conventions.
+
 Climate Related Metrics
 ^^^^^^^^^^^^^^^^^^^^^^^
 
