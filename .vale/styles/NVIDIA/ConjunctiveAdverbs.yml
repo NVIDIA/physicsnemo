@@ -1,0 +1,15 @@
+# NVIDIA writing guidelines (Technical Content > Readability):
+# "Use academic or formal conjunctive adverbs sparingly."
+extends: existence
+message: "Use the formal conjunctive adverb '%s' sparingly."
+level: suggestion
+ignorecase: true
+tokens:
+  - additionally
+  - consequently
+  - furthermore
+  - hence
+  - moreover
+  - thus
+  - undoubtedly
+  - whilst
