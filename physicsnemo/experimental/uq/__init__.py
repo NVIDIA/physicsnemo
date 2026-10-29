@@ -16,9 +16,9 @@
 
 """Uncertainty quantification modules (experimental).
 
-This subpackage collects UQ building blocks that attach to existing backbones:
-the Gaussian-process heads below, and post-hoc conformal prediction in
-:mod:`physicsnemo.experimental.uq.conformal`.
+This subpackage collects UQ building blocks that attach to existing backbones.
+The ``gp`` subpackage provides Gaussian-process heads, and
+:mod:`physicsnemo.experimental.uq.conformal` provides post-hoc conformal prediction.
 
 For methodology and scientific results on UQ for geometry-conditioned neural
 surrogates, refer to `Predictive Uncertainty for Neural CAE Surrogates
@@ -52,8 +52,8 @@ from physicsnemo.core.version_check import check_version_spec
 _GPYTORCH_AVAILABLE = check_version_spec("gpytorch", hard_fail=False)
 
 if _GPYTORCH_AVAILABLE:
-    from .field_variational_gp_head import (
+    from .gp.field_variational_gp_head import (
         FieldVariationalGPHead,
         FieldVariationalGPPrediction,
     )
-    from .variational_gp_head import GPPrediction, VariationalGPHead
+    from .gp.variational_gp_head import GPPrediction, VariationalGPHead
