@@ -36,6 +36,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
 
+- Adds `DiffusionExtraTimes` and `DiffusionExtraOutputs` to
+  `physicsnemo.diffusion` for utilities that carry named times or auxiliary
+  outputs. Compatible model interfaces and preconditioners can accept
+  `(t, extra_times)`, where `extra_times` is a `DiffusionExtraTimes` container,
+  and return `(prediction, extra_outputs)`, where `extra_outputs` is a
+  `DiffusionExtraOutputs` container. The API reserves the named field
+  `extra_times.r` for a destination diffusion time, as in MeanFlow. It reserves
+  the named field `extra_outputs.logvar` for learned loss weighting, as in sCM
+  and EDM2. Existing single-time, single-prediction calls remain
+  unchanged. Existing DSM and flow-matching losses continue to consume
+  single tensors.
+- Adds `TrigFlowNoiseScheduler` and `TrigFlowPreconditioner` to the diffusion
+  noise schedulers and preconditioners in `physicsnemo.diffusion`. Pair them
+  with the same `sigma_data` to train and sample models along a trigonometric
+  diffusion path, with the backbone predicting normalized velocity. Built-in
+  linear Gaussian schedulers also provide differentiable `snr_inv()` methods
+  to convert signal-to-noise amplitude ratios back to diffusion times. Use
+  these inverses to match noise levels across schedules. The amplitude ratio
+  is `alpha(t) / sigma(t)`. The power signal-to-noise ratio is its square.
+  Custom schedulers can supply their own inverse. These additions are opt-in.
+  Existing schedulers, preconditioners, and training workflows work as before.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.

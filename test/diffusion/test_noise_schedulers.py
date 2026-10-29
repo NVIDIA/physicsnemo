@@ -289,6 +289,10 @@ class TestLinearGaussianNoiseScheduler:
         t = torch.tensor([0.5, 2.0], device=device)
         assert torch.allclose(s.snr(t), 1 / t, atol=1e-7)
 
+    def test_optional_snr_inverse(self):
+        with pytest.raises(NotImplementedError, match="snr_inv"):
+            _MinimalScheduler().snr_inv(torch.ones(2))
+
     def test_concrete_add_noise(self, device):
         s = _MinimalScheduler()
         x0 = make_input((2, 3, 8, 8), seed=3, device=device)

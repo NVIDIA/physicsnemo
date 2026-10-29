@@ -55,7 +55,9 @@ class VENoiseScheduler(LinearGaussianNoiseScheduler):
 
     Examples
     --------
-    Basic training and sampling workflow using the VE noise scheduler:
+    The first sequence uses a variance-exploding schedule for both training and
+    sampling. The final predictor conversion supplies the right-hand side expected by an
+    ODE solver.
 
     >>> import torch
     >>> from physicsnemo.diffusion.noise_schedulers import VENoiseScheduler
@@ -104,6 +106,10 @@ class VENoiseScheduler(LinearGaussianNoiseScheduler):
     ) -> Float[Tensor, " *shape"]:
         r"""Inverse VE mapping: :math:`t = \sigma^2`."""
         return sigma**2
+
+    def snr_inv(self, q: Float[Tensor, " *shape"]) -> Float[Tensor, " *shape"]:
+        r"""Find diffusion time :math:`t = q^{-2}` for amplitude ratios ``q > 0``."""
+        return self.sigma_inv(q.reciprocal())
 
     def sigma_dot(
         self,

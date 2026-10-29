@@ -66,7 +66,9 @@ class VPNoiseScheduler(LinearGaussianNoiseScheduler):
 
     Examples
     --------
-    Basic training and sampling workflow using the VP noise scheduler:
+    The first sequence uses a variance-preserving schedule for both training and
+    sampling. The final predictor conversion supplies the right-hand side expected by an
+    ODE solver.
 
     >>> import torch
     >>> from physicsnemo.diffusion.noise_schedulers import VPNoiseScheduler
@@ -157,6 +159,20 @@ class VPNoiseScheduler(LinearGaussianNoiseScheduler):
         # sigma = 0
         discriminant = self.beta_min**2 + 2 * self.beta_d * a
         return 2 * a / (self.beta_min + torch.sqrt(discriminant))
+
+    def snr_inv(self, q: Float[Tensor, " *shape"]) -> Float[Tensor, " *shape"]:
+        r"""Find diffusion time for finite amplitude ratios ``q > 0``.
+
+        .. math::
+
+            A = \log(1+q^{-2}), \qquad
+            t = \frac{2A}{\beta_{\min}+\sqrt{\beta_{\min}^2+2\beta_d A}}.
+
+        The rationalized root avoids cancellation and supports ``beta_d=0``
+        when ``beta_min > 0``. See the base ``snr_inv`` contract.
+        """
+        a = torch.logaddexp(torch.zeros_like(q), -2 * q.log())
+        return 2 * a / (self.beta_min + (self.beta_min**2 + 2 * self.beta_d * a).sqrt())
 
     def timesteps(
         self,

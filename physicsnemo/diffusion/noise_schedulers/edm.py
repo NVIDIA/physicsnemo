@@ -71,7 +71,9 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
 
     Examples
     --------
-    Basic training and sampling workflow using the EDM noise scheduler:
+    The first sequence covers the EDM training and sampling interfaces with one
+    scheduler. Its final call converts a clean-data predictor into the right-hand side
+    used by an ODE solver.
 
     >>> import torch
     >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
@@ -98,7 +100,8 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
     >>> denoiser(xN, tN).shape  # ODE RHS for sampling
     torch.Size([4, 3, 8, 8])
 
-    Per-channel ``sigma_data`` for heterogeneous channels:
+    A channel-specific ``sigma_data`` assigns different data scales to each channel.
+    The resulting loss weight retains a separate value for each channel.
 
     >>> sigma_per_ch = torch.tensor([0.3, 0.5, 0.7])
     >>> scheduler_ch = EDMNoiseScheduler(sigma_data=sigma_per_ch)
@@ -142,6 +145,10 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
     ) -> Float[Tensor, " *shape"]:
         r"""Identity mapping: :math:`t = \sigma`."""
         return sigma
+
+    def snr_inv(self, q: Float[Tensor, " *shape"]) -> Float[Tensor, " *shape"]:
+        r"""Find diffusion time :math:`t = 1/q` for amplitude ratios ``q > 0``."""
+        return self.sigma_inv(q.reciprocal())
 
     def sigma_dot(
         self,
