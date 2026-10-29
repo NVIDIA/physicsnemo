@@ -12,11 +12,19 @@ prediction intervals. You do not need to retrain the model.
     This module is experimental. Its API can change without a deprecation
     period.
 
+.. seealso::
+
+    The `Uncertainty Quantification <https://docs.nvidia.com/physicsnemo/latest/user-guide/uncertainty_quantification.html>`_ user guide covers the
+    PhysicsNeMo models that estimate their own uncertainty, such as Gaussian
+    process heads, concrete dropout, and ensembles. Conformal prediction can
+    calibrate their intervals after training.
+
 Overview
 --------
 
 A trained model returns a prediction, such as a scalar, a vector, or a
-field, but not how far that prediction can be from the truth. Conformal
+tensor at each of many points. It does not say how far that prediction can
+be from the truth. Conformal
 prediction measures the model's errors on a held-out *calibration set* and
 picks a threshold from those errors. It then turns each new prediction into
 bounds ``(lo, hi)`` that contain the true value with a stated probability.
@@ -24,8 +32,9 @@ bounds ``(lo, hi)`` that contain the true value with a stated probability.
 The guarantee holds for any model and any data distribution. It needs one
 assumption. The calibration samples and the new samples are
 *exchangeable*, for example drawn independently from the same distribution.
-If the deployment data drifts away from the calibration data, the
-guarantee no longer holds.
+The guarantee no longer holds if the deployment data comes from a
+different distribution than the calibration data, for example geometries or
+operating conditions outside the calibration range.
 
 The workflow has three steps.
 
@@ -51,7 +60,7 @@ Quick Start
     )
 
     calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.1)
-    for prediction, target in calibration_set:  # samples may differ in size
+    for prediction, target in calibration_set:  # samples can differ in size
         calibrator.update(prediction, target)
     predictor = calibrator.finalize()
 
@@ -92,7 +101,7 @@ whether every sample has the same output layout.
      - Can differ.
    * - :class:`RiskControlCalibrator`
      - The fraction of missed points is at most 10% in expectation. A
-       single case may exceed it.
+       single case can exceed it.
      - Same as the functional band, and narrower.
      - Can differ.
 
@@ -116,8 +125,9 @@ Non-Uniform Meshes
 
 Risk control counts every point equally, so on a mesh that is fine in one
 region and coarse in another, the fraction of missed points is not the
-fraction of missed area. Pass ``weights=`` to count each point by its cell
-area or volume.
+fraction of missed area. Pass ``weights=`` to give each point its own
+weight. Any nonnegative per-point weights work, for example cell areas or
+volumes, or an importance you choose for each region.
 
 .. code:: python
 
@@ -128,11 +138,17 @@ area or volume.
 
 ``weights`` has shape ``(n_points,)`` and holds nonnegative, finite values
 that are not all zero. The calibrator normalizes them within each sample.
-The guarantee then bounds the expected weighted fraction of missed points by
-``alpha``. With ``physicsnemo.mesh``, ``point_measures(mesh)`` from
-``physicsnemo.mesh.calculus`` returns these weights for a mesh that stores
-point measures, and ``lumped_point_measures(mesh)`` builds them from the
-cells. Pass ``weights`` on every call or on none. The predictor records
+The weights change what counts as missed, not the band itself. The
+guarantee then bounds the expected weighted fraction of missed points by
+``alpha``.
+
+If you use ``physicsnemo.mesh``, its per-point area or volume makes a good
+set of weights. ``physicsnemo.mesh.calculus.point_measures(mesh)`` returns
+it when the mesh already stores point measures.
+``physicsnemo.mesh.calculus.lumped_point_measures(mesh)`` computes it from
+the cells.
+
+Pass ``weights`` on every call or on none. The predictor records
 that it was calibrated with weights, and ``save`` and ``load`` keep that
 record. Its ``coverage_accumulator()`` then requires ``weights`` on every
 ``update(lo, hi, target, weights=...)`` so the report measures the weighted
@@ -212,6 +228,39 @@ threshold by a per-point uncertainty read from ``aux``. Pair it with
 :class:`AbsoluteErrorScore`. Pairing ``AuxScale("sigma")`` with
 :class:`NormalizedErrorScore` would scale by :math:`\sigma` twice, so the
 calibrators reject that pair.
+
+
+Calibrating Existing Uncertainty
+--------------------------------
+
+The score decides what conformal prediction calibrates. A deterministic
+model has no spread of its own, so use :class:`AbsoluteErrorScore`. The
+interval is then the prediction plus or minus a fitted width.
+
+Some models estimate their own uncertainty, such as a Gaussian process
+head, concrete dropout, or an ensemble. These models supply a standard
+deviation for each output. Pass it as ``aux["sigma"]`` with
+:class:`NormalizedErrorScore`. With the functional band or risk-control
+calibrator, you can instead pass it to an ``AuxScale`` and use
+:class:`AbsoluteErrorScore`. The interval keeps the model's shape and stays
+wide where the model is unsure. The calibrator fits how much to widen or
+shrink it. For a ``FieldVariationalGPHead``, ``sigma`` is
+``output.variance.sqrt()`` from the ``FieldVariationalGPPrediction`` it
+returns. For an ensemble or repeated dropout passes, ``sigma`` is the
+standard deviation across members or passes. The
+`Uncertainty Quantification <https://docs.nvidia.com/physicsnemo/latest/user-guide/uncertainty_quantification.html>`_ user guide notes that these
+spreads often fall short of the observed error. Conformal calibration
+corrects that shortfall on held-out data.
+
+A simpler post hoc option is standard-deviation rescaling. It multiplies
+every ``sigma`` by one factor, chosen so that the errors divided by
+``sigma`` have unit spread on held-out data. Both methods use held-out data,
+but they promise different things. Rescaling matches the spread on average.
+For example, 90% of true values fall inside ``mu +/- 1.645 * sigma`` only if
+the errors are Gaussian with that spread. A conformal interval contains the
+true value with probability at least :math:`1 - \alpha` for any model and
+any data distribution, given exchangeable data. For risk control, it keeps
+the expected missed fraction at or below :math:`\alpha`.
 
 
 Custom Scores
@@ -432,8 +481,8 @@ predictor, which uses :class:`AbsoluteErrorScore`. A predictor fitted with
 
 For a risk-control predictor, ``report["fields"]["tensor"]["empirical_mean_risk"]``
 is the mean fraction of points per sample that fell outside the band. It
-should be close to or below ``alpha``. A plain tensor is reported under the
-key ``"tensor"`` and ``TensorDict`` fields under their own names.
+should be close to or below ``alpha``. The report lists a plain tensor
+under the key ``"tensor"`` and ``TensorDict`` fields under their own names.
 
 
 Practical Notes
@@ -444,6 +493,18 @@ Practical Notes
     level it fits, for example 9 for ``alpha=0.1`` and 19 for
     ``alpha=0.05``. With more samples the fitted threshold varies less from
     one calibration set to the next.
+
+**One call per sample.**
+    Each ``update`` call adds one calibration sample, and the guarantee
+    counts samples. If the model returns a batch, call ``update`` once for
+    each item, not once for the batch.
+
+    .. code:: python
+
+        for prediction, target in zip(batch_prediction, batch_target):
+            calibrator.update(prediction, target)
+
+    The same applies to ``CoverageAccumulator.update``.
 
 **Single process.**
     Calibration does not communicate across ranks. Predictions can come
@@ -463,7 +524,7 @@ Practical Notes
     :class:`FunctionalBandCalibrator` stores one number per sample.
 
 **Devices and dtypes.**
-    Inputs may live on any device and use any floating-point dtype,
+    Inputs can live on any device and use any floating-point dtype,
     including ``float16`` and ``bfloat16``. Interval endpoints are computed
     in float64 and rounded outward to the input dtype, so low-precision
     inputs do not break the guarantee.
