@@ -26,14 +26,23 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import numpy as np
 import torch
 from tensordict import TensorDict, is_leaf_nontensor
 
+from physicsnemo.datapipes._domain_parallel import (
+    DomainParallelConfig,
+    ShardedProto,
+    as_leaf_key,
+    resolve_leaf_placements,
+)
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
+
+if TYPE_CHECKING:
+    from torch.distributed.device_mesh import DeviceMesh
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +98,8 @@ class Reader(ABC):
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         coordinated_subsampling: dict[str, Any] | None = None,
+        domain_parallel: dict[str, Any] | None = None,
+        device_mesh: DeviceMesh | None = None,
     ) -> None:
         """
         Initialize the reader.
@@ -112,10 +123,51 @@ class Reader(ABC):
             point has equal inclusion probability while reads retain storage
             locality. This allows configuration via Hydra. Readers that don't
             support coordinated subsampling will ignore this parameter.
+        domain_parallel : dict[str, Any], optional
+            Optional dict to configure domain-parallel (rank-local) reading.
+            Requires ``device_mesh``. If provided, may contain:
+
+            - ``auto_shard_size``: auto gate; a batch axis shards when its
+              length (the size of tensor dim 0) is at least this many
+              entries (default 1024), e.g. ``(200_000, 3)`` points shard
+              while a ``(512, 512)`` image replicates
+            - ``placements``: ``{key: "shard" | "replicate"}`` overrides; a
+              key pins the whole batch axis (every key sharing its dim-0
+              length), applies by prefix to nested keys, and unnamed axes
+              fall back to the gate
+
+            Supporting readers read only this rank's chunk of every sharded
+            key and return a proto payload the dataset assembles into
+            ``Shard(0)`` ShardTensors on the GPU. Composes with
+            ``coordinated_subsampling``: the rank chunk is taken of the
+            coordinated window, which requires a seed (``set_generator``) so
+            every rank draws the same window. Every rank in the device mesh
+            must request the same sample indices: use a sampler that hands
+            the same index sequence to every rank of a domain group (e.g. a
+            ``DistributedSampler`` over the data-parallel axis only). Readers
+            that don't support domain-parallel reading raise.
+        device_mesh : torch.distributed.device_mesh.DeviceMesh, optional
+            1-D device mesh for domain-parallel reading. Not serializable
+            configuration: construct it in Python at runtime and inject it
+            alongside ``domain_parallel``.
+
+        Raises
+        ------
+        ValueError
+            If ``domain_parallel`` is given to a reader that does not support
+            domain-parallel reading, or the configuration is invalid.
         """
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
         self._coordinated_subsampling_config = coordinated_subsampling
+        self._domain_parallel = DomainParallelConfig.from_dict(
+            domain_parallel, device_mesh
+        )
+        if self._domain_parallel is not None and not self._supports_domain_parallel:
+            raise ValueError(
+                f"{type(self).__name__} does not support domain-parallel reading; "
+                "remove domain_parallel / device_mesh or use a supporting reader"
+            )
         # Base seed + epoch for deterministic per-index RNG. See
         # :meth:`_index_generator`. ``None`` means no seed was provided
         # (random draws fall back to the global default RNG).
@@ -216,6 +268,64 @@ class Reader(ABC):
         return False
 
     @property
+    def _supports_domain_parallel(self) -> bool:
+        """
+        Return True if this reader supports domain-parallel reading.
+
+        Override this property (and implement
+        :meth:`_load_sample_domain_parallel`) in subclasses that can read
+        rank-local chunks.
+
+        Returns
+        -------
+        bool
+            True if domain-parallel reading is supported.
+        """
+        return False
+
+    def _load_sample_domain_parallel(
+        self, index: int
+    ) -> tuple[dict[str, torch.Tensor], dict[str, tuple[int, ...]]]:
+        """
+        Load this rank's chunk of a single sample.
+
+        This is the extension point for domain-parallel reading. Implement it
+        in a subclass that returns ``True`` from
+        :attr:`_supports_domain_parallel`; the base class validates the
+        configuration, wraps the result for the device transfer, and the
+        dataset assembles ``Shard(0)`` ShardTensors on the device. The
+        recipe is:
+
+        1. Collect the global shape of every key from metadata (no data read).
+        2. ``selection, sharded = self._selection_plan(shapes, window,
+           windowed_keys, generator)`` decides shard-vs-replicate per key
+           (gate and ``placements``) and returns the dim-0 selection this
+           rank reads of each.
+        3. Read ``array[selection[key]]`` per key and return the tensors with
+           ``sharded``.
+
+        The same procedure with domain parallelism off reads whole arrays, so
+        one read method can back both ``_load_sample`` and this one. Must be
+        thread-safe (no scratch state on ``self``). If the reader subsamples,
+        the window must come from :meth:`_window_indices` with
+        :meth:`_index_generator`; a seed is then required so every rank draws
+        the same window. See ``ZarrReader`` for a complete implementation.
+
+        Parameters
+        ----------
+        index : int
+            Sample index (0 to len-1).
+
+        Returns
+        -------
+        tuple[dict[str, torch.Tensor], dict[str, tuple[int, ...]]]
+            Per-key local tensors, and the global shape of every *sharded*
+            key. Keys absent from the map are replicated (complete on every
+            rank).
+        """
+        raise NotImplementedError
+
+    @property
     def field_names(self) -> list[str]:
         """
         List of field names available in samples.
@@ -255,7 +365,11 @@ class Reader(ABC):
             )
 
         # Load data
-        data_dict = self._load_sample(index)
+        domain_parallel = self._domain_parallel is not None
+        if domain_parallel:
+            data_dict, sharded = self._load_sample_domain_parallel(index)
+        else:
+            data_dict = self._load_sample(index)
 
         # Build metadata
         metadata = self._get_sample_metadata(index)
@@ -268,6 +382,14 @@ class Reader(ABC):
         # Pin memory if requested; TensorDict.pin_memory walks every leaf
         if self.pin_memory:
             data = data.pin_memory()
+
+        if domain_parallel:
+            data = ShardedProto(
+                tensors=data,
+                sharded={as_leaf_key(k): tuple(v) for k, v in sharded.items()},
+                device_mesh=self._domain_parallel.device_mesh,
+                kind="tensordict",
+            )
 
         return data, metadata
 
@@ -350,6 +472,79 @@ class Reader(ABC):
         if self._seed_base is None:
             return None
         return spawn_generator(self._seed_base, self._epoch, index)
+
+    def _selection_plan(
+        self,
+        shapes: dict[str, tuple[int, ...]],
+        window: np.ndarray | None,
+        windowed_keys: set[str],
+        generator: torch.Generator | None,
+    ) -> tuple[dict[str, slice | np.ndarray], dict[str, tuple[int, ...]]]:
+        """Decide which dim-0 selection of each array this rank reads.
+
+        One procedure serves the plain and the domain-parallel read: with
+        domain parallelism off every key reads its window (or everything);
+        with it on, sharded keys read this rank's share of the window (or of
+        the full range) and replicated keys read as before.
+
+        Parameters
+        ----------
+        shapes : dict[str, tuple[int, ...]]
+            Effective global shape per array key: the window length on dim 0
+            for windowed keys, the stored shape otherwise. Metadata only.
+        window : np.ndarray or None
+            Coordinated-subsampling window from :meth:`_window_indices`.
+        windowed_keys : set[str]
+            Keys the window applies to.
+        generator : torch.Generator or None
+            The per-sample generator; a seed is required when both
+            subsampling and domain parallelism are on.
+
+        Returns
+        -------
+        tuple[dict[str, slice | np.ndarray], dict[str, tuple[int, ...]]]
+            Selection to read per key, and the global shape of every sharded
+            key (empty when domain parallelism is off).
+        """
+        selection: dict[str, slice | np.ndarray] = {}
+        sharded: dict[str, tuple[int, ...]] = {}
+        config = self._domain_parallel
+        if config is not None:
+            self._require_seed_for_domain_parallel(generator)
+            shard = resolve_leaf_placements(shapes, config)
+        for key, shape in shapes.items():
+            windowed = window is not None and key in windowed_keys
+            if config is not None and shard[key]:
+                lo, hi = config.chunk_bounds(shape[0])
+                # This rank's share of the window (a sub-slice of a 1-2 run
+                # cyclic block) or of the full range.
+                selection[key] = window[lo:hi] if windowed else slice(lo, hi)
+                sharded[key] = shape
+            else:
+                selection[key] = window if windowed else slice(None)
+        return selection, sharded
+
+    def _require_seed_for_domain_parallel(
+        self, generator: torch.Generator | None
+    ) -> None:
+        """Domain-parallel subsampling needs a seed: every rank must draw the same window.
+
+        Parameters
+        ----------
+        generator : torch.Generator or None
+            The per-sample generator from :meth:`_index_generator`.
+
+        Raises
+        ------
+        ValueError
+            If coordinated subsampling is configured and no seed was set.
+        """
+        if self._coordinated_subsampling_config is not None and generator is None:
+            raise ValueError(
+                "domain-parallel reading with coordinated_subsampling requires a "
+                "seed so every rank draws the same window: call set_generator on "
+                "the dataset (the DataLoader does this when given a seed)"
+            )
 
     def _window_indices(
         self,

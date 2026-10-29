@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- Adds `GeoTransolver.forward_with_geometry_features` for predictions and detached
+  geometry tokens in one pass, preserving the existing `forward` API.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - `MeshDataset(cache_host=True)` reads each sample once and serves repeats from
@@ -99,6 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ClusterTree.merge` joins trees into one forest, whose `root_ids` list the
   root of each tree. Every traversal starts from all of them, so one
   traversal plans a tree against every tree of a forest, on either side.
+- `ClusterTree.from_points`, the new `ClusterTree.from_point_groups` (one tree
+  per group of points, and their forest) and
+  `ClusterTree.find_point_interaction_pairs` run in Warp kernels on CUDA by
+  default (`implementation=`), with one host synchronization instead of one per
+  tree level, and give the same trees and plans. The point plans now list each
+  target's entries together, and `count_only=True` counts them without making
+  the plan.
 - `radius_search` accepts points with 1 or 2 coordinates, as well as 3, with
   both backends. The torch backend accepts any number of coordinates, and
   points with more than 3 use it by default.
@@ -108,6 +117,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sharded like the queries. In-place `detach_` on a `ShardTensor` is
   supported.
 - `radius_search` on sharded inputs works under `torch.compile`.
+- Domain-parallel (rank-local) reading in the datapipes: `ZarrReader`,
+  `TensorStoreZarrReader`, `MeshReader` and `DomainMeshReader` accept a
+  `domain_parallel` dict and a 1-D `device_mesh`; each rank reads only its
+  rows and the dataset assembles `Shard(0)` ShardTensors on the device.
+  Custom readers opt in by implementing `Reader._load_sample_domain_parallel`
+  with the exported `DomainParallelConfig` / `resolve_leaf_placements`.
+- The unified external aero recipe trains with optional domain parallelism
+  (`domain_parallelism.domain_size`), reading samples sharded and running the
+  model on ShardTensors over a domain x data-parallel device mesh.
 
 ### Changed
 
@@ -322,6 +340,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `perturbed_grid` primitive takes `perturbation_scale` as a fraction of
   the grid spacing (was an absolute length), so its default no longer folds
   cells, even on fine grids.
+- `CenterMesh` materializes the center of mass on sharded meshes so the offset
+  stays a plain tensor.
 - `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
   the requested rows instead of all-gathering the source; no host sync, and
   `torch.compile` safe.
@@ -372,6 +392,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
   Padé networks (pytorch/pytorch#193194).
+- Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
+  when `keepdim=True`, including independently sharded simulation and spatial axes.
 - Multi-node jobs launched with `srun` no longer hang in
   `DistributedManager.initialize()` when Slurm starts rank 0 on a different node
   from the one that ran `srun`. The rendezvous now uses the job step's first node.

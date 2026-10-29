@@ -996,8 +996,8 @@ class GlobalContextBuilder(nn.Module):
               each of shape :math:`(B, N, D_l)`, or ``None`` if local features are
               disabled.
             - ``geometry_context_detached``: Detached geometry-tokenizer output of shape
-              :math:`(B, H, S, D)`, intended for downstream observers such as the
-              embedded OOD guard.  ``None`` when geometry tokenization is disabled
+              :math:`(B, H, S, D)`, returned to callers requesting
+              ``GeoTransolver.forward_with_geometry_features``.  ``None`` when geometry tokenization is disabled
               or no geometry was provided.
 
         Raises
@@ -1046,8 +1046,8 @@ class GlobalContextBuilder(nn.Module):
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
             geometry_context = self.geometry_tokenizer(geometry)
-            # Detach the returned copy so downstream observers (e.g. the OOD
-            # guard) don't keep the backward graph alive.
+            # Detach geometry tokens exposed by forward_with_geometry_features so
+            # callers do not retain the backward graph.
             geometry_context_detached = geometry_context.detach()
             context_parts.append(geometry_context)
 
