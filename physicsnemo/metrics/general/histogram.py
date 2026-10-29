@@ -22,7 +22,7 @@ import torch.distributed as dist
 
 from physicsnemo.distributed.manager import DistributedManager
 
-from .ensemble_metrics import EnsembleMetrics
+from .ensemble_metrics import StreamingStatistic
 
 Tensor = torch.Tensor
 
@@ -582,10 +582,19 @@ def cdf(
     return bin_edges, cdf
 
 
-class Histogram(EnsembleMetrics):
+class Histogram(StreamingStatistic):
     """
-    Convenience class for computing histograms, possibly as a part of a distributed or
-    iterative environment
+    Accumulate histogram counts across successive batches of observations.
+
+    Call the statistic with an initial batch to establish bin edges and counts,
+    then pass additional batches to ``update``. Inputs have shape ``(B, ...)``:
+    observations occupy the leading dimension, with a separate histogram for
+    each remaining location. ``update`` can expand the bin range for new values.
+    ``finalize`` normalizes the accumulated counts to a PDF, or a CDF when
+    ``cdf=True``.
+
+    Distributed behavior is implemented by the histogram operations and their
+    process-group handling, rather than by the ``StreamingStatistic`` base.
 
     Parameters
     ----------
