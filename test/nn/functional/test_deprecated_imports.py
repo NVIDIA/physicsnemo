@@ -115,38 +115,31 @@ def test_unknown_name_raises_attribute_error(module):
 
 
 def test_library_imports_do_not_use_deprecated_names():
-    """No physicsnemo module reaches the moved functionals through nn.functional.
+    """No physicsnemo module reaches the moved functionals through nn.functional,
+    and importing nn.functional does not import mesh, whose aliases resolve
+    lazily.
 
     Runs in a subprocess because a module body executes once per process: by the
     time this test runs, the modules are already cached, so an in-process check
     would pass regardless of what they import.
     """
     snippet = (
+        "import sys\n"
         "import warnings\n"
         "with warnings.catch_warnings(record=True) as caught:\n"
         "    warnings.simplefilter('always')\n"
+        "    import physicsnemo.nn.functional\n"
+        "    mesh = [m for m in sys.modules if m.startswith('physicsnemo.mesh')]\n"
+        "    assert not mesh, mesh\n"
         "    import physicsnemo.datapipes.cae.transolver_datapipe\n"
         "    import physicsnemo.datapipes.transforms\n"
         "    import physicsnemo.mesh\n"
         "    import physicsnemo.models.domino.utils\n"
-        "    import physicsnemo.nn.functional\n"
         "leaked = [\n"
         "    str(w.message) for w in caught\n"
         '    if "from \'physicsnemo.nn.functional" in str(w.message)\n'
         "]\n"
         "assert not leaked, leaked\n"
-    )
-    subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
-        [sys.executable, "-c", snippet], check=True
-    )
-
-
-def test_nn_functional_import_does_not_load_mesh():
-    """The mesh aliases resolve lazily, so importing nn.functional never imports mesh."""
-    snippet = (
-        "import sys\n"
-        "import physicsnemo.nn.functional\n"
-        "assert not [m for m in sys.modules if m.startswith('physicsnemo.mesh')]\n"
     )
     subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
         [sys.executable, "-c", snippet], check=True
