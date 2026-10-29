@@ -14,32 +14,72 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import logging
+from pathlib import Path
+from typing import Tuple, Union
 
-import onnx
 import pytest
 import torch
 
 import physicsnemo
-
-try:
-    import onnxruntime as ort
-except ImportError:
-    ort = None
-
-from pathlib import Path
-from typing import Tuple
-
-from physicsnemo.deploy.onnx import export_to_onnx_stream, run_onnx_inference
+from physicsnemo.core.version_check import OptionalImport
 
 from .utils import compare_output
+
+# Lazy: test suites that never run ONNX checks need neither package installed.
+onnx = OptionalImport("onnx")
+ort = OptionalImport("onnxruntime")
 
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")
 
 
+def export_to_onnx_stream(
+    model: torch.nn.Module, invars: Union[Tensor, Tuple[Tensor, ...]]
+) -> bytes:
+    """Export a model to an in-memory ONNX byte stream, leaving it on its device."""
+    if isinstance(invars, Tensor):
+        invars = (invars,)
+    invars = tuple(invar.detach().cpu() for invar in invars)
+    if hasattr(model, "device"):  # PhysicsNeMo modules track their device
+        device = model.device
+    else:
+        device = next(model.parameters(), torch.empty(0)).device
+    with io.BytesIO() as stream:
+        torch.onnx.export(
+            model.cpu(),
+            invars,
+            stream,
+            operator_export_type=torch.onnx.OperatorExportTypes.ONNX,
+            opset_version=15,
+            verbose=False,
+        )
+        model.to(device)
+        return stream.getvalue()
+
+
+def run_onnx_inference(
+    model: bytes,
+    invars: Union[Tensor, Tuple[Tensor, ...]],
+    device: torch.device = "cuda",
+) -> Tuple[Tensor, ...]:
+    """Run an ONNX model with onnxruntime and return its outputs as CPU tensors."""
+    providers = ["CPUExecutionProvider"]
+    if "cuda" in str(device):
+        providers = ["CUDAExecutionProvider"] + providers
+    session = ort.InferenceSession(model, providers=providers)
+    if isinstance(invars, Tensor):
+        invars = (invars,)
+    inputs = {
+        inp.name: v.detach().cpu().numpy()
+        for inp, v in zip(session.get_inputs(), invars)
+    }
+    return tuple(torch.Tensor(v) for v in session.run(None, inputs))
+
+
 def check_ort_version():
-    if ort is None:
+    if not ort.available:
         return pytest.mark.skipif(
             True,
             reason="Proper ONNX runtime is not installed. 'pip install onnxruntime onnxruntime_gpu'",
@@ -149,7 +189,7 @@ def validate_onnx_runtime(
     ----
     ONNX runtime must be turned on in the model's meta data for this test to run.
     """
-    if ort is None:
+    if not ort.available:
         logger.warning("ONNX runtime not installed, skipping")
         return True
     if not model.meta.onnx_runtime:

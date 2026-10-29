@@ -362,6 +362,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removes `physicsnemo.deploy`, deprecated in this release. Its only callers
+  were PhysicsNeMo's own ONNX tests, which now carry the two functions they
+  used. Instead of `export_to_onnx_stream`, call
+  `torch.onnx.export` with an `io.BytesIO` target; instead of
+  `run_onnx_inference`, run the result in an `onnxruntime.InferenceSession`.
 - `physicsnemo.experimental.models.globe.utilities`, whose TensorDict helpers
   GLOBE no longer uses.
 - `physicsnemo.mesh.fields`: `RankSpecDict`, `flatten_rank_spec`,
