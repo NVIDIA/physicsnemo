@@ -192,7 +192,16 @@ class RunningNorm(Module):
                             f"{desired_size=!r} != {actual_size=!r}"
                         )
 
-            values[torch.isnan(values)] = 0.0  # Makes 0 the default (no-op)
+            # nanmean returns NaN when a reduction slice is entirely zeros.
+            # There is no signal in that slice, so keep the running estimate
+            # unchanged instead of letting log(0) = -inf poison the EWMA.
+            all_nan = torch.isnan(values)
+            fallback = torch.where(
+                self._initialized,
+                self.ln_running_mean.exp(),
+                torch.ones_like(values),
+            )
+            values = torch.where(all_nan, fallback, values)
 
             ln_batch_mean = values.log()
 
