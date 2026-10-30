@@ -58,10 +58,11 @@ training:
   loss:
     type: 'edm' # use "regression"/"edm" here to train your regression/diffusion model
   
-  total_train_steps: 450000 # set according to your needs
+  # total_train_steps: 30000 # for the regression model, a much smaller number of steps is often enough
+  total_train_steps: 300000 # for the diffusion model; adjust according to your needs
   checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
-  validation_plot_variables: [t2m, u10, v10] # state channels to plot during validation
+  validation_plot_variables: [t2m_t+0, u10_t+0, v10_t+0] # state channels to plot during validation
   
   perf:
     fp_optimizations: amp-bf16

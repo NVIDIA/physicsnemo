@@ -57,8 +57,12 @@ dataset: # variable naming follows Earth2Studio wrapper: https://github.com/NVID
     era5:
       channels: ['u10m', 'v10m', 't2m', 'tcwv', 'sp', 'msl', 'u1000', 'u850', 'u500', 'u250', 'v1000', 'v850', 'v500', 'v250', 'z1000', 'z850', 'z500', 'z250', 't1000', 't850', 't500', 't250', 'q1000', 'q850', 'q500', 'q250']
       time_steps: [1]
+    solar_angles: # computed from lat_lon_variables
+      channels: [cos_zenith]
+      time_steps: [1]
   invariants_path: data/invariants.zarr # replace with your invariants file
   invariant_variables: ["lsm", "orography"]
+  lat_lon_variables: [lat, lon] # replace with the latitude and longitude names in your invariants file
 
 training:
   loss:

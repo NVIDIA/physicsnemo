@@ -37,10 +37,12 @@ invariant_variables: null # invariants given to the model, e.g. [orography, land
 lat_lon_variables: null # latitude and longitude variable names in invariants file; null for none
 mask_variable: null # static mask variable name in invariants file, nonzero where valid; null for none
 nan_mask: false # also mask out pixels that are NaN in any channel
-
 # Sample composition: access patterns determine which arrays the samples are
 # read from, which channels are used (null for all channels), and which time
 # steps are read. Step 0 is the reference time, e.g. the last past step.
+# The reserved array name solar_angles computes [sin_zenith, cos_zenith,
+# sin_azimuth, cos_azimuth] in the background from lat_lon_variables, e.g.
+#   solar_angles: {channels: [cos_zenith], time_steps: [1]}
 # Three examples are given below: CorrDiff, StormCast and StormScope. Uncomment
 # the one you want or override in another config file that includes this one.
 
@@ -53,19 +55,22 @@ background_access_patterns: {} # none by default (unconditional diffusion model)
 #background_access_patterns: # the "background" (conditioning); {} for none
 #  era5: {channels: null, time_steps: [0]}
 
-# StormCast pattern: predict the next HRRR step from the current HRRR state and the
-# ERA5 conditioning at the target time
+# StormCast pattern: predict the next HRRR step from the current HRRR state, and the
+# ERA5 conditioning and the cosine of the solar zenith angle at the target time
 #state_access_patterns: # the "state" (training target)
 #  hrrr: {channels: [t2m, u10, v10], time_steps: [1]}
 #background_access_patterns: # the "background" (conditioning); {} for none
 #  hrrr: {channels: [t2m, u10, v10], time_steps: [0]}
 #  era5: {channels: null, time_steps: [1]}
+#  solar_angles: {channels: [cos_zenith], time_steps: [1]} # requires lat_lon_variables
 
-# StormScope pattern: predict the next GOES step from the previous six steps
+# StormScope pattern: predict the next GOES step from the previous six steps, and the
+# cosine of the solar zenith angle at the input and target times
 #state_access_patterns: # the "state" (training target)
 #  radiance: {channels: null, time_steps: [1]}
 #background_access_patterns: # the "background" (conditioning); {} for none
 #  radiance: {channels: null, time_steps: [-5, -4, -3, -2, -1, 0]}
+#  solar_angles: {channels: [cos_zenith], time_steps: [-5, -4, -3, -2, -1, 0, 1]} # requires lat_lon_variables
 
 # Time selection
 time_step_seconds: 3600 # length of one time step; null to infer from the data

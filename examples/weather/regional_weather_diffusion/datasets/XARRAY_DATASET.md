@@ -87,7 +87,8 @@ matching the data arrays. It can contain:
 * invariants given to the model as conditioning, e.g. orography or a land-sea mask,
   listed in `invariant_variables`; to use them, add `"invariant"` to
   `model.diffusion_conditions` and/or `model.regression_conditions`;
-* latitude and longitude, named in `lat_lon_variables`, used by `inference.py`;
+* latitude and longitude, named in `lat_lon_variables`, used to compute
+  [solar angles](#solar-angles) and to store metadata in `inference.py`
 * a static mask, named in `mask_variable`, nonzero where the data are valid (e.g. on the
   satellite disk; see [Masking](#masking)).
 
@@ -160,10 +161,10 @@ With multiple time steps, all channels of the first step come first, followed by
 of the next step and so on.
 
 Channel names (as returned by `state_channels` and `background_channels`) get a
-`_t{step:+d}` suffix for steps other than 0. In the example above, the state channels
-are `t2m_t+1`, `u10_t+1` and `v10_t+1`, and the background channels are `t2m`, `u10` and
-`v10`, followed by `msl_t+1` and `tcwv_t+1`. These are the names to use e.g. in
-`training.validation_plot_variables`.
+`_t{step:+d}` suffix. In the example above, the state channels are `t2m_t+1`, `u10_t+1`
+and `v10_t+1`, and the background channels are `t2m_t+0`, `u10_t+0` and `v10_t+0`,
+followed by `msl_t+1` and `tcwv_t+1`. These are the names used for per-variable loss
+logging and in `training.validation_plot_variables`.
 
 The commented examples in `config/dataset/xarray.yaml` show the patterns for the other
 model types:
@@ -174,6 +175,26 @@ model types:
 | Hybrid (StormCast)      | high-res array at step `[1]` | high-res array at `[0]`, low-res array at `[1]` |
 | Nowcasting (StormScope) | observations at step `[1]`   | observations at steps `[-5, ..., 0]`            |
 | Unconditional           | any                          | `{}` (no `"background"`)                        |
+
+### Solar Angles
+
+The sines and cosines of the solar zenith and azimuth angles at each grid point, a
+common conditioning for diurnal and seasonal cycles, can be computed from the latitude
+and longitude using the reserved array name `solar_angles` in
+`background_access_patterns`. Its channels are `sin_zenith`, `cos_zenith`, `sin_azimuth`
+and `cos_azimuth`. For example, to add the cosine of the zenith angle at the target time
+to the StormCast example above:
+
+```yaml
+lat_lon_variables: [lat, lon]
+background_access_patterns:
+  hrrr: {channels: [t2m, u10, v10], time_steps: [0]}
+  era5: {channels: null, time_steps: [1]}
+  solar_angles: {channels: [cos_zenith], time_steps: [1]}
+```
+
+The background channels are then `t2m_t+0`, `u10_t+0`, `v10_t+0`, `msl_t+1`,
+`tcwv_t+1` and `cos_zenith_t+1`.
 
 ## Time Selection
 

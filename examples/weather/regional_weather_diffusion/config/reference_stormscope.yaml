@@ -45,8 +45,11 @@ dataset: # remove if using custom dataset
     radiance: {channels: null, time_steps: [1]}
   background_access_patterns: # the "background" (conditioning); {} for none
     radiance: {channels: "${dataset.state_access_patterns.radiance.channels}", time_steps: [-5, -4, -3, -2, -1, 0]}
+    # StormScopeMeteosat models use channels: [cos_zenith, sin_azimuth, cos_azimuth]
+    solar_angles: {channels: [cos_zenith], time_steps: [-5, -4, -3, -2, -1, 0, 1]} # computed from lat_lon_variables
   invariants_path: data/invariants.zarr # replace with your invariants file
   invariant_variables: ["elevation", "land_sea_mask"]
+  lat_lon_variables: [lat, lon] # replace with the latitude and longitude names in your invariants file
   mask_variable: mask # static mask in the invariants file, nonzero where valid (e.g. on the satellite disk)
   nan_mask: false # set to true to also mask out pixels that are NaN in the data
   time_step_seconds: 600 # 10 min
@@ -55,7 +58,7 @@ training:
   batch_size: 16
   loss:
     type: 'edm'
-  total_train_steps: 450000 # set according to your needs
+  total_train_steps: 500000 # set according to your needs
   checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
   validation_plot_variables: [] # state channels to plot during validation, e.g. [abi13c_t+1]

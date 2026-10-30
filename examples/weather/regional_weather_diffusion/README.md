@@ -288,7 +288,7 @@ Diffusion losses typically drop quickly at first and then slowly. Their late imp
 ```bash
 python inference.py --config-name reference_downscaling +inference=default \
     inference.diffusion_checkpoint=<checkpoint_dir>/EDMPreconditioner.0.<step>.mdlus \
-    inference.indices=[0,10,20] inference.ensemble_size=4 inference.plot_variables=[t2m]
+    inference.indices=[0,10,20] inference.ensemble_size=4 inference.plot_variables=[t2m_t+0]
 ```
 
 This generates an ensemble of 4 samples for each of the validation dataset samples 0, 10 and 20, and saves them along with the corresponding targets, in physical units, to `samples.zarr` in `inference.output_dir` (by default `{training.rundir}/inference`). It also saves a plot of `t2m` for each sample, comparing the first ensemble member to the target. For regression+diffusion models, the regression model is loaded from `model.regression_weights` unless `inference.regression_checkpoint` is given, and its prediction is also saved if `inference.save_regression=true`. Other parts of the config can be overridden as in training, e.g. `sampler.args.num_steps=32`.

@@ -62,7 +62,7 @@ training:
   total_train_steps: 450000 # set according to your needs
   checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
-  validation_plot_variables: [mrr, t2m, u10m, v10m] # state channels to plot during validation
+  validation_plot_variables: [mrr_t+0, t2m_t+0, u10m_t+0, v10m_t+0] # state channels to plot during validation
   perf:
     fp_optimizations: fp32
     torch_compile: true

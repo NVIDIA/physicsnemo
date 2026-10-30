@@ -46,6 +46,9 @@ dataset: # remove if using custom dataset
   background_access_patterns: # the "background" (conditioning); {} for none
     hrrr: {channels: "${dataset.state_access_patterns.hrrr.channels}", time_steps: [0]}
     era5: {channels: null, time_steps: [1]}
+    solar_angles: {channels: [cos_zenith], time_steps: [1]} # computed from lat_lon_variables
+  invariants_path: data/invariants.zarr # replace with your invariants file
+  lat_lon_variables: [lat, lon] # replace with the latitude and longitude names in your invariants file
 
 training:
   batch_size: 16

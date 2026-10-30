@@ -48,8 +48,10 @@ dataset: # remove if using custom dataset
       time_steps: [1]
   background_access_patterns: # the "background" (conditioning)
     radiance: {channels: "${dataset.state_access_patterns.radiance.channels}", time_steps: [-5, -4, -3, -2, -1, 0]}
+    solar_angles: {channels: [cos_zenith], time_steps: [-5, -4, -3, -2, -1, 0, 1]} # computed from lat_lon_variables
   invariants_path: data/invariants.zarr # replace with your invariants file
   invariant_variables: ["lsm", "orography"]
+  lat_lon_variables: [lat, lon] # replace with the latitude and longitude names in your invariants file
   mask_variable: mask
   time_step_seconds: 600 # 10 min
 

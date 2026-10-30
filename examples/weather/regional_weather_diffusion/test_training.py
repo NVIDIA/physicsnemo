@@ -26,7 +26,7 @@ import torch
 import train
 import xarray as xr
 import zarr
-from datasets.xarray import XarrayDataset, write_example_files
+from datasets.xarray import SOLAR_ANGLE_CHANNELS, XarrayDataset, write_example_files
 from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
@@ -36,6 +36,7 @@ from utils import parallel, trainer
 from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.nn import RopeNatten2DSelfAttention
+from physicsnemo.utils.zenith_angle import zenith_azimuth_angles_from_timestamp
 
 DistributedManager.initialize()
 
@@ -989,8 +990,8 @@ def test_xarray_dataset_samples(
     assert dataset.background_channels() == [
         "v10_t-1",
         "t2m_t-1",
-        "v10",
-        "t2m",
+        "v10_t+0",
+        "t2m_t+0",
         "msl_t+1",
         "tcwv_t+1",
     ]
@@ -1052,6 +1053,109 @@ def test_xarray_dataset_time_selection(tmp_path: Path):
         np.testing.assert_array_equal(dataset.times, np.array(expected))
 
 
+def test_xarray_dataset_solar_angles(xarray_files: dict):
+    """Solar angles are computed in access-pattern order without normalization, and
+    may be at times that are not in the data."""
+    background = {
+        "era5": {"channels": ["msl"], "time_steps": [1]},
+        "solar_angles": {
+            "channels": ["sin_azimuth", "cos_zenith"],
+            "time_steps": [0, 1],
+        },
+        "hrrr": {"channels": ["t2m"], "time_steps": [0]},
+    }
+    params = {
+        **xarray_files,
+        "state_access_patterns": XARRAY_STATE,
+        "background_access_patterns": background,
+    }
+    dataset = XarrayDataset(params, train=True)
+    assert len(dataset) == 47  # 48 times, minus the last one for step 1
+    assert dataset.background_channels() == [
+        "msl_t+1",
+        "sin_azimuth_t+0",
+        "cos_zenith_t+0",
+        "sin_azimuth_t+1",
+        "cos_zenith_t+1",
+        "t2m_t+0",
+    ]
+
+    with xr.open_dataset(xarray_files["invariants_path"]) as ds:
+        (lat, lon) = (ds["lat"].values, ds["lon"].values)
+    time_step = np.timedelta64(xarray_files["time_step_seconds"], "s")
+    idx = 5
+    sample = dataset[idx]["background"]
+    for k, step in enumerate((0, 1)):
+        time = dataset.times[idx] + step * time_step
+        timestamp = (time - np.datetime64(0, "s")) / np.timedelta64(1, "s")
+        (_, cos_zenith, sin_azimuth, _) = zenith_azimuth_angles_from_timestamp(
+            timestamp, lon, lat
+        )
+        np.testing.assert_allclose(sample[1 + 2 * k], sin_azimuth, atol=1e-6)
+        np.testing.assert_allclose(sample[2 + 2 * k], cos_zenith, atol=1e-6)
+    np.testing.assert_array_equal(
+        dataset.normalize_background(sample)[1:5], sample[1:5]
+    )
+    # the data channels around the solar angles are still read and normalized
+    for c, array in ((0, "era5"), (5, "hrrr")):
+        (_, expected) = _read_collated(
+            xarray_files, {array: background[array]}, dataset.times[idx]
+        )
+        np.testing.assert_allclose(sample[c], expected[0], rtol=1e-5, atol=1e-5)
+
+    # solar angles only, all channels, at a time far outside the data
+    params["background_access_patterns"] = {
+        "solar_angles": {"channels": None, "time_steps": [-100]}
+    }
+    dataset = XarrayDataset(params, train=True)
+    assert len(dataset) == 47
+    assert dataset.background_channels() == [
+        f"{angle}_t-100" for angle in SOLAR_ANGLE_CHANNELS
+    ]
+    sample = dataset[0]["background"]
+    assert sample.shape == (4, *dataset.image_shape())
+    assert np.all(np.abs(sample) <= 1.0)
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        (
+            {
+                "background_access_patterns": {
+                    "solar_angles": {"channels": ["zenith"], "time_steps": [0]}
+                }
+            },
+            "not found",
+        ),
+        (
+            {
+                "background_access_patterns": {
+                    "solar_angles": {"channels": None, "time_steps": [0]}
+                },
+                "lat_lon_variables": None,
+            },
+            "lat_lon_variables must be set",
+        ),
+        (
+            {
+                "state_access_patterns": {
+                    "solar_angles": {"channels": None, "time_steps": [0]}
+                }
+            },
+            "only be used in the background",
+        ),
+    ],
+)
+def test_xarray_dataset_solar_angles_errors(
+    xarray_files: dict, overrides: dict, match: str
+):
+    """Invalid solar angle configurations raise an error."""
+    params = {**xarray_files, "state_access_patterns": XARRAY_STATE, **overrides}
+    with pytest.raises(ValueError, match=match):
+        XarrayDataset(params, train=True)
+
+
 def test_xarray_dataset_nan_mask_and_crop(xarray_files: dict):
     """NaNs are zeroed and masked out, combined with the cropped static mask."""
     zarr.open_array(os.path.join(xarray_files["data_paths"][0], "hrrr"), mode="r+")[
@@ -1087,7 +1191,7 @@ def test_xarray_dataset_nan_mask_and_crop(xarray_files: dict):
                     "hrrr": {"channels": ["q2"], "time_steps": [0]}
                 }
             },
-            r"Channels \['q2'\] of 'hrrr' not found",
+            r"Channels \{'q2'\} of 'hrrr' in .* not found",
         ),
         (
             {"state_access_patterns": {"gfs": {"channels": None, "time_steps": [0]}}},

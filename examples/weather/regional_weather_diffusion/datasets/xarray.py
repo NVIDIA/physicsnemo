@@ -28,7 +28,14 @@ from typing import Any, Literal
 import numpy as np
 import xarray as xr
 
+from physicsnemo.utils.zenith_angle import zenith_azimuth_angles_from_timestamp
+
 from .dataset import StormCastDataset
+
+# reserved array name of the solar angles, which are computed rather than read
+SOLAR_ANGLES = "solar_angles"
+# in the order returned by zenith_azimuth_angles_from_timestamp
+SOLAR_ANGLE_CHANNELS = ["sin_zenith", "cos_zenith", "sin_azimuth", "cos_azimuth"]
 
 
 @dataclass
@@ -82,7 +89,7 @@ class _XarrayDataset(StormCastDataset):
     each array in the access patterns, the selected channels are read at each time
     step in ``time_steps`` and normalized; the time and channel dimensions are then
     merged and the arrays concatenated along the channel axis, in the order of the
-    access patterns. Channel names get a ``_t{step:+d}`` suffix for steps other than 0.
+    access patterns. Channel names get a ``_t{step:+d}`` suffix, e.g. ``t2m_t+0``.
 
     Only samples whose every accessed time exists, is valid and lies within the time
     range are used. Files may contain an optional boolean ``"valid"`` variable along
@@ -100,7 +107,11 @@ class _XarrayDataset(StormCastDataset):
         ``time_steps``) defining the ``"state"`` (training target).
     background_access_patterns : dict[str, dict], optional, default {}
         As ``state_access_patterns``, but defining the ``"background"`` (conditioning).
-        When empty, samples have no ``"background"``.
+        When empty, samples have no ``"background"``. The reserved array name
+        ``"solar_angles"`` computes the sin/cos of the solar zenith and azimuth angles,
+        with channels ``"sin_zenith"``, ``"cos_zenith"``, ``"sin_azimuth"`` and
+        ``"cos_azimuth"``. ``lat_lon_variables`` must be set for ``"solar_angles"`` to
+        work.
     invariants_path : str | None, optional, default None
         Path to a file with time-independent data: invariants, latitude/longitude and
         mask, each with dimensions ``(y_dim, x_dim)`` matching the data arrays. May be
@@ -115,7 +126,7 @@ class _XarrayDataset(StormCastDataset):
     invariant_variables : list[str], optional, default []
         Names of the variables in ``invariants_path`` to use as invariants.
     lat_lon_variables : tuple[str, str] | None, optional, default None
-        Names of the latitude and longitude variables in ``invariants_path``.
+        Names of the latitude and longitude (degrees) variables in ``invariants_path``.
     mask_variable : str | None, optional, default None
         Name of a static mask variable in ``invariants_path``, nonzero where valid.
     nan_mask : bool, optional, default False
@@ -191,8 +202,8 @@ class _XarrayDataset(StormCastDataset):
         time_range_valid: ["2021-07-01T00:00:00", "2022-01-01T00:00:00"]
 
     Time step 0 is the last past step, so the state channels are then ``t2m_t+1``,
-    ``u10_t+1`` and ``v10_t+1``, and the background channels ``t2m``, ``u10`` and
-    ``v10`` followed by all ERA5 channels with a ``_t+1`` suffix.
+    ``u10_t+1`` and ``v10_t+1``, and the background channels ``t2m_t+0``,
+    ``u10_t+0`` and ``v10_t+0`` followed by all ERA5 channels with a ``_t+1`` suffix.
     """
 
     def __init__(
@@ -242,6 +253,13 @@ class _XarrayDataset(StormCastDataset):
         self.lat_lon_variables = lat_lon_variables
         self.mask_variable = mask_variable
         self.nan_mask = nan_mask
+        if SOLAR_ANGLES in self.state_access_patterns:
+            raise ValueError(f"'{SOLAR_ANGLES}' can only be used in the background.")
+        if (
+            SOLAR_ANGLES in self.background_access_patterns
+            and lat_lon_variables is None
+        ):
+            raise ValueError(f"lat_lon_variables must be set to use '{SOLAR_ANGLES}'.")
         self.open_dataset_kwargs = open_dataset_kwargs
         if time_range_valid is None:
             time_range_valid = time_range_train
@@ -277,7 +295,7 @@ class _XarrayDataset(StormCastDataset):
         """Map each valid time to its file and index, checking that each file contains
         all accessed arrays."""
         self.file_and_index_for_time = {}
-        arrays = {array for (array, _) in self._all_access_patterns()}
+        arrays = {array for (array, _) in self._file_access_patterns()}
         for path in self.data_paths:
             with xr.open_dataset(path, **self.open_dataset_kwargs) as ds:
                 missing = arrays - set(ds.variables)
@@ -311,29 +329,18 @@ class _XarrayDataset(StormCastDataset):
         have the same channels."""
         self.used_channels = {}
         with xr.open_dataset(self.data_paths[0], **self.open_dataset_kwargs) as ds:
-            for array, pattern in self._all_access_patterns():
+            for array, pattern in self._file_access_patterns():
                 da = ds[array]
                 self.img_shape = da[..., *self.crop_slice].shape[-2:]
-                channel_index = {
-                    str(ch): j for (j, ch) in enumerate(da[da.dims[-3]].values)
-                }
-                if pattern.channels is None:
-                    pattern.channels = list(channel_index)
-                    pattern.channel_index = slice(None)
-                else:
-                    unknown = [ch for ch in pattern.channels if ch not in channel_index]
-                    if unknown:
-                        raise ValueError(
-                            f"Channels {unknown} of '{array}' not found in "
-                            f"'{self.data_paths[0]}'. Available channels: "
-                            f"{list(channel_index)}"
-                        )
-                    pattern.channel_index = [
-                        channel_index[ch] for ch in pattern.channels
-                    ]
+                channels = [str(ch) for ch in da[da.dims[-3]].values]
+                _resolve_channel_index(
+                    pattern, channels, f"'{array}' in '{self.data_paths[0]}'"
+                )
                 self.used_channels.setdefault(array, {}).update(
                     dict.fromkeys(pattern.channels)
                 )
+        if (pattern := self.background_access_patterns.get(SOLAR_ANGLES)) is not None:
+            _resolve_channel_index(pattern, SOLAR_ANGLE_CHANNELS, f"'{SOLAR_ANGLES}'")
 
     def _select_times(self) -> None:
         """Select the sample times: those in the time range, not excluded, and for
@@ -349,7 +356,7 @@ class _XarrayDataset(StormCastDataset):
             self.times = self.times[in_range]
         self.times = self.times[~np.isin(self.times, self.exclude_times)]
         keep_times = np.ones(len(self.times), dtype=bool)
-        for _, pattern in self._all_access_patterns():
+        for _, pattern in self._file_access_patterns():
             for step in pattern.time_steps:
                 keep_times &= np.isin(self.times + step * self.time_step, self.times)
         self.times = self.times[keep_times]
@@ -402,6 +409,10 @@ class _XarrayDataset(StormCastDataset):
             )
             for x, v in zip(self.invariants, self.invariant_variables):
                 self.in_place_normalize(x, "invariant", v)
+        # solar angles are already in [-1, 1], so they are not normalized; these
+        # identity stats keep them unchanged in normalize/denormalize_background
+        self.mean[SOLAR_ANGLES] = dict.fromkeys(SOLAR_ANGLE_CHANNELS, np.float32(0.0))
+        self.std[SOLAR_ANGLES] = dict.fromkeys(SOLAR_ANGLE_CHANNELS, np.float32(1.0))
 
         (self.state_variables, self.state_mean, self.state_std) = self._collated_layout(
             self.state_access_patterns
@@ -421,20 +432,24 @@ class _XarrayDataset(StormCastDataset):
         std = []
         for array, pattern in access_patterns.items():
             for step in pattern.time_steps:
-                suffix = "" if step == 0 else f"_t{step:+d}"
                 for ch in pattern.channels:
-                    names.append(f"{ch}{suffix}")
+                    names.append(f"{ch}_t{step:+d}")
                     mean.append(self.mean[array][ch])
                     std.append(self.std[array][ch])
         mean = np.array(mean, dtype=np.float32)[:, None, None]
         std = np.array(std, dtype=np.float32)[:, None, None]
         return (names, mean, std)
 
-    def _all_access_patterns(self) -> Iterator[tuple[str, AccessPattern]]:
+    def _file_access_patterns(self) -> Iterator[tuple[str, AccessPattern]]:
         """``(array, pattern)`` pairs of the state and then the background access
-        patterns."""
-        return chain(
-            self.state_access_patterns.items(), self.background_access_patterns.items()
+        patterns, except the computed solar angles."""
+        return (
+            (array, pattern)
+            for (array, pattern) in chain(
+                self.state_access_patterns.items(),
+                self.background_access_patterns.items(),
+            )
+            if array != SOLAR_ANGLES
         )
 
     def _open_dataset(self, path: str) -> xr.Dataset:
@@ -493,7 +508,14 @@ class _XarrayDataset(StormCastDataset):
         buffer: np.ndarray,
     ) -> None:
         """Read the channels ``channel_index`` of ``array`` at ``time``, cropped to the
-        crop window, into ``buffer``."""
+        crop window, into ``buffer``, or compute them if ``array`` is the solar
+        angles."""
+        if array == SOLAR_ANGLES:
+            timestamp = (time - np.datetime64(0, "s")) / np.timedelta64(1, "s")
+            angles = zenith_azimuth_angles_from_timestamp(timestamp, self.lon, self.lat)
+            buffer[:] = np.stack(angles)[channel_index]
+            return
+
         (dataset_path, time_idx) = self.file_and_index_for_time[time]
         da = self._get_dataset(dataset_path)[array]
         (time_dim, channel_dim, y_dim, x_dim) = da.dims
@@ -570,6 +592,8 @@ class _XarrayDataset(StormCastDataset):
         for read in as_completed(reads):
             read.result()
             (array, channels, block) = reads[read]
+            if array == SOLAR_ANGLES:  # solar angles are not normalized
+                continue
             for j, ch in enumerate(channels):
                 normalize_tasks.append(
                     self.executor.submit(self.in_place_normalize, block[j], array, ch)
@@ -612,6 +636,7 @@ class _XarrayDataset(StormCastDataset):
             Channel of shape :math:`(H, W)` in physical units, normalized in place.
         array : str
             Name of the data array of the channel, or ``"invariant"`` for invariants.
+            Not called for the solar angles, which are not normalized.
         var : str
             Name of the channel or invariant variable.
 
@@ -747,6 +772,24 @@ class _XarrayDataset(StormCastDataset):
             State in physical units, same shape as ``x``.
         """
         return x * self.state_std + self.state_mean
+
+
+def _resolve_channel_index(
+    pattern: AccessPattern, available: list[str], source: str
+) -> None:
+    """Set ``pattern.channel_index`` from the ``available`` channels of ``source``,
+    and ``pattern.channels`` to all of them if it is ``None``."""
+    if pattern.channels is None:
+        pattern.channels = list(available)
+        pattern.channel_index = slice(None)
+        return
+    unknown = set(pattern.channels) - set(available)
+    if unknown:
+        raise ValueError(
+            f"Channels {unknown} of {source} not found. Available channels: "
+            f"{list(available)}"
+        )
+    pattern.channel_index = [available.index(ch) for ch in pattern.channels]
 
 
 def _is_url(path: str) -> bool:
