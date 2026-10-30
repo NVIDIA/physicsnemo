@@ -222,11 +222,57 @@ def test_reduction_backward_resolves_partial_cotangent_2d(distributed_mesh_2d):
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("op", ["sum", "mean"])
+@pytest.mark.parametrize("keepdim", [False, True])
+@pytest.mark.parametrize("dim", [0, -3, 2, (0, 2)])
+def test_reduction_preserves_unreduced_shard(distributed_mesh_2d, op, keepdim, dim):
+    """Reducing simulations must preserve the spatial shard's dimension."""
+    mesh = distributed_mesh_2d
+    i, j = mesh.get_coordinate()
+    simulation_sizes = [rank + 1 for rank in range(mesh.size(0))]
+    spatial_sizes = [2 * rank + 3 for rank in range(mesh.size(1))]
+    k, d = simulation_sizes[i], spatial_sizes[j]
+    ks, ds = sum(simulation_sizes[:i]), sum(spatial_sizes[:j])
+    full = torch.arange(
+        sum(simulation_sizes) * sum(spatial_sizes) * 2,
+        dtype=torch.float64,
+        device=DistributedManager().device,
+    ).reshape(sum(simulation_sizes), sum(spatial_sizes), 2)
+    x = ShardTensor.from_local(
+        full[ks : ks + k, ds : ds + d].clone(),
+        mesh,
+        (Shard(0), Shard(1)),
+        sharding_shapes={
+            0: [(n, d, 2) for n in simulation_sizes],
+            1: [(k, n, 2) for n in spatial_sizes],
+        },
+    ).requires_grad_(True)
+    full.requires_grad_(True)
+    result = getattr(x, op)(dim=dim, keepdim=keepdim)
+    if dim == 2:
+        assert result.placements == (Shard(0), Shard(1))
+    else:
+        assert result.placements == (Partial(), Shard(1 if keepdim else 0))
+    expected = getattr(full, op)(dim=dim, keepdim=keepdim)
+    assert result.shape == expected.shape
+    gathered = result.full_tensor()
+    torch.testing.assert_close(gathered, expected)
+    # Nonconstant cotangents exercise both values and gradient layout after the
+    # reduction, including a still-sharded axis after a retained singleton.
+    gathered.square().sum().backward()
+    expected.square().sum().backward()
+    assert x.grad.placements == x.placements
+    assert x.grad._spec.sharding_shapes() == x._spec.sharding_shapes()
+    torch.testing.assert_close(x.grad.full_tensor(), full.grad)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("op", ["sum", "mean"])
 @pytest.mark.parametrize("backward", [True])
 @pytest.mark.parametrize("dim", [None, 0, (0, 1)])
 @pytest.mark.parametrize("in_place", [True, False])
+@pytest.mark.parametrize("keepdim", [False, True])
 def test_shard_tensor_reduction(
-    distributed_mesh, op, backward, dim, in_place, verbose=False
+    distributed_mesh, op, backward, dim, in_place, keepdim, verbose=False
 ):
     dm = DistributedManager()
 
@@ -263,7 +309,7 @@ def test_shard_tensor_reduction(
     # also, technically, a reduction.
 
     args = ()
-    kwargs = {"dim": dim}
+    kwargs = {"dim": dim, "keepdim": keepdim}
 
     full_input = shard_tensor.full_tensor().detach().requires_grad_(True)
 

@@ -297,6 +297,11 @@ def main(
     # remaining code falls back to eager.
     torch._dynamo.config.cache_size_limit = 64
 
+    # Dynamo in PyTorch 2.13 and 2.14 can fail to compile the Padé networks inside
+    # GLOBE's checkpointed kernels, for example with theta > 0, unless floats are
+    # specialized (pytorch/pytorch#193194, fixed in 2.15).
+    torch._dynamo.config.specialize_float = True
+
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
