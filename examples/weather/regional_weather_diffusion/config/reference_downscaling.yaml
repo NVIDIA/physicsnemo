@@ -49,15 +49,23 @@ dataset: # remove if using custom dataset
 
 training:
   batch_size: 64 # can be smaller for large grids
-  
+
   loss:
     type: 'edm'
-  
+    sigma_distribution: loguniform
+    sigma_min: 0.01  # best to use power spectral analysis to determine sigma_min and sigma_max
+    sigma_max: 300.0
+
   total_train_steps: 450000 # set according to your needs
   checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
   validation_plot_variables: [t2m_t+0, u10_t+0, v10_t+0] # state channels to plot during validation
-  
+
   perf:
     fp_optimizations: amp-bf16
     torch_compile: true
+
+sampler:
+  args: # sample over the same noise range as used in training
+    sigma_min: ${training.loss.sigma_min}
+    sigma_max: ${training.loss.sigma_max}

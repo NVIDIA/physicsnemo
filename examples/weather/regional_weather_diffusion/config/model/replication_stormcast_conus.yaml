@@ -31,6 +31,6 @@ hyperparameters:
   depth: 16
   hidden_size: 768
   attn_kernel_size: 31
-  num_heads: 16
+  num_heads: 12
   patch_size: 4
   use_nan_mask_tokens: false

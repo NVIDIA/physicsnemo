@@ -17,7 +17,7 @@
 
 # StormScope model config - corresponds to versions of StormScope-GOES/MRMS
 # trained with absolute positional embedding and FP32 training, as well as
-# StormScope Meteosat EU.
+# StormScope Meteosat EU (which uses num_heads: 12).
 #
 # For new StormScope/nowcasting models, it is recommended to use the better-optimized
 # config of reference_dit.yaml instead of this one.

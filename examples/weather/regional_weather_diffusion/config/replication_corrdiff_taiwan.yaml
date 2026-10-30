@@ -44,9 +44,13 @@ defaults:
 model:
   # Pretrained regression model, where regression training saves its final checkpoint
   # when run with training.experiment_name=regression
-  regression_weights: "rundir/regression/0/checkpoints_regression/StormCastUNet.0.450000.mdlus"
+  regression_weights: "rundir/regression/0/checkpoints_regression/StormCastUNet.0.4000.mdlus"
+  hyperparameters:
+    dropout: 0.13
 
 dataset: # remove if using custom dataset
+  time_range_train: ["2018-01-01T00:00:00", "2021-01-01T00:00:00"]
+  time_range_valid: ["2021-01-01T00:00:00", "2022-01-01T00:00:00"]
   state_access_patterns: # the "state" (training target)
     wrf:
       channels: ["mrr", "t2m", "u10m", "v10m"]
@@ -57,12 +61,24 @@ dataset: # remove if using custom dataset
       time_steps: [0]
 
 training:
+  batch_size: 512
+
   loss:
     type: 'edm' # use "regression"/"edm" here to train your regression/diffusion model
-  total_train_steps: 450000 # set according to your needs
-  checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
-  validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+    P_mean: 0.0
+    P_std: 1.2
+
+  # total_train_steps: 4000 # regression model
+  total_train_steps: 55000 # diffusion model
+  checkpoint_freq: 1000 # How often to save the checkpoints, measured in number of training steps
+  validation_freq: 1000 # how often to record the validation loss, measured in number of training steps
   validation_plot_variables: [mrr_t+0, t2m_t+0, u10m_t+0, v10m_t+0] # state channels to plot during validation
+
+  optimizer:
+    name: "adam"
+    lr: 2e-4
+    betas: [0.9, 0.99]
+
   perf:
     fp_optimizations: fp32
     torch_compile: true

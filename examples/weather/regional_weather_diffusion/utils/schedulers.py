@@ -42,37 +42,42 @@ def init_scheduler(
     optimizer : torch.optim.Optimizer
         The optimizer to schedule.
     cfg : SchedulerConfig
-        Scheduler configuration:
-        - ``name``: Any ``torch.optim.lr_scheduler`` class name (e.g., "CosineAnnealingLR")
-        - Other scheduler-specific parameters passed to the constructor
-    warmup_steps : int
-        Number of warmup steps (used to compute default T_max for cosine schedulers).
+        Scheduler configuration (``cfg.training.scheduler``):
+
+        - ``name``: any ``torch.optim.lr_scheduler`` class name (e.g.
+          ``"CosineAnnealingLR"``), or ``None`` for no scheduler.
+        - ``lr_rampup_steps``: number of warmup steps, handled by the trainer.
+        - Other fields are passed to the scheduler constructor. For
+          ``CosineAnnealingLR``, ``T_max`` defaults to
+          ``total_steps - lr_rampup_steps``, so the decay ends with training.
     total_steps : int
-        Total training steps.
+        Total number of training steps.
+    logger : ExperimentLogger
+        Logger for the scheduler parameters.
 
     Returns
     -------
     scheduler : LRScheduler or None
-        The configured scheduler, or None if cfg is empty.
+        The configured scheduler, or ``None`` if ``cfg.name`` is ``None``.
     scheduler_name : str or None
-        Name of the scheduler class, or None if no scheduler.
+        Name of the scheduler class, or ``None`` if no scheduler.
 
     Raises
     ------
     ValueError
-        If the scheduler name is not found in torch.optim.lr_scheduler.
+        If ``cfg.name`` is not a learning rate scheduler class.
 
     Examples
     --------
     >>> optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    >>> scheduler, name = init_scheduler(
-    ...     optimizer,
-    ...     {"name": "CosineAnnealingLR", "eta_min": 1e-6},
-    ...     warmup_steps=1000,
-    ...     total_steps=10000,
+    >>> cfg = SchedulerConfig(
+    ...     name="CosineAnnealingLR", lr_rampup_steps=1000, eta_min=1e-6
     ... )
-    >>> name
-    'CosineAnnealingLR'
+    >>> scheduler, name = init_scheduler(
+    ...     optimizer, cfg, total_steps=10000, logger=logger
+    ... )
+    >>> (name, scheduler.T_max)
+    ('CosineAnnealingLR', 9000)
     """
     if cfg.name is None:
         return None, None
@@ -119,12 +124,16 @@ def step_scheduler(
         Number of warmup steps. Scheduler only steps when total_steps >= warmup_steps.
     metric : float, optional
         Validation metric value. Required for ReduceLROnPlateau scheduler.
+    logger : ExperimentLogger
+        Logger for ReduceLROnPlateau updates.
 
     Examples
     --------
-    >>> step_scheduler(scheduler, total_steps=1500, warmup_steps=1000)
+    >>> step_scheduler(scheduler, total_steps=1500, warmup_steps=1000, logger=logger)
     >>> # For ReduceLROnPlateau:
-    >>> step_scheduler(scheduler, total_steps=1500, warmup_steps=1000, metric=0.05)
+    >>> step_scheduler(
+    ...     scheduler, total_steps=1500, warmup_steps=1000, metric=0.05, logger=logger
+    ... )
     """
     if scheduler is None:
         return
