@@ -10,10 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The PhysicsNeMo-Mesh paper ([arXiv:2610.39072](https://arxiv.org/abs/2610.39072))
-  describes the design of `physicsnemo.mesh` and compares its speed with VTK. The
-  README, the module README, and the mesh API reference now give it as the
-  citation for `physicsnemo.mesh`.
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
