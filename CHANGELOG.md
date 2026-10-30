@@ -129,6 +129,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Adds type annotations and NumPy-style docstrings to the helpers in
+  `physicsnemo.distributed.utils` (no behavior change).
 - Partitioning a graph across GPUs (`partition_graph_with_id_mapping`, behind
   `DistributedGraph` and GraphCast's distributed mode) no longer loops over
   destination nodes in Python. A 1-million-node grid now takes well under a
@@ -388,6 +390,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.distributed.utils.pad_helper` pads the requested `dim`; it
+  previously always padded the last dimension. `split_tensor_along_dim` now
+  formats the values in its too-few-elements error message.
 - The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
