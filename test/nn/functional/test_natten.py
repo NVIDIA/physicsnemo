@@ -20,7 +20,7 @@ Validates that the ``na1d``, ``na2d``, and ``na3d`` wrappers:
 
 * produce bit-identical results to the underlying ``natten.functional`` calls,
 * preserve tensor shapes through forward and backward,
-* correctly dispatch through ``__torch_function__`` for tensor subclasses,
+* route tensor subclasses through the ``physicsnemo::na{1,2,3}d`` ops,
 * degenerate to standard scaled dot-product attention when the kernel window
   covers the entire spatial extent.
 """
@@ -148,7 +148,7 @@ class TestNA1D:
         _DispatchRecorder.dispatched_funcs.clear()
         na1d(q, k, v, kernel_size=3)
 
-        assert na1d in _DispatchRecorder.dispatched_funcs
+        assert torch.ops.physicsnemo.na1d.default in _DispatchRecorder.dispatched_funcs
 
     def test_full_window_matches_sdpa(self, device):
         """When kernel covers the entire sequence, NA degenerates to SDPA."""
@@ -242,7 +242,7 @@ class TestNA2D:
         _DispatchRecorder.dispatched_funcs.clear()
         na2d(q, k, v, kernel_size=3)
 
-        assert na2d in _DispatchRecorder.dispatched_funcs
+        assert torch.ops.physicsnemo.na2d.default in _DispatchRecorder.dispatched_funcs
 
     def test_full_window_matches_sdpa(self, device):
         """When kernel covers the full spatial extent, NA degenerates to SDPA."""
@@ -334,7 +334,7 @@ class TestNA3D:
         _DispatchRecorder.dispatched_funcs.clear()
         na3d(q, k, v, kernel_size=3)
 
-        assert na3d in _DispatchRecorder.dispatched_funcs
+        assert torch.ops.physicsnemo.na3d.default in _DispatchRecorder.dispatched_funcs
 
     def test_full_window_matches_sdpa(self, device):
         """When kernel covers the full spatial extent, NA degenerates to SDPA."""
