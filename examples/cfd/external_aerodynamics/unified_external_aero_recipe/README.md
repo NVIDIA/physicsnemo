@@ -79,6 +79,9 @@ and each model YAML's `forward_kwargs:` block declaratively maps
 DomainMesh paths into the model's `forward()` kwargs. The recipe collate
 either passes those values through (mesh-native models like GLOBE) or
 batch-wraps them into `(B, N, C)` tensors (transformer-style models).
+Section 5 of the [PhysicsNeMo-Mesh paper](https://arxiv.org/abs/2610.39072)
+describes this design, with one stored DrivAerML dataset feeding Transolver,
+GeoTransolver, and GLOBE.
 
 ```mermaid
 flowchart LR
