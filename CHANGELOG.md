@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds experimental `SignedDistanceStencil` and `RadiusPooledFeatures` layers to
+  `physicsnemo.experimental.nn`: signed distances to a triangle surface at a stencil of
+  probes around each point, and radius-pooled local features from voxel-downsampled
+  candidate points, as local geometry encodings for GeoTransolver.
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
