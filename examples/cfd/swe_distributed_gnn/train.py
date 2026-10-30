@@ -457,15 +457,6 @@ def main(cfg: DictConfig):
     if dist_manager.rank == 0:
         logger.info(f"starting to run ...")
 
-    # Check if distributed mode is requested with PyG backend
-    if graph_partition_size > 1:
-        # GraphCastNet defaults to graph_backend="pyg"
-        # Distributed mode is not yet supported with PyG backend
-        raise NotImplementedError(
-            "Distributed mode (partition_size > 1) is not supported with PyG backend. "
-            "Support for distributed message passing using PyG backend will likely be included in a future release."
-        )
-
     model = GraphCastNet(
         mesh_level=cfg.data.mesh_level,
         input_res=input_res,
@@ -621,7 +612,7 @@ def main(cfg: DictConfig):
     if DistributedManager().distributed:
         torch.distributed.gather(max_mem, gather_list, dst=0)
     else:
-        max_mem = gather_list[0]
+        gather_list[0] = max_mem
 
     if dist_manager.rank == 0:
         if cfg.run_training:

@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Union
 
 import numpy as np
-import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
 
@@ -33,6 +32,8 @@ from physicsnemo.utils.insolation import insolation
 
 from . import couplers
 from .timeseries_dataset import TimeSeriesDataset
+
+pd = OptionalImport("pandas")
 
 xr = OptionalImport("xarray")
 

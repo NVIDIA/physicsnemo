@@ -14,24 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import TYPE_CHECKING
+
 from physicsnemo.mesh.domain_mesh import DomainMesh
 from physicsnemo.mesh.fields import (
-    RankSpecDict,
-    flatten_rank_spec,
-    rank_counts,
-    ranks_from_tensordict,
-    validate_data_contains_ranks,
+    FieldSchema,
+    FieldSchemaLike,
+    RankSpec,
+    RankSpecLike,
+    _missing_attribute,
 )
 from physicsnemo.mesh.mesh import MESH_FIELD_ASSOCIATIONS, Mesh, MeshFieldAssociation
+
+### The rank-spec helpers removed in 2.3 were re-exported here; importing one
+### names its replacement (see physicsnemo.mesh.fields). Hidden from type
+### checkers so that they keep reporting unknown names as missing.
+if not TYPE_CHECKING:
+
+    def __getattr__(name: str):
+        """Point imports of removed names at their replacements (PEP 562)."""
+        _missing_attribute(__name__, name)
+
 
 __all__ = [
     "DomainMesh",
     "MESH_FIELD_ASSOCIATIONS",
     "Mesh",
     "MeshFieldAssociation",
-    "RankSpecDict",
-    "flatten_rank_spec",
-    "rank_counts",
-    "ranks_from_tensordict",
-    "validate_data_contains_ranks",
+    "FieldSchema",
+    "FieldSchemaLike",
+    "RankSpec",
+    "RankSpecLike",
 ]

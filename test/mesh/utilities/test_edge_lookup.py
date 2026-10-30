@@ -80,3 +80,13 @@ def test_find_edges_uses_sparse_strict_index_bound() -> None:
 
     assert matches.tolist() == [True, True]
     assert indices.tolist() == [1, 0]
+
+
+def test_find_edges_int32_hash_does_not_overflow() -> None:
+    # 42949 * 100000 + 67297 == 2**32 + 1, which wraps to the hash of (0, 1) in int32
+    reference = torch.tensor([[42949, 67297]], dtype=torch.int32)
+    query = torch.tensor([[0, 1], [67297, 42949]], dtype=torch.int32)
+
+    _, matches = find_edges_in_reference(reference, query, index_bound=100_000)
+
+    assert matches.tolist() == [False, True]

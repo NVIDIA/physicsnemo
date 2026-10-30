@@ -23,8 +23,8 @@ PhysicsNeMo samples have more models that illustrate how a specific approach wit
 model architecture can be applied to a specific problem.
 These are reference starting points for users to get started.
 
-You can find the list of built in model architectures
-[here](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models).
+You can find the list of built in model architectures in the
+[`physicsnemo/models` directory](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models).
 
 ## How do I use physics-informed training with PhysicsNeMo?
 

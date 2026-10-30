@@ -16,6 +16,7 @@
 
 """Tests for procedural example meshes."""
 
+import pytest
 import torch
 
 from physicsnemo.mesh import primitives
@@ -47,3 +48,10 @@ class TestProceduralPrimitives:
 
         # Corners should still be at expected positions
         assert corners.sum() >= 4
+
+    @pytest.mark.parametrize("n", [5, 11, 101])
+    def test_perturbed_grid_positively_oriented(self, n):
+        """The default perturbation, relative to the grid spacing, folds no cell."""
+        mesh = primitives.procedural.perturbed_grid.load(n_x=n, n_y=n)
+
+        assert mesh.validate(check_inverted_cells=True)["n_inverted_cells"] == 0

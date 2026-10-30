@@ -64,25 +64,27 @@ def vectorized_connected_components(
         return parent
 
     ### Iterative union-find: repeat union + path compression until stable
+    # Invariant: parent[i] <= i, since parent starts as arange and both the
+    # "amin" scatter and path compression only lower it. Hence merging the
+    # roots of a pair needs only the scatter of the smaller root lo into the
+    # larger root hi: the reverse scatter would be a no-op, as
+    # parent[lo] <= lo <= hi. Merging the raw pairs as well
+    # is not needed: in the first iteration parent[pairs] == pairs, and
+    # afterwards parent[max(a, b)] <= min(a, b) already holds and stays true.
+    first = pairs[:, 0]
+    second = pairs[:, 1]
     max_iterations = 100
     for _ in range(max_iterations):
         prev = parent.clone()
 
-        # Union step: merge to smaller index
-        merge_from = torch.maximum(pairs[:, 0], pairs[:, 1])
-        merge_to = torch.minimum(pairs[:, 0], pairs[:, 1])
-        # Also need to merge through current parent pointers
-        parent_from = parent[pairs[:, 0]]
-        parent_to = parent[pairs[:, 1]]
-        all_merge_from = torch.cat([merge_from, torch.maximum(parent_from, parent_to)])
-        all_merge_to = torch.cat([merge_to, torch.minimum(parent_from, parent_to)])
-
-        parent.scatter_reduce_(
-            dim=0,
-            index=all_merge_from,
-            src=all_merge_to,
-            reduce="amin",
-        )
+        # Union step: merge the larger root of each pair to the smaller root
+        root_first = parent[first]
+        root_second = parent[second]
+        smaller_root = torch.minimum(root_first, root_second)
+        larger_root = root_first.clamp_(min=root_second)  # the maximum, in place
+        del root_first, root_second
+        parent.scatter_reduce_(0, larger_root, smaller_root, reduce="amin")
+        del larger_root, smaller_root
 
         # Path compression
         parent = parent[parent]
@@ -140,7 +142,7 @@ def find_duplicate_pairs(
     ### BVH query: L∞ candidate pairs within tolerance
     candidate_adjacency = bvh.find_candidate_cells(
         query_points=points,
-        max_candidates_per_point=100,
+        max_candidates_per_point=None,
         aabb_tolerance=tolerance,
     )
 

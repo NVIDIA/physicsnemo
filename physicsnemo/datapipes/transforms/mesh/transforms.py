@@ -45,8 +45,15 @@ from physicsnemo.mesh import (
     Mesh,
     MeshFieldAssociation,
 )
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
-from physicsnemo.nn.functional import weighted_multinomial
+from physicsnemo.mesh.calculus.measure import (
+    EFFECTIVE_MEASURE_KEY,
+    cell_measures,
+    point_measure_dimension,
+    point_measures,
+    scale_measures,
+    set_point_measures,
+)
+from physicsnemo.utils import weighted_multinomial
 
 
 @register()
@@ -200,11 +207,35 @@ class RotateMesh(MeshTransform):
 
 @register()
 class CenterMesh(MeshTransform):
-    r"""Translate mesh so its center of mass is at the origin."""
+    r"""Translate mesh so its center of mass is at the origin.
 
-    def __init__(self, use_area_weighting: bool = True) -> None:
+    Parameters
+    ----------
+    use_area_weighting : bool, default ``True``
+        Weight cell centroids by cell area when computing the center. If
+        ``False``, use the arithmetic mean of the mesh points.
+    store_center_as : str or None, default ``None``
+        Optional ``global_data`` key under which to store the center that was
+        subtracted, so inference can shift results back. A dotted name is a
+        nested key, as in the other mesh transforms. For a
+        :class:`DomainMesh`, the center is stored in the domain-level
+        ``global_data``. A later origin-fixed :class:`RotateMesh` or
+        :class:`ScaleMesh` with ``transform_global_data={<key>: True}``
+        transforms the stored center too; translations and non-origin pivots
+        do not update it. The default preserves the historical
+        behavior without adding metadata.
+    """
+
+    def __init__(
+        self,
+        use_area_weighting: bool = True,
+        store_center_as: str | None = None,
+    ) -> None:
         super().__init__()
         self.use_area_weighting = use_area_weighting
+        self.store_center_as = (
+            None if store_center_as is None else as_nested_key(store_center_as)
+        )
 
     def _compute_com(self, mesh: Mesh) -> Float[torch.Tensor, " spatial_dims"]:
         """Compute center of mass for a single mesh."""
@@ -212,11 +243,25 @@ class CenterMesh(MeshTransform):
             areas = mesh.cell_areas  # (n_cells,)
             centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
             total_area = areas.sum()
-            return (centroids * areas.unsqueeze(-1)).sum(dim=0) / total_area
-        return mesh.points.mean(dim=0)
+            com = (centroids * areas.unsqueeze(-1)).sum(dim=0) / total_area
+        else:
+            com = mesh.points.mean(dim=0)
+        # On a sharded mesh the reduction yields a ShardTensor. Materialize
+        # it: the offset broadcasts against plain and sharded tensors alike,
+        # whereas a ShardTensor offset would promote every plain sub-mesh it
+        # touches (e.g. a replicated SDF reference surface) into ShardTensors.
+        if hasattr(com, "full_tensor"):
+            com = com.full_tensor()
+        return com
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        return mesh.translate(-self._compute_com(mesh))
+        com = self._compute_com(mesh)
+        centered = mesh.translate(-com)
+        if self.store_center_as is not None:
+            global_data = centered.global_data.copy()
+            global_data[self.store_center_as] = com
+            centered.global_data = global_data
+        return centered
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Translate a :class:`DomainMesh` so its interior center of mass is at the origin.
@@ -235,10 +280,18 @@ class CenterMesh(MeshTransform):
             Centered domain mesh.
         """
         com = self._compute_com(domain.interior)
-        return domain.translate(-com)
+        centered = domain.translate(-com)
+        if self.store_center_as is not None:
+            global_data = centered.global_data.copy()
+            global_data[self.store_center_as] = com
+            centered.global_data = global_data
+        return centered
 
     def extra_repr(self) -> str:
-        return f"use_area_weighting={self.use_area_weighting}"
+        parts = [f"use_area_weighting={self.use_area_weighting}"]
+        if self.store_center_as is not None:
+            parts.append(f"store_center_as={self.store_center_as!r}")
+        return ", ".join(parts)
 
 
 def _compact_points(mesh: Mesh) -> Mesh:
@@ -268,10 +321,10 @@ def _compact_points(mesh: Mesh) -> Mesh:
 class SubsampleMesh(MeshTransform):
     r"""Subsample a mesh to a fixed number of cells and/or points.
 
-    Cell subsampling preserves the integration measure by recording
-    each stage's inverse inclusion probability into the mesh's measure
-    weights (see :mod:`physicsnemo.mesh.calculus.measure`); point
-    subsampling does not maintain weights.
+    Sampling multiplies explicit effective measures by the stage's inverse
+    inclusion probability. Cell measures default to geometric measures;
+    point measures remain absent unless supplied explicitly. Point sampling
+    does not correct cell measures for cells removed indirectly.
     """
 
     def __init__(
@@ -317,16 +370,19 @@ class SubsampleMesh(MeshTransform):
             if self.compact:
                 mesh = _compact_points(mesh)
             ### Compose this stage's inverse inclusion probability into the
-            ### mesh's measure weights.
+            ### mesh's effective measures.
             ### `_random_indices` is exact below the large-population threshold
             ### and uses the near-uniform Poisson-gap approximation above it.
-            compose_measure_weights(mesh, n_before / self.n_cells)
+            scale_measures(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(
                 mesh.n_points, self.n_points, mesh.points.device
             )
+            n_before = mesh.n_points
             mesh = mesh.slice_points(indices)
+            if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+                scale_measures(mesh, n_before / self.n_points, association="points")
 
         return mesh
 
@@ -1065,8 +1121,11 @@ class MeshToDomainMesh(MeshTransform):
         Names of cell-centered fields on the input mesh to use as prediction
         targets. They are moved out of the boundary's ``cell_data`` and into
         ``interior.point_data``. Use with ``interior_points='cell_centroids'``.
-        If ``None`` (and ``point_data_targets`` is also ``None``), no targets
-        are placed on the interior.
+        If ``None`` (and ``point_data_targets`` is also ``None``), no user
+        targets are placed on the interior. Centroid mode still records each
+        source cell's effective measure under
+        :data:`~physicsnemo.mesh.calculus.measure.EFFECTIVE_MEASURE_KEY`, so integrals over the query
+        points remain possible after the cells are gone.
     point_data_targets : list[str] or None, default ``None``
         Names of vertex-centered fields on the input mesh to use as prediction
         targets. They are moved out of the boundary's ``point_data`` and into
@@ -1148,6 +1207,12 @@ class MeshToDomainMesh(MeshTransform):
         ### ``select`` / ``exclude`` below accept the parsed tuple keys.
         self._cell_data_targets: list[NestedKey] = as_nested_keys(cell_data_targets)
         self._point_data_targets: list[NestedKey] = as_nested_keys(point_data_targets)
+        reserved = as_nested_key(EFFECTIVE_MEASURE_KEY)
+        if reserved in self._cell_data_targets or reserved in self._point_data_targets:
+            raise ValueError(
+                f"{EFFECTIVE_MEASURE_KEY!r} is reserved for effective "
+                "measure bookkeeping and cannot be configured as a user target."
+            )
         self._interior_points = interior_points
         self._boundary_name = boundary_name
 
@@ -1185,7 +1250,10 @@ class MeshToDomainMesh(MeshTransform):
 
     def _call_cell_centroids(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at cell centroids, with target
-        ### cell_data fields moved into interior.point_data.
+        ### cell_data fields moved into interior.point_data.  The original
+        ### cells disappear at this boundary, so materialize their effective
+        ### measure beside the centroid queries while cell geometry and any
+        ### sampling corrections are still available.
         require_keys(mesh.cell_data, self._cell_data_targets, what="Target field")
         interior_point_data = (
             mesh.cell_data.select(*self._cell_data_targets)
@@ -1195,6 +1263,9 @@ class MeshToDomainMesh(MeshTransform):
         interior = Mesh(
             points=mesh.cell_centroids,
             point_data=interior_point_data,
+        )
+        set_point_measures(
+            interior, cell_measures(mesh), dimension=mesh.n_manifold_dims
         )
         ### Build the boundary by stripping target fields from cell_data.
         boundary_cell_data = (
@@ -1222,6 +1293,12 @@ class MeshToDomainMesh(MeshTransform):
             points=mesh.points,
             point_data=interior_point_data,
         )
+        if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+            set_point_measures(
+                interior,
+                point_measures(mesh),
+                dimension=int(point_measure_dimension(mesh)),
+            )
         boundary_point_data = (
             exclude_keys(mesh.point_data, self._point_data_targets)
             if self._point_data_targets

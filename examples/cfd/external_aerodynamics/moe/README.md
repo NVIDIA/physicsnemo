@@ -116,7 +116,8 @@ The training process:
 - Implements mixed precision training for efficiency
 - Applies **entropy regularization** to encourage expert diversity and more reliable scoring.
 
-Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU training, run:
+Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU
+training, run:
 
 ```bash
 torchrun --nproc_per_node=<num_GPUs> train.py
@@ -155,7 +156,7 @@ of the individual experts, demonstrating the MoE model's significant
 reduction in error across all variables.
 
 | Model | P L-2 Error | WSS (x) L-2 Error | WSS (y) L-2 Error | WSS (z) L-2 Error |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | MoE | 0.08 | 0.14 | 0.19 | 0.21 |
 | DoMINO | 0.10 | 0.18 | 0.26 | 0.28 |
 | X-MeshGraphNet | 0.14 | 0.17 | 0.22 | 0.29 |
@@ -205,7 +206,8 @@ $$
 \end{aligned}
 $$
 
-You can control the strength of this effect using the `lambda_entropy` parameter in the config.
+You can control the strength of this effect using the `lambda_entropy` parameter in
+the config.
 
 ## Logging
 
@@ -256,8 +258,12 @@ To add a new expert model to the MoE system:
 
    ```python
    # Add new expert predictions to the mesh
-   mesh.point_data["pMeanTrimPred_new_expert"] = new_expert_mesh.point_data["pMeanTrimPred"]
-   mesh.point_data["wallShearStressMeanTrimPred_new_expert"] = new_expert_mesh.point_data["wallShearStressMeanTrimPred"]
+   mesh.point_data["pMeanTrimPred_new_expert"] = new_expert_mesh.point_data[
+       "pMeanTrimPred"
+   ]
+   mesh.point_data["wallShearStressMeanTrimPred_new_expert"] = new_expert_mesh.point_data[
+       "wallShearStressMeanTrimPred"
+   ]
    ```
 
 3. **Update Dataset**: Modify `dataset.py` to load the new expert predictions:
@@ -272,7 +278,9 @@ To add a new expert model to the MoE system:
 
    ```python
    # Concatenate new expert predictions
-   p_preds = torch.cat([p_pred_xmgn, p_pred_fignet, p_pred_domino, p_pred_new_expert], dim=1)
+   p_preds = torch.cat(
+       [p_pred_xmgn, p_pred_fignet, p_pred_domino, p_pred_new_expert], dim=1
+   )
    ```
 
 The gating network will automatically adapt to the new number of experts and learn optimal

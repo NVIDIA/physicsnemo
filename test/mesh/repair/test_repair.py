@@ -412,6 +412,38 @@ class TestHoleFilling:
         # Should find no holes
         assert stats["n_holes_filled"] == 0
 
+    def test_fill_holes_extends_point_and_cell_data(self, device):
+        """New centroid points and faces get NaN in float fields, 0 in others."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device=device
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={
+                "T": torch.tensor([0.0, 1.0, 2.0], device=device),
+                "flow": {"v": torch.ones(3, 2, device=device)},
+            },
+            cell_data={"id": torch.tensor([7], device=device)},
+        )
+
+        # The triangle's boundary is one 3-edge hole: 1 centroid, 3 faces
+        mesh_filled, stats = fill_holes(mesh)
+
+        assert stats["n_points_added"] == 1 and stats["n_faces_added"] == 3
+        nan = float("nan")
+        torch.testing.assert_close(
+            mesh_filled.point_data["T"],
+            torch.tensor([0.0, 1.0, 2.0, nan], device=device),
+            equal_nan=True,
+        )
+        assert mesh_filled.point_data["flow", "v"].shape == (4, 2)
+        assert mesh_filled.point_data["flow", "v"][3].isnan().all()
+        assert torch.equal(
+            mesh_filled.cell_data["id"], torch.tensor([7, 0, 0, 0], device=device)
+        )
+
 
 class TestRepairIntegration:
     """Integration tests for repair operations."""

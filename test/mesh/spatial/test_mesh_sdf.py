@@ -525,6 +525,100 @@ def test_repair_degenerate_faces(device):
     assert torch.equal(_repair_degenerate_faces(valid), valid)
 
 
+def test_repair_degenerate_faces_keeps_orientation(device):
+    """A thin face with a nonzero height keeps its plane and orientation.
+
+    Moving the off-edge vertex to the far side of its edge, or out of the
+    face's plane, turns the face's normal and so the pseudo-normal sign.
+    """
+    from physicsnemo.mesh.spatial.sdf import _repair_degenerate_faces
+
+    device = torch.device(device)
+    torch.manual_seed(0)
+    n = 10_000
+    f64 = {"device": device, "dtype": torch.float64}
+    a = torch.randn(n, 3, **f64)
+    edge = torch.randn(n, 3, **f64)
+    edge = edge / edge.norm(dim=-1, keepdim=True) * (1 + torch.rand(n, 1, **f64))
+    b = a + edge
+    w = torch.randn(n, 3, **f64)
+    w = w - ((w * edge).sum(-1) / (edge * edge).sum(-1)).unsqueeze(-1) * edge
+    w = w / w.norm(dim=-1, keepdim=True)
+    t = torch.rand(n, 1, **f64)
+    # Relative height 5e-5: below the repair threshold, far above float32 noise.
+    c = a + t * edge + 5e-5 * edge.norm(dim=-1, keepdim=True) * w
+
+    def unit_normal(tri):
+        tri = tri.to(torch.float64)
+        nrm = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1)
+        return nrm / nrm.norm(dim=-1, keepdim=True)
+
+    for tri in (torch.stack([a, b, c], 1), torch.stack([c, a, b], 1)):
+        tri = tri.to(torch.float32)
+        repaired = _repair_degenerate_faces(tri)
+        assert not torch.equal(repaired, tri)
+        cos = (unit_normal(repaired) * unit_normal(tri)).sum(-1)
+        assert torch.all(cos > 0.99)
+
+
+def test_sdf_sliver_face_keeps_sign(device):
+    """A repaired sliver on an outward closed surface keeps exterior points
+    positive.
+
+    The boundary of [0, 100]^3, with the y = 0 wall split at (50, 0, 99.999)
+    into a valid sliver below its top edge. The query projects onto that wall,
+    so its signed distance is +100.
+    """
+    device = torch.device(device)
+    points = torch.tensor(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+            [0, 1, 1],
+            [0.5, 0, 0.99999],
+        ],
+        dtype=torch.float64,
+        device=device,
+    )
+    cells = torch.tensor(
+        [
+            [0, 2, 1],
+            [0, 3, 2],
+            [1, 2, 6],
+            [1, 6, 5],
+            [0, 4, 7],
+            [0, 7, 3],
+            [3, 7, 6],
+            [3, 6, 2],
+            [4, 8, 5],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 8],
+            [0, 8, 4],
+        ],
+        device=device,
+    )
+    mesh = Mesh(points=points * 100, cells=cells)
+    query = torch.tensor(
+        [[25.0, -100.0, 99.99], [25.0, -1.0, 99.99], [50.0, 50.0, 50.0]],
+        dtype=torch.float64,
+        device=device,
+    )
+    sdf_out, _, _ = signed_distance_field(mesh, query)
+    torch.testing.assert_close(
+        sdf_out,
+        torch.tensor([100.0, 1.0, -50.0], dtype=torch.float64, device=device),
+        atol=1e-3,
+        rtol=0.0,
+    )
+
+
 def test_sdf_degenerate_face_mesh(device):
     """An isolated degenerate face reports the distance to its segment.
 
@@ -810,6 +904,119 @@ def test_sdf_no_winding_path_is_sync_free():
     torch.cuda.set_sync_debug_mode("error")
     try:
         signed_distance_field(mesh, query, use_sign_winding_number=False)
+    finally:
+        torch.cuda.set_sync_debug_mode(prev)
+    torch.cuda.synchronize()
+
+
+def test_sdf_backward_to_mesh_points(device):
+    """Gradients reach ``mesh.points`` and ``query_points`` and match finite differences."""
+    device = torch.device(device)
+    points = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=torch.float64,
+        device=device,
+    )
+    cells = torch.tensor(
+        [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]], dtype=torch.int64, device=device
+    )
+    query = torch.tensor(
+        [[1.0, 1.0, 1.0], [0.1, 0.15, 0.2], [0.3, 0.3, -0.4], [1.2, -0.3, 0.1]],
+        dtype=torch.float64,
+        device=device,
+    )
+
+    def total_sdf(mesh_points: torch.Tensor, query_points: torch.Tensor):
+        sdf_out, _, _ = signed_distance_field(
+            Mesh(points=mesh_points, cells=cells), query_points
+        )
+        return sdf_out.sum()
+
+    mesh_points = points.clone().requires_grad_(True)
+    query_points = query.clone().requires_grad_(True)
+    grad_points, grad_query = torch.autograd.grad(
+        total_sdf(mesh_points, query_points), (mesh_points, query_points)
+    )
+    assert grad_points.dtype == torch.float64
+
+    step = 1e-3
+    for x, other_is_mesh, grad in (
+        (points, False, grad_points),
+        (query, True, grad_query),
+    ):
+        fd = torch.zeros_like(x)
+        for i in range(x.numel()):
+            offset = torch.zeros_like(x)
+            offset.view(-1)[i] = step
+            if other_is_mesh:
+                plus = total_sdf(points, x + offset)
+                minus = total_sdf(points, x - offset)
+            else:
+                plus = total_sdf(x + offset, query)
+                minus = total_sdf(x - offset, query)
+            fd.view(-1)[i] = (plus - minus) / (2.0 * step)
+        torch.testing.assert_close(grad, fd, atol=1e-3, rtol=0.0)
+
+
+def test_sdf_backward_through_degenerate_face_repair(device):
+    """Gradients flow through the degenerate-face repair to the original points."""
+    device = torch.device(device)
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [101.0, 0.0, 0.0],
+            [100.0, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+        requires_grad=True,
+    )
+    cells = torch.tensor([[0, 1, 1], [2, 3, 4]], dtype=torch.int64, device=device)
+    query = torch.tensor([[4.5, 0.2, 0.0]], dtype=torch.float32, device=device)
+
+    sdf_out, _, _ = signed_distance_field(
+        Mesh(points=points, cells=cells), query, use_sign_winding_number=True
+    )
+    (grad_points,) = torch.autograd.grad(sdf_out.abs().sum(), (points,))
+
+    # The nearest point is the segment end (4, 0, 0), so moving that vertex
+    # toward the query shortens the distance and nothing else moves it.
+    direction = torch.tensor([0.5, 0.2, 0.0], device=device)
+    direction = direction / direction.norm()
+    torch.testing.assert_close(grad_points[1], -direction, atol=1e-3, rtol=0.0)
+    torch.testing.assert_close(
+        grad_points[[0, 2, 3, 4]],
+        torch.zeros(4, 3, device=device),
+        atol=1e-3,
+        rtol=0.0,
+    )
+
+
+@pytest.mark.skipif(not _CUDA, reason="CUDA required to check stream-sync-free SDF")
+def test_sdf_backward_is_sync_free():
+    """The SDF backward pass issues no host<->device syncs."""
+    device = torch.device("cuda")
+    mesh = _uv_sphere_mesh().to(device)
+    mesh_points = mesh.points.clone().requires_grad_(True)
+    mesh = Mesh(points=mesh_points, cells=mesh.cells)
+
+    torch.manual_seed(0)
+    query = (torch.rand(8192, 3, device=device) * 3.0 - 1.5).requires_grad_(True)
+
+    def run():
+        sdf_out, _, _ = signed_distance_field(mesh, query)
+        return torch.autograd.grad(sdf_out.sum(), (mesh_points, query))
+
+    # Warm up outside the guard, as in the forward test above.
+    run()
+    torch.cuda.synchronize()
+
+    prev = torch.cuda.get_sync_debug_mode()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        run()
     finally:
         torch.cuda.set_sync_debug_mode(prev)
     torch.cuda.synchronize()

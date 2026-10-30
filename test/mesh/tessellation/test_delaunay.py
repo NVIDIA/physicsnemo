@@ -836,6 +836,32 @@ def test_segment_recovery_on_sparse_reflex_polygons(loop):
     assert _meshed_area(points, triangles) == pytest.approx(_shoelace(pts), rel=1e-12)
 
 
+@pytest.mark.parametrize("reverse", [False, True], ids=["ccw", "cw"])
+def test_segment_recovery_through_multi_edge_pipe(reverse):
+    """A simple rectilinear polygon whose segments cross several Delaunay
+    edges: the pipe walk previously stepped into the wrong neighbor and
+    raised "pipe walk exited the triangulation"."""
+    loop = torch.tensor(
+        [[0, 0], [8, 0], [8, 3], [4, 3], [4, 1], [3, 1], [3, 8], [0, 8]],
+        dtype=torch.float64,
+    )
+    if reverse:
+        loop = loop.flip(0)
+    points, triangles, _, _ = delaunay_mesh_2d(
+        [loop], max_area=None, min_angle_degrees=0.0
+    )
+    assert points.shape[0] == loop.shape[0]  # no Steiner points
+    assert _meshed_area(points, triangles) == pytest.approx(37.0, rel=1e-12)
+    edges = {
+        frozenset((int(t[i]), int(t[(i + 1) % 3])))
+        for t in triangles.tolist()
+        for i in range(3)
+    }
+    n = loop.shape[0]
+    for i in range(n):
+        assert frozenset((i, (i + 1) % n)) in edges, f"segment {i} not recovered"
+
+
 def test_segment_recovery_random_star_polygons():
     """Property test (suggested by melo-gonzo): sparse random star polygons
     exercise real segment recovery -- densely sampled smooth boundaries make

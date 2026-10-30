@@ -153,6 +153,17 @@ def test_dtype_device_roundtrip():
     assert torch.equal(filled.points[:32], disk32.points)
 
 
+def test_output_has_no_autograd_history():
+    """The documented contract: fill_interior is not differentiable."""
+    boundary = boundary_mesh(circle_mesh_parts(1.0, 32, 0))
+    points = boundary.points.clone().requires_grad_(True)
+    filled = fill_interior(
+        Mesh(points=points, cells=boundary.cells), max_cell_size=0.05
+    )
+    assert not filled.points.requires_grad
+    assert filled.points.grad_fn is None
+
+
 def test_unreferenced_points_ignored():
     pts, edges = circle_mesh_parts(1.0, 32, 0)
     pts = torch.cat([pts, torch.tensor([[5.0, 5.0]], dtype=torch.float64)])

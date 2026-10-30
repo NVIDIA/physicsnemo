@@ -39,6 +39,8 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -112,7 +114,7 @@ def exterior_derivative_0(
 
     # Ensure edges are canonically ordered (smaller index first)
     # This is important for consistent orientation
-    sorted_edges, sort_indices = torch.sort(edges, dim=-1)
+    sorted_edges = sort_index_tuples(edges)
 
     # Compute differences (indexing works for any ndim)
     edge_values = vertex_0form[sorted_edges[:, 1]] - vertex_0form[sorted_edges[:, 0]]
@@ -193,9 +195,9 @@ def exterior_derivative_1(
     # Shape: (n_faces, 3, 2) where 3 is the number of edges per triangle
     boundary_edges = torch.stack(
         [
-            faces[:, [0, 1]],  # edge from v₀ to v₁
-            faces[:, [1, 2]],  # edge from v₁ to v₂
-            faces[:, [2, 0]],  # edge from v₂ to v₀
+            faces[:, :2],  # edge from v₀ to v₁
+            faces[:, 1:],  # edge from v₁ to v₂
+            faces[:, ::2].flip(1),  # edge from v₂ to v₀
         ],
         dim=1,
     )  # (n_faces, 3, 2)

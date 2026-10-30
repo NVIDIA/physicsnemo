@@ -27,6 +27,7 @@ to be powers of 2, which doesn't work for triangles (3 vertices) or tets (4 vert
 The pure PyTorch implementation here is highly optimized and performs excellently.
 """
 
+import operator
 from typing import TYPE_CHECKING, Literal
 
 import torch
@@ -34,7 +35,7 @@ from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
-from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples_, unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -172,18 +173,15 @@ def categorize_facets_by_count(
         )
 
     ### Filter facets and update inverse indices
-    filtered_facets = unique_facets[mask]
-    filtered_counts = counts[mask]
+    # One nonzero (a single device sync) serves both compactions.
+    kept = torch.nonzero(mask).squeeze(1)
+    filtered_facets = unique_facets[kept]
+    filtered_counts = counts[kept]
 
     # Update inverse indices to point to filtered facets
     # Create mapping from old unique indices to new filtered indices
     # For facets that don't pass the filter, map to -1
-    old_to_new = torch.full(
-        (len(unique_facets),), -1, dtype=torch.int64, device=unique_facets.device
-    )
-    old_to_new[mask] = torch.arange(
-        mask.sum(), dtype=torch.int64, device=unique_facets.device
-    )
+    old_to_new = torch.where(mask, torch.cumsum(mask, dim=0) - 1, -1)
 
     # Remap inverse indices
     filtered_inverse = old_to_new[inverse_indices]
@@ -213,6 +211,7 @@ def extract_candidate_facets(
     manifold_codimension : int, optional
         Codimension of the extracted mesh relative to parent.
 
+        - 0: The cells themselves (e.g., the edges of a 1D mesh)
         - 1: Extract (n-1)-facets (default, e.g., triangular faces from tets)
         - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
         - k: Extract (n-k)-facets
@@ -247,9 +246,9 @@ def extract_candidate_facets(
     n_vertices_per_subsimplex = n_vertices_per_cell - manifold_codimension
 
     ### Validate codimension
-    if manifold_codimension < 1:
+    if manifold_codimension < 0:
         raise ValueError(
-            f"{manifold_codimension=} must be >= 1. "
+            f"{manifold_codimension=} must be >= 0. "
             "Use codimension=1 to extract immediate boundary facets."
         )
     if n_vertices_per_subsimplex < 1:
@@ -261,10 +260,16 @@ def extract_candidate_facets(
 
     ### Generate combination indices for selecting vertices
     # Shape: (n_combinations, n_vertices_per_subsimplex)
+    # The table is built in pageable host memory, which CUDA stages before an
+    # asynchronous copy returns, so ``non_blocking`` is safe here and avoids the
+    # device synchronization of a blocking host-to-device copy.
+    # ``operator.index`` specializes on the (small, fixed) cell width. Under
+    # ``torch.compile(dynamic=True)`` it is otherwise a symbolic size, which
+    # ``itertools.combinations`` cannot trace (issue #2138).
     combination_indices = _generate_combination_indices(
-        n_vertices_per_cell,
-        n_vertices_per_subsimplex,
-    ).to(cells.device)
+        operator.index(n_vertices_per_cell),
+        operator.index(n_vertices_per_subsimplex),
+    ).to(cells.device, non_blocking=True)
     n_combinations = len(combination_indices)
 
     ### Extract sub-simplices using combination indices
@@ -277,8 +282,9 @@ def extract_candidate_facets(
     )
 
     ### Sort vertices within each sub-simplex to canonical form for deduplication
-    # Shape remains (n_cells, n_combinations, n_vertices_per_subsimplex)
-    candidate_facets = torch.sort(candidate_facets, dim=-1)[0]
+    # Shape remains (n_cells, n_combinations, n_vertices_per_subsimplex). The
+    # gather output is ours, so it is sorted in place.
+    candidate_facets = sort_index_tuples_(candidate_facets)
 
     ### Reshape to (n_cells * n_combinations, n_vertices_per_subsimplex)
     candidate_facets = candidate_facets.reshape(-1, n_vertices_per_subsimplex)
@@ -532,10 +538,10 @@ def extract_facet_mesh_data(
             index_bound=parent_mesh.n_points,
         )
         # Discard candidates that were filtered out (inverse == -1)
-        keep_mask = inverse_indices >= 0
-        candidate_facets = candidate_facets[keep_mask]
-        parent_cell_indices = parent_cell_indices[keep_mask]
-        inverse_indices = inverse_indices[keep_mask]
+        keep = torch.nonzero(inverse_indices >= 0).squeeze(1)
+        candidate_facets = candidate_facets[keep]
+        parent_cell_indices = parent_cell_indices[keep]
+        inverse_indices = inverse_indices[keep]
 
     n_unique_facets = len(unique_facets)
 
@@ -546,9 +552,15 @@ def extract_facet_mesh_data(
         device=parent_mesh.points.device,
     )
 
+    ### Explicit measures have the parent's dimension, so they are not data of
+    # lower-dimensional facets, which fall back to their geometric measures.
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
     if data_source == "cells":
         ### Aggregate data from parent cells
         filtered_cell_data = parent_mesh.cell_data
+        if manifold_codimension > 0:
+            filtered_cell_data = filtered_cell_data.exclude(EFFECTIVE_MEASURE_KEY)
         if len(filtered_cell_data.keys()) > 0:
             ### Compute facet centroids if needed for inverse_distance
             facet_centroids = None
@@ -588,9 +600,10 @@ def extract_facet_mesh_data(
 
     elif data_source == "points":
         ### Aggregate data from facet vertices
-        if len(parent_mesh.point_data.keys()) > 0:
+        filtered_point_data = parent_mesh.point_data.exclude(EFFECTIVE_MEASURE_KEY)
+        if len(filtered_point_data.keys()) > 0:
             facet_cell_data = _aggregate_point_data_to_facets(
-                point_data=parent_mesh.point_data,
+                point_data=filtered_point_data,
                 candidate_facets=candidate_facets,
                 inverse_indices=inverse_indices,
                 n_unique_facets=n_unique_facets,

@@ -29,8 +29,9 @@ def load(
 ) -> Mesh[1, 3]:
     """Create a trefoil knot curve in 3D space.
 
-    The trefoil knot is the simplest nontrivial knot.
-    Parametric equations:
+    The trefoil knot is the simplest nontrivial knot. Its parametric
+    equations are::
+
         x = sin(t) + 2*sin(2*t)
         y = cos(t) - 2*cos(2*t)
         z = -sin(3*t)

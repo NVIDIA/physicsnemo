@@ -22,8 +22,14 @@ import torch
 from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.mesh.calculus.measure import (
+    EFFECTIVE_MEASURE_KEY,
+    _transfer_cell_measures,
+    point_measure_dimension,
+)
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.projections._embed import embed
+from physicsnemo.utils._small_linalg import small_det
 
 
 def extrude(
@@ -92,7 +98,8 @@ def extrude(
     ------
     ValueError
         If ``n_manifold_dims + 1 > n_spatial_dims`` and
-        ``allow_new_spatial_dims=False``.
+        ``allow_new_spatial_dims=False``, or if the mesh has dimensional point
+        measures, which cannot be copied to the extruded points.
     NotImplementedError
         If ``capping=True`` (not yet implemented).
 
@@ -156,6 +163,16 @@ def extrude(
     ### Validate inputs
     if capping:
         raise NotImplementedError("Capping is not yet implemented. Use capping=False.")
+    # Counting measures carry over to the copied points, but copying
+    # dimensional ones would double every integral.
+    if EFFECTIVE_MEASURE_KEY in mesh.point_data and bool(
+        point_measure_dimension(mesh) != 0
+    ):
+        raise ValueError(
+            "Extrusion cannot copy dimensional point measures to the extruded "
+            "points; remove them before extruding and set replacement measures "
+            "on the result"
+        )
 
     ### Determine target spatial dimensions and construct extrusion vector
     n_manifold_dims = mesh.n_manifold_dims
@@ -311,14 +328,15 @@ def extrude(
     if extruded_cells.shape[0] > 0 and target_manifold_dims == target_spatial_dims:
         cell_points = all_points[extruded_cells]  # (n_cells, D+1, D)
         edge_vectors = cell_points[:, 1:] - cell_points[:, :1]  # (n_cells, D, D)
-        inverted = torch.det(edge_vectors) < 0  # (n_cells,)
+        inverted = small_det(edge_vectors) < 0  # (n_cells,)
         swapped = extruded_cells[inverted, -2].clone()
         extruded_cells[inverted, -2] = extruded_cells[inverted, -1]
         extruded_cells[inverted, -1] = swapped
 
     ### Propagate data (excluding cached properties, which depend on geometry)
+    # Explicit cell measures are not copied as data; they are transferred below.
     filtered_point_data = mesh.point_data
-    filtered_cell_data = mesh.cell_data
+    filtered_cell_data = mesh.cell_data.exclude(EFFECTIVE_MEASURE_KEY)
     # Point data: concatenate original and copy for extruded points
     if len(filtered_point_data.keys()) > 0:
         extruded_point_data = TensorDict.cat(
@@ -352,10 +370,15 @@ def extrude(
     extruded_global_data = mesh.global_data
 
     ### Create and return extruded mesh
-    return Mesh(
+    extruded = Mesh(
         points=all_points,
         cells=extruded_cells,
         point_data=extruded_point_data,
         cell_data=extruded_cell_data,
         global_data=extruded_global_data,
     )
+    if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+        # Each child keeps its parent's ratio of explicit to geometric measure.
+        parents = torch.arange(n_original_cells, device=mesh.cells.device)
+        _transfer_cell_measures(mesh, extruded, parents.repeat(n_children_per_parent))
+    return extruded

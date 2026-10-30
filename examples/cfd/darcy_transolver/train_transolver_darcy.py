@@ -135,7 +135,10 @@ def darcy_trainer(cfg: DictConfig) -> None:
         model=model, logger=log, use_amp=False, use_graphs=False
     )
     def forward_eval(invars):
-        return model(invars)
+        # same token layout as forward_train; the validator expects images back
+        h, w = invars.shape[-2:]
+        pred = model(rearrange(invars, "b c h w -> b (h w) c"))
+        return rearrange(pred, "b (h w) c -> b c h w", h=h, w=w)
 
     if loaded_pseudo_epoch == 0:
         log.success("Training started...")

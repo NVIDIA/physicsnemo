@@ -14,13 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Python 3.14 evaluates annotations lazily in the decorated class namespace,
-# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
-# Qualify scalar annotations that must continue to resolve to builtin types.
-import builtins
+import dataclasses
+import itertools
 import math
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -36,7 +34,7 @@ from typing import (
 
 import torch
 from jaxtyping import Float
-from tensordict import NonTensorData, TensorDict, tensorclass
+from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh.boundaries import is_manifold, is_watertight
 from physicsnemo.mesh.calculus import (
@@ -45,9 +43,14 @@ from physicsnemo.mesh.calculus import (
     integrate,
     integrate_flux,
     integrate_moment,
+    integrate_samples,
 )
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.geometry._cell_normals import _compute_cell_normals_from_points
+
+### Imported at run time, not only for type checking: `Mesh.load` must find
+### this class to rebuild the adjacencies cached in a saved mesh.
+from physicsnemo.mesh.neighbors._adjacency import Adjacency
 from physicsnemo.mesh.remeshing import remesh
 from physicsnemo.mesh.transformations.deform import (
     displace,
@@ -63,20 +66,19 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
+from physicsnemo.mesh.utilities._gather import gather_rows
+from physicsnemo.mesh.utilities._normalization import safe_normalize
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
-from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.utils._tracing import is_tracing
 
 ### slice_points remaps cells through a full-mesh lookup table unless the mesh
 ### has more than this many points per cell-vertex entry, in which case it
 ### binary-searches the kept ids instead (see slice_points for the measurement).
 _SEARCH_REMAP_RATIO = 64
-
-if TYPE_CHECKING:
-    from physicsnemo.mesh.neighbors._adjacency import Adjacency
 
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
@@ -119,7 +121,7 @@ _64_BIT_INTEGER_DTYPES = frozenset({torch.int64, torch.uint64})
 
 def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
     """Check tensor values eagerly or retain the assertion in a compiled graph."""
-    if torch.compiler.is_compiling() or valid.device.type == "meta":
+    if is_tracing() or valid.device.type == "meta":
         torch._assert_async(valid, message)
         return
 
@@ -131,8 +133,81 @@ def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
         raise ValueError(message)
 
 
-@tensorclass(tensor_only=True, shadow=True)
-class Mesh:
+def _set_subclass_fields(obj: Any, base: type, fields: dict[str, Any]) -> None:
+    """Set the fields that ``type(obj)`` declares beyond those of ``base``.
+
+    Lets the ``__init__`` of ``base`` construct subclasses that add fields,
+    which inherit that ``__init__`` from tensordict 0.15 onwards.
+    """
+    subclass_fields = {f.name for f in dataclasses.fields(type(obj))} - {
+        f.name for f in dataclasses.fields(base)
+    }
+    for name, value in fields.items():
+        if name not in subclass_fields:
+            raise TypeError(
+                f"{type(obj).__name__}.__init__() got an unexpected keyword "
+                f"argument {name!r}"
+            )
+        setattr(obj, name, value)
+
+
+def _conflicting_keys(src: TensorDict, dst: TensorDict) -> set[str | tuple[str, ...]]:
+    """Return the keys of ``src`` that would overwrite data in ``dst``.
+
+    A key conflicts if a leaf key of ``dst`` equals it or is a prefix of it (a
+    leaf or group, even an empty one, replacing a leaf), or if it is a leaf
+    that is a prefix of a leaf key of ``dst`` (a leaf replacing a group).
+    Groups of the same name with disjoint leaves merge.
+    """
+
+    def as_tuple(key: str | tuple[str, ...]) -> tuple[str, ...]:
+        return key if isinstance(key, tuple) else (key,)
+
+    dst_keys = [as_tuple(k) for k in dst.keys(include_nested=True, leaves_only=True)]
+    src_leaves = {as_tuple(k) for k in src.keys(include_nested=True, leaves_only=True)}
+    conflicts = set()
+    for key in src.keys(include_nested=True):
+        k = as_tuple(key)
+        is_leaf = k in src_leaves
+        if any(k[: len(d)] == d or (is_leaf and d[: len(k)] == k) for d in dst_keys):
+            conflicts.add(key)
+    return conflicts
+
+
+def _requested_dtype(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> torch.dtype | None:
+    """Return the dtype requested through any supported ``Tensor.to`` overload.
+
+    Covers ``to(dtype, ...)``, ``to(device, dtype, ...)``, ``to(other, ...)`` (a
+    tensor whose dtype is copied), and ``to(..., dtype=...)``; a device-only move
+    returns ``None``. Crucially the result does not depend on the caller's current
+    dtype, so re-casting to the dtype a mesh already has (e.g. ``float64 ->
+    float64``) still routes through the cells-safe path rather than the
+    tensorclass ``to`` that would cast the integer ``cells`` and raise.
+    """
+    dtype = kwargs.get("dtype")
+    if dtype is None:
+        for arg in args:
+            if isinstance(arg, torch.dtype):
+                return arg
+            if isinstance(arg, torch.Tensor):
+                return arg.dtype
+    return dtype if isinstance(dtype, torch.dtype) else None
+
+
+class _MeshTensorClassMeta(type(TensorClass)):
+    """Preserve ``Mesh[m, s]`` over TensorClass's configuration subscript."""
+
+    def __getitem__(cls, params: Any) -> type:
+        return cls.__class_getitem__(params)
+
+
+class Mesh(
+    TensorClass,
+    tensor_only=True,
+    metaclass=_MeshTensorClassMeta,
+):
     r"""A PyTorch-based, dimensionally-generic Mesh data structure.
 
     A ``Mesh`` is a discrete representation of an n-dimensional manifold embedded
@@ -244,6 +319,9 @@ class Mesh:
         Per-cell data. Dicts are automatically converted to TensorDict.
     global_data : TensorDict or dict[str, torch.Tensor], optional
         Mesh-level data. Dicts are automatically converted to TensorDict.
+    **fields
+        Values for the fields that a subclass of ``Mesh`` declares, so that
+        such a subclass needs no ``__init__`` of its own.
 
     Raises
     ------
@@ -254,7 +332,8 @@ class Mesh:
         represented exactly in ``float64``, or ``uint64`` connectivity overflows
         ``int64``. Compiled value checks raise a backend assertion instead.
     TypeError
-        If cell indices are not an integer dtype.
+        If cell indices are not an integer dtype, or if a keyword argument
+        names no field of the class.
 
     Examples
     --------
@@ -354,7 +433,9 @@ class Mesh:
     ``mesh.cell_normals`` computes and caches the result; subsequent calls
     return the cached value). Because ``Mesh`` is effectively immutable (see
     above), cached values never go stale -- they remain valid for the
-    lifetime of the ``Mesh`` instance.
+    lifetime of the ``Mesh`` instance. Under ``torch.compile``, geometric
+    properties compute from ``points`` and ``cells`` without reading or
+    filling ``_cache``.
 
     Geometric transforms (``translate``, ``rotate``, ``scale``, ``transform``)
     carry forward applicable cache entries to the new ``Mesh`` rather than
@@ -381,11 +462,11 @@ class Mesh:
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
-    cells: torch.Tensor  # shape: (n_cells, n_manifold_dimensions + 1)
-    point_data: TensorDict
-    cell_data: TensorDict
-    global_data: TensorDict
-    _cache: TensorDict
+    cells: torch.Tensor = None  # type: ignore[assignment]
+    point_data: TensorDict = None  # type: ignore[assignment]
+    cell_data: TensorDict = None  # type: ignore[assignment]
+    global_data: TensorDict = None  # type: ignore[assignment]
+    _cache: TensorDict = None  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -396,12 +477,14 @@ class Mesh:
         global_data: TensorDict | dict[str, torch.Tensor] | None = None,
         *,
         _cache: TensorDict | None = None,
+        **fields: Any,
     ) -> None:
         self.points = points
         self.cells = cells  # type: ignore[assignment]  # normalized by __post_init__
-        # The tensorclass setter silently drops entries from non-dict Mappings
-        # (e.g. PyVista DataSetAttributes). Wrapping with dict() converts any
-        # Mapping to a plain dict that the setter handles correctly.
+        # The tensorclass setter stores a mapping-like object that is not a
+        # dict, such as PyVista's DataSetAttributes, as NonTensorData.
+        # dict() turns it into a plain dict, which the setter converts to a
+        # TensorDict.
         self.point_data = (  # type: ignore[assignment]  # normalized by __post_init__
             dict(point_data)
             if point_data is not None and not isinstance(point_data, TensorDict)
@@ -418,6 +501,8 @@ class Mesh:
             else global_data
         )
         self._cache = _cache  # type: ignore[assignment]  # normalized by __post_init__
+        if fields:
+            _set_subclass_fields(self, Mesh, fields)
         # tensorclass only auto-calls __post_init__ from the *generated* __init__
         # (same semantics as dataclasses). Since we define a custom __init__,
         # we must call it explicitly. During load(), tensorclass calls it
@@ -431,19 +516,15 @@ class Mesh:
         Called automatically during ``load()`` by tensorclass, and explicitly
         from ``__init__`` during normal construction. This is the single source
         of truth for all default values, type coercions, and shape validation.
+        Tensordict also runs it when it rebuilds a mesh without ``__init__``
+        (``clone``, ``to``, ``apply``, ``double``, ``torch.stack``, ...), which
+        catches the rebuilds that would change a dtype or a shape.
         """
         ### cells: default empty-cells sentinel for point clouds
-        # The tensordict memmap format does not persist tensors with 0 elements,
-        # so this also restores cells after deserialization.
         if self.cells is None:
             self.cells = torch.zeros(0, 1, dtype=torch.long, device=self.points.device)
 
         ### Coerce every data field to a TensorDict with the right batch_size.
-        # The auto-init's ``tensor_only=True`` fast path silently wraps any
-        # non-dict ``Mapping`` (e.g. PyVista ``DataSetAttributes``) as
-        # ``NonTensorData(data=<original Mapping>)`` instead of converting it
-        # to a ``TensorDict``.  We unwrap that here so all data fields end up
-        # as proper ``TensorDict`` instances regardless of what the user passed.
         for field_name, batch_size in (
             ("point_data", torch.Size([self.n_points])),
             ("cell_data", torch.Size([self.n_cells])),
@@ -451,10 +532,20 @@ class Mesh:
         ):
             value = getattr(self, field_name)
             if isinstance(value, TensorDict):
-                value.batch_size = batch_size
+                if value.batch_size != batch_size:
+                    value.batch_size = batch_size
                 continue
-            if isinstance(value, NonTensorData):
-                value = value.data  # extract original Mapping from fast-path wrapper
+            if value is None:
+                # An empty container needs no validation; the checked constructor
+                # dominates the construction time of small meshes
+                setattr(
+                    self,
+                    field_name,
+                    TensorDict._new_unsafe(
+                        batch_size=batch_size, device=self.points.device
+                    ),
+                )
+                continue
             setattr(
                 self,
                 field_name,
@@ -468,17 +559,21 @@ class Mesh:
         ### _cache: default empty cache structure
         if self._cache is None:
             device = self.points.device
-            self._cache = TensorDict(
+            empty = TensorDict._new_unsafe  # as for the empty data containers above
+            self._cache = empty(
                 {
-                    "cell": TensorDict({}, batch_size=[self.n_cells], device=device),
-                    "point": TensorDict({}, batch_size=[self.n_points], device=device),
-                    "topology": TensorDict({}, device=device),
+                    "cell": empty(batch_size=torch.Size([self.n_cells]), device=device),
+                    "point": empty(
+                        batch_size=torch.Size([self.n_points]), device=device
+                    ),
+                    "topology": empty(batch_size=torch.Size([]), device=device),
                 },
+                batch_size=torch.Size([]),
                 device=device,
             )
 
         ### Validate shapes and dtypes
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if self.points.ndim != 2:
                 raise ValueError(
                     f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
@@ -520,7 +615,7 @@ class Mesh:
                 # CUDA casts can saturate, so round-trip equality alone misses
                 # maximum integers rounded up to the exclusive upper bound.
                 exact = (converted_points.to(source_dtype) == self.points) & (
-                    converted_points < builtins.float(torch.iinfo(source_dtype).max + 1)
+                    converted_points < float(torch.iinfo(source_dtype).max + 1)
                 )
                 _check_geometry_values(
                     exact.all(),
@@ -547,7 +642,7 @@ class Mesh:
         point_data: TensorDict | dict[str, torch.Tensor] | None = None,
         cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
         global_data: TensorDict | dict[str, torch.Tensor] | None = None,
-        assume_convex: builtins.bool = False,
+        assume_convex: bool = False,
     ) -> Self:
         r"""Build a triangulated surface :class:`Mesh` from a polygon soup.
 
@@ -631,7 +726,7 @@ class Mesh:
         )
 
     @classmethod
-    def __class_getitem__(cls, params: tuple) -> builtins.type:
+    def __class_getitem__(cls, params: tuple) -> type:
         r"""Parametrize Mesh by manifold and spatial dimensions.
 
         Returns a synthetic type usable in type annotations and ``isinstance``
@@ -685,56 +780,92 @@ class Mesh:
             MeshDims(n_manifold_dims=n_manifold_dims, n_spatial_dims=n_spatial_dims)
         )
 
+    def __repr__(self) -> str:
+        """Summarize the mesh: its dimensions, sizes and data fields."""
+        return format_mesh_repr(self)
+
+    def to(self, *args: Any, **kwargs: Any) -> Self:
+        """Move mesh and all attached data to specified device, dtype, or format.
+
+        Maps this Mesh to another device and/or dtype. All tensors in ``points``,
+        ``cells``, ``point_data``, ``cell_data``, and ``global_data`` are moved
+        together.
+
+        Parameters
+        ----------
+        *args : Any
+            Positional arguments passed to the tensorclass ``to`` method.
+            Common usage: ``mesh.to("cuda")`` or ``mesh.to(torch.float32)``.
+        **kwargs : Any
+            Keyword arguments passed to the tensorclass ``to`` method.
+
+        Keyword Arguments
+        -----------------
+        device : torch.device, optional
+            The desired device of the mesh.
+        dtype : torch.dtype, optional
+            The desired floating-point or complex dtype of the mesh tensors.
+        non_blocking : bool, optional
+            Whether the operations should be non-blocking.
+        memory_format : torch.memory_format, optional
+            The desired memory format for 4D parameters and buffers.
+
+        Returns
+        -------
+        Mesh
+            A new Mesh on the target device and dtype. Tensors that need no
+            change are shared with this mesh, not copied.
+
+        Raises
+        ------
+        TypeError
+            If ``dtype`` is neither floating-point nor complex. Coordinates
+            must stay real- or complex-valued, and the cast would also be
+            applied to the integer ``cells``.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> mesh = Mesh(points=torch.zeros(3, 2), cells=torch.tensor([[0, 1, 2]]))
+        >>> mesh_gpu = mesh.to("cuda")  # doctest: +SKIP
+        >>> mesh_cpu = mesh.to(device="cpu")
+        >>> mesh_fp16 = mesh.to(torch.float16)
+        >>> mesh_fp16.points.dtype, mesh_fp16.cells.dtype
+        (torch.float16, torch.int64)
+        """
+        cast_dtype = _requested_dtype(args, kwargs)
+        if cast_dtype is not None and not (
+            cast_dtype.is_floating_point or cast_dtype.is_complex
+        ):
+            raise TypeError(
+                "Mesh coordinates must remain floating point or complex; "
+                f"cannot convert a Mesh to {cast_dtype}."
+            )
+        if cast_dtype is None:
+            # For a device-only move, the tensorclass ``to`` preserves
+            # per-leaf dtypes and forwards ``non_blocking``/etc. unchanged.
+            return super().to(*args, **kwargs)
+
+        # The tensorclass ``to`` casts *every* leaf, including the integer
+        # connectivity. Resolve the target device by probing a zero-length
+        # slice of the (always-floating) points -- this reuses torch's own
+        # ``.to`` overload parsing without copying data. Move every leaf to
+        # that device (forwarding all transfer options except ``dtype``), then
+        # cast only the floating leaves so the integer cells (and any integer
+        # data) are never cast to a float dtype.
+        probe = self.points[:0].to(*args, **kwargs)
+        transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
+        transfer_kwargs["device"] = probe.device
+        moved = super().to(**transfer_kwargs)
+
+        def _cast(t: torch.Tensor) -> torch.Tensor:
+            return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+
+        return moved.apply(_cast)
+
     if TYPE_CHECKING:
-        # Type stub for the `to` method dynamically added by @tensorclass.
-        # This provides proper type hints without shadowing the runtime implementation.
-        def to(self, *args: Any, **kwargs: Any) -> Self:
-            """Move mesh and all attached data to specified device, dtype, or format.
-
-            Maps this Mesh to another device and/or dtype. All tensors in ``points``,
-            ``cells``, ``point_data``, ``cell_data``, and ``global_data`` are moved
-            together.
-
-            Parameters
-            ----------
-            *args : Any
-                Positional arguments passed to the underlying tensorclass ``to`` method.
-                Common usage: ``mesh.to("cuda")`` or ``mesh.to(torch.float32)``.
-            **kwargs : Any
-                Keyword arguments passed to the underlying tensorclass ``to`` method.
-
-            Keyword Arguments
-            -----------------
-            device : torch.device, optional
-                The desired device of the mesh.
-            dtype : torch.dtype, optional
-                The desired floating-point or complex dtype of the mesh tensors.
-            non_blocking : bool, optional
-                Whether the operations should be non-blocking.
-            memory_format : torch.memory_format, optional
-                The desired memory format for 4D parameters and buffers.
-
-            Returns
-            -------
-            Mesh
-                A new Mesh instance on the target device/dtype, or the same mesh if
-                no changes were required.
-
-            Raises
-            ------
-            TypeError
-                If ``dtype`` is neither floating-point nor complex. Coordinates
-                must stay real- or complex-valued, and the cast would also be
-                applied to the integer ``cells``.
-
-            Examples
-            --------
-            >>> mesh_gpu = mesh.to("cuda")
-            >>> mesh_cpu = mesh.to(device="cpu")
-            >>> mesh_fp16 = mesh.to(torch.float16)
-            """
-            ...
-
+        # Type stubs for methods that TensorClass adds to the class.
         def clone(self) -> Self:
             """Return a deep clone of this Mesh.
 
@@ -829,27 +960,27 @@ class Mesh:
             ...
 
     @property
-    def n_points(self) -> builtins.int:
+    def n_points(self) -> int:
         """Number of points in the mesh."""
         return self.points.shape[0]
 
     @property
-    def n_spatial_dims(self) -> builtins.int:
+    def n_spatial_dims(self) -> int:
         """Dimension of the ambient coordinate space."""
         return self.points.shape[-1]
 
     @property
-    def n_cells(self) -> builtins.int:
+    def n_cells(self) -> int:
         """Number of cells in the mesh."""
         return self.cells.shape[0]
 
     @property
-    def n_manifold_dims(self) -> builtins.int:
+    def n_manifold_dims(self) -> int:
         """Intrinsic dimension of each simplicial cell."""
         return self.cells.shape[-1] - 1
 
     @property
-    def codimension(self) -> builtins.int:
+    def codimension(self) -> int:
         """Compute the codimension of the mesh.
 
         The codimension is the difference between the spatial dimension and the
@@ -884,11 +1015,10 @@ class Mesh:
         torch.Tensor
             Tensor of shape (n_cells, n_spatial_dims) containing the centroid of each cell.
         """
-        cached = self._cache.get(("cell", "centroids"), None)
-        if cached is None:
-            cached = self.points[self.cells].mean(dim=1)
-            self._cache["cell", "centroids"] = cached
-        return cached
+        return self._cached(
+            ("cell", "centroids"),
+            lambda: gather_rows(self.points, self.cells).mean(dim=1),
+        )
 
     @property
     def cell_areas(self) -> torch.Tensor:
@@ -913,15 +1043,14 @@ class Mesh:
         torch.Tensor
             Tensor of shape (n_cells,) containing the volume of each cell.
         """
-        cached = self._cache.get(("cell", "areas"), None)
-        if cached is None:
-            relative_vectors = (
-                self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
-            )
-            cached = compute_cell_areas(relative_vectors)
-            self._cache["cell", "areas"] = cached
 
-        return cached
+        def compute() -> torch.Tensor:
+            cell_vertices = gather_rows(self.points, self.cells)
+            relative_vectors = cell_vertices[:, 1:] - cell_vertices[:, :1]
+            del cell_vertices
+            return compute_cell_areas(relative_vectors)
+
+        return self._cached(("cell", "areas"), compute)
 
     @property
     def cell_normals(self) -> torch.Tensor:
@@ -946,8 +1075,8 @@ class Mesh:
         ValueError
             If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
         """
-        cached = self._cache.get(("cell", "normals"), None)
-        if cached is None:
+
+        def compute() -> torch.Tensor:
             if self.codimension != 1:
                 raise ValueError(
                     f"cell normals are only defined for codimension-1 manifolds.\n"
@@ -955,13 +1084,9 @@ class Mesh:
                     f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
                     f"Current codimension: {self.codimension}"
                 )
-            rh_index = self.cells[:, 1:]
-            lh_index = self.cells[:, 0].unsqueeze(-1)
-            relative_vectors = self.points[rh_index] - self.points[lh_index]
-            cached = compute_cell_normals(relative_vectors)
-            self._cache["cell", "normals"] = cached
+            return _compute_cell_normals_from_points(self.points, self.cells)
 
-        return cached
+        return self._cached(("cell", "normals"), compute)
 
     @property
     def point_normals(self) -> torch.Tensor:
@@ -1002,12 +1127,11 @@ class Mesh:
         >>> # Normals are unit vectors (or zero for isolated points)
         >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
-        cached = self._cache.get(("point", "normals"), None)
-        if cached is None:
-            weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
-            cached = self.compute_point_normals(weighting=weighting)
-            self._cache["point", "normals"] = cached
-        return cached
+        weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
+        return self._cached(
+            ("point", "normals"),
+            lambda: self.compute_point_normals(weighting=weighting),
+        )
 
     def compute_point_normals(
         self,
@@ -1078,7 +1202,7 @@ class Mesh:
         --------
         >>> # Triangle mesh in 3D
         >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
-        >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
+        >>> normals = mesh.compute_point_normals()  # angle-area-weighted (default)  # doctest: +SKIP
         >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
         >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
         >>> # Normals are unit vectors (or zero for isolated points)
@@ -1110,51 +1234,32 @@ class Mesh:
         ### Get cell normals (triggers computation if not cached)
         cell_normals = self.cell_normals  # (n_cells, n_spatial_dims)
 
-        ### Initialize accumulated normals for each point
-        accumulated_normals = torch.zeros(
-            (self.n_points, self.n_spatial_dims),
-            dtype=self.points.dtype,
-            device=self.points.device,
-        )
-
         n_vertices_per_cell = self.cells.shape[1]
-        point_indices = self.cells.flatten()
 
-        # Repeat cell normals for each vertex in the cell
-        cell_normals_repeated = cell_normals.unsqueeze(1).expand(
-            -1, n_vertices_per_cell, -1
-        )
-        cell_normals_flat = cell_normals_repeated.reshape(-1, self.n_spatial_dims)
-
-        ### Compute weights based on scheme
+        ### Weight each cell normal at each of its vertices: (n_cells, V or 1, d)
+        # Broadcast products: the (n_cells * V, d) source is materialized only
+        # once, for the scatter
         if weighting == "unweighted":
-            weights = torch.ones(
-                self.n_cells * n_vertices_per_cell,
-                dtype=self.points.dtype,
-                device=self.points.device,
-            )
+            normals_to_accumulate = cell_normals.unsqueeze(1)
 
         elif weighting == "area":
-            cell_areas = self.cell_areas
-            weights = cell_areas.unsqueeze(1).expand(-1, n_vertices_per_cell).flatten()
+            normals_to_accumulate = (
+                cell_normals.unsqueeze(1) * self.cell_areas[:, None, None]
+            )
 
         elif weighting in ("angle", "angle_area"):
             # Compute interior angles at each vertex of each cell
             # For a simplex, angle at vertex k is between edges to other vertices
             from physicsnemo.mesh.geometry._angles import compute_vertex_angles
 
-            vertex_angles = compute_vertex_angles(
-                self
-            )  # (n_cells, n_vertices_per_cell)
-            weights = vertex_angles.flatten()
+            weights = compute_vertex_angles(self)  # (n_cells, n_vertices_per_cell)
 
             if weighting == "angle_area":
                 # Multiply by cell area
-                cell_areas = self.cell_areas
-                area_weights = (
-                    cell_areas.unsqueeze(1).expand(-1, n_vertices_per_cell).flatten()
-                )
-                weights = weights * area_weights
+                weights = weights * self.cell_areas.unsqueeze(1)
+
+            normals_to_accumulate = cell_normals.unsqueeze(1) * weights.unsqueeze(-1)
+            del weights
 
         else:
             raise ValueError(
@@ -1162,17 +1267,23 @@ class Mesh:
                 f"'unweighted', 'area', 'angle', 'angle_area'."
             )
 
-        ### Apply weights and accumulate
-        normals_to_accumulate = cell_normals_flat * weights.unsqueeze(-1)
-
-        point_indices_expanded = point_indices.unsqueeze(-1).expand(
+        ### Accumulate at each point
+        accumulated_normals = torch.zeros(
+            (self.n_points, self.n_spatial_dims),
+            dtype=self.points.dtype,
+            device=self.points.device,
+        )
+        point_indices_expanded = self.cells.reshape(-1, 1).expand(
             -1, self.n_spatial_dims
         )
         accumulated_normals.scatter_add_(
             dim=0,
             index=point_indices_expanded,
-            src=normals_to_accumulate,
+            src=normals_to_accumulate.expand(-1, n_vertices_per_cell, -1).reshape(
+                -1, self.n_spatial_dims
+            ),
         )
+        del normals_to_accumulate
 
         ### Normalize to get unit normals
         return safe_normalize(accumulated_normals, dim=-1)
@@ -1232,14 +1343,11 @@ class Mesh:
         >>> K = sphere.gaussian_curvature_vertices
         >>> # K.mean() approx 0.25 (= 1 / 2.0^2)
         """
-        cached = self._cache.get(("point", "gaussian_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import gaussian_curvature_vertices
+        from physicsnemo.mesh.curvature import gaussian_curvature_vertices
 
-            cached = gaussian_curvature_vertices(self)
-            self._cache["point", "gaussian_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("point", "gaussian_curvature"), lambda: gaussian_curvature_vertices(self)
+        )
 
     @property
     def gaussian_curvature_cells(self) -> torch.Tensor:
@@ -1262,14 +1370,11 @@ class Mesh:
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> K_cells = mesh.gaussian_curvature_cells
         """
-        cached = self._cache.get(("cell", "gaussian_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import gaussian_curvature_cells
+        from physicsnemo.mesh.curvature import gaussian_curvature_cells
 
-            cached = gaussian_curvature_cells(self)
-            self._cache["cell", "gaussian_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("cell", "gaussian_curvature"), lambda: gaussian_curvature_cells(self)
+        )
 
     @property
     def mean_curvature_vertices(self) -> torch.Tensor:
@@ -1310,14 +1415,11 @@ class Mesh:
         >>> H = sphere.mean_curvature_vertices
         >>> # H.mean() ≈ 0.5 (= 1/2.0)
         """
-        cached = self._cache.get(("point", "mean_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import mean_curvature_vertices
+        from physicsnemo.mesh.curvature import mean_curvature_vertices
 
-            cached = mean_curvature_vertices(self)
-            self._cache["point", "mean_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("point", "mean_curvature"), lambda: mean_curvature_vertices(self)
+        )
 
     @classmethod
     def merge(
@@ -1350,7 +1452,7 @@ class Mesh:
             If tensors from different meshes reside on different devices.
         """
         ### Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
             elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
@@ -1392,24 +1494,46 @@ class Mesh:
         ### Merge the meshes
 
         # Compute the number of points for each mesh, cumulatively, so that we can update
-        # the point indices for the constituent cells arrays accordingly.
-        n_points_for_meshes = torch.tensor(
-            [m.n_points for m in meshes],
-            device=meshes[0].points.device,
+        # the point indices for the constituent cells arrays accordingly. Python ints
+        # keep this on the host (device offsets would cost synchronizations).
+        cell_index_offsets = itertools.accumulate(
+            (m.n_points for m in meshes[:-1]), initial=0
         )
-        cumsum_n_points = torch.cumsum(n_points_for_meshes, dim=0)
-        cell_index_offsets = cumsum_n_points.roll(1)
-        cell_index_offsets[0] = 0
 
+        from physicsnemo.mesh.calculus.measure import (
+            EFFECTIVE_MEASURE_KEY,
+            POINT_MEASURE_DIMENSION_KEY,
+            point_measure_dimension,
+        )
+
+        point_dimension = None
+        if EFFECTIVE_MEASURE_KEY in meshes[0].point_data:
+            point_dimension = point_measure_dimension(meshes[0])
+            if any(
+                not torch.equal(point_measure_dimension(m), point_dimension)
+                for m in meshes[1:]
+            ):
+                raise ValueError(
+                    "Cannot merge point quadrature with different measure dimensions"
+                )
         if global_data_strategy == "stack":
-            global_data = TensorDict.stack([m.global_data for m in meshes])
+            global_data = TensorDict.stack(
+                [m.global_data.exclude(POINT_MEASURE_DIMENSION_KEY) for m in meshes]
+            )
+            if point_dimension is not None:
+                global_data.batch_size = []
+                global_data[POINT_MEASURE_DIMENSION_KEY] = point_dimension
         else:
             raise ValueError(f"Invalid {global_data_strategy=}")
 
         return cls(
             points=torch.cat([m.points for m in meshes], dim=0),
             cells=torch.cat(
-                [m.cells + offset for m, offset in zip(meshes, cell_index_offsets)],
+                [
+                    # The first mesh's offset is 0: cat its cells without a copy
+                    m.cells if i == 0 else m.cells + offset
+                    for i, (m, offset) in enumerate(zip(meshes, cell_index_offsets))
+                ],
                 dim=0,
             ),
             point_data=TensorDict.cat([m.point_data for m in meshes], dim=0),
@@ -1419,12 +1543,12 @@ class Mesh:
 
     def slice_points(
         self,
-        indices: builtins.int
+        indices: int
         | slice
         | types.EllipsisType
         | None
         | torch.Tensor
-        | Sequence[builtins.int | builtins.bool],
+        | Sequence[int | bool],
     ) -> "Mesh":
         """Returns a new Mesh with a subset of the points.
 
@@ -1457,6 +1581,10 @@ class Mesh:
         and ``global_data`` is shared with the source by reference rather than
         copied. Mutating shared data on the result therefore also mutates the
         source; clone first if you need an independent copy.
+
+        On CUDA, boolean point masks and filtering surviving cells require
+        host-device synchronization to determine output sizes. Integer point
+        indices avoid these waits for meshes without cells or empty selections.
 
         Examples
         --------
@@ -1544,9 +1672,8 @@ class Mesh:
         cells = self.cells
         if n_kept == 0 or cells.numel() == 0:
             # Nothing to remap: no points kept, or a point cloud without cells.
-            valid_cells_mask = torch.zeros(
-                cells.shape[0], dtype=torch.bool, device=device
-            )
+            # An integer gather avoids retaining source storage or memmap files.
+            kept_cell_indices = torch.empty(0, dtype=torch.long, device=device)
             new_cells = cells.new_empty((0, cells.shape[1]), dtype=torch.long)
         elif (
             n_points <= _SEARCH_REMAP_RATIO * cells.numel()
@@ -1558,7 +1685,9 @@ class Mesh:
             )
             remapped_cells = old_to_new[cells]
             valid_cells_mask = (remapped_cells >= 0).all(dim=-1)
-            new_cells = remapped_cells[valid_cells_mask]
+            # Share one compaction (and CUDA wait) with all cell-data fields.
+            kept_cell_indices = valid_cells_mask.nonzero().squeeze(-1)
+            new_cells = remapped_cells[kept_cell_indices]
         else:
             sorted_kept, order = torch.sort(kept_indices, stable=True)
             # right=True then -1 selects the LAST equal entry, so a point id
@@ -1569,10 +1698,11 @@ class Mesh:
                 - 1
             ).clamp_min(0)
             valid_cells_mask = (sorted_kept[pos] == cells).all(dim=-1)
-            new_cells = order[pos[valid_cells_mask]]
-        # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
+            kept_cell_indices = valid_cells_mask.nonzero().squeeze(-1)
+            new_cells = order[pos[kept_cell_indices]]
+        # cast: TensorDict[index] returns TensorCollection | Tensor statically;
         # the runtime is always TensorDict because cell_data is itself a TensorDict.
-        new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
+        new_cell_data = cast(TensorDict, self.cell_data[kept_cell_indices])
 
         return Mesh(
             points=new_points,
@@ -1584,12 +1714,12 @@ class Mesh:
 
     def slice_cells(
         self,
-        indices: builtins.int
+        indices: int
         | slice
         | types.EllipsisType
         | None
         | torch.Tensor
-        | Sequence[builtins.int | builtins.bool | slice],
+        | Sequence[int | bool | slice],
     ) -> "Mesh":
         """Returns a new Mesh with a subset of the cells.
 
@@ -1606,11 +1736,16 @@ class Mesh:
         Notes
         -----
         Slicing shares unsliced data with the source by reference rather than
-        copying: the returned mesh shares ``points``, ``point_data``, and
-        ``global_data`` with this mesh, and the no-op selections ``None`` /
-        ``Ellipsis`` return this mesh itself. Mutating any shared field on the
-        result therefore also mutates the source; clone first if you need an
-        independent copy.
+        copying: the returned mesh shares ``points`` and the field tensors of
+        ``point_data`` and ``global_data`` with this mesh (in new containers,
+        so adding or removing a field does not affect the source), and the
+        no-op selections ``None`` / ``Ellipsis`` return this mesh itself.
+        Mutating a shared tensor in place on the result therefore also mutates
+        the source; clone first if you need an independent copy.
+
+        A one-dimensional CUDA boolean mask requires one host-device
+        synchronization to determine the output cell count. Integer index
+        tensors and Python slices avoid this data-dependent synchronization.
         """
         ### Handle no-op cases: None or Ellipsis means keep all cells (returns self),
         # matching slice_points and the documented type hint (which previously raised
@@ -1620,6 +1755,18 @@ class Mesh:
 
         if isinstance(indices, int):
             indices = torch.tensor([indices], device=self.cells.device)
+        elif (
+            isinstance(indices, torch.Tensor)
+            and indices.ndim == 1
+            and indices.dtype in (torch.bool, torch.uint8)
+        ):
+            if indices.numel() != self.n_cells:
+                raise IndexError(
+                    f"cell mask must have length {self.n_cells}, got {indices.numel()}"
+                )
+            # Reuse integer indices for connectivity, data and caches instead
+            # of synchronizing for the same mask once per tensor or TensorDict.
+            indices = indices.nonzero().squeeze(-1)
         new_cell_data = cast(TensorDict, self.cell_data[indices])
         # Only purely-local per-cell geometry caches survive a cell slice: each
         # cell's centroid/area/normal depends solely on that cell's own vertices.
@@ -1644,16 +1791,17 @@ class Mesh:
         return Mesh(
             points=self.points,
             cells=self.cells[indices],
-            point_data=self.point_data,
+            # Shallow copies: shared field tensors, independent containers
+            point_data=self.point_data.copy(),
             cell_data=new_cell_data,
-            global_data=self.global_data,
+            global_data=self.global_data.copy(),
             _cache=new_cache,
         )
 
     def sample_random_points_on_cells(
         self,
-        cell_indices: Sequence[builtins.int] | torch.Tensor | None = None,
-        alpha: builtins.float = 1.0,
+        cell_indices: Sequence[int] | torch.Tensor | None = None,
+        alpha: float = 1.0,
     ) -> torch.Tensor:
         """Sample random points on specified cells of the mesh.
 
@@ -1715,8 +1863,8 @@ class Mesh:
         query_points: torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
         multiple_cells_strategy: Literal["mean", "nan"] = "mean",
-        project_onto_nearest_cell: builtins.bool = False,
-        tolerance: builtins.float = 1e-6,
+        project_onto_nearest_cell: bool = False,
+        tolerance: float = 1e-6,
         bvh: Any = None,
     ) -> "TensorDict":
         """Extract or interpolate mesh data at specified query points.
@@ -1745,7 +1893,12 @@ class Mesh:
             If True, snaps each query point to the centroid of the nearest cell
             before containment testing. Useful for codimension != 0 manifolds.
         tolerance : float, optional
-            Tolerance for considering a point inside a cell.
+            Relative tolerance for considering a point inside a cell. A point is
+            inside if all barycentric coordinates are ``>= -tolerance`` and its
+            distance to the cell's affine hull (nonzero only when
+            ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+            ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+            scale with the length unit of the mesh.
         bvh : BVH or None, optional
             Pre-built Bounding Volume Hierarchy. If ``None`` (default), one is
             built automatically. For repeated queries, pre-build with
@@ -1837,6 +1990,7 @@ class Mesh:
         points: torch.Tensor,
         *,
         keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = "topology",
+        preserve_measures: bool = False,
     ) -> "Mesh":
         r"""Return a mesh with replacement point coordinates.
 
@@ -1854,6 +2008,11 @@ class Mesh:
         keep : str, tuple[str, ...], or sequence of either, optional
             Cache keys to retain. Uses the same key semantics as
             :meth:`strip_caches`; defaults to the complete ``"topology"`` cache.
+
+        preserve_measures : bool, default False
+            Explicitly retain reference measures when replacing coordinates.
+            Otherwise cell measures follow geometric measure changes; dimensional
+            point measures require a known transformation or replacement measures.
 
         Returns
         -------
@@ -1893,11 +2052,21 @@ class Mesh:
             lambda: "with_points must preserve point indexing.",
         )
 
-        return self._new_with_structure(
+        from physicsnemo.mesh.calculus.measure import (
+            _require_preserved_point_measures,
+            _transfer_cell_measures,
+        )
+
+        if not preserve_measures:
+            _require_preserved_point_measures(self)
+        result = self._new_with_structure(
             points=points,
             cells=self.cells,
             keep=keep,
         )
+        if not preserve_measures:
+            _transfer_cell_measures(self, result)
+        return result
 
     def with_cells(
         self,
@@ -1962,11 +2131,15 @@ class Mesh:
             lambda: "with_cells must preserve simplex type.",
         )
 
-        return self._new_with_structure(
+        result = self._new_with_structure(
             points=self.points,
             cells=cells,
             keep=keep,
         )
+        from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+
+        _transfer_cell_measures(self, result)
+        return result
 
     def with_data(
         self,
@@ -2017,12 +2190,15 @@ class Mesh:
         def _replacement(
             value: TensorDict | dict[str, torch.Tensor] | None,
             current: TensorDict,
-        ) -> TensorDict | dict[str, torch.Tensor]:
+        ) -> TensorDict:
             if value is None:
                 return current.copy()
             if isinstance(value, TensorDict):
                 return value.copy()
-            return value
+            # dict() unwraps mappings that TensorDict rejects, such as PyVista's
+            # DataSetAttributes, as the constructor does. A dict may hold the
+            # source's nested TensorDicts, so copy them too.
+            return TensorDict(dict(value)).copy()
 
         return replace(
             self,
@@ -2035,7 +2211,7 @@ class Mesh:
             _cache=self._cache.copy(),
         )
 
-    def cell_data_to_point_data(self, overwrite_keys: builtins.bool = False) -> "Mesh":
+    def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "Mesh":
         """Convert cell data to point data by averaging.
 
         For each point, computes the average of the cell data values from all cells
@@ -2071,11 +2247,13 @@ class Mesh:
         >>> mesh_with_point_data = mesh.cell_data_to_point_data()  # doctest: +SKIP
         >>> # Now mesh has both cell_data["pressure"] and point_data["pressure"]
         """
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        fields = self.cell_data.exclude(EFFECTIVE_MEASURE_KEY)
+        # Effective measures are not interpolated; use lumped_point_measures.
         ### Check for key conflicts
         if not overwrite_keys:
-            src_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
-            dst_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
-            conflicts = src_keys & dst_keys
+            conflicts = _conflicting_keys(fields, self.point_data)
             if conflicts:
                 raise ValueError(
                     f"Keys {conflicts} already exist in point_data. "
@@ -2083,9 +2261,10 @@ class Mesh:
                 )
 
         ### Convert each cell data field to point data via scatter aggregation
-        new_point_data = self.point_data.clone()
+        # A shallow copy: with_data shares the unchanged leaves anyway
+        new_point_data = self.point_data.copy()
 
-        # Get flat list of point indices and corresponding cell indices
+        # Get flat list of point indices
         # self.cells shape: (n_cells, n_vertices_per_cell)
         n_vertices_per_cell = self.cells.shape[1]
 
@@ -2093,27 +2272,42 @@ class Mesh:
         # Shape: (n_cells * n_vertices_per_cell,)
         point_indices = self.cells.flatten()
 
-        # Corresponding cell index for each point
-        # Shape: (n_cells * n_vertices_per_cell,)
-        cell_indices = torch.arange(
-            self.n_cells, device=self.points.device
-        ).repeat_interleave(n_vertices_per_cell)
+        # Number of cells using each point, counted once for every field
+        device = self.points.device
+        vertex_degree = torch.zeros(self.n_points, dtype=torch.int64, device=device)
+        vertex_degree.scatter_add_(
+            0,
+            point_indices,
+            torch.ones((), dtype=torch.int64, device=device).expand_as(point_indices),
+        )
+        # Points in no cell have zero sums, which divided by 1 stay the same zero
+        # that scatter_aggregate's epsilon-clamped count gives
+        vertex_degree = vertex_degree.clamp_(min=1)
 
-        converted = self.cell_data.apply(
-            lambda cell_values: scatter_aggregate(
-                src_data=cell_values[cell_indices],
+        def _mean_over_point_cells(cell_values: torch.Tensor) -> torch.Tensor:
+            """Average a single cell field over the cells around each point."""
+            # Same arithmetic as scatter_aggregate's unweighted mean, which would
+            # recount the vertex degree for every field
+            if not cell_values.is_floating_point() and not cell_values.is_complex():
+                cell_values = cell_values.to(torch.float64)
+            sums = scatter_aggregate(
+                # Each cell's value once per vertex, lined up with point_indices
+                src_data=cell_values.repeat_interleave(n_vertices_per_cell, dim=0),
                 src_to_dst_mapping=point_indices,
                 n_dst=self.n_points,
-                weights=None,
-                aggregation="mean",
-            ),
+                aggregation="sum",
+            )
+            return sums.div_(vertex_degree.view(-1, *([1] * (sums.ndim - 1))))
+
+        converted = fields.apply(
+            _mean_over_point_cells,
             batch_size=torch.Size([self.n_points]),
         )
         new_point_data.update(converted)
 
         return self.with_data(point_data=new_point_data)
 
-    def point_data_to_cell_data(self, overwrite_keys: builtins.bool = False) -> "Mesh":
+    def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "Mesh":
         """Convert point data to cell data by averaging.
 
         For each cell, computes the average of the point data values from all points
@@ -2150,11 +2344,12 @@ class Mesh:
         >>> mesh_with_cell_data = mesh.point_data_to_cell_data()  # doctest: +SKIP
         >>> # Now mesh has both point_data["temperature"] and cell_data["temperature"]
         """
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        fields = self.point_data.exclude(EFFECTIVE_MEASURE_KEY)
         ### Check for key conflicts
         if not overwrite_keys:
-            src_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
-            dst_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
-            conflicts = src_keys & dst_keys
+            conflicts = _conflicting_keys(fields, self.cell_data)
             if conflicts:
                 raise ValueError(
                     f"Keys {conflicts} already exist in cell_data. "
@@ -2162,21 +2357,36 @@ class Mesh:
                 )
 
         ### Convert each point data field to cell data by averaging over cell vertices
-        new_cell_data = self.cell_data.clone()
+        # A shallow copy: with_data shares the unchanged leaves anyway
+        new_cell_data = self.cell_data.copy()
+        n_vertices_per_cell = self.cells.shape[1]
 
         def _mean_over_cell_vertices(point_values: torch.Tensor) -> torch.Tensor:
             """Average a single point field over the vertices of each cell."""
-            # Shape: (n_cells, n_vertices_per_cell, *data_shape)
-            cell_values = point_values[self.cells]
-            # Promote integer/bool fields to float first: torch.mean rejects
-            # integer dtypes, and a mean of integers is real-valued anyway.
-            # Casting after the gather rather than the point field before it
-            # keeps the gather on the narrow source dtype, which measures faster.
-            if not cell_values.is_floating_point() and not cell_values.is_complex():
-                cell_values = cell_values.to(torch.float64)
-            return cell_values.mean(dim=1)
+            # Promote integer/bool fields to float first: a mean of integers is
+            # real-valued, and an integer sum could overflow.
+            if not point_values.is_floating_point() and not point_values.is_complex():
+                point_values = point_values.to(torch.float64)
+            # Accumulate one vertex at a time over the static vertex count rather
+            # than gathering an (n_cells, n_vertices_per_cell, *data_shape)
+            # tensor. The sum runs in the order of mean(dim=1), which it matches
+            # bitwise on CPU. Like mean(dim=1), floats narrower than float32
+            # accumulate in float32 and round once at the end.
+            field_dtype = point_values.dtype
+            accumulate_dtype = (
+                torch.float32
+                if point_values.is_floating_point() and point_values.element_size() < 4
+                else field_dtype
+            )
+            # index_select rather than indexing: same values, but its backward is
+            # an index_add_ instead of CUDA's sort-based index_put_
+            cell_values = point_values.index_select(0, self.cells[:, 0])
+            cell_values = cell_values.to(accumulate_dtype)
+            for j in range(1, n_vertices_per_cell):
+                cell_values += point_values.index_select(0, self.cells[:, j])
+            return cell_values.div_(n_vertices_per_cell).to(field_dtype)
 
-        converted = self.point_data.apply(
+        converted = fields.apply(
             _mean_over_cell_vertices,
             batch_size=torch.Size([self.n_cells]),
         )
@@ -2186,10 +2396,10 @@ class Mesh:
 
     def get_facet_mesh(
         self,
-        manifold_codimension: builtins.int = 1,
+        manifold_codimension: int = 1,
         data_source: Literal["points", "cells"] = "cells",
         data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
-        target_counts: list[builtins.int]
+        target_counts: list[int]
         | Literal["boundary", "shared", "interior", "all"] = "all",
     ) -> "Mesh":
         """Extract k-codimension facet mesh from this n-dimensional mesh.
@@ -2210,6 +2420,7 @@ class Mesh:
         manifold_codimension : int, optional
             Codimension of extracted mesh relative to parent.
 
+            - 0: The cells themselves, deduplicated (e.g., the edges of a 1D mesh)
             - 1: Extract (n-1)-facets (default, immediate boundaries of all cells)
             - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
             - k: Extract (n-k)-facets
@@ -2385,6 +2596,11 @@ class Mesh:
         codimension-1 facet (e.g., cells sharing an edge in 2D or a face in
         3D).  The parent mesh's ``cell_data`` becomes the ``point_data`` of the
         returned Mesh, since each dual-graph node corresponds to a parent cell.
+        As in ``to_point_cloud(point_source="cell_centroids")``, each node also
+        carries its parent cell's measure in ``point_data["_effective_measure"]``,
+        and ``global_data["_point_measure_dimension"]`` records the parent's
+        manifold dimension. ``integrate_samples`` reads these reserved fields,
+        so it integrates node values over the parent mesh.
 
         Returns
         -------
@@ -2412,11 +2628,12 @@ class Mesh:
         mask = sources < targets
         edges = torch.stack([sources[mask], targets[mask]], dim=1)
 
+        centroids = self.to_point_cloud(point_source="cell_centroids")
         return Mesh(
-            points=self.cell_centroids,
+            points=centroids.points,
             cells=edges,
-            point_data=self.cell_data,
-            global_data=self.global_data,
+            point_data=centroids.point_data,
+            global_data=centroids.global_data,
         )
 
     def to_point_cloud(
@@ -2432,7 +2649,8 @@ class Mesh:
             - ``"vertices"`` (default): Uses mesh vertices as points,
               preserving ``point_data``.
             - ``"cell_centroids"``: Uses cell centroids as points,
-              mapping ``cell_data`` to ``point_data``.
+              mapping ``cell_data`` to ``point_data``. Complete cell measures
+              become point measures with the source manifold's dimension.
 
         Returns
         -------
@@ -2457,11 +2675,20 @@ class Mesh:
                 global_data=self.global_data,
             )
         elif point_source == "cell_centroids":
-            return Mesh(
-                points=self.cell_centroids,
-                point_data=self.cell_data,
-                global_data=self.global_data,
+            from physicsnemo.mesh.calculus.measure import (
+                cell_measures,
+                set_point_measures,
             )
+
+            result = Mesh(
+                points=self.cell_centroids,
+                point_data=self.cell_data.copy(),
+                global_data=self.global_data.copy(),
+            )
+            set_point_measures(
+                result, cell_measures(self), dimension=self.n_manifold_dims
+            )
+            return result
         else:
             raise ValueError(
                 f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
@@ -2470,6 +2697,25 @@ class Mesh:
     is_manifold = is_manifold
 
     is_watertight = is_watertight
+
+    def _cached(
+        self, key: tuple[str, str], compute: Callable[[], torch.Tensor]
+    ) -> torch.Tensor:
+        """Return ``_cache[key]``, computing and storing it on a miss.
+
+        While this call is traced (see ``is_tracing``), it always calls
+        ``compute()`` and leaves ``_cache`` alone: Dynamo guards on the cache's
+        contents, so each cache state would need its own graph, and it would
+        replay the write onto the caller's mesh. Other threads keep their
+        caches meanwhile, which carry cell areas through transforms.
+        """
+        if is_tracing():
+            return compute()
+        cached = self._cache.get(key, None)
+        if cached is None:
+            cached = compute()
+            self._cache[key] = cached
+        return cached
 
     def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
         r"""Look up or compute-and-cache a topological adjacency.
@@ -2563,7 +2809,7 @@ class Mesh:
 
         return self._cached_adjacency("point_to_points", get_point_to_points_adjacency)
 
-    def get_cell_to_cells_adjacency(self, adjacency_codimension: builtins.int = 1):
+    def get_cell_to_cells_adjacency(self, adjacency_codimension: int = 1):
         """Compute cell-to-cells adjacency based on shared facets.
 
         Two cells are considered adjacent if they share a k-codimension facet.
@@ -2635,9 +2881,9 @@ class Mesh:
 
     def pad(
         self,
-        target_n_points: builtins.int | None = None,
-        target_n_cells: builtins.int | None = None,
-        data_padding_value: builtins.float = torch.nan,
+        target_n_points: int | None = None,
+        target_n_cells: int | None = None,
+        data_padding_value: float = torch.nan,
     ) -> "Mesh":
         """Pad points and cells arrays to specified sizes.
 
@@ -2647,6 +2893,7 @@ class Mesh:
         - Points: Additional points at the last existing point (preserves bounding box)
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
         - cell data: NaN-valued padding for all cell data fields (default)
+        - explicit effective measures: zero, so padding adds nothing to integrals
 
         Parameters
         ----------
@@ -2680,7 +2927,7 @@ class Mesh:
         >>> padded.n_cells   # 256  # doctest: +SKIP
         """
         # Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if target_n_points is not None and target_n_points < self.n_points:
                 raise ValueError(f"{target_n_points=} must be >= {self.n_points=}")
             if target_n_cells is not None and target_n_cells < self.n_cells:
@@ -2696,11 +2943,7 @@ class Mesh:
         if target_n_cells is None:
             target_n_cells = self.n_cells
 
-        if (
-            not torch.compiler.is_compiling()
-            and target_n_cells > 0
-            and target_n_points == 0
-        ):
+        if not is_tracing() and target_n_cells > 0 and target_n_points == 0:
             raise ValueError("Cannot pad cells without at least one mesh point.")
 
         def _pad_data(tensor: torch.Tensor, size: int) -> torch.Tensor:
@@ -2712,6 +2955,20 @@ class Mesh:
             ):
                 value = 0.0
             return _pad_with_value(tensor, size, value)
+
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        def _pad_fields(data: TensorDict, size: int) -> TensorDict:
+            padded = data.apply(
+                lambda x: _pad_data(x, size), batch_size=torch.Size([size])
+            )
+            # Padding elements contribute nothing to integrals, whatever the
+            # padding value of ordinary fields.
+            if EFFECTIVE_MEASURE_KEY in data.keys():
+                padded[EFFECTIVE_MEASURE_KEY] = _pad_with_value(
+                    data[EFFECTIVE_MEASURE_KEY], size, 0.0
+                )
+            return padded
 
         padded_cell_cache = self._cache["cell"].apply(
             lambda x: _pad_with_value(x, target_n_cells, 0.0),
@@ -2733,14 +2990,8 @@ class Mesh:
             cells=_pad_with_value(
                 self.cells, target_n_cells, max(self.n_points - 1, 0)
             ),
-            point_data=self.point_data.apply(
-                lambda x: _pad_data(x, target_n_points),
-                batch_size=torch.Size([target_n_points]),
-            ),
-            cell_data=self.cell_data.apply(
-                lambda x: _pad_data(x, target_n_cells),
-                batch_size=torch.Size([target_n_cells]),
-            ),
+            point_data=_pad_fields(self.point_data, target_n_points),
+            cell_data=_pad_fields(self.cell_data, target_n_cells),
             global_data=self.global_data,
             _cache=TensorDict(
                 {
@@ -2757,8 +3008,8 @@ class Mesh:
 
     def pad_to_next_power(
         self,
-        power: builtins.float = 1.5,
-        data_padding_value: builtins.float = torch.nan,
+        power: float = 1.5,
+        data_padding_value: float = torch.nan,
     ) -> "Mesh":
         """Pads points and cells arrays to their next power of `power` (integer-floored).
 
@@ -2795,10 +3046,10 @@ class Mesh:
         >>> mesh = Mesh(points, cells)  # 100 points, 200 cells  # doctest: +SKIP
         >>> padded = mesh.pad_to_next_power(power=1.5)  # doctest: +SKIP
         >>> # Points padded to floor(1.5^n) >= 100, cells to floor(1.5^m) >= 200
-        >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 216 cells
+        >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 291 cells
         >>> # Padding cells have zero area and don't affect computations
         """
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if power <= 1:
                 raise ValueError(f"power must be > 1, got {power=}")
 
@@ -2812,6 +3063,11 @@ class Mesh:
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
             n = math.ceil(math.log(safe_size) / math.log(base))
+            # The logarithm is only an estimate; check the actual floored powers.
+            while n > 0 and int(base ** (n - 1)) >= safe_size:
+                n -= 1
+            while int(base**n) < safe_size:
+                n += 1
             return int(base**n)
 
         target_n_points = next_power_size(self.n_points, power)
@@ -2854,6 +3110,8 @@ class Mesh:
     compute_cell_derivatives = compute_cell_derivatives
 
     compute_point_derivatives = compute_point_derivatives
+
+    integrate_samples = integrate_samples
 
     integrate = integrate
 
@@ -3119,9 +3377,7 @@ class Mesh:
         self,
     ) -> Mapping[
         str,
-        builtins.int
-        | builtins.float
-        | tuple[builtins.float, builtins.float, builtins.float, builtins.float],
+        int | float | tuple[float, float, float, float],
     ]:
         """Compute summary statistics for the mesh.
 
@@ -3154,7 +3410,7 @@ class Mesh:
 
     def subdivide(
         self,
-        levels: builtins.int = 1,
+        levels: int = 1,
         filter: Literal["linear", "butterfly", "loop"] = "linear",
     ) -> "Mesh":
         """Subdivide the mesh using iterative application of subdivision schemes.
@@ -3253,10 +3509,10 @@ class Mesh:
 
     def clean(
         self,
-        tolerance: builtins.float = 1e-12,
-        merge_points: builtins.bool = True,
-        remove_duplicate_cells: builtins.bool = True,
-        remove_unused_points: builtins.bool = True,
+        tolerance: float = 1e-12,
+        merge_points: bool = True,
+        remove_duplicate_cells: bool = True,
+        remove_unused_points: bool = True,
     ) -> "Mesh":
         r"""Clean and repair this mesh.
 
@@ -3378,77 +3634,3 @@ class Mesh:
             cells=self.cells,
             keep=keep,
         )
-
-
-### Override the tensorclass __repr__ with custom formatting
-# Note: Must be done after class definition because @tensorclass overrides __repr__
-# even when defined inside the class body
-def _mesh_repr(self) -> str:
-    return format_mesh_repr(self)
-
-
-Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
-
-
-### Override the tensorclass ``to`` so a floating/complex dtype is applied only to
-# floating/complex tensors. The generated tensorclass ``to`` casts *every* leaf --
-# including integer connectivity -- while integer coordinate requests would violate
-# the Mesh geometry contract. Device-only moves still delegate unchanged so per-leaf
-# dtypes and transfer options retain tensorclass behavior. Reassigned after the class
-# because @tensorclass overrides a body-defined ``to`` (same reason as ``__repr__``).
-def _requested_dtype(
-    args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> torch.dtype | None:
-    """Return the dtype requested through any supported ``Tensor.to`` overload.
-
-    Covers ``to(dtype, ...)``, ``to(device, dtype, ...)``, ``to(other, ...)`` (a
-    tensor whose dtype is copied), and ``to(..., dtype=...)``; a device-only move
-    returns ``None``. Crucially the result does not depend on the caller's current
-    dtype, so re-casting to the dtype a mesh already has (e.g. ``float64 ->
-    float64``) still routes through the cells-safe path rather than the generated
-    ``to`` that would cast the integer ``cells`` and raise.
-    """
-    dtype = kwargs.get("dtype")
-    if dtype is None:
-        for arg in args:
-            if isinstance(arg, torch.dtype):
-                return arg
-            if isinstance(arg, torch.Tensor):
-                return arg.dtype
-    return dtype if isinstance(dtype, torch.dtype) else None
-
-
-def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
-    cast_dtype = _requested_dtype(args, kwargs)
-    if cast_dtype is not None and not (
-        cast_dtype.is_floating_point or cast_dtype.is_complex
-    ):
-        raise TypeError(
-            "Mesh coordinates must remain floating point or complex; "
-            f"cannot convert a Mesh to {cast_dtype}."
-        )
-    if cast_dtype is None:
-        # For a device-only move, the generated tensorclass ``to`` preserves
-        # per-leaf dtypes and forwards ``non_blocking``/etc. unchanged.
-        return _tensorclass_mesh_to(self, *args, **kwargs)
-
-    # Floating/complex dtype cast. Resolve the target device by probing a zero-length
-    # slice of the (always-floating) points -- this reuses torch's own ``.to`` overload
-    # parsing without copying data. Move every leaf to that device with the generated
-    # ``to`` (cells-safe, forwarding all transfer options except ``dtype``), then cast
-    # only the floating leaves so the integer cells (and any integer data) are never
-    # cast to a float dtype.
-    probe = self.points[:0].to(*args, **kwargs)
-    transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
-    transfer_kwargs["device"] = probe.device
-    moved = _tensorclass_mesh_to(self, **transfer_kwargs)
-
-    def _cast(t: torch.Tensor) -> torch.Tensor:
-        return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
-
-    # A no-op device move may return self. Apply functionally to preserve it.
-    return moved.apply(_cast)
-
-
-_tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``
-Mesh.to = _mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]

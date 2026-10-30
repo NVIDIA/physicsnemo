@@ -281,13 +281,15 @@ def attach_and_save(
     Writes ``pred_<name>`` and ``true_<name>`` onto a copy of the
     interior's ``point_data`` (the training-space target fields are
     dropped to avoid ambiguity with their physical ``true_<name>``
-    counterparts; non-target inputs like ``sdf`` are kept). The result is
-    saved with :meth:`DomainMesh.save` as a native ``.pdmsh`` tree.
+    counterparts; non-target inputs like ``sdf`` are kept). Explicit point
+    measures are retained and follow geometric rescaling, so the saved sample
+    can still be integrated in physical coordinates. The result is saved with
+    :meth:`DomainMesh.save` as a native ``.pdmsh`` tree.
 
     When *rescale_geometry* is set and ``L_ref`` is available, every mesh
     in the domain is scaled by ``L_ref`` to recover physical-scale
-    coordinates (``Mesh.scale`` leaves ``point_data`` untouched, so the
-    attached fields are not affected).
+    coordinates. ``Mesh.scale`` leaves ordinary ``point_data`` untouched;
+    effective measures scale with their represented dimension.
     """
     if rescale_geometry and "L_ref" in domain.global_data:
         L_ref = domain.global_data["L_ref"]
@@ -567,7 +569,7 @@ def main(cfg: DictConfig) -> None:
     totals: dict[str, float] = {k: 0.0 for k in metric_calculator.expected_keys()}
     count = 0
     sampling_cap = cfg.get("sampling_resolution", None)
-    truncation_warned = False
+    subsampling_warned = False
     for i, idx in enumerate(sampler):
         sample = dataset[idx]
         domain, metadata = sample
@@ -598,23 +600,25 @@ def main(cfg: DictConfig) -> None:
             )
             if sample_forces is not None:
                 force_acc.update(*sample_forces)
-                ### Force magnitudes are only physical at full surface
-                ### resolution (see forces.py): a vehicle cell count
-                ### sitting exactly at the subsample cap means the surface
-                ### was almost certainly truncated by the reader.
+                ### A vehicle cell count sitting exactly at the subsample
+                ### cap means the surface was almost certainly subsampled.
+                ### Effective measures compensate for retained-area shrinkage;
+                ### sampling and moment-frame caveats remain (see forces.py).
                 if (
-                    not truncation_warned
+                    not subsampling_warned
                     and sampling_cap is not None
                     and domain.boundaries["vehicle"].n_cells == sampling_cap
                 ):
                     logger.warning(
                         f"Vehicle surface has exactly sampling_resolution="
                         f"{sampling_cap} cells, so it was likely subsampled; "
-                        f"integrated force/moment coefficients cover only the "
-                        f"kept cells and their magnitudes are not physical. "
-                        f"Raise `sampling_resolution` for absolute CD/CL/CM."
+                        f"integrated force/moment coefficients are estimates "
+                        f"from weighted kept cells and may have sampling "
+                        f"noise or bias, including from a sample-dependent "
+                        f"moment origin. Check convergence by increasing "
+                        f"`sampling_resolution`; see forces.py for assumptions."
                     )
-                    truncation_warned = True
+                    subsampling_warned = True
 
         ### Re-dimensionalize predictions + reference to physical units,
         ### then write them back onto the DomainMesh.

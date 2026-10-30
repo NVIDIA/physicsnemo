@@ -236,17 +236,24 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             if not path.exists():
                 raise FileNotFoundError(f"Missing required file: {path}")
 
+        # AirfRANS files store float64 internal points but float32 fields and
+        # boundary points. Cast all three meshes to float32 so that `project`
+        # and `knn` see one dtype.
         freestream = project(
-            from_pyvista(pv.read(mesh_paths["freestream"]), manifold_dim=1),
+            from_pyvista(pv.read(mesh_paths["freestream"]), manifold_dim=1).to(
+                torch.float32
+            ),
             keep_dims=[0, 1],
             transform_cell_data=True,
         )
         airfoil = project(
-            from_pyvista(pv.read(mesh_paths["airfoil"]), manifold_dim=1),
+            from_pyvista(pv.read(mesh_paths["airfoil"]), manifold_dim=1).to(
+                torch.float32
+            ),
             keep_dims=[0, 1],
         )
         internal = project(
-            from_pyvista(pv.read(mesh_paths["internal"])),
+            from_pyvista(pv.read(mesh_paths["internal"])).to(torch.float32),
             keep_dims=[0, 1],
             transform_point_data=True,
         )

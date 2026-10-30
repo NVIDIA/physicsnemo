@@ -168,13 +168,9 @@ def get_leaf(td: TensorDict, key: NestedKey, *, what: str = "Field") -> torch.Te
         If ``key`` names a sub-TensorDict (a group of fields) rather than a
         single tensor field.
     """
-    ### ``TensorDict.get`` returns ``None`` for a missing key (including when
-    ### a path component is missing); it raises ``ValueError`` when a path
-    ### tries to descend *through* a leaf tensor. Both are "not found" here.
-    try:
-        value = td.get(key, None)
-    except ValueError:
-        value = None
+    ### ``TensorDict.get`` returns the default for a missing key, including a
+    ### path that runs through a leaf tensor.
+    value = td.get(key, None)
     if value is None:
         raise KeyError(
             f"{what} {key_to_str(key)!r} not found in data. "
@@ -194,9 +190,8 @@ def require_keys(
 ) -> None:
     r"""Raise ``KeyError`` listing the available leaves if any key is absent from ``td``.
 
-    Use before ``td.select(*keys)``: TensorDict's own error for a path that
-    runs through a leaf tensor is an ``AttributeError``, and its message for
-    a missing key lists only the top level.
+    Use before ``td.select(*keys)``: TensorDict's own ``KeyError`` for a
+    missing key lists only the keys at the level where the lookup failed.
     """
     missing = [key_to_str(k) for k in keys if k not in td]
     if missing:

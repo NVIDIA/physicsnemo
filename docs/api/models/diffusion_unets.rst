@@ -3,11 +3,12 @@
 Diffusion UNets
 ===============
 
-This page documents the UNet family of backbone architectures for diffusion
-models.  These are built-in architectures specialized for diffusion on
-structured 2D domains (images, spatial fields).  For other domains or
-architectures, see the :ref:`DiT backbone <dit_model>`, or use any model from
-the :doc:`PhysicsNeMo model zoo <../../api_models>` or external libraries as
+This page documents the UNet family of backbone architectures for diffusion and
+flow matching models.
+These built-in architectures support structured 2D domains (images and
+spatial fields) and 3D volumetric domains. For other domains or architectures,
+refer to the :ref:`DiT backbone <dit_model>`, or use any model from the
+:doc:`PhysicsNeMo model zoo <../../api_models>` or external libraries as
 described in :ref:`Model Backbones <diffusion_model_backbones>`.
 
 All models on this page are based on the
@@ -15,7 +16,7 @@ All models on this page are based on the
 
 .. important::
 
-    These UNet backbones do **not** implement the
+    The legacy 2D UNet backbones do **not** implement the
     :class:`~physicsnemo.diffusion.DiffusionModel` protocol directly.  Their
     forward signatures differ (e.g.,
     ``forward(x, noise_labels, class_labels, augment_labels)``).  To use them
@@ -23,6 +24,8 @@ All models on this page are based on the
     :ref:`losses <diffusion_metrics>`, and
     :ref:`samplers <diffusion_samplers>`, wrap them with a thin adapter.
     See the :ref:`adapter examples <diffusion_unet_adapter_example>` below.
+    :class:`~physicsnemo.models.diffusion_unets.DiffusionUNet3D` implements the
+    protocol directly and does not require an adapter.
 
 
 .. _diffusion_unet_api:
@@ -287,6 +290,55 @@ informed of its position in the global domain.
     embeddings are specifically desired.
 
 
+DiffusionUNet3D
+---------------
+
+The :class:`~physicsnemo.models.diffusion_unets.DiffusionUNet3D` backbone is
+essentially the 3D counterpart of
+:class:`~physicsnemo.models.diffusion_unets.SongUNetPosEmbd`, adapted to
+volumetric tensors of shape :math:`(B, C, D, H, W)`. It provides constructor
+options for the embedding, encoder, and decoder variants. Additional
+volumetric context can be supplied through ``condition["volume"]``, while
+global vector context is supplied through ``condition["vector"]``.
+
+.. code:: python
+
+    import torch
+    from tensordict import TensorDict
+    from physicsnemo.models.diffusion_unets import DiffusionUNet3D
+
+    B, C_x, C_cond, C_vec = 2, 3, 4, 5
+    D, H, W = 6, 8, 10
+
+    # Configure a two-level volumetric U-Net with positional noise embeddings.
+    model = DiffusionUNet3D(
+        x_channels=C_x,
+        vol_cond_channels=C_cond,
+        vec_cond_dim=C_vec,
+        num_levels=2,
+        model_channels=16,
+        channel_mult=[1, 2],
+        num_blocks=2,
+        attention_levels=[1],
+        embedding_type="positional",
+        channel_mult_noise=2,
+        encoder_type="residual",
+        decoder_type="skip",
+    )
+
+    x = torch.randn(B, C_x, D, H, W)  # Volumetric latent state
+    noise_labels = torch.rand(B)  # Diffusion noise level for each sample
+    condition = TensorDict(
+        {
+            "vector": torch.randn(B, C_vec),  # Global vector conditioning
+            "volume": torch.randn(B, C_cond, D, H, W),  # Volumetric conditioning
+        },
+        batch_size=[B],
+    )
+    out = model(x, noise_labels, condition=condition)
+    print(out.shape)  # Shape: (B, C_x, D, H, W), same as the latent state
+
+
 API Reference
 -------------
 
@@ -310,6 +362,14 @@ API Reference
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: physicsnemo.models.diffusion_unets.SongUNetPosEmbd
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+:code:`DiffusionUNet3D`
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.models.diffusion_unets.DiffusionUNet3D
     :show-inheritance:
     :members:
     :exclude-members: forward

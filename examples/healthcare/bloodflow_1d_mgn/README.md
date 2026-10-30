@@ -138,5 +138,5 @@ inference.
 
 ## License
 
-The geometric data from the VMR is subject to license. See
-[here](https://vascularmodel.com/FAQs.html) for more information.
+The geometric data from the VMR is subject to license. See the
+[VMR FAQ](https://vascularmodel.com/FAQs.html) for more information.

@@ -9,14 +9,11 @@ contract_types =
 name = Prevent Upward Imports in the PhysicsNemo Structure
 type = layers
 exhaustive = True
-ignore_imports =
-   physicsnemo -> physicsnemo.compat
 exhaustive_ignores =
    conftest
 containers=
    physicsnemo
 layers = 
-   compat
    experimental
    deploy | active_learning | diffusion | sym
    models : datapipes : metrics : domain_parallel : optim
@@ -62,7 +59,7 @@ layers =
    profiling
    checkpoint
    capture
-   logging | memory | _index_tuple_ops
+   logging | memory | _index_tuple_ops | _small_linalg | weighted_multinomial | _tracing
 
 [importlinter:contract:physicsnemo-nn]
 name = Control Dependencies in PhysicsNeMo nn

@@ -118,7 +118,7 @@ class MeshReaderWithGlobalData(MeshReader):
                 f"{self._merge_rel_path!r})"
             )
 
-        ext_td = TensorDict.load_memmap(ext_path)
+        ext_td = TensorDict.load_memmap(ext_path, mode="r")  # copy-on-write
         merged = mesh.global_data.clone()
 
         ### Compare leaf key *paths* (nested included): two groups sharing a

@@ -23,6 +23,8 @@ import math
 import torch
 from torch.autograd.function import once_differentiable
 
+from physicsnemo.utils._small_linalg import small_det, small_inverse
+
 
 def _scatter_cell_vertices(
     values: torch.Tensor,
@@ -62,10 +64,45 @@ def _assemble_p1_operators(
 
     cell_points = points[:, cells.to(dtype=torch.long)]
     edge_matrix = cell_points[:, :, 1:, :] - cell_points[:, :, :1, :]
-    gram = edge_matrix @ edge_matrix.transpose(-1, -2)
-    gram_determinant = torch.linalg.det(gram)
 
-    finite_positive = torch.isfinite(gram_determinant) & (gram_determinant > 0)
+    ### Normalize each cell by its largest edge coordinate
+    # Determinants of tiny or huge cells under- or overflow; those of the
+    # normalized O(1) edges do not. The operators below are homogeneous in the
+    # edges, so rescaling recovers them exactly. The scale is detached: for
+    # any fixed positive scale the normalized expressions equal the original
+    # ones, so their gradients do too.
+    cell_scale = edge_matrix.abs().amax(dim=(-1, -2)).detach()
+    normalized_edges = edge_matrix / cell_scale[..., None, None]
+    if num_manifold_dims == num_spatial_dims:
+        # Full-dimensional cells: G^-1 = E^-T E^-1 from the inverse of E itself.
+        # Forming G = E E^T would square the condition number of thin cells.
+        normalized_measure = small_det(normalized_edges).abs()
+        normalized_edge_inverse = small_inverse(normalized_edges)
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        normalized_gram_inverse = (
+            normalized_edge_inverse.unsqueeze(-1)
+            * normalized_edge_inverse.unsqueeze(-2)
+        ).sum(dim=-3)
+    else:
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        normalized_gram = (
+            normalized_edges.unsqueeze(-2) * normalized_edges.unsqueeze(-3)
+        ).sum(dim=-1)
+        normalized_measure = torch.sqrt(small_det(normalized_gram).clamp_min(0))
+        normalized_gram_inverse = small_inverse(normalized_gram)
+
+    factorial = torch.arange(
+        1,
+        num_manifold_dims + 1,
+        dtype=points.dtype,
+        device=points.device,
+    ).prod()
+    normalized_measure = normalized_measure / factorial
+    # |cell| = sqrt(det(G)) / m!, and det(G) = det(G / s^2) * s^(2m).
+    cell_measures = normalized_measure * cell_scale**num_manifold_dims
+
+    # The exact finite, positive det(G) test, without its under- and overflow.
+    finite_positive = torch.isfinite(cell_measures) & (cell_measures > 0)
     valid_geometry = finite_positive.all()
     if torch.compiler.is_compiling():
         torch._assert_async(
@@ -85,30 +122,21 @@ def _assemble_p1_operators(
                 "cells must be finite, nondegenerate simplices for Sobolev deformation"
             )
 
-    cell_measures = torch.sqrt(gram_determinant.clamp_min(0))
-    factorial = torch.arange(
-        1,
-        num_manifold_dims + 1,
-        dtype=points.dtype,
-        device=points.device,
-    ).prod()
-    cell_measures = cell_measures / factorial
-
-    basis_gradient_map = torch.cat(
-        (
-            -points.new_ones((1, num_manifold_dims)),
-            torch.eye(
-                num_manifold_dims,
-                dtype=points.dtype,
-                device=points.device,
-            ),
-        ),
-        dim=0,
+    ### Local stiffness |cell| * H G^-1 H^T, with H = [[-1, ..., -1]; I]
+    # grad lambda_0 = -sum_k grad lambda_k, so multiplying by H (or H^T)
+    # prepends minus the column (or row) sums. Built by concatenation rather
+    # than batched matmuls of millions of tiny matrices, which are slow.
+    # G^-1 = G_normalized^-1 / s^2, so |cell| G^-1 scales as s^(m - 2).
+    gradient_products = torch.cat(
+        (-normalized_gram_inverse.sum(dim=-2, keepdim=True), normalized_gram_inverse),
+        dim=-2,
     )
-    gram_inverse = torch.linalg.inv(gram)
-    local_stiffness = cell_measures[..., None, None] * (
-        basis_gradient_map[None, None] @ gram_inverse @ basis_gradient_map.T[None, None]
+    gradient_products = torch.cat(
+        (-gradient_products.sum(dim=-1, keepdim=True), gradient_products),
+        dim=-1,
     )
+    stiffness_scale = normalized_measure * cell_scale ** (num_manifold_dims - 2)
+    local_stiffness = stiffness_scale[..., None, None] * gradient_products
 
     local_mass = (
         cell_measures[..., None].expand(-1, -1, num_cell_points).div(num_cell_points)

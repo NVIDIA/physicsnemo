@@ -293,6 +293,15 @@ def process_sim(
     return sample, meta
 
 
+def nonzero_range(vmax: np.ndarray, vmin: np.ndarray) -> np.ndarray:
+    """Raise ``vmax`` where it equals ``vmin``, so min-max scaling stays finite.
+
+    A channel that is constant over the training set, such as a step that every
+    simulation pads with zeros, gets a range as large as its value, and at least 1.
+    """
+    return np.where(vmax > vmin, vmax, vmin + np.maximum(np.abs(vmin), 1.0))
+
+
 def compute_stats(npz_dir: Path, stats_dir: Path) -> None:
     """Compute per-channel min/max for surface and volume fields."""
 
@@ -323,11 +332,13 @@ def compute_stats(npz_dir: Path, stats_dir: Path) -> None:
     # Save statistics
     stats_dir.mkdir(parents=True, exist_ok=True)
     if surf_max is not None:
+        surf_max = nonzero_range(surf_max, surf_min)
         np.save(
             stats_dir / "surface_scaling_factors.npy",
             np.stack([surf_max, surf_min]).astype(np.float32),
         )
     if vol_max is not None:
+        vol_max = nonzero_range(vol_max, vol_min)
         np.save(
             stats_dir / "volume_scaling_factors.npy",
             np.stack([vol_max, vol_min]).astype(np.float32),
@@ -375,6 +386,7 @@ def meta_from_existing_npz(
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Pack each raw simulation into an NPZ and write the scaling stats."""
     # Get config values
     OmegaConf.set_struct(cfg, False)
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)

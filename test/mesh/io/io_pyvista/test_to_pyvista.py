@@ -16,6 +16,8 @@
 
 """Tests for physicsnemo.mesh.io module - to_pyvista conversion."""
 
+import gc
+
 import numpy as np
 import pytest
 import torch
@@ -112,6 +114,52 @@ class TestToPyvista:
         assert isinstance(pv_mesh, pv.PointSet)
         assert pv_mesh.n_points == 50
         assert np.allclose(pv_mesh.points, points.numpy())
+
+    def test_vertex_cells_to_polydata_verts(self):
+        """Vertex cells export as PolyData verts that carry the cell_data."""
+        points = torch.rand(4, 3)
+        cells = torch.tensor([[2], [0]])
+        mesh = Mesh(
+            points=points, cells=cells, cell_data={"p": torch.tensor([5.0, 7.0])}
+        )
+        pv_mesh = to_pyvista(mesh)
+
+        assert isinstance(pv_mesh, pv.PolyData)
+        assert pv_mesh.n_points == 4
+        assert pv_mesh.n_verts == pv_mesh.n_cells == 2
+        np.testing.assert_array_equal(pv_mesh.verts, [1, 2, 1, 0])
+        np.testing.assert_array_equal(pv_mesh.cell_data["p"], [5.0, 7.0])
+
+    def test_vertex_cells_share_storage_unless_force_copy(self):
+        """Like lines, vertex cells share mesh.cells' storage unless force_copy,
+        and the shared connectivity outlives the source Mesh."""
+        cells = torch.tensor([[2], [0]])
+        mesh = Mesh(points=torch.rand(4, 3), cells=cells)
+        shared = to_pyvista(mesh)
+        copied = to_pyvista(mesh, force_copy=True)
+
+        assert np.shares_memory(shared.GetVerts().cell_connectivity, cells.numpy())
+        assert not np.shares_memory(copied.GetVerts().cell_connectivity, cells.numpy())
+
+        del mesh, cells
+        gc.collect()
+        _ = [torch.full((1000, 4), -1) for _ in range(100)]
+        np.testing.assert_array_equal(shared.verts, [1, 2, 1, 0])
+
+    @pytest.mark.parametrize("n_vertices_per_cell", [2, 3])
+    def test_empty_line_and_triangle_meshes_have_no_cells(self, n_vertices_per_cell):
+        """Empty 1D/2D meshes export with zero cells, so empty cell_data fits."""
+        mesh = Mesh(
+            points=torch.rand(4, 3),
+            cells=torch.empty((0, n_vertices_per_cell), dtype=torch.long),
+            cell_data={"p": torch.empty(0)},
+        )
+        pv_mesh = to_pyvista(mesh)
+
+        assert isinstance(pv_mesh, pv.PolyData)
+        assert pv_mesh.n_points == 4
+        assert pv_mesh.n_cells == 0
+        assert pv_mesh.cell_data["p"].shape == (0,)
 
     def test_data_preservation_to_pyvista(self):
         """Test that point_data, cell_data, and global_data are preserved."""

@@ -24,6 +24,8 @@ exterior derivatives, and sharp/flat operators.
 import torch
 from jaxtyping import Bool, Int
 
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples
+
 
 def find_edges_in_reference(
     reference_edges: Int[torch.Tensor, "n_ref 2"],
@@ -76,8 +78,8 @@ def find_edges_in_reference(
         )
 
     ### Canonicalize edges to ascending vertex-index order
-    sorted_reference, _ = torch.sort(reference_edges, dim=-1)
-    sorted_query, _ = torch.sort(query_edges, dim=-1)
+    sorted_reference = sort_index_tuples(reference_edges)
+    sorted_query = sort_index_tuples(query_edges)
 
     ### Compute integer hash for each edge
     # hash = v0 * index_bound + v1
@@ -86,8 +88,10 @@ def find_edges_in_reference(
         index_bound = (
             int(max(reference_edges.max().item(), query_edges.max().item())) + 1
         )
-    reference_hash = sorted_reference[:, 0] * index_bound + sorted_reference[:, 1]
-    query_hash = sorted_query[:, 0] * index_bound + sorted_query[:, 1]
+    reference_hash = (
+        sorted_reference[:, 0].long() * index_bound + sorted_reference[:, 1]
+    )
+    query_hash = sorted_query[:, 0].long() * index_bound + sorted_query[:, 1]
 
     ### Sort reference hashes to enable binary search via searchsorted
     reference_hash_sorted, sort_indices = torch.sort(reference_hash)

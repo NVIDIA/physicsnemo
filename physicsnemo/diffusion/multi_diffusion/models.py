@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Multi-diffusion model wrapper for patch-based diffusion."""
+"""Model wrapper for patch-based diffusion and flow matching."""
 
 import warnings
 from collections import defaultdict
@@ -35,21 +35,23 @@ from physicsnemo.diffusion.multi_diffusion.patching import (
 
 
 class MultiDiffusionModel2D(Module):
-    r"""Multi-diffusion model wrapper for 2D patch-based diffusion.
+    r"""Model wrapper for 2D patch-based diffusion and flow matching.
 
-    Multi-diffusion is a method useful for scaling diffusion models to large
-    domains. A multi-diffusion model splits a 2D latent state into smaller
-    patches, processes each patch independently through the wrapped model, and
-    optionally fuses the outputs back into a full-resolution image.
+    Multi-diffusion provides patch-based training and inference for diffusion
+    and flow-matching models on large domains. The wrapper splits a 2D state
+    into smaller patches, processes each patch independently through the
+    wrapped model, and optionally fuses the outputs back into a full-resolution
+    image.
 
     The wrapper handles:
 
     - Patching the state :math:`\mathbf{x}` into :math:`P` smaller
       patches, expanding the batch dimension from :math:`B` to
       :math:`P \times B`.
-    - For conditional diffusion models, pre-processing each conditioning tensor
-      according to some specified strategies: patching, interpolating to patch
-      resolution, or simply repeating along the batch dimension.
+    - For conditional diffusion and flow-matching models, pre-processing each
+      conditioning tensor according to some specified strategies: patching,
+      interpolating to patch resolution, or simply repeating along the batch
+      dimension.
     - Extracting positional embeddings for each patch and injecting them into
       the condition under the key ``"positional_embedding"``. This optional
       feature is useful to encode the relative position of the patches within
@@ -70,8 +72,8 @@ class MultiDiffusionModel2D(Module):
     .. code-block:: python
 
         model(
-            x: torch.Tensor,       # Noisy state, shape: (P*B, C, Hp, Wp)
-            t: torch.Tensor,       # Diffusion time, shape: (P*B,)
+            x: torch.Tensor,       # Noisy or interpolated state, shape: (P*B, C, Hp, Wp)
+            t: torch.Tensor,       # Diffusion or flow-matching time, shape: (P*B,)
             condition: TensorDict | None = None, # Pre-processed conditioning tensors, shape: (P*B, *cond_dims)
             **model_kwargs: Any,
         ) -> torch.Tensor          # Prediction, shape: (P*B, C, Hp, Wp)
@@ -117,7 +119,8 @@ class MultiDiffusionModel2D(Module):
         :math:`\mathbf{x}`. Can be used to patch any global spatial tensor with
         shape :math:`(B, C, H, W)` to the patch-compatible format with shape
         :math:`(P \times B, C, H_p, W_p)`.
-    - :meth:`patch_t`: batch-dimension expansion of the diffusion time.
+    - :meth:`patch_t`: batch-dimension expansion of the diffusion or
+      flow-matching time.
     - :meth:`patch_condition`: patching / interpolation / expansion of
       the condition, depending on the configured strategy.
 
@@ -163,11 +166,12 @@ class MultiDiffusionModel2D(Module):
     Forward
     -------
     x : torch.Tensor
-        Noisy latent state. Shape :math:`(B, C, H, W)` at global resolution,
-        or :math:`(P \times B, C, H_p, W_p)` if ``x_is_patched=True``.
+        Noisy or interpolated state. Shape :math:`(B, C, H, W)` at global
+        resolution, or :math:`(P \times B, C, H_p, W_p)` if
+        ``x_is_patched=True``.
     t : torch.Tensor
-        Diffusion time. Shape :math:`(B,)`, or :math:`(P \times B,)` if
-        ``t_is_patched=True``.
+        Diffusion or flow-matching time. Shape :math:`(B,)`, or
+        :math:`(P \times B,)` if ``t_is_patched=True``.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Conditioning information at **global** resolution (batch size
         :math:`B`), or already in patch-compatible format if
@@ -206,6 +210,8 @@ class MultiDiffusionModel2D(Module):
     --------
     :class:`~physicsnemo.diffusion.multi_diffusion.MultiDiffusionMSEDSMLoss` :
         Patch-based denoising score matching loss for use with this wrapper.
+    The :class:`MultiDiffusionFlowMatchingLoss` class :
+        Patch-based flow-matching loss for use with this wrapper.
     :class:`~physicsnemo.diffusion.multi_diffusion.RandomPatching2D` :
         Random patching strategy (training).
     :class:`~physicsnemo.diffusion.multi_diffusion.GridPatching2D` :
@@ -213,6 +219,9 @@ class MultiDiffusionModel2D(Module):
 
     Examples
     --------
+    These examples use diffusion notation. Flow-matching models use the same
+    patching interface with an interpolated state and flow-matching time.
+
     **Example 1:** Unconditional model: training with random patches then
     sampling with grid patches:
 
@@ -696,15 +705,15 @@ class MultiDiffusionModel2D(Module):
         return patching.apply(x)
 
     def patch_t(self, t: Float[Tensor, " B"]) -> Float[Tensor, " P_times_B"]:
-        r"""Convert a diffusion-time tensor to patch-compatible format.
+        r"""Convert a diffusion or flow-matching time to patch-compatible format.
 
         Repeats ``t`` :math:`P` times along the batch dimension so that
-        each patch receives the same diffusion time as its parent sample.
+        each patch receives the same time as its parent sample.
 
         Parameters
         ----------
         t : Tensor
-            Diffusion time of shape :math:`(B,)`.
+            Diffusion or flow-matching time of shape :math:`(B,)`.
 
         Returns
         -------
