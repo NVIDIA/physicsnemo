@@ -43,7 +43,7 @@ defaults:
 model:
   # Pretrained regression model, where regression training saves its final checkpoint
   # when run with training.experiment_name=regression
-  regression_weights: "rundir/regression/0/checkpoints_regression/StormCastUNet.0.450000.mdlus"
+  regression_weights: "rundir/regression/0/checkpoints_regression/StormCastUNet.0.30000.mdlus"
 
 dataset: # remove if using custom dataset
   # replace array names (hrrr, era5) and channels with your own (channels: null to use all channels)

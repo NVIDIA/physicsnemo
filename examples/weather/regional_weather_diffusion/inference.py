@@ -102,11 +102,12 @@ def main(cfg: DictConfig) -> None:
     )
 
     os.makedirs(inf_cfg.output_dir, exist_ok=True)
-    predictions = []
-    targets = []
-    regressions = []
+    output_path = os.path.join(inf_cfg.output_dir, "samples.zarr")
+    dims = ("y", "x")
+    (lat, lon) = (dataset.latitude(), dataset.longitude())
+    has_lat_lon = not (np.isnan(lat).all() or np.isnan(lon).all())
     with torch.no_grad():
-        for idx in inf_cfg.indices:
+        for i, idx in enumerate(inf_cfg.indices):
             print(f"Generating {inf_cfg.ensemble_size} sample(s) for index {idx}...")
             batch = torch.utils.data.default_collate([dataset[idx]])
             (background, target, mask, lead_time_label, scalar_conditions) = (
@@ -146,41 +147,36 @@ def main(cfg: DictConfig) -> None:
                         pred += reg_out.float()
                     ensemble.append(dataset.denormalize_state(pred.cpu().numpy())[0])
 
-            predictions.append(np.stack(ensemble))
-            targets.append(dataset.denormalize_state(target.cpu().numpy())[0])
+            prediction = np.stack(ensemble)
+            target = dataset.denormalize_state(target.cpu().numpy())[0]
+
+            # Save predictions and targets in physical units, appending along "index"
+            data_vars = {
+                "prediction": (
+                    ("index", "ensemble", "channel", *dims),
+                    prediction[None],
+                ),
+                "target": (("index", "channel", *dims), target[None]),
+            }
             if inf_cfg.save_regression:
-                regressions.append(
-                    dataset.denormalize_state(reg_out.float().cpu().numpy())[0]
-                )
+                regression = dataset.denormalize_state(reg_out.float().cpu().numpy())
+                data_vars["regression"] = (("index", "channel", *dims), regression)
+            ds = xr.Dataset(
+                data_vars, coords={"index": [idx], "channel": state_channels}
+            )
+            if i == 0:
+                if has_lat_lon:
+                    ds = ds.assign_coords(lat=(dims, lat), lon=(dims, lon))
+                ds.to_zarr(output_path, mode="w")
+            else:
+                ds.to_zarr(output_path, append_dim="index")
 
             for var in inf_cfg.plot_variables:
                 c = state_channels.index(var)
-                fig = inference_plot(
-                    predictions[-1][0, c], targets[-1][c], f"{var}, index {idx}"
-                )
+                fig = inference_plot(prediction[0, c], target[c], f"{var}, index {idx}")
                 fig.savefig(os.path.join(inf_cfg.output_dir, f"{var}_{idx}.png"))
                 plt.close(fig)
 
-    # Save predictions and targets in physical units
-    dims = ("y", "x")
-    data_vars = {
-        "prediction": (
-            ("index", "ensemble", "channel", *dims),
-            np.stack(predictions),
-        ),
-        "target": (("index", "channel", *dims), np.stack(targets)),
-    }
-    if regressions:
-        data_vars["regression"] = (("index", "channel", *dims), np.stack(regressions))
-    ds = xr.Dataset(
-        data_vars,
-        coords={"index": list(inf_cfg.indices), "channel": state_channels},
-    )
-    (lat, lon) = (dataset.latitude(), dataset.longitude())
-    if not (np.isnan(lat).all() or np.isnan(lon).all()):
-        ds = ds.assign_coords(lat=(dims, lat), lon=(dims, lon))
-    output_path = os.path.join(inf_cfg.output_dir, "samples.zarr")
-    ds.to_zarr(output_path, mode="w")
     print(f"Saved samples to {output_path}")
 
 

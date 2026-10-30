@@ -31,7 +31,7 @@ All of the above models can be formulated in terms of a high-resolution state up
 
 ### Preliminaries
 
-1. Install PhysicsNeMo (if not already installed) with the `datapipes-extras` and `nn-extras` optional dependency groups, along with the packages in `requirements.txt`. 
+1. Install PhysicsNeMo (if not already installed) with the `datapipes-extras` and `nn-extras` optional dependency groups, along with the packages in `requirements.txt`.
 2. Copy this folder (`examples/weather/regional_weather_diffusion`) to a system with a GPU available.
 
 To install the requirements not covered by PhysicsNeMo with the above-mentioned optional dependency groups, you can run:
@@ -62,7 +62,7 @@ To train a model on your own data:
 
 ### Testing
 
-To test the functionality of the training code, you can run the `pytest` test suite in `test_training.py` in a single-GPU or multi-GPU environment. 
+To test the functionality of the training code, you can run the `pytest` test suite in `test_training.py` in a single-GPU or multi-GPU environment.
 
 To run the single-GPU tests, run:
 
@@ -174,7 +174,7 @@ See `config/model/reference_*.yaml` for starting points and `config/model/replic
 
 You can ignore this section if you plan to train a diffusion-only model such as StormScope.
 
-Regression models are trained by setting `training.loss.type` to `regression`. For example, to train the regression model of the original StormCast, you can use the `replication_stormcast_v1` config and an optional name for the training experiment:
+Regression models are trained by setting `training.loss.type` to `regression`. For example, to train the regression model of the original StormCast, you can use the `replication_stormcast_v1` config (uncomment the regression-specific settings in that config first) and an optional name for the training experiment:
 
 ```bash
 python train.py --config-name replication_stormcast_v1 training.loss.type=regression training.experiment_name=regression
@@ -187,7 +187,7 @@ Diffusion model training is launched by setting `training.loss.type` to `edm` (t
 To train a diffusion model that uses the regression model output (unnecessary for diffusion-only models), there are two config items that must be defined:
   1. `'regression'` included in `model.diffusion_conditions`.
   2. `model.regression_weights` set to the path of a PhysicsNeMo (`.mdlus`) checkpoint with model weights for the pre-trained regression model. These are saved in the checkpoint directory during training (see [Checkpoints and Resuming](#checkpoints-and-resuming)).
-     
+
 The `reference_corrdiff` and `replication_stormcast_v1` top-level configs show examples of how to specify these settings.
 
 With that, launching diffusion training for the original StormCast configuration looks something like:

@@ -127,8 +127,10 @@ class LogPrecipDataset(XarrayDataset):
 
     def denormalize_state(self, x):
         x = super().denormalize_state(x)
-        i = self.state_channels().index("tp")
-        x[..., i, :, :] = np.expm1(x[..., i, :, :])
+        # tp channels are named e.g. tp_t+0, tp_t+1, one per time step
+        for i, name in enumerate(self.state_channels()):
+            if name.startswith("tp"):
+                x[..., i, :, :] = np.expm1(x[..., i, :, :])
         return x
 ```
 
