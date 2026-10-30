@@ -88,96 +88,182 @@ def _mesh_lsq_gradient_1d_kernel(
 
 
 @wp.func
-def _point_2d(points: wp.array2d(dtype=wp.float32), i: int) -> wp.vec2d:
-    """Coordinates of entity ``i``, in float64."""
-    return wp.vec2d(wp.float64(points[i, 0]), wp.float64(points[i, 1]))
+def _point_2d(points: wp.array2d(dtype=wp.float32), i: int) -> wp.vec2:
+    """Coordinates of entity ``i``."""
+    return wp.vec2(points[i, 0], points[i, 1])
 
 
 @wp.func
-def _point_3d(points: wp.array2d(dtype=wp.float32), i: int) -> wp.vec3d:
-    """Coordinates of entity ``i``, in float64."""
-    return wp.vec3d(
-        wp.float64(points[i, 0]), wp.float64(points[i, 1]), wp.float64(points[i, 2])
-    )
+def _point_3d(points: wp.array2d(dtype=wp.float32), i: int) -> wp.vec3:
+    """Coordinates of entity ``i``."""
+    return wp.vec3(points[i, 0], points[i, 1], points[i, 2])
+
+
+# Each entity's weighted least-squares system is solved by a QR factorization
+# that takes one neighbor row at a time with Givens rotations. Unlike the normal
+# equations, it does not square the condition number, so float32 keeps cells
+# that are thousands of times thinner than they are wide. R^T R equals the
+# normal matrix A^T W A + reg_eps I.
+@wp.func
+def _givens_2d(r: wp.mat22, z: wp.vec2, x: wp.vec2, y: float):
+    """Rotate row ``x``, with right-hand side ``y``, into the triangle ``r``."""
+    for k in range(2):
+        a = r[k, k]
+        b = x[k]
+        h = wp.sqrt(a * a + b * b)
+        if h > 0.0:
+            c = a / h
+            s = b / h
+            for j in range(k, 2):
+                rkj = r[k, j]
+                r[k, j] = c * rkj + s * x[j]
+                x[j] = c * x[j] - s * rkj
+            zk = z[k]
+            z[k] = c * zk + s * y
+            y = c * y - s * zk
+    return r, z
 
 
 @wp.func
-def _weight(dist2: wp.float64, weight_power: float, dist_eps: float) -> wp.float64:
-    """Inverse-distance weight of a neighbor at squared distance ``dist2``."""
-    return wp.pow(dist2 + wp.float64(dist_eps), wp.float64(-0.5 * weight_power))
+def _givens_3d(r: wp.mat33, z: wp.vec3, x: wp.vec3, y: float):
+    """Rotate row ``x``, with right-hand side ``y``, into the triangle ``r``."""
+    for k in range(3):
+        a = r[k, k]
+        b = x[k]
+        h = wp.sqrt(a * a + b * b)
+        if h > 0.0:
+            c = a / h
+            s = b / h
+            for j in range(k, 3):
+                rkj = r[k, j]
+                r[k, j] = c * rkj + s * x[j]
+                x[j] = c * x[j] - s * rkj
+            zk = z[k]
+            z[k] = c * zk + s * y
+            y = c * y - s * zk
+    return r, z
 
 
 @wp.func
-def _normal_matrix_2d(
+def _qr_2d(
     points: wp.array2d(dtype=wp.float32),
+    values: wp.array(dtype=wp.float32),
+    use_values: bool,
     indices: wp.array(dtype=wp.int32),
     start: int,
     end: int,
-    center: wp.vec2d,
+    i: int,
     weight_power: float,
     reg_eps: float,
     dist_eps: float,
-) -> wp.mat22d:
-    """``A^T W A`` of one entity, plus ``reg_eps`` on the diagonal."""
-    m = wp.diag(wp.vec2d(wp.float64(reg_eps), wp.float64(reg_eps)))
+):
+    """Triangle ``r`` and rotated right-hand side ``z`` of entity ``i``."""
+    root = wp.sqrt(reg_eps)
+    r = wp.mat22(root, 0.0, 0.0, root)
+    z = wp.vec2()
+    center = _point_2d(points, i)
     for p in range(start, end):
-        d = _point_2d(points, indices[p]) - center
-        m = m + _weight(wp.dot(d, d), weight_power, dist_eps) * wp.outer(d, d)
-    return m
+        n = indices[p]
+        d = _point_2d(points, n) - center
+        root_w = wp.pow(wp.dot(d, d) + dist_eps, -0.25 * weight_power)
+        y = float(0.0)
+        if use_values:
+            y = root_w * (values[n] - values[i])
+        r, z = _givens_2d(r, z, root_w * d, y)
+    return r, z
 
 
 @wp.func
-def _normal_matrix_3d(
+def _qr_3d(
     points: wp.array2d(dtype=wp.float32),
+    values: wp.array(dtype=wp.float32),
+    use_values: bool,
     indices: wp.array(dtype=wp.int32),
     start: int,
     end: int,
-    center: wp.vec3d,
+    i: int,
     weight_power: float,
     reg_eps: float,
     dist_eps: float,
-) -> wp.mat33d:
-    """``A^T W A`` of one entity, plus ``reg_eps`` on the diagonal."""
-    r = wp.float64(reg_eps)
-    m = wp.diag(wp.vec3d(r, r, r))
+):
+    """Triangle ``r`` and rotated right-hand side ``z`` of entity ``i``."""
+    root = wp.sqrt(reg_eps)
+    r = wp.mat33(root, 0.0, 0.0, 0.0, root, 0.0, 0.0, 0.0, root)
+    z = wp.vec3()
+    center = _point_3d(points, i)
     for p in range(start, end):
-        d = _point_3d(points, indices[p]) - center
-        m = m + _weight(wp.dot(d, d), weight_power, dist_eps) * wp.outer(d, d)
-    return m
+        n = indices[p]
+        d = _point_3d(points, n) - center
+        root_w = wp.pow(wp.dot(d, d) + dist_eps, -0.25 * weight_power)
+        y = float(0.0)
+        if use_values:
+            y = root_w * (values[n] - values[i])
+        r, z = _givens_3d(r, z, root_w * d, y)
+    return r, z
 
 
-# The normal matrices are formed and solved in float64, in which the products
-# of float32 coordinates are exact. A regularized matrix counts as singular by
-# the test that rejects the singular systems the regularization leaves (one
+# A regularized system counts as singular by the determinant test of its normal
+# matrix, which rejects the singular systems the regularization leaves (one
 # neighbor, or collinear neighbors). An unregularized one comes from neighbors
-# that span the space, so only a determinant near float64 rounding, relative
-# to the matrix's scale, counts as singular: cells far thinner than float32
-# could solve keep their gradients.
+# that span the space: as in PyTorch's least squares, it counts as singular
+# where a diagonal entry of R falls below float32 precision times the number
+# of rows, relative to the largest.
 @wp.func
-def _inverse_2d(m: wp.mat22d, reg_eps: float, dist_eps: float) -> wp.mat22d:
-    """Inverse of a normal matrix, or zero where it counts as singular."""
-    scale = m[0, 0] * m[1, 1]
-    tolerance = wp.float64(1.0e-13)
+def _solvable_2d(r: wp.mat22, rows: int, reg_eps: float, dist_eps: float) -> bool:
+    """Whether the system with triangle ``r`` counts as solvable."""
     if reg_eps > 0.0:
-        scale = scale + wp.float64(dist_eps)
-        tolerance = wp.float64(1.0e-6)
-    if wp.abs(wp.determinant(m)) > tolerance * scale:
-        return wp.inverse(m)
-    return wp.mat22d()
+        root_det = r[0, 0] * r[1, 1]
+        m11 = r[0, 1] * r[0, 1] + r[1, 1] * r[1, 1]
+        return root_det * root_det > 1.0e-6 * (r[0, 0] * r[0, 0] * m11 + dist_eps)
+    tolerance = 1.1920929e-07 * float(wp.max(rows, 2))
+    return wp.min(r[0, 0], r[1, 1]) > tolerance * wp.max(r[0, 0], r[1, 1])
 
 
 @wp.func
-def _inverse_3d(m: wp.mat33d, reg_eps: float, dist_eps: float) -> wp.mat33d:
-    """Inverse of a normal matrix, or zero where it counts as singular."""
-    trace = m[0, 0] + m[1, 1] + m[2, 2]
-    scale = trace * trace * trace
-    tolerance = wp.float64(1.0e-13)
+def _solvable_3d(r: wp.mat33, rows: int, reg_eps: float, dist_eps: float) -> bool:
+    """Whether the system with triangle ``r`` counts as solvable."""
     if reg_eps > 0.0:
-        scale = scale + wp.float64(dist_eps)
-        tolerance = wp.float64(1.0e-8)
-    if wp.abs(wp.determinant(m)) > tolerance * scale:
-        return wp.inverse(m)
-    return wp.mat33d()
+        root_det = r[0, 0] * r[1, 1] * r[2, 2]
+        trace = float(0.0)
+        for k in range(3):
+            for j in range(k, 3):
+                trace = trace + r[k, j] * r[k, j]
+        return root_det * root_det > 1.0e-8 * (trace * trace * trace + dist_eps)
+    tolerance = 1.1920929e-07 * float(wp.max(rows, 3))
+    smallest = wp.min(r[0, 0], wp.min(r[1, 1], r[2, 2]))
+    largest = wp.max(r[0, 0], wp.max(r[1, 1], r[2, 2]))
+    return smallest > tolerance * largest
+
+
+@wp.func
+def _back_2d(r: wp.mat22, z: wp.vec2) -> wp.vec2:
+    """``g`` with ``r g = z``."""
+    g1 = z[1] / r[1, 1]
+    return wp.vec2((z[0] - r[0, 1] * g1) / r[0, 0], g1)
+
+
+@wp.func
+def _back_3d(r: wp.mat33, z: wp.vec3) -> wp.vec3:
+    """``g`` with ``r g = z``."""
+    g2 = z[2] / r[2, 2]
+    g1 = (z[1] - r[1, 2] * g2) / r[1, 1]
+    return wp.vec3((z[0] - r[0, 1] * g1 - r[0, 2] * g2) / r[0, 0], g1, g2)
+
+
+@wp.func
+def _normal_solve_2d(r: wp.mat22, v: wp.vec2) -> wp.vec2:
+    """``(r^T r)^-1 v``, by substitution forward through ``r^T``, then back."""
+    u0 = v[0] / r[0, 0]
+    return _back_2d(r, wp.vec2(u0, (v[1] - r[0, 1] * u0) / r[1, 1]))
+
+
+@wp.func
+def _normal_solve_3d(r: wp.mat33, v: wp.vec3) -> wp.vec3:
+    """``(r^T r)^-1 v``, by substitution forward through ``r^T``, then back."""
+    u0 = v[0] / r[0, 0]
+    u1 = (v[1] - r[0, 1] * u0) / r[1, 1]
+    u2 = (v[2] - r[0, 2] * u0 - r[1, 2] * u1) / r[2, 2]
+    return _back_3d(r, wp.vec3(u0, u1, u2))
 
 
 @wp.kernel
@@ -204,26 +290,17 @@ def _mesh_lsq_gradient_2d_kernel(
         solved[i] = 0
         return
 
-    # Solve M g = A^T W b, both accumulated over the neighbors in float64.
-    center = _point_2d(points, i)
-    m = _normal_matrix_2d(
-        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    r, z = _qr_2d(
+        points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
-    inverse = _inverse_2d(m, reg_eps, dist_eps)
-    value = wp.float64(values[i])
-    b = wp.vec2d()
-    for p in range(start, end):
-        n = indices[p]
-        d = _point_2d(points, n) - center
-        dphi = wp.float64(values[n]) - value
-        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
-    g = inverse * b
-
-    gradients[i, 0] = wp.float32(g[0])
-    gradients[i, 1] = wp.float32(g[1])
+    g = wp.vec2()
     solved_i = int(0)
-    if inverse[0, 0] > wp.float64(0.0):
+    if _solvable_2d(r, end - start, reg_eps, dist_eps):
+        g = _back_2d(r, z)
         solved_i = 1
+
+    gradients[i, 0] = g[0]
+    gradients[i, 1] = g[1]
     solved[i] = solved_i
 
 
@@ -252,27 +329,18 @@ def _mesh_lsq_gradient_3d_kernel(
         solved[i] = 0
         return
 
-    # Solve M g = A^T W b, both accumulated over the neighbors in float64.
-    center = _point_3d(points, i)
-    m = _normal_matrix_3d(
-        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    r, z = _qr_3d(
+        points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
-    inverse = _inverse_3d(m, reg_eps, dist_eps)
-    value = wp.float64(values[i])
-    b = wp.vec3d()
-    for p in range(start, end):
-        n = indices[p]
-        d = _point_3d(points, n) - center
-        dphi = wp.float64(values[n]) - value
-        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
-    g = inverse * b
-
-    gradients[i, 0] = wp.float32(g[0])
-    gradients[i, 1] = wp.float32(g[1])
-    gradients[i, 2] = wp.float32(g[2])
+    g = wp.vec3()
     solved_i = int(0)
-    if inverse[0, 0] > wp.float64(0.0):
+    if _solvable_3d(r, end - start, reg_eps, dist_eps):
+        g = _back_3d(r, z)
         solved_i = 1
+
+    gradients[i, 0] = g[0]
+    gradients[i, 1] = g[1]
+    gradients[i, 2] = g[2]
     solved[i] = solved_i
 
 
@@ -341,23 +409,34 @@ def _mesh_lsq_gradient_2d_backward_kernel(
     if end - start < min_neighbors:
         return
 
-    center = _point_2d(points, i)
-    m = _normal_matrix_2d(
-        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    # The values of the factorization's right-hand side are not needed here.
+    r, _ = _qr_2d(
+        points,
+        grad_values,
+        False,
+        indices,
+        start,
+        end,
+        i,
+        weight_power,
+        reg_eps,
+        dist_eps,
     )
-    q = _inverse_2d(m, reg_eps, dist_eps) * wp.vec2d(
-        wp.float64(grad_output[i, 0]), wp.float64(grad_output[i, 1])
-    )
+    if not _solvable_2d(r, end - start, reg_eps, dist_eps):
+        return
+    q = _normal_solve_2d(r, wp.vec2(grad_output[i, 0], grad_output[i, 1]))
 
-    self_contrib = wp.float64(0.0)
+    center = _point_2d(points, i)
+    self_contrib = float(0.0)
     for p in range(start, end):
         n = indices[p]
         d = _point_2d(points, n) - center
-        c = _weight(wp.dot(d, d), weight_power, dist_eps) * wp.dot(q, d)
-        wp.atomic_add(grad_values, n, wp.float32(c))
+        w = wp.pow(wp.dot(d, d) + dist_eps, -0.5 * weight_power)
+        c = w * wp.dot(q, d)
+        wp.atomic_add(grad_values, n, c)
         self_contrib = self_contrib - c
 
-    wp.atomic_add(grad_values, i, wp.float32(self_contrib))
+    wp.atomic_add(grad_values, i, self_contrib)
 
 
 @wp.kernel
@@ -379,25 +458,36 @@ def _mesh_lsq_gradient_3d_backward_kernel(
     if end - start < min_neighbors:
         return
 
-    center = _point_3d(points, i)
-    m = _normal_matrix_3d(
-        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    # The values of the factorization's right-hand side are not needed here.
+    r, _ = _qr_3d(
+        points,
+        grad_values,
+        False,
+        indices,
+        start,
+        end,
+        i,
+        weight_power,
+        reg_eps,
+        dist_eps,
     )
-    q = _inverse_3d(m, reg_eps, dist_eps) * wp.vec3d(
-        wp.float64(grad_output[i, 0]),
-        wp.float64(grad_output[i, 1]),
-        wp.float64(grad_output[i, 2]),
+    if not _solvable_3d(r, end - start, reg_eps, dist_eps):
+        return
+    q = _normal_solve_3d(
+        r, wp.vec3(grad_output[i, 0], grad_output[i, 1], grad_output[i, 2])
     )
 
-    self_contrib = wp.float64(0.0)
+    center = _point_3d(points, i)
+    self_contrib = float(0.0)
     for p in range(start, end):
         n = indices[p]
         d = _point_3d(points, n) - center
-        c = _weight(wp.dot(d, d), weight_power, dist_eps) * wp.dot(q, d)
-        wp.atomic_add(grad_values, n, wp.float32(c))
+        w = wp.pow(wp.dot(d, d) + dist_eps, -0.5 * weight_power)
+        c = w * wp.dot(q, d)
+        wp.atomic_add(grad_values, n, c)
         self_contrib = self_contrib - c
 
-    wp.atomic_add(grad_values, i, wp.float32(self_contrib))
+    wp.atomic_add(grad_values, i, self_contrib)
 
 
 @wp.kernel
@@ -476,39 +566,30 @@ def _mesh_lsq_gradient_2d_backward_points_kernel(
     if end - start < min_neighbors:
         return
 
-    center = _point_2d(points, i)
-    m = _normal_matrix_2d(
-        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    r, z = _qr_2d(
+        points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
-    inverse = _inverse_2d(m, reg_eps, dist_eps)
-    if inverse[0, 0] <= wp.float64(0.0):
+    if not _solvable_2d(r, end - start, reg_eps, dist_eps):
         return
+    g = _back_2d(r, z)
+    q = _normal_solve_2d(r, wp.vec2(grad_output[i, 0], grad_output[i, 1]))
 
-    value = wp.float64(values[i])
-    b = wp.vec2d()
+    center = _point_2d(points, i)
+    vi = values[i]
     for p in range(start, end):
         n = indices[p]
         d = _point_2d(points, n) - center
-        dphi = wp.float64(values[n]) - value
-        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
-    g = inverse * b
-    q = inverse * wp.vec2d(wp.float64(grad_output[i, 0]), wp.float64(grad_output[i, 1]))
-
-    power = wp.float64(weight_power)
-    for p in range(start, end):
-        n = indices[p]
-        d = _point_2d(points, n) - center
-        dist2 = wp.dot(d, d) + wp.float64(dist_eps)
-        w = wp.pow(dist2, wp.float64(-0.5 * weight_power))
+        dist2 = wp.dot(d, d) + dist_eps
+        w = wp.pow(dist2, -0.5 * weight_power)
         pd = wp.dot(d, q)
-        common = wp.float64(values[n]) - value - wp.dot(d, g)
-        beta = (-power / dist2) * w
+        common = values[n] - vi - wp.dot(d, g)
+        beta = (-weight_power / dist2) * w
         grad_d = (beta * pd * common) * d + w * (common * q - pd * g)
 
-        wp.atomic_add(grad_points, n, 0, wp.float32(grad_d[0]))
-        wp.atomic_add(grad_points, n, 1, wp.float32(grad_d[1]))
-        wp.atomic_add(grad_points, i, 0, -wp.float32(grad_d[0]))
-        wp.atomic_add(grad_points, i, 1, -wp.float32(grad_d[1]))
+        wp.atomic_add(grad_points, n, 0, grad_d[0])
+        wp.atomic_add(grad_points, n, 1, grad_d[1])
+        wp.atomic_add(grad_points, i, 0, -grad_d[0])
+        wp.atomic_add(grad_points, i, 1, -grad_d[1])
 
 
 @wp.kernel
@@ -531,45 +612,34 @@ def _mesh_lsq_gradient_3d_backward_points_kernel(
     if end - start < min_neighbors:
         return
 
-    center = _point_3d(points, i)
-    m = _normal_matrix_3d(
-        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    r, z = _qr_3d(
+        points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
-    inverse = _inverse_3d(m, reg_eps, dist_eps)
-    if inverse[0, 0] <= wp.float64(0.0):
+    if not _solvable_3d(r, end - start, reg_eps, dist_eps):
         return
-
-    value = wp.float64(values[i])
-    b = wp.vec3d()
-    for p in range(start, end):
-        n = indices[p]
-        d = _point_3d(points, n) - center
-        dphi = wp.float64(values[n]) - value
-        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
-    g = inverse * b
-    q = inverse * wp.vec3d(
-        wp.float64(grad_output[i, 0]),
-        wp.float64(grad_output[i, 1]),
-        wp.float64(grad_output[i, 2]),
+    g = _back_3d(r, z)
+    q = _normal_solve_3d(
+        r, wp.vec3(grad_output[i, 0], grad_output[i, 1], grad_output[i, 2])
     )
 
-    power = wp.float64(weight_power)
+    center = _point_3d(points, i)
+    vi = values[i]
     for p in range(start, end):
         n = indices[p]
         d = _point_3d(points, n) - center
-        dist2 = wp.dot(d, d) + wp.float64(dist_eps)
-        w = wp.pow(dist2, wp.float64(-0.5 * weight_power))
+        dist2 = wp.dot(d, d) + dist_eps
+        w = wp.pow(dist2, -0.5 * weight_power)
         pd = wp.dot(d, q)
-        common = wp.float64(values[n]) - value - wp.dot(d, g)
-        beta = (-power / dist2) * w
+        common = values[n] - vi - wp.dot(d, g)
+        beta = (-weight_power / dist2) * w
         grad_d = (beta * pd * common) * d + w * (common * q - pd * g)
 
-        wp.atomic_add(grad_points, n, 0, wp.float32(grad_d[0]))
-        wp.atomic_add(grad_points, n, 1, wp.float32(grad_d[1]))
-        wp.atomic_add(grad_points, n, 2, wp.float32(grad_d[2]))
-        wp.atomic_add(grad_points, i, 0, -wp.float32(grad_d[0]))
-        wp.atomic_add(grad_points, i, 1, -wp.float32(grad_d[1]))
-        wp.atomic_add(grad_points, i, 2, -wp.float32(grad_d[2]))
+        wp.atomic_add(grad_points, n, 0, grad_d[0])
+        wp.atomic_add(grad_points, n, 1, grad_d[1])
+        wp.atomic_add(grad_points, n, 2, grad_d[2])
+        wp.atomic_add(grad_points, i, 0, -grad_d[0])
+        wp.atomic_add(grad_points, i, 1, -grad_d[1])
+        wp.atomic_add(grad_points, i, 2, -grad_d[2])
 
 
 def _launch_forward(
