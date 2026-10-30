@@ -44,6 +44,11 @@ def main(cfg: DictConfig) -> None:
     warnings.filterwarnings(
         "ignore", message="^.*You are importing from 'physicsnemo.experimental'.*$"
     )
+    # Flow matching trains up to t = 1 (pure noise), which is safe: the loss and
+    # the flow used for sampling stay finite there
+    warnings.filterwarnings(
+        "ignore", message="^RectifiedFlowNoiseScheduler was constructed with t_max=1.0"
+    )
 
     # Initialize
     DistributedManager.initialize()

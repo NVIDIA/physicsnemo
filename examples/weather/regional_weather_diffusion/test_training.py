@@ -14,23 +14,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
+import pandas as pd
 import pytest
 import torch
 import train
+import xarray as xr
 from hydra import compose, initialize
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
+from tensordict import TensorDict
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from torch.distributed.tensor import DTensor
 from utils import parallel, trainer
+from utils.nn import TimeScaledModel, diffusion_model_forward
 
+from physicsnemo.core import Module
+from physicsnemo.diffusion.metrics.losses import MSEDSMLoss
+from physicsnemo.diffusion.noise_schedulers import RectifiedFlowNoiseScheduler
 from physicsnemo.distributed import DistributedManager
 
 DistributedManager.initialize()
+
+# The rectified-flow scheduler warns about t_max = 1; the x-prediction loss and
+# the flow used for sampling stay finite there
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:RectifiedFlowNoiseScheduler was constructed with t_max=1.0"
+)
 
 
 # Retrieve and fixture configs
@@ -56,6 +71,12 @@ def cfg_diffusion():
 def cfg_diffusion_unet():
     """Return the diffusion UNet test configuration."""
     return _load_config(config_name="test_diffusion_unet.yaml")
+
+
+@pytest.fixture
+def cfg_flow_matching():
+    """Return the flow matching (CorrDiff-ERA5-HRRR style) test configuration."""
+    return _load_config(config_name="test_flow_matching.yaml")
 
 
 def _setup_rundir(tmp_path, num_procs):
@@ -866,3 +887,338 @@ def test_datapipes_backend_training(
         rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
     )
     assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+# =============================================================================
+# Flow matching (CorrDiff-ERA5-HRRR)
+# =============================================================================
+
+
+# Launch configurations (world_size, domain_parallel_size, batch_size): a test
+# runs the cases matching the number of processes pytest was launched with.
+# ``data_parallel`` uses FSDP only, ``domain_parallel`` shards the spatial
+# dimension with ShardTensor, ``data_domain_parallel`` combines both on a
+# (2, 2) mesh.
+_PARALLEL_CONFIGS = pytest.mark.parametrize(
+    "world_size, domain_parallel_size, batch_size",
+    [(1, 1, 1), (2, 1, 2), (2, 2, 1), (4, 2, 2)],
+    ids=["single", "data_parallel", "domain_parallel", "data_domain_parallel"],
+)
+
+
+def _skip_unless_world_size(world_size: int) -> DistributedManager:
+    """Skip the test unless it was launched with ``world_size`` processes."""
+    dist = DistributedManager()
+    if dist.world_size != world_size:
+        pytest.skip(
+            f"Skipping: this configuration requires {world_size} process(es), "
+            f"current: {dist.world_size}."
+        )
+    return dist
+
+
+@_PARALLEL_CONFIGS
+@pytest.mark.parametrize("net_architecture", ["dit", "unet"])
+@pytest.mark.parametrize("prediction_type", ["x0", "epsilon", "flow"])
+@pytest.mark.parametrize("fp_optimizations", ["fp32", "amp-bf16"])
+def test_flow_matching_training(
+    tmp_path: Path,
+    cfg_flow_matching: DictConfig,
+    *,
+    world_size: int,
+    domain_parallel_size: int,
+    batch_size: int,
+    net_architecture: Literal["unet", "dit"],
+    prediction_type: Literal["x0", "epsilon", "flow"],
+    fp_optimizations: Literal["fp32", "amp-bf16"],
+):
+    """Test that flow matching training runs with the DiT and the U-Net, with
+    x0, epsilon, and flow prediction, on 1, 2 and 4 processes (data and
+    domain parallelism), and writes the TimeScaledModel checkpoint and
+    validation plots."""
+    dist = _skip_unless_world_size(world_size)
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+
+    cfg = cfg_flow_matching.copy()
+    cfg.training.rundir = rundir
+    cfg.training.batch_size = batch_size
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.perf.fp_optimizations = fp_optimizations
+    cfg.training.loss.prediction_type = prediction_type
+    cfg.model.architecture = net_architecture
+    if net_architecture == "unet":
+        cfg.dataset.num_scalar_cond_channels = 0  # scalar conditions need the DiT
+        cfg.model.hyperparameters = {"model_channels": 8, "channel_mult": [1, 1]}
+    train.main(cfg)
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "TimeScaledModel.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Flow matching checkpoint not found"
+    assert isinstance(Module.from_checkpoint(ckpt_path), TimeScaledModel)
+    assert os.path.isdir(os.path.join(rundir, "images", "state_0"))
+
+
+@_PARALLEL_CONFIGS
+@pytest.mark.parametrize("prediction_type", ["x0", "epsilon"])
+def test_edm_time_scaled_training(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    *,
+    world_size: int,
+    domain_parallel_size: int,
+    batch_size: int,
+    prediction_type: Literal["x0", "epsilon"],
+):
+    """Test that the time-scaled preconditioner also trains with the EDM loss,
+    predicting the clean state or the noise: the preconditioner, the loss type,
+    and the prediction type are independent settings. Runs on 1, 2 and 4
+    processes (data and domain parallelism)."""
+    dist = _skip_unless_world_size(world_size)
+    cfg = cfg_diffusion.copy()
+    cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg.training.batch_size = batch_size
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.model.preconditioner = "time_scaled"  # with the default time_scale
+    cfg.training.loss.prediction_type = prediction_type
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+    train.main(cfg)
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+    ckpt_path = os.path.join(
+        cfg.training.rundir, "checkpoints_diffusion", "TimeScaledModel.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+def test_edm_preconditioner_requires_x0(cfg_diffusion: DictConfig):
+    """Test that the EDM preconditioner rejects other prediction types."""
+    cfg = cfg_diffusion.copy()
+    cfg.training.loss.prediction_type = "epsilon"
+    with pytest.raises(ValueError, match="predicts x0"):
+        trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+
+
+def test_flow_matching_x0_loss_equals_mse(
+    tmp_path: Path, cfg_flow_matching: DictConfig
+):
+    """Test that the x0-prediction flow matching loss equals the x0-prediction
+    loss of MSEDSMLoss, ||x0_hat - x0||^2, for sampled times and at the
+    endpoints t = 0 and t = 1."""
+    dist = DistributedManager()
+    if dist.world_size > 1:
+        pytest.skip("Skipping: single-process test.")
+    cfg = cfg_flow_matching.copy()
+    cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    tr = trainer.Trainer(cfg)
+    x0_mse = MSEDSMLoss(
+        tr.net, tr.train_noise_scheduler, prediction_type="x0", reduction="none"
+    )
+    device = tr.device
+    (h, w) = cfg.dataset.image_size
+    x0 = torch.randn(2, cfg.dataset.num_state_channels, h, w, device=device)
+    condition = TensorDict(
+        {
+            "cond_concat": torch.randn(
+                2, cfg.dataset.num_background_channels, h, w, device=device
+            ),
+            "cond_vec": torch.randn(
+                2, cfg.dataset.num_scalar_cond_channels, device=device
+            ),
+        },
+        batch_size=[2],
+        device=device,
+    )
+    for t in (None, torch.tensor([0.0, 1.0], device=device)):
+        with torch.no_grad():
+            torch.manual_seed(0)
+            loss = tr.loss_fn(x0, torch.ones_like(x0), t=t, condition=condition)
+            torch.manual_seed(0)  # same times and noise as in the training loss
+            expected = x0_mse(x0, t=t, condition=condition)
+        assert torch.isfinite(loss).all()
+        assert torch.equal(loss, expected)
+
+
+class _GaussianX0Predictor(torch.nn.Module):
+    """Exact x0-predictor E[x0 | x_t] for data x0 ~ N(mean, std^2) on the
+    rectified-flow path x_t = (1 - t) x0 + t eps."""
+
+    def __init__(self, mean: float, std: float):
+        super().__init__()
+        self.mean = mean
+        self.var = std**2
+
+    def forward(self, x, t, condition=None):
+        alpha = (1 - t).reshape(-1, 1, 1, 1)
+        sigma = t.reshape(-1, 1, 1, 1)
+        gain = alpha * self.var / (alpha**2 * self.var + sigma**2)
+        return self.mean + gain * (x - alpha * self.mean)
+
+
+@pytest.mark.parametrize(
+    "solver, num_steps, time_shift",
+    [("heun", 32, 1.0), ("heun", 64, 4.0), ("euler", 128, 1.0)],
+)
+def test_rectified_flow_sampling_from_pure_noise(
+    solver: str, num_steps: int, time_shift: float
+):
+    """Test that rectified-flow sampling from pure noise (t = 1) with the exact
+    x0-predictor of Gaussian data reproduces the data distribution, with and
+    without a time shift."""
+    device = DistributedManager().device
+    (mean, std) = (2.0, 0.5)
+    model = _GaussianX0Predictor(mean, std).to(device)
+    torch.manual_seed(0)
+    x = diffusion_model_forward(
+        model,
+        torch.zeros(4, 1, 64, 64, device=device),  # the predictor ignores the condition
+        shape=(4, 1, 64, 64),
+        scheduler=RectifiedFlowNoiseScheduler(t_max=1.0),
+        sampler_args={
+            "num_steps": num_steps,
+            "solver": solver,
+            "time_shift": time_shift,
+        },
+        formulation="flow",
+        prediction_type="x0",
+    )
+    assert torch.isfinite(x).all()
+    assert abs(x.mean().item() - mean) < 0.02
+    assert abs(x.std().item() - std) < 0.02
+
+
+def _write_corrdiff_era5_hrrr_data(path: Path) -> dict:
+    """Write a small dataset in the layout that CorrDiffEra5HrrrDataset expects.
+    The ERA5 fields are linear in latitude and longitude, so their bilinear
+    interpolation to the HRRR grid is exact."""
+    times = pd.date_range("2025-01-01", periods=6, freq="h")
+    (y, x) = np.meshgrid(np.arange(12), np.arange(16), indexing="ij")
+    lat = (35.0 + 0.5 * y + 0.1 * x).astype(np.float32)
+    lon = (-105.0 + 0.6 * x + 0.05 * y).astype(np.float32)
+    rng = np.random.default_rng(0)
+    hrrr = rng.normal(size=(6, 2, 12, 16)).astype(np.float32)
+    xr.Dataset(
+        {
+            "HRRR": (("time", "channel", "y", "x"), hrrr),
+            "latitude": (("y", "x"), lat),
+            "longitude": (("y", "x"), lon),
+            "valid_data": ("time", np.array([True] * 5 + [False])),  # last hour invalid
+        },
+        coords={"time": times, "channel": np.array(["u10m", "t2m"])},
+    ).to_zarr(path / "hrrr-conus" / "2025.zarr")
+
+    # ERA5 fields c0 + c1 * lat + c2 * lon, without the hour at index 4
+    (era5_lat, era5_lon) = (np.arange(50.0, 29.0, -1.0), np.arange(-110.0, -89.0))
+    coefs = np.array([[1.0, 0.2, -0.3], [2.0, -0.1, 0.4], [3.0, 0.05, 0.1]])
+    fields = (
+        coefs[:, 0, None, None]
+        + coefs[:, 1, None, None] * era5_lat[:, None]
+        + coefs[:, 2, None, None] * era5_lon[None, :]
+    )
+    era5_times = times[[0, 1, 2, 3, 5]]
+    xr.Dataset(
+        {
+            "data": (
+                ("time", "channel", "latitude", "longitude"),
+                np.repeat(fields[None], len(era5_times), axis=0).astype(np.float32),
+            )
+        },
+        coords={
+            "time": era5_times,
+            "channel": np.array(["u10m", "tcwv", "sp"]),
+            "latitude": era5_lat,
+            "longitude": era5_lon,
+        },
+    ).to_zarr(path / "era5-conus" / "2025.zarr")
+
+    invariant_names = ["elev_mean", "elev_std", "lsm_mean"]
+    invariants = rng.normal(size=(3, 12, 16)).astype(np.float32)
+    os.makedirs(path / "invariants")
+    xr.Dataset(
+        {v: (("y", "x"), invariants[k]) for (k, v) in enumerate(invariant_names)}
+    ).to_netcdf(path / "invariants" / "invariants_HRRR.nc")
+
+    stats = {
+        "hrrr": {"u10m": {"mean": 0.5, "std": 2.0}, "t2m": {"mean": -1.0, "std": 4.0}},
+        "era5": {v: {"mean": 1.0, "std": 3.0} for v in ["u10m", "tcwv", "sp"]},
+        "invariant": {v: {"mean": 0.1, "std": 2.0} for v in invariant_names},
+    }
+    os.makedirs(path / "stats")
+    with open(path / "stats" / "hrrr_era5_stats.json", "w") as f:
+        json.dump(stats, f)
+    return {
+        "hrrr": hrrr,
+        "lat": lat,
+        "lon": lon,
+        "coefs": coefs,
+        "invariants": invariants,
+        "times": times,
+    }
+
+
+def test_corrdiff_era5_hrrr_dataset(tmp_path: Path):
+    """Test time filtering, cropping, interpolation, normalization, patches,
+    and presence flags of CorrDiffEra5HrrrDataset on a small synthetic dataset."""
+    from datasets.data_loader_corrdiff_era5_hrrr import CorrDiffEra5HrrrDataset
+
+    dist = DistributedManager()
+    if dist.world_size > 1:
+        pytest.skip("Skipping: single-process test.")
+    data = _write_corrdiff_era5_hrrr_data(tmp_path)
+    params = dict(
+        data_path=str(tmp_path),
+        years=[2025],
+        time_range_train=["2025-01-01T00:00:00", "2025-01-01T02:00:00"],
+        time_range_valid=["2025-01-01T02:00:00", "2025-01-02T00:00:00"],
+        crop_window=[[1, 11], [2, 14]],
+        drop_variables=["tcwv", "sp"],
+        drop_prob=1.0,
+    )
+    crop = (slice(1, 11), slice(2, 14))
+
+    # Validation on the full domain: the dataset skips the invalid HRRR hour
+    # and the hour missing in ERA5, and keeps every input
+    valid = CorrDiffEra5HrrrDataset(dict(params, patch_shape=None), train=False)
+    assert list(valid.times) == list(data["times"][[2, 3]])
+    assert valid.image_shape() == (10, 12)
+    assert len(valid.background_channels()) == 3 + 1 + 3
+    assert valid.get_invariants() is None
+    item = valid[0]
+    np.testing.assert_allclose(
+        item["state"],
+        (data["hrrr"][2][:, crop[0], crop[1]] - np.array([0.5, -1.0])[:, None, None])
+        / np.array([2.0, 4.0])[:, None, None],
+        rtol=1e-6,
+    )
+    (lat, lon) = (data["lat"][crop], data["lon"][crop])
+    coefs = data["coefs"]
+    era5 = (
+        coefs[:, 0, None, None]
+        + coefs[:, 1, None, None] * lat
+        + coefs[:, 2, None, None] * lon
+    )
+    np.testing.assert_allclose(item["background"][:3], (era5 - 1.0) / 3.0, atol=1e-4)
+    np.testing.assert_allclose(
+        item["background"][4:],
+        (data["invariants"][:, crop[0], crop[1]] - 0.1) / 2.0,
+        rtol=1e-6,
+    )
+    year_phase = 2 * np.pi * (2 / 24) / 365.25  # 02:00 on January 1
+    np.testing.assert_allclose(
+        item["scalar_conditions"],
+        [np.sin(year_phase), np.cos(year_phase), 1, 1],
+        rtol=1e-5,
+    )
+
+    # Training patches: with drop_prob = 1, the dataset replaces tcwv and sp by
+    # their climatological mean (zero) and sets their presence flags to zero
+    train_ds = CorrDiffEra5HrrrDataset(dict(params, patch_shape=[4, 4]), train=True)
+    assert len(train_ds) == 2
+    item = train_ds[1]
+    assert item["state"].shape == (2, 4, 4)
+    assert item["background"].shape == (7, 4, 4)
+    assert np.all(item["background"][1:3] == 0)
+    np.testing.assert_array_equal(item["scalar_conditions"][2:], [0, 0])

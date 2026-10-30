@@ -23,6 +23,9 @@ regression_conditions: ["background", "invariant"] # list consisting of "backgro
                                                     # The dataset's "background" tensor includes the previous HRRR timestep.
 diffusion_conditions: ["regression", "invariant"] # list consisting of "regression", "background", "invariant" (default from StormCast paper)
 
+# Preconditioner of the diffusion network: edm preconditioner
+preconditioner: edm
+
 # Model hyperparameters
 model_type: "SongUNetPosEmbd" # Model class to use
 # Example overrides for architecture hyperparameters (uncomment to customize)

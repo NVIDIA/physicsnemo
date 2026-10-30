@@ -42,6 +42,13 @@ class ModelConfig:
     regression_weights: str | None = (
         None  # file with weights of pre-trained regression model, set to None when training regression or diffusion-only model
     )
+    preconditioner: Literal["edm", "time_scaled"] = (
+        "edm"  # wrapper of the diffusion network: "edm" (EDM input/output scaling, the network output is x0)
+        # or "time_scaled" (times multiplied by time_scale, the network output is training.loss.prediction_type)
+    )
+    time_scale: float = Field(
+        default=999.0, gt=0.0
+    )  # factor applied to the times by the "time_scaled" preconditioner
     hyperparameters: dict[str, Any] = Field(
         default={}
     )  # additional parameters to be passed to model
@@ -101,7 +108,18 @@ class SchedulerConfig:
 class LossConfig:
     """Loss configuration: cfg.training.loss"""
 
-    type: Literal["regression", "edm"] = "edm"
+    type: Literal["regression", "edm", "flow_matching"] = (
+        "edm"  # "regression", "edm" (denoising score matching), or "flow_matching" (rectified flow)
+    )
+    prediction_type: Literal["x0", "epsilon", "score", "flow"] = (
+        "x0"  # network output: clean state, noise, score, or flow (velocity); must be "x0" with the EDM preconditioner
+    )
+    # Flow matching parameters (used when type: "flow_matching")
+    t_min: float = Field(default=0.0, ge=0.0)  # Lowest flow-matching time (clean data)
+    t_max: float = Field(
+        default=1.0, le=1.0
+    )  # Highest flow-matching time (1 = pure noise)
+    # EDM parameters (used when type: "edm")
     sigma_distribution: Literal["lognormal", "loguniform"] = "lognormal"
     sigma_data: float | list[float] = 0.5
     P_mean: float = -1.2  # Center of the lognormal noise distribution
@@ -115,6 +133,8 @@ class LossConfig:
 
     @model_validator(mode="after")
     def _check_sigmas(self):
+        if self.t_min >= self.t_max:
+            raise ValueError("t_min must be smaller than t_max")
         if self.sigma_min >= self.sigma_max:
             raise ValueError("sigma_min must be smaller than sigma_max")
         sigma_data = (
@@ -285,3 +305,17 @@ class MainConfig:
     model: ModelConfig
     training: TrainingConfig
     sampler: SamplerConfig
+
+    @model_validator(mode="after")
+    def _check_preconditioner(self):
+        # The EDM preconditioner scales the network output into the clean state
+        if (
+            self.training.loss.type != "regression"
+            and self.model.preconditioner == "edm"
+            and self.training.loss.prediction_type != "x0"
+        ):
+            raise ValueError(
+                "model.preconditioner 'edm' predicts x0; set training.loss.prediction_type "
+                "to 'x0' or use model.preconditioner 'time_scaled'"
+            )
+        return self

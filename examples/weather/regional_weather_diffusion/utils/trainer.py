@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trainer class for StormCast/StormScope training."""
+"""Trainer class for Regional Weather Diffusion training."""
 
 import os
 import time
@@ -29,12 +29,20 @@ from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, load_model_weights, save_checkpoint
 
-from physicsnemo.diffusion.metrics.losses import WeightedMSEDSMLoss
-from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler, NoiseScheduler
+from physicsnemo.diffusion.metrics.losses import (
+    WeightedFlowMatchingLoss,
+    WeightedMSEDSMLoss,
+)
+from physicsnemo.diffusion.noise_schedulers import (
+    EDMNoiseScheduler,
+    NoiseScheduler,
+    RectifiedFlowNoiseScheduler,
+)
 
 from utils.loss import (
     RegressionLoss,
     SigmaBinTracker,
+    build_diffusion_loss,
     build_noise_scheduler,
 )
 
@@ -56,7 +64,7 @@ from datasets import dataset_classes
 
 class Trainer:
     r"""
-    StormCast Trainer class.
+    Regional Weather Diffusion Trainer class.
 
     Encapsulates all training logic including model and optimizer setup,
     training and validation loops, checkpointing, logging, and validation plotting.
@@ -227,6 +235,9 @@ class Trainer:
         # Model type
         self.loss_type = cfg.training.loss.type
         self.net_name = "regression" if self.loss_type == "regression" else "diffusion"
+        # Noise schedule family and the quantity the network predicts
+        self.formulation = "flow" if self.loss_type == "flow_matching" else "edm"
+        self.prediction_type = cfg.training.loss.prediction_type
 
         # Invalid-region masking for the DiT NATTEN backend. When enabled, the
         # per-sample mask from the dataloader is passed to the model's forward
@@ -500,6 +511,8 @@ class Trainer:
                 lead_time_steps=self.lead_time_steps,
                 amp_mode=self.enable_amp,
                 use_apex_gn=self.use_apex_gn,
+                preconditioner=model_cfg.preconditioner,
+                time_scale=model_cfg.time_scale,
                 **model_cfg.hyperparameters,
             )
         elif model_cfg.architecture == "dit":
@@ -509,11 +522,14 @@ class Trainer:
                 conditional_channels=num_condition_channels,
                 scalar_condition_channels=len(self.scalar_cond_channels),
                 lead_time_steps=self.lead_time_steps,
+                preconditioner=model_cfg.preconditioner,
+                time_scale=model_cfg.time_scale,
                 **model_cfg.hyperparameters,
             )
             # Capture patch_size directly from the DiT before FSDP wrapping
-            # changes the module hierarchy. EDMPreconditioner.model is the
-            # ConcatConditionWrapper; .model of that is the DiT.
+            # changes the module hierarchy. EDMPreconditioner.model (or
+            # TimeScaledModel.model) is the ConcatConditionWrapper; .model of
+            # that is the DiT.
             self._dit_patch_size = net.model.model.patch_size
         else:
             raise ValueError("model.architecture must be 'unet' or 'dit'")
@@ -654,7 +670,9 @@ class Trainer:
     # Loss and Optimizer Setup
     # =========================================================================
 
-    def _setup_loss(self) -> WeightedMSEDSMLoss | RegressionLoss:
+    def _setup_loss(
+        self,
+    ) -> WeightedMSEDSMLoss | WeightedFlowMatchingLoss | RegressionLoss:
         r"""
         Create the loss function.
 
@@ -662,7 +680,12 @@ class Trainer:
         For diffusion models, creates a
         :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
         with an
-        :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`.
+        :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`
+        (``training.loss.type: edm``), or a
+        :class:`~physicsnemo.diffusion.metrics.losses.WeightedFlowMatchingLoss`
+        with a
+        :class:`~physicsnemo.diffusion.noise_schedulers.RectifiedFlowNoiseScheduler`
+        (``training.loss.type: flow_matching``).
         When domain parallelism is active the scheduler is wrapped via
         :meth:`~utils.parallel.ParallelHelper.make_domain_parallel_scheduler`
         so that sampled sigmas are broadcast across spatial shards.
@@ -676,7 +699,7 @@ class Trainer:
 
         Returns
         -------
-        WeightedMSEDSMLoss | RegressionLoss
+        WeightedMSEDSMLoss | WeightedFlowMatchingLoss | RegressionLoss
             The loss function (possibly ``torch.compile``-wrapped).
         """
         self.logger.info("Setting up loss function...")
@@ -698,9 +721,13 @@ class Trainer:
             return loss_fn
 
         loss_params = self.cfg.training.loss
-        self.logger.info(
-            f"Using modern diffusion loss: {loss_params.sigma_distribution}"
-        )
+        if self.loss_type == "flow_matching":
+            self.logger.info(
+                f"Using flow matching loss with {loss_params.prediction_type} "
+                f"prediction and t in [{loss_params.t_min}, {loss_params.t_max}]"
+            )
+        else:
+            self.logger.info(f"Using diffusion loss: {loss_params.sigma_distribution}")
 
         noise_scheduler = build_noise_scheduler(
             loss_params,
@@ -709,15 +736,19 @@ class Trainer:
         noise_scheduler = self.parallel_helper.make_domain_parallel_scheduler(
             noise_scheduler,
         )
-        loss_fn = WeightedMSEDSMLoss(self.net, noise_scheduler, reduction="none")
-        self.train_noise_scheduler = loss_fn.noise_scheduler
+        loss_fn = build_diffusion_loss(self.net, noise_scheduler, loss_params)
+        self.train_noise_scheduler = noise_scheduler
 
         sa = self.cfg.sampler.args.__dict__
-        sampling_scheduler = EDMNoiseScheduler(
-            sigma_min=sa.get("sigma_min", 0.002),
-            sigma_max=sa.get("sigma_max", 80.0),
-            rho=sa.get("rho", 7.0),
-        )
+        if self.loss_type == "flow_matching":
+            # Sampling starts at the highest training time, pure noise for t_max = 1
+            sampling_scheduler = RectifiedFlowNoiseScheduler(t_max=loss_params.t_max)
+        else:
+            sampling_scheduler = EDMNoiseScheduler(
+                sigma_min=sa.get("sigma_min", 0.002),
+                sigma_max=sa.get("sigma_max", 80.0),
+                rho=sa.get("rho", 7.0),
+            )
         self.sampling_scheduler = self.parallel_helper.make_domain_parallel_scheduler(
             sampling_scheduler
         )
@@ -1089,6 +1120,8 @@ class Trainer:
                 sampler_args=self.cfg.sampler.args.__dict__,
                 lead_time_label=lead_time_label,
                 invalid_mask=invalid_mask if self.use_nan_mask_tokens else None,
+                formulation=self.formulation,
+                prediction_type=self.prediction_type,
             )
             if "regression" in self.condition_list:
                 outputs += reg_out

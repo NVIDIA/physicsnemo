@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Defaults
+
+# CorrDiff-ERA5-HRRR: kilometer-scale downscaling of ERA5 to the 3 km HRRR grid
+# over the contiguous US with x-prediction rectified flow matching:
+#   - noisy states x_t = (1 - t) x0 + t eps with t drawn uniformly from [0, 1]
+#   - the DiT predicts the clean HRRR state x0, the loss is ||x0_hat - x0||^2
+#   - trained on random 256 x 256 patches of the 1024 x 1792 HRRR domain
+
+defaults:
+
+  # Dataset
+  - dataset/corrdiff_era5_hrrr
+
+  # Model
+  - model/corrdiff_era5_hrrr
+
+  # Training
+  - training/default
+
+  # Sampler
+  - sampler/rectified_flow
+
+  # Hydra
+  - hydra/default
+
+  - _self_
+
+training:
+  experiment_name: 'corrdiff-era5-hrrr'
+  num_data_workers: 8
+
+  checkpoint_freq: 7812 # How often to save the checkpoints (8 GB each), measured in number of training steps (7812 steps = 0.5M samples)
+  validation_freq: 1562 # How often to record the validation loss, measured in number of training steps (1562 steps = 100k samples)
+  validation_steps: 8
+  validation_plot_variables: ["u10m", "v10m", "t2m", "refc"]
+  validation_plot_background_channels: ["u10m", "t2m"]
+
+  batch_size: 64
+  batch_size_per_gpu: 2 # 2 samples per GPU use about 68 GB; gradients are accumulated on fewer than 32 GPUs
+  total_train_steps: 781250 # 781250 steps with batch size 64 = 50M samples
+  clip_grad_norm: 1.0
+
+  perf:
+    fp_optimizations: amp-bf16
+
+  optimizer:
+    name: "adamw"
+    lr: 1.0E-4
+    betas: [0.9, 0.99]
+    weight_decay: 0.0
+
+  scheduler:
+    name: "CosineAnnealingLR" # cosine decay to zero at total_train_steps after the warmup
+    lr_rampup_steps: 1000
+
+  loss:
+    type: 'flow_matching'
+    prediction_type: 'x0' # the network predicts the clean state (x-prediction)
+    t_min: 0.0 # Lowest time (clean data)
+    t_max: 1.0 # Highest time (pure noise), where the sampling starts
