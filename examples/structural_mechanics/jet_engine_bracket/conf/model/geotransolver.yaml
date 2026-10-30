@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GeoTransolver on every mesh node. Inputs (datapipe.py): node coordinates in units of 100 mm and
+# the one-hot of the node region (7 channels), the geometry context (every node voxel-downsampled
+# at 2 mm), and the one-hot of the load case as the global context. Outputs: displacement (3) and
+# von Mises stress (1), normalized per load case. Local features pool the geometry context within
+# 5 mm and 20 mm of every node.
+_target_: physicsnemo.models.geotransolver.GeoTransolver
+functional_dim: 7
+out_dim: 4
+geometry_dim: 3
+global_dim: 4
+n_layers: 8
+n_hidden: 192
+n_head: 6
+mlp_ratio: 2
+slice_num: 256
+include_local_features: true
+radii: [0.05, 0.2]
+neighbors_in_radius: [8, 32]
+n_hidden_local: 48
+activation_checkpointing: true

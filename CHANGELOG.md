@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds the jet engine bracket example
+  (`examples/structural_mechanics/jet_engine_bracket`): `GeoTransolverSDF` trained
+  on every mesh node of DeepJEB, with the stock GeoTransolver for comparison, and
+  LoRA transfer to the human-designed SimJEB brackets with
+  `physicsnemo.experimental.peft`.
 - Adds an experimental `GeoTransolverSDF` model
   (`physicsnemo.experimental.models.geotransolver_sdf`): GeoTransolver with
   radius-pooled node features and a signed-distance stencil at every mesh node, and
