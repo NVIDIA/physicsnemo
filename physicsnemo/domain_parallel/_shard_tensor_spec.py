@@ -34,6 +34,21 @@ from torch.distributed.tensor.placement_types import (
 from physicsnemo.distributed.utils import compute_split_shapes
 
 
+def _is_symbolic(spec: "ShardTensorSpec") -> bool:
+    r"""Whether the spec's global shape or stride holds a SymInt."""
+    meta = spec.tensor_meta
+    return meta is not None and any(
+        type(d) is not int for d in (*meta.shape, *meta.stride)
+    )
+
+
+def _same_dims(a, b) -> bool:
+    r"""Equal dims without SymInt arithmetic: ints by value, SymInts by identity."""
+    return len(a) == len(b) and all(
+        x is y or (type(x) is int and type(y) is int and x == y) for x, y in zip(a, b)
+    )
+
+
 @dataclass(kw_only=True)
 class ShardTensorSpec(DTensorSpec):
     r"""A distributed tensor specification that tracks sharding information.
@@ -222,6 +237,34 @@ class ShardTensorSpec(DTensorSpec):
         """
         if not isinstance(other, ShardTensorSpec):
             return False
+        if _is_symbolic(self) or _is_symbolic(other):
+            # Symbolic shapes hash by (mesh, placements) only, so collisions
+            # with specs from other traces reach here: never compare SymInts
+            # (that records guards or fails across traces). Same objects or
+            # equal ints only; anything else is a cache miss, not an error.
+            if self is other:
+                return True
+            a, b = self.tensor_meta, other.tensor_meta
+            if (
+                self.mesh != other.mesh
+                or self.placements != other.placements
+                or (a is None) != (b is None)
+            ):
+                return False
+            if a is not None and not (
+                a.dtype == b.dtype
+                and _same_dims(a.shape, b.shape)
+                and _same_dims(a.stride, b.stride)
+            ):
+                return False
+            sa, sb = self._sharding_shapes, other._sharding_shapes
+            if sa is None or sb is None:
+                return sa is sb
+            return sa.keys() == sb.keys() and all(
+                len(sa[k]) == len(sb[k])
+                and all(_same_dims(x, y) for x, y in zip(sa[k], sb[k]))
+                for k in sa
+            )
         if not super().__eq__(other):
             return False
         if self._sharding_shapes != other._sharding_shapes:
