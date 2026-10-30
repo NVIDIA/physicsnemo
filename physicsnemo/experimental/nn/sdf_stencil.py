@@ -159,6 +159,22 @@ class SignedDistanceStencil(Module):
         vertices: Float[torch.Tensor, "batch vertices 3"],
         faces: Int[torch.Tensor, "batch faces 3"],
     ) -> Float[torch.Tensor, "batch points out_features"]:
+        r"""Encode the signed distances of the stencil probes around every point.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Query points of shape :math:`(B, N, 3)`.
+        vertices : torch.Tensor
+            Surface vertices of shape :math:`(B, V, 3)`.
+        faces : torch.Tensor
+            Surface triangles of shape :math:`(B, F, 3)`, facing outward.
+
+        Returns
+        -------
+        torch.Tensor
+            Features of shape :math:`(B, N, \text{out_features})`.
+        """
         if not torch.compiler.is_compiling():
             if points.ndim != 3 or points.shape[-1] != 3:
                 raise ValueError(f"Expected points of shape (B, N, 3), got {tuple(points.shape)}")

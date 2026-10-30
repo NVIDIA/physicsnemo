@@ -198,6 +198,20 @@ class RadiusPooledFeatures(Module):
         candidates: Float[torch.Tensor, "batch candidates 3"],
         queries: Float[torch.Tensor, "batch queries 3"],
     ) -> tuple[Float[torch.Tensor, "batch queries hidden"], ...]:
+        r"""Draw the neighbours of every query and pool their features (:meth:`neighbours`, then :meth:`pool`).
+
+        Parameters
+        ----------
+        candidates : torch.Tensor
+            Candidate points of shape :math:`(B, P, 3)`.
+        queries : torch.Tensor
+            Query points of shape :math:`(B, N, 3)`.
+
+        Returns
+        -------
+        tuple[torch.Tensor, ...]
+            One feature tensor of shape :math:`(B, N, \text{hidden})` per radius.
+        """
         if not torch.compiler.is_compiling():
             if candidates.ndim != 3 or candidates.shape[-1] != 3:
                 raise ValueError(f"Expected candidates of shape (B, P, 3), got {tuple(candidates.shape)}")

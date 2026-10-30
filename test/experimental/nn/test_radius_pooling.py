@@ -114,6 +114,19 @@ def test_eval_is_deterministic_and_train_draws(device):
     assert not all(torch.equal(draws[0], d) for d in draws[1:])
 
 
+def test_forward_is_pool_of_the_drawn_neighbours(device):
+    layer = _layer().to(device).eval()
+    candidates, queries = (
+        torch.rand(1, 300, 3, device=device),
+        torch.rand(1, 9, 3, device=device),
+    )
+    for a, b in zip(
+        layer(candidates, queries),
+        layer.pool(layer.neighbours(candidates, queries), queries),
+    ):
+        torch.testing.assert_close(a, b)
+
+
 def test_forward_rejects_shapes():
     layer = _layer()
     with pytest.raises(ValueError):
