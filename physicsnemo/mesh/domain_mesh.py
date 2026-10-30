@@ -137,6 +137,11 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     Move everything to GPU:
 
     >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
+
+    References
+    ----------
+    - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI
+      <https://arxiv.org/abs/2610.39072>`__
     """
 
     interior: Mesh

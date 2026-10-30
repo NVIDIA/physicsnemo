@@ -459,6 +459,11 @@ class Mesh(
 
     Prefer using properties (``mesh.cell_centroids``, ``mesh.point_normals``)
     over direct ``_cache`` access.
+
+    References
+    ----------
+    - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI
+      <https://arxiv.org/abs/2610.39072>`__
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
