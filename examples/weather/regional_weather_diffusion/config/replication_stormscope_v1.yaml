@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Configuration for replicating the training of the StormScope GOES satellite
+# nowcasting model (6 km / 10 min) of the StormScope paper
+# (https://arxiv.org/abs/2601.17268): absolute positional embedding and no qk_norm.
+# For new projects, reference_stormscope.yaml is recommended.
+
+
+# Defaults
+defaults:
+
+  # Dataset
+  - dataset/xarray  # replace with your own if using a custom dataset
+
+  # Model
+  - model/replication_stormscope_absposemb
+
+  # Training
+  - training/default
+
+  # Sampler
+  - sampler/edm_deterministic
+
+  # Hydra
+  - hydra/default
+
+  - _self_
+
+dataset: # remove if using custom dataset; data on the 6 km (512 x 896) grid, i.e. the HRRR grid downsampled by 2
+  time_range_train: ["2018-01-01T00:00:00", "2024-01-01T00:00:00"]
+  time_range_valid: ["2024-01-01T00:00:00", "2025-01-01T00:00:00"]
+  state_access_patterns: # the "state" (training target)
+    radiance:
+      channels: [abi01c, abi02c, abi03c, abi07c, abi08c, abi09c, abi10c, abi13c] # GOES-ABI
+      time_steps: [1]
+  background_access_patterns: # the "background" (conditioning)
+    radiance: {channels: "${dataset.state_access_patterns.radiance.channels}", time_steps: [-5, -4, -3, -2, -1, 0]}
+    solar_angles: {channels: [cos_zenith], time_steps: [0, 1]} # computed from lat_lon_variables
+  invariants_path: data/invariants.zarr # replace with your invariants file
+  invariant_variables: [lat, lon] # the paper model uses latitude and longitude as its only invariants
+  lat_lon_variables: [lat, lon] # replace with the latitude and longitude names in your invariants file
+  mask_variable: mask
+  time_step_seconds: 600 # 10 min
+
+training:
+  batch_size: 32  # high-resolution GOES variants use batch_size: 16
+
+  loss:
+    type: 'edm'
+    sigma_distribution: loguniform
+    # The paper trains a low-sigma and a high-sigma expert separately; the sigma
+    # ranges below are those of the released 6 km GOES nearcasting model
+
+    # For low-sigma expert:
+    # sigma_min: 0.001
+    # sigma_max: 2.0
+
+    # For high-sigma expert:
+    sigma_min: 2.0
+    sigma_max: 500.0
+
+  total_train_steps: 450000 # set according to your needs
+  checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
+  validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+  validation_plot_variables: [abi02c_t+1, abi08c_t+1, abi13c_t+1]
+
+  optimizer:
+    name: "adamw" # the paper uses StableAdamW, which is not available in PyTorch
+    lr: 5e-4
+    betas: [0.9, 0.99]
+
+  scheduler:
+    name: "CosineAnnealingLR"
+
+  clip_grad_norm: 1.0
+
+  perf:
+    fp_optimizations: fp32
+    torch_compile: true
+
+sampler:
+  args:
+    num_steps: 100
+    S_churn: 10
+    # sample over the same noise range as used in training
+    sigma_min: ${training.loss.sigma_min}
+    sigma_max: ${training.loss.sigma_max}

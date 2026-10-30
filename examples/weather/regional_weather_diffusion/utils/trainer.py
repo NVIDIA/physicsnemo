@@ -1011,7 +1011,7 @@ class Trainer:
                         target, weight, condition=condition, **loss_kwargs
                     )
 
-                    if v_i == 0:
+                    if v_i == 0 and self.cfg.training.validation_plot_variables:
                         # plot_target holds the raw (pre-residual) target so
                         # validation plots show physical truth, matching
                         # _get_plot_outputs adding the regression estimate

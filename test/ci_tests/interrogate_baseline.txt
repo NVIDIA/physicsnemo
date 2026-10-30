@@ -515,15 +515,10 @@ examples/weather/regional_weather_diffusion/datasets/dataset.py:StormCastDataset
 examples/weather/regional_weather_diffusion/datasets/dataset.py:StormCastDataset.longitude
 examples/weather/regional_weather_diffusion/datasets/dataset.py:worker_init
 examples/weather/regional_weather_diffusion/datasets/mock.py:MockDataset
-examples/weather/regional_weather_diffusion/inference.py:main
 examples/weather/regional_weather_diffusion/test_training.py:cfg_diffusion
 examples/weather/regional_weather_diffusion/test_training.py:cfg_diffusion_unet
 examples/weather/regional_weather_diffusion/test_training.py:cfg_regression
-examples/weather/regional_weather_diffusion/utils/io.py:init_inference_results_zarr
-examples/weather/regional_weather_diffusion/utils/io.py:save_inference_results_netcdf
-examples/weather/regional_weather_diffusion/utils/io.py:write_inference_results_zarr
 examples/weather/regional_weather_diffusion/utils/loss.py:EDMLoss.replicate_in_mesh
-examples/weather/regional_weather_diffusion/utils/plots.py:inference_plot
 examples/weather/regional_weather_diffusion/utils/spectrum.py:ps1d_plots
 examples/weather/unified_recipe/curate_era5.py:main
 examples/weather/unified_recipe/download_era5.py:main

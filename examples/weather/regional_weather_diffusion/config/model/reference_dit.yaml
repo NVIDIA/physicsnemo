@@ -15,21 +15,22 @@
 # limitations under the License.
 
 
-# Model name
-model_name: 'diffusion' # 'regression', 'diffusion', or custom model added by user
+# Reference model config for diffusion transformer (DiT). Recommended as the starting
+# configuration for new model projects.
 
-architecture: dit
 
 # Model conditions
-regression_conditions: []
-diffusion_conditions: ["background", "invariant"] # list consisting of "regression", "background", "invariant".
-                                                   # The dataset's "background" tensor includes any past-state history.
+diffusion_conditions: ["background", "invariant"] # list consisting of "regression", "background", "invariant"
 
-# Model hyperparameters (defaults follow Stormscope)
+# Model hyperparameters
+architecture: "dit"
 hyperparameters:
   depth: 16
   hidden_size: 768
   attn_kernel_size: 31
-  num_heads: 16
+  num_heads: 6  # for optimal performance, use hidden_size // num_heads == 128 (or 64)
   patch_size: 4
-  use_nan_mask_tokens: false  # replace invalid-region tokens with a learned mask token (requires a per-sample dataloader "mask")
+  attention_backend: "natten2d_rope"  # use "natten2d" instead for absolute positional embeddings
+  use_nan_mask_tokens: true  # can set to false if you don't need masking
+  attn_kwargs:
+    qk_norm: true  # needed to stabilize 16-bit training
