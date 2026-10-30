@@ -48,6 +48,7 @@ dataset: # remove if using custom dataset
     era5: {channels: null, time_steps: [0]}
 
 training:
+  batch_size: 64 # can be smaller for large grids
   loss:
     type: 'edm'
   total_train_steps: 450000 # set according to your needs

@@ -844,7 +844,7 @@ def test_model_types(
 def test_two_element_state_rejected():
     """The two-element `state: [input, target]` convention has been removed;
     a dataset that still returns it must fail loudly rather than silently
-    mis-train (see the 'Adding custom datasets' section of the README)."""
+    mis-train (see datasets/CUSTOM_DATASET.md)."""
     from utils.nn import unpack_batch
 
     batch = {"state": [torch.zeros(1, 3, 4, 4), torch.zeros(1, 3, 4, 4)]}

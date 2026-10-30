@@ -55,6 +55,7 @@ dataset: # variable naming follows Earth2Studio wrapper: https://github.com/NVID
   invariant_variables: ["elev_mean", "elev_std", "lsm_mean"]
 
 training:
+  batch_size: 16
   loss:
     type: 'edm'
   total_train_steps: 450000 # set according to your needs

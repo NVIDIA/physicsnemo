@@ -200,7 +200,7 @@ class TrainingConfig:
     scheduler: SchedulerConfig = Field(default=SchedulerConfig())
 
     validation_steps: int = Field(
-        default=1, ge=0
+        default=16, ge=0
     )  # Number of batches to evaluate during validation
     validation_plot_variables: list[str] = Field(
         default=[]

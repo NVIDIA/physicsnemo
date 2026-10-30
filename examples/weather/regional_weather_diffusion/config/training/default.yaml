@@ -84,7 +84,7 @@ scheduler:
   lr_rampup_steps: 1000 # Number of training steps over which to perform linear LR warmup
 
 # Validation options
-validation_steps: 1 # Number of batches to evaluate during validation
+validation_steps: 16 # Number of batches to evaluate during validation
 validation_plot_variables: [] # State channels to plot during validation; empty to disable plotting
 validation_plot_background_channels: [] # Background channels to show in validation plots (list of names or indices)
 
@@ -95,7 +95,7 @@ channel_loss_weights: null
 
 # Loss options
 loss:
-  type: 'regression' # Loss type; use 'regression' or 'edm' for the regression and diffusion, respectively
+  type: 'edm' # Loss type; use 'regression' or 'edm' for the regression and diffusion, respectively
   # sigma_distribution: "lognormal" # EDM noise sampling distribution, "lognormal" or "loguniform"
   # sigma_data: 0.5 # Standard deviation of the data (set to match your normalized data's std)
   # # Lognormal distribution parameters (used when sigma_distribution: "lognormal")

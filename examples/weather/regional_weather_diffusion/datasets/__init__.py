@@ -33,7 +33,7 @@ from .xarray import XarrayDataset
 # module under this package -- including a custom dataset a user drops in --
 # and list them by "<module>.<ClassName>", matching the `dataset.name` config
 # field. This is how a custom dataset is picked up with no registration step
-# beyond adding the file; see the README's "Adding Custom Datasets" section.
+# beyond adding the file; see datasets/CUSTOM_DATASET.md.
 dataset_modules = pkgutil.iter_modules(__path__)
 dataset_modules = [mod.name for mod in dataset_modules if mod.name != "dataset"]
 dataset_classes: dict[str, type[StormCastDataSource]] = {}

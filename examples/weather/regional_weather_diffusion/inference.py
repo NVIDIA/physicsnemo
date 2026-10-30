@@ -14,208 +14,174 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Single-step diagnostic inference.
+"""Generate samples from a trained diffusion model for any dataset.
 
-Evaluates a trained regression/diffusion pair against ``n_steps`` independent
-samples from the dataset's own ``background`` (which, per the data-source
-contract, already carries any past-state input the model needs -- see
-``datasets/dataset.py``). This script does not perform autoregressive
-rollout: each step is scored against its own dataset sample rather than fed
-forward as input to the next step. For autoregressive rollout or more
-elaborate inference workflows, bring your checkpoints to
-[Earth2Studio](https://github.com/NVIDIA/earth2studio); see the README's
-"Running inference" section.
+Uses the training config to build the validation dataset and the model
+conditions, generates an ensemble of samples for each requested dataset index,
+and saves the denormalized predictions and targets to a Zarr store, optionally
+with plots. The inference options are in ``config/inference/default.yaml``.
+Example::
+
+    python inference.py --config-name reference_downscaling +inference=default \\
+        inference.diffusion_checkpoint=<ckpt_dir>/EDMPreconditioner.0.<step>.mdlus \\
+        inference.indices=[0,10,20] inference.ensemble_size=4
+
+Other config overrides, e.g. ``sampler.args.num_steps=32``, can be added as usual.
 """
 
-import matplotlib.pyplot as plt
-import torch
-from datetime import datetime
-import pandas as pd
-import hydra
-from physicsnemo.distributed import DistributedManager
-from omegaconf import DictConfig
-from physicsnemo.core import Module
+import os
 
+import hydra
+import numpy as np
+import torch
+import xarray as xr
+from matplotlib import pyplot as plt
+from omegaconf import DictConfig, OmegaConf
+from physicsnemo.core import Module
 from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
 
 from datasets import dataset_classes
-from utils.io import (
-    init_inference_results_zarr,
-    write_inference_results_zarr,
-    save_inference_results_netcdf,
+from utils.config import MainConfig
+from utils.nn import (
+    build_network_condition_and_target,
+    diffusion_model_forward,
+    unpack_batch,
 )
-from utils.nn import build_network_condition_and_target, diffusion_model_forward
 from utils.plots import inference_plot
 
 
-@hydra.main(version_base=None, config_path="config", config_name="stormcast_inference")
-def main(cfg: DictConfig):
-    # Initialize
-    DistributedManager.initialize()
-    dist = DistributedManager()
-    device = dist.device
+@hydra.main(version_base=None, config_path="config", config_name=None)
+def main(cfg: DictConfig) -> None:
+    """Generate and save samples as configured by ``cfg``; see the module docstring."""
+    if "inference" not in cfg:
+        raise ValueError(
+            "Add the inference options with +inference=default, see "
+            "config/inference/default.yaml"
+        )
+    inf_cfg = cfg.inference
+    cfg = OmegaConf.to_container(cfg, resolve=True)
+    del cfg["inference"]
+    cfg = MainConfig(**cfg)
 
-    initial_time = datetime.fromisoformat(cfg.inference.initial_time)
-    n_steps = cfg.inference.n_steps
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(inf_cfg.seed)
 
-    # Dataset prep
-    dataset_cls = dataset_classes[cfg.dataset.name]
-    dataset = dataset_cls(cfg.dataset, train=False)
-
-    background_channels = dataset.background_channels()
+    # Dataset, built as in training
+    dataset_kwargs = cfg.dataset.__dict__.copy()
+    dataset_cls = dataset_classes[dataset_kwargs.pop("name")]
+    dataset_kwargs.pop("loader", None)
+    dataset = dataset_cls(dataset_kwargs, train=False)
+    invariants = dataset.get_invariants()
+    if invariants is not None:
+        invariants = torch.as_tensor(invariants, device=device)[None]
     state_channels = dataset.state_channels()
-    lead_time_steps = dataset.lead_time_steps
+    unknown_vars = set(inf_cfg.plot_variables) - set(state_channels)
+    if unknown_vars:
+        raise ValueError(f"Unknown plot_variables {unknown_vars}: not state channels")
 
-    invariant_array = dataset.get_invariants()
-    invariant_tensor = (
-        None
-        if invariant_array is None
-        else torch.from_numpy(invariant_array).to(device).repeat(1, 1, 1, 1)
-    )
-
-    if len(cfg.inference.output_state_channels) == 0:
-        output_state_channels = state_channels.copy()
-    else:
-        output_state_channels = cfg.inference.output_state_channels
-
-    vardict_state: dict[str, int] = {
-        state_channel: i for i, state_channel in enumerate(state_channels)
-    }
-
-    vardict_background = {
-        background_channel: i
-        for i, background_channel in enumerate(background_channels)
-    }
-
-    hours_since_jan_01 = int(
-        (initial_time - datetime(initial_time.year, 1, 1, 0, 0)).total_seconds() / 3600
-    )
-
-    # Load pretrained models
+    # Models
+    net = Module.from_checkpoint(inf_cfg.diffusion_checkpoint).eval().to(device)
+    regression_net = None
     if "regression" in cfg.model.diffusion_conditions:
-        net = Module.from_checkpoint(cfg.inference.regression_checkpoint)
-        regression_model = net.to(device)
-    else:
-        regression_model = None
-    net = Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
-    diffusion_model = net.to(device)
-
-    sa = dict(cfg.sampler.args)
-    sampling_scheduler = EDMNoiseScheduler(
-        sigma_min=sa.get("sigma_min", 0.002),
-        sigma_max=sa.get("sigma_max", 80.0),
-        rho=sa.get("rho", 7.0),
+        regression_path = inf_cfg.regression_checkpoint or cfg.model.regression_weights
+        regression_net = Module.from_checkpoint(regression_path).eval().to(device)
+    elif inf_cfg.save_regression:
+        raise ValueError("save_regression requires a regression+diffusion model")
+    use_mask_tokens = cfg.model.architecture == "dit" and bool(
+        cfg.model.hyperparameters.get("use_nan_mask_tokens", False)
     )
 
-    # initialize zarr
-    (
-        group,
-        target_group,
-        edm_prediction_group,
-        noedm_prediction_group,
-    ) = init_inference_results_zarr(
-        dataset, cfg.inference.rundir, output_state_channels, n_steps
+    sampler_args = cfg.sampler.args.__dict__
+    scheduler = EDMNoiseScheduler(
+        sigma_min=sampler_args.get("sigma_min", 0.002),
+        sigma_max=sampler_args.get("sigma_max", 80.0),
+        rho=sampler_args.get("rho", 7.0),
+    )
+    amp_dtype = {"amp-bf16": torch.bfloat16, "amp-fp16": torch.float16}.get(
+        cfg.training.perf.fp_optimizations
     )
 
+    os.makedirs(inf_cfg.output_dir, exist_ok=True)
+    predictions = []
+    targets = []
+    regressions = []
     with torch.no_grad():
-        for i in range(n_steps):
-            data = dataset[i + hours_since_jan_01]
-
-            background = data["background"].to(device=device, dtype=torch.float32)
-            background = background.unsqueeze(0)
-            target = data["state"].to(device=device, dtype=torch.float32)
-            target = target.unsqueeze(0)
-
-            lead_time_label = data.get("lead_time_label")
-            if lead_time_label is not None:
-                lead_time_label = lead_time_label.to(device=device, dtype=torch.int64)
-                lead_time_label = lead_time_label.unsqueeze(0)
-
-            # build diffusion condition and inference regression model
-            (condition, _, reg_out) = build_network_condition_and_target(
-                background,
-                target,
-                invariant_tensor,
-                lead_time_label=lead_time_label,
-                regression_net=regression_model,
-                condition_list=cfg.model.diffusion_conditions,
-                regression_condition_list=cfg.model.regression_conditions,
+        for idx in inf_cfg.indices:
+            print(f"Generating {inf_cfg.ensemble_size} sample(s) for index {idx}...")
+            batch = torch.utils.data.default_collate([dataset[idx]])
+            (background, target, mask, lead_time_label, scalar_conditions) = (
+                unpack_batch(batch, device)
             )
+            invalid_mask = None
+            if use_mask_tokens and mask is not None:
+                invalid_mask = (mask < 0.5).any(dim=1, keepdim=True)
 
-            # regression-only estimate (the diffusion model's condition), or
-            # zero if no regression model is used
-            state_pred_noedm = (
-                reg_out.clone() if reg_out is not None else torch.zeros_like(target)
-            )
+            with torch.autocast(
+                device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+            ):
+                (condition, _, reg_out) = build_network_condition_and_target(
+                    background,
+                    target,
+                    invariants,
+                    lead_time_label=lead_time_label,
+                    scalar_conditions=scalar_conditions,
+                    regression_net=regression_net,
+                    condition_list=cfg.model.diffusion_conditions,
+                    regression_condition_list=cfg.model.regression_conditions,
+                )
+                ensemble = []
+                for _ in range(inf_cfg.ensemble_size):
+                    pred = diffusion_model_forward(
+                        net,
+                        condition,
+                        shape=target.shape,
+                        scheduler=scheduler,
+                        dtype=target.dtype,
+                        device=device,
+                        sampler_args=sampler_args,
+                        lead_time_label=lead_time_label,
+                        invalid_mask=invalid_mask,
+                    ).float()
+                    if reg_out is not None:
+                        pred += reg_out.float()
+                    ensemble.append(dataset.denormalize_state(pred.cpu().numpy())[0])
 
-            # inference diffusion model: it predicts a residual around
-            # `state_pred_noedm` (see build_network_condition_and_target)
-            edm_corrected_outputs = diffusion_model_forward(
-                diffusion_model,
-                condition,
-                target.shape,
-                scheduler=sampling_scheduler,
-                sampler_args=sa,
-                lead_time_label=lead_time_label,
-            )
-            state_pred_edm = state_pred_noedm + edm_corrected_outputs.float()
+            predictions.append(np.stack(ensemble))
+            targets.append(dataset.denormalize_state(target.cpu().numpy())[0])
+            if inf_cfg.save_regression:
+                regressions.append(
+                    dataset.denormalize_state(reg_out.float().cpu().numpy())[0]
+                )
 
-            assert (
-                state_pred_edm.shape == (1, len(state_channels)) + dataset.image_shape()
-            )
-            assert (
-                state_pred_noedm.shape
-                == (1, len(state_channels)) + dataset.image_shape()
-            )
-            # write zarr
-            write_inference_results_zarr(
-                dataset.denormalize_state(state_pred_edm.cpu().numpy())[0],
-                dataset.denormalize_state(state_pred_noedm.cpu().numpy())[0],
-                dataset.denormalize_state(target.cpu().numpy())[0],
-                edm_prediction_group,
-                noedm_prediction_group,
-                target_group,
-                output_state_channels,
-                vardict_state,
-                i,
-            )
+            for var in inf_cfg.plot_variables:
+                c = state_channels.index(var)
+                fig = inference_plot(
+                    predictions[-1][0, c], targets[-1][c], f"{var}, index {idx}"
+                )
+                fig.savefig(os.path.join(inf_cfg.output_dir, f"{var}_{idx}.png"))
+                plt.close(fig)
 
-            varidx_state = vardict_state[cfg.inference.plot_var_state]
-            varidx_background = vardict_background[cfg.inference.plot_var_background]
-
-            background_arr = background.cpu().numpy()[0]
-            state_true_arr = target.cpu().numpy()[0]
-            state_pred_arr = state_pred_edm.cpu().numpy()[0]
-
-            background_arr = dataset.denormalize_background(background_arr)
-            state_true_arr = dataset.denormalize_state(state_true_arr)
-            state_pred_arr = dataset.denormalize_state(state_pred_arr)
-
-            fig = inference_plot(
-                background_arr[varidx_background],
-                state_pred_arr[varidx_state],
-                state_true_arr[varidx_state],
-                cfg.inference.plot_var_background,
-                cfg.inference.plot_var_state,
-                initial_time,
-                i,
-            )
-            fig.savefig(f"{cfg.inference.rundir}/out_{i}.png")
-            plt.close(fig)
-
-    initial_time_pd = pd.to_datetime(initial_time)
-    val_times = []
-    for i in range(n_steps):
-        val_times.append(initial_time_pd + pd.Timedelta(hours=i))
-
-    save_inference_results_netcdf(
-        ds_out_path=cfg.inference.rundir,
-        zarr_group=group,
-        vertical_vars=cfg.inference.save_vertical_vars,
-        level_names=cfg.inference.save_vertical_levels,
-        horizontal_vars=cfg.inference.save_horizontal_vars,
-        val_times=val_times,
+    # Save predictions and targets in physical units
+    dims = ("y", "x")
+    data_vars = {
+        "prediction": (
+            ("index", "ensemble", "channel", *dims),
+            np.stack(predictions),
+        ),
+        "target": (("index", "channel", *dims), np.stack(targets)),
+    }
+    if regressions:
+        data_vars["regression"] = (("index", "channel", *dims), np.stack(regressions))
+    ds = xr.Dataset(
+        data_vars,
+        coords={"index": list(inf_cfg.indices), "channel": state_channels},
     )
+    (lat, lon) = (dataset.latitude(), dataset.longitude())
+    if not (np.isnan(lat).all() or np.isnan(lon).all()):
+        ds = ds.assign_coords(lat=(dims, lat), lon=(dims, lon))
+    output_path = os.path.join(inf_cfg.output_dir, "samples.zarr")
+    ds.to_zarr(output_path, mode="w")
+    print(f"Saved samples to {output_path}")
 
 
 if __name__ == "__main__":

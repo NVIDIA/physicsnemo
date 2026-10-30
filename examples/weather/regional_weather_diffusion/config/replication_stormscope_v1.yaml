@@ -54,6 +54,7 @@ dataset: # remove if using custom dataset
   time_step_seconds: 600 # 10 min
 
 training:
+  batch_size: 16
   loss:
     type: 'edm'
   total_train_steps: 450000 # set according to your needs

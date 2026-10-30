@@ -41,6 +41,7 @@ training:
   print_progress_freq: 5 # How often to print progress, measured in number of training steps
   checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 5 # how often to record the validation loss, measured in number of training steps
+  validation_steps: 1 # Number of batches to evaluate during validation
   batch_size: 1
   total_train_steps: 10
 
