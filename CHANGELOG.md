@@ -739,6 +739,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backward through `ShardTensor.to_local()` adopts the gradient's shard order
   along with its placements, so a sharded primal with a replicated cotangent
   no longer trips a `DTensorSpec` assertion.
+- AeroJEPA (experimental) honors the `mask` of unbatched `TokenSet`s:
+  `PrototypeTokenJEPAHead` excludes masked-out context tokens (a fully masked
+  context no longer fails in the neighbor search), `pad_token_sets` carries
+  per-set masks into the packed mask and global token, and
+  `flatten_valid_token_features` applies rank-2 masks.
+- `AeroJEPA.decode_field_chunked` rejects unknown `precision` values instead
+  of silently decoding in fp32, rejects non-positive `chunk_size`, and accepts
+  `query_sdf=None` for decoders built with `use_sdf=False`.
+  `QueryTokenDecoder` rejects a non-positive `query_chunk_size`.
 
 ### Security
 

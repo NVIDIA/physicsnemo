@@ -190,6 +190,13 @@ def test_bad_final_refinement_style_raises():
         QueryTokenDecoder(token_dim=32, final_refinement_style="bogus")
 
 
+@pytest.mark.parametrize("query_chunk_size", [0, -1])
+def test_non_positive_query_chunk_size_raises(query_chunk_size):
+    """A non-positive ``query_chunk_size`` is rejected at construction."""
+    with pytest.raises(ValueError, match="query_chunk_size must be a positive"):
+        QueryTokenDecoder(token_dim=32, query_chunk_size=query_chunk_size)
+
+
 def test_missing_sdf_raises(device):
     """``use_sdf=True`` without ``query_sdf`` is rejected."""
     dec = _build().to(device).eval()

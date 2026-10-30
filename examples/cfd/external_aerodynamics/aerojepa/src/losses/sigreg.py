@@ -132,8 +132,8 @@ class TokenLatentSIGReg(nn.Module):
     Shape
     -----
     - Input ``features``: ``(N, D)`` or ``(B, N, D)``.
-    - Optional ``mask``: ``(B, N)`` boolean, required to be ``None`` for
-      rank-2 ``features``.
+    - Optional ``mask``: ``(N,)`` or ``(B, N)`` boolean, matching
+      ``features.shape[:-1]``.
     - Output: scalar tensor.
     """
 

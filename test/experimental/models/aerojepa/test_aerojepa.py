@@ -30,6 +30,7 @@ from physicsnemo.experimental.models.aerojepa import (
     PrototypeTokenJEPAHead,
     QueryTokenDecoder,
     TargetTransformer,
+    TokenSet,
 )
 
 
@@ -50,7 +51,7 @@ def _enc_kwargs() -> dict:
     )
 
 
-def _build_model() -> AeroJEPA:
+def _build_model(*, use_sdf: bool = True) -> AeroJEPA:
     trunk = AeroJEPATrunk(
         context_encoder=ContextTransformer(**_enc_kwargs()),
         target_encoder=TargetTransformer(**_enc_kwargs()),
@@ -59,7 +60,7 @@ def _build_model() -> AeroJEPA:
             hidden_dim=64,
             num_layers=2,
             out_dim=4,
-            use_sdf=True,
+            use_sdf=use_sdf,
             cond_dim=4,
             pe_num_bands=4,
             cross_attention_heads=4,
@@ -288,6 +289,90 @@ def test_decode_field_chunked_autocast_returns_cpu(device, precision):
     assert out.device.type == "cpu"
     assert out.shape == (200, 4)
     assert torch.isfinite(out).all()
+
+
+def _random_target_tokens(device) -> TokenSet:
+    return TokenSet(
+        features=torch.randn(12, 32, device=device),
+        coords=torch.randn(12, 3, device=device),
+    )
+
+
+@pytest.mark.parametrize("precision", ["bfloat16", "amp", "fp8"])
+def test_decode_field_chunked_rejects_unknown_precision(precision):
+    """An unsupported ``precision`` raises instead of silently running in fp32."""
+    model = _build_model().eval()
+    with pytest.raises(ValueError, match="precision must be one of"):
+        model.decode_field_chunked(
+            target_tokens=_random_target_tokens("cpu"),
+            cond_global=torch.randn(4),
+            query_pos=torch.randn(20, 3),
+            query_sdf=torch.randn(20, 1),
+            chunk_size=8,
+            precision=precision,
+        )
+
+
+@pytest.mark.parametrize("chunk_size", [0, -1])
+def test_decode_field_chunked_rejects_non_positive_chunk_size(chunk_size):
+    """A non-positive ``chunk_size`` is rejected with a clear message."""
+    model = _build_model().eval()
+    with pytest.raises(ValueError, match="chunk_size must be a positive"):
+        model.decode_field_chunked(
+            target_tokens=_random_target_tokens("cpu"),
+            cond_global=torch.randn(4),
+            query_pos=torch.randn(20, 3),
+            query_sdf=torch.randn(20, 1),
+            chunk_size=chunk_size,
+        )
+
+
+@pytest.mark.parametrize("precision", ["fp32", "FP32"])
+def test_decode_field_chunked_matches_decode_field(device, precision):
+    """Chunked fp32 decode matches ``decode_field``; ``precision`` ignores case."""
+    model = _build_model().to(device).eval()
+    target_tokens = _random_target_tokens(device)
+    cond_global = torch.randn(4, device=device)
+    query_pos = torch.randn(50, 3)
+    query_sdf = torch.randn(50, 1)
+    out = model.decode_field_chunked(
+        target_tokens=target_tokens,
+        cond_global=cond_global,
+        query_pos=query_pos,
+        query_sdf=query_sdf,
+        chunk_size=16,
+        precision=precision,
+    )
+    with torch.no_grad():
+        ref = model.decode_field(
+            target_tokens=target_tokens,
+            cond_global=cond_global,
+            query_pos=query_pos.to(device),
+            query_sdf=query_sdf.to(device),
+        )
+    torch.testing.assert_close(out, ref.cpu())
+
+
+def test_decode_field_chunked_without_sdf(device):
+    """``query_sdf`` may be omitted when the decoder has ``use_sdf=False``."""
+    model = _build_model(use_sdf=False).to(device).eval()
+    target_tokens = _random_target_tokens(device)
+    cond_global = torch.randn(4, device=device)
+    query_pos = torch.randn(50, 3)
+    out = model.decode_field_chunked(
+        target_tokens=target_tokens,
+        cond_global=cond_global,
+        query_pos=query_pos,
+        chunk_size=16,
+    )
+    with torch.no_grad():
+        ref = model.decode_field(
+            target_tokens=target_tokens,
+            cond_global=cond_global,
+            query_pos=query_pos.to(device),
+        )
+    assert out.device.type == "cpu"
+    torch.testing.assert_close(out, ref.cpu())
 
 
 def test_encode_geometry_and_flow_returns_dict(device):

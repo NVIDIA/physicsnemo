@@ -206,7 +206,7 @@ class AeroJEPATrunk(Module):
         *,
         context: dict,
         query_pos: torch.Tensor,
-        query_sdf: torch.Tensor,
+        query_sdf: torch.Tensor | None,
         return_mask_logits: bool = False,
     ):
         r"""Decode the field at the supplied query positions.
@@ -218,8 +218,9 @@ class AeroJEPATrunk(Module):
             ``target_tokens`` and ``cond_global``.
         query_pos : torch.Tensor
             Query positions of shape ``(Nq, 3)``.
-        query_sdf : torch.Tensor
-            Per-query SDF of shape ``(Nq, 1)``.
+        query_sdf : torch.Tensor or None
+            Per-query SDF of shape ``(Nq, 1)``. May be ``None`` when the
+            decoder was built with ``use_sdf=False``.
         return_mask_logits : bool, optional
             When ``True`` and the mask head was enabled, return
             ``(pred, mask_logits)``. Otherwise return ``pred`` only.
