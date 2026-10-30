@@ -21,7 +21,9 @@ import torch.cuda.nvtx as nvtx
 
 from physicsnemo.models.domino.utils import unnormalize
 from physicsnemo.models.domino.utils import *
-from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+from physicsnemo.mesh.neighbors import Adjacency
 
 
 def _build_csr_from_neighbors(neighbors_list, device):
@@ -51,8 +53,8 @@ def compute_physics_loss(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute physics-based loss terms for Navier-Stokes equations.
 
-    Spatial derivatives are computed using ``mesh_lsq_gradient`` from
-    ``physicsnemo.nn.functional.derivatives``.
+    Spatial derivatives are least-squares gradients on the neighbor stencil, from
+    ``physicsnemo.mesh.calculus.compute_gradient_points_lsq``.
 
     Args:
         output: Model output containing (output, coords_neighbors, output_neighbors, neighbors_list)
@@ -83,25 +85,30 @@ def compute_physics_loss(
     # Build CSR adjacency from the neighbor graph
     device = output_total_unnormalized.device
     offsets, indices = _build_csr_from_neighbors(neighbors_list, device)
+    adjacency = Adjacency(offsets=offsets, indices=indices)
     num_nodes = max(neighbors_list.keys()) + 1
 
-    # First-order gradients for all nodes using mesh_lsq_gradient
+    # First-order least-squares gradients for all nodes
     first_grads_list = []
     for b in range(batch_size):
         coords_b = coords_total_unnormalized[b].detach()
         values_b = output_total_unnormalized[b]
-        grads_b = mesh_lsq_gradient(coords_b, values_b, offsets, indices)
+        grads_b = compute_gradient_points_lsq(
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
+        )
         first_grads_list.append(grads_b)
     grad_neighbors_center = torch.stack(first_grads_list)
 
-    # Second-order gradients at center node (node 0) via mesh_lsq_gradient
+    # Second-order gradients at center node (node 0): least-squares gradients
     # on the first-order gradient results (compose first-order twice)
     grad_flat = grad_neighbors_center.reshape(batch_size, num_nodes, -1)
     second_grads_list = []
     for b in range(batch_size):
         coords_b = coords_total_unnormalized[b].detach()
         values_b = grad_flat[b]
-        sg_b = mesh_lsq_gradient(coords_b, values_b, offsets, indices)
+        sg_b = compute_gradient_points_lsq(
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
+        )
         second_grads_list.append(sg_b)
     ggrad_all = torch.stack(second_grads_list)
     ggrad_center = ggrad_all[:, 0, :, :]

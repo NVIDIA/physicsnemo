@@ -16,6 +16,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Literal
+
 import torch
 
 from physicsnemo.core.function_spec import FunctionSpec
@@ -65,7 +68,8 @@ class MeshLSQGradient(FunctionSpec):
         inverse-distance weighting. When ``None``, a dtype-derived default
         is used by each backend.
     implementation : {"warp", "torch"} or None
-        Explicit backend selection. When ``None``, dispatch selects by rank.
+        Explicit backend selection. When ``None``, dispatch selects by
+        :meth:`_default_implementation`.
 
     Returns
     -------
@@ -86,6 +90,64 @@ class MeshLSQGradient(FunctionSpec):
     _COMPARE_RTOL = 5e-3
     _COMPARE_BACKWARD_ATOL = 8e-3
     _COMPARE_BACKWARD_RTOL = 8e-3
+
+    @classmethod
+    def _default_implementation(
+        cls,
+        points: torch.Tensor,
+        values: Sequence[torch.Tensor],
+        weight_power: float = 2.0,
+    ) -> Literal["torch", "warp"]:
+        """The backend that ``implementation=None`` selects for these inputs.
+
+        Warp, which is faster, for data that is not ``float64`` on CPU or CUDA
+        in one to three dimensions, at the default ``weight_power`` of 2. Its
+        fixed regularization assumes the scale-free normal matrix that this
+        weighting gives. PyTorch otherwise, and inside ``torch.func``
+        transforms, also under ``torch.compile``, which custom operators do not
+        support.
+        """
+        warp = cls._get_impls()["warp"]
+        # Unlike the functorch interpreter stack, which Dynamo fills while it
+        # traces, this tells a torch.func transform from plain torch.compile.
+        functorch = torch._C._are_functorch_transforms_active()
+        use_warp = (
+            warp.available
+            and not functorch
+            and points.device.type in ("cpu", "cuda")
+            and 0 < points.shape[0]
+            and points.shape[1] <= 3
+            and weight_power == 2.0
+            and torch.float64 not in {points.dtype, *(v.dtype for v in values)}
+        )
+        return "warp" if use_warp else "torch"
+
+    @classmethod
+    def dispatch(
+        cls,
+        points: torch.Tensor,
+        values: torch.Tensor,
+        neighbor_offsets: torch.Tensor,
+        neighbor_indices: torch.Tensor,
+        weight_power: float = 2.0,
+        min_neighbors: int = 0,
+        safe_epsilon: float | None = None,
+        *,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> torch.Tensor:
+        """Dispatch to ``implementation``, or to :meth:`_default_implementation`."""
+        if implementation is None:
+            implementation = cls._default_implementation(points, [values], weight_power)
+        return super().dispatch(
+            points,
+            values,
+            neighbor_offsets,
+            neighbor_indices,
+            weight_power=weight_power,
+            min_neighbors=min_neighbors,
+            safe_epsilon=safe_epsilon,
+            implementation=implementation,
+        )
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(

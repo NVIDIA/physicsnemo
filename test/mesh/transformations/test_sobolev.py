@@ -24,7 +24,7 @@ import torch
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.transformations.deform import sobolev_deform
-from physicsnemo.nn.functional import sobolev_deform_points
+from physicsnemo.mesh.transformations.deform._kernels import sobolev_deform_points
 
 
 def _surface_mesh(*, requires_grad: bool = False) -> Mesh:

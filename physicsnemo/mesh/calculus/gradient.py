@@ -34,6 +34,7 @@ from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+    from physicsnemo.mesh.neighbors import Adjacency
 
 
 def compute_gradient_points_dec(
@@ -78,6 +79,9 @@ def compute_gradient_points_lsq(
     point_values: Float[torch.Tensor, "n_points ..."],
     weight_power: float = 2.0,
     intrinsic: bool = False,
+    *,
+    adjacency: "Adjacency | None" = None,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     r"""Compute gradient at vertices using weighted least-squares.
 
@@ -91,6 +95,23 @@ def compute_gradient_points_lsq(
         Exponent for inverse-distance weighting.
     intrinsic : bool
         If ``True`` and mesh is a manifold, solve LSQ in tangent space.
+    adjacency : Adjacency, optional
+        Neighbor lists to use instead of the mesh's point-to-point adjacency.
+        Pass one to differentiate on a point cloud, ``Mesh(points=...)``, with
+        your own neighbor graph, such as a k-nearest-neighbor graph. The lists
+        may be directed.
+    implementation : {"torch", "warp"} or None, optional
+        Backend for the ambient-space solve. ``None`` picks Warp, which is
+        faster, for data that is not ``float64`` on a mesh whose cells fill a
+        space of at most three dimensions, with the mesh's own neighbors and
+        the default ``weight_power``; and PyTorch otherwise, including inside
+        ``torch.func`` transforms. Curves and surfaces in a higher-dimensional
+        space and a custom ``adjacency`` keep PyTorch because their neighbors
+        need not span the space: there PyTorch returns the minimum-norm
+        solution, and Warp, with its small fixed regularization, about the same
+        or zero. For speed, pass ``"warp"`` with an ``adjacency`` whose
+        neighborhoods span the space, such as a k-nearest-neighbor graph.
+        Intrinsic gradients always use PyTorch.
 
     Returns
     -------
@@ -98,9 +119,14 @@ def compute_gradient_points_lsq(
         Gradient vectors at vertices, shape
         ``(n_points, n_spatial_dims, ...)``.
     """
-    return _compute_gradients_points_lsq(mesh, [point_values], weight_power, intrinsic)[
-        0
-    ]
+    return _compute_gradients_points_lsq(
+        mesh,
+        [point_values],
+        weight_power,
+        intrinsic,
+        adjacency=adjacency,
+        implementation=implementation,
+    )[0]
 
 
 def _compute_gradients_points_lsq(
@@ -108,29 +134,48 @@ def _compute_gradients_points_lsq(
     point_values: Sequence[Float[torch.Tensor, "n_points ..."]],
     weight_power: float = 2.0,
     intrinsic: bool = False,
+    *,
+    adjacency: "Adjacency | None" = None,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at vertices, by
     :func:`compute_gradient_points_lsq`, sharing their LSQ systems."""
+    if implementation not in (None, "torch", "warp"):
+        raise ValueError(
+            f"Invalid {implementation=!r}. Must be 'torch', 'warp', or None."
+        )
     if intrinsic and mesh.codimension > 0:
+        if implementation == "warp":
+            raise ValueError("implementation='warp' supports only intrinsic=False")
         # Use intrinsic LSQ (solves in tangent space)
         from physicsnemo.mesh.calculus._lsq_intrinsic import (
             _compute_point_gradients_lsq_intrinsic,
         )
 
-        return _compute_point_gradients_lsq_intrinsic(mesh, point_values, weight_power)
+        return _compute_point_gradients_lsq_intrinsic(
+            mesh, point_values, weight_power, adjacency=adjacency
+        )
     else:
         # Use standard ambient-space LSQ
         from physicsnemo.mesh.calculus._lsq_reconstruction import (
             _compute_point_gradients_lsq,
         )
 
-        return _compute_point_gradients_lsq(mesh, point_values, weight_power)
+        return _compute_point_gradients_lsq(
+            mesh,
+            point_values,
+            weight_power,
+            adjacency=adjacency,
+            implementation=implementation,
+        )
 
 
 def compute_gradient_cells_lsq(
     mesh: "Mesh",
     cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
+    *,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
     r"""Compute gradient at cells using weighted least-squares.
 
@@ -142,6 +187,12 @@ def compute_gradient_cells_lsq(
         Values at cells.
     weight_power : float
         Exponent for inverse-distance weighting.
+    implementation : {"torch", "warp"} or None, optional
+        Backend for the solve. ``None`` picks PyTorch, because a cell near the
+        boundary may have too few neighbors to determine the gradient: PyTorch
+        then returns the minimum-norm solution, and Warp, with its small fixed
+        regularization, about the same or zero. Warp is faster and computes in
+        ``float32``.
 
     Returns
     -------
@@ -149,13 +200,17 @@ def compute_gradient_cells_lsq(
         Gradient vectors at cells, shape
         ``(n_cells, n_spatial_dims, ...)``.
     """
-    return _compute_gradients_cells_lsq(mesh, [cell_values], weight_power)[0]
+    return _compute_gradients_cells_lsq(
+        mesh, [cell_values], weight_power, implementation=implementation
+    )[0]
 
 
 def _compute_gradients_cells_lsq(
     mesh: "Mesh",
     cell_values: Sequence[Float[torch.Tensor, "n_cells ..."]],
     weight_power: float = 2.0,
+    *,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> list[Float[torch.Tensor, "n_cells n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at cells, by
     :func:`compute_gradient_cells_lsq`, sharing their LSQ systems."""
@@ -163,7 +218,9 @@ def _compute_gradients_cells_lsq(
         _compute_cell_gradients_lsq,
     )
 
-    return _compute_cell_gradients_lsq(mesh, cell_values, weight_power)
+    return _compute_cell_gradients_lsq(
+        mesh, cell_values, weight_power, implementation=implementation
+    )
 
 
 def project_to_tangent_space(

@@ -145,6 +145,7 @@ Two methods compute the operators:
 
       - Gradient, divergence, and curl
       - At points and at cells
+      - Point clouds with their own neighbor graph, through ``adjacency=``
       - ``method="lsq"``
 
       **Watch out:** LSQ has no Laplacian.

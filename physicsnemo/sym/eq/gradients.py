@@ -308,15 +308,19 @@ class GradientsLeastSquares(torch.nn.Module):
         self.return_mixed_derivs = return_mixed_derivs
 
     def forward(self, input_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        # Lazy import (see GradientsFiniteDifference.forward for rationale).
-        from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
+        # Lazy imports (see GradientsFiniteDifference.forward for rationale).
+        from physicsnemo.mesh import Mesh
+        from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+        from physicsnemo.mesh.neighbors import Adjacency
 
-        coords = input_dict["coordinates"].detach()
+        cloud = Mesh(points=input_dict["coordinates"].detach())
         connectivity = input_dict["connectivity_tensor"]
-        offsets, indices = connectivity[0], connectivity[1]
+        adjacency = Adjacency(offsets=connectivity[0], indices=connectivity[1])
 
         values = input_dict[self.invar].squeeze(-1)
-        first_grads = mesh_lsq_gradient(coords, values, offsets, indices)
+        first_grads = compute_gradient_points_lsq(
+            cloud, values, adjacency=adjacency, implementation="warp"
+        )
 
         result: Dict[str, torch.Tensor] = {}
 
@@ -332,7 +336,12 @@ class GradientsLeastSquares(torch.nn.Module):
         if self.order == 2:
             second_grads = []
             for a in range(self.dim):
-                sg = mesh_lsq_gradient(coords, derivs[a].squeeze(-1), offsets, indices)
+                sg = compute_gradient_points_lsq(
+                    cloud,
+                    derivs[a].squeeze(-1),
+                    adjacency=adjacency,
+                    implementation="warp",
+                )
                 second_grads.append(sg)
 
             for a in range(self.dim):

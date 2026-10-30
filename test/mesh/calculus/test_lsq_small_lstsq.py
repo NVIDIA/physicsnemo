@@ -22,6 +22,7 @@ import torch
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus import _lsq_intrinsic
+from physicsnemo.mesh.calculus._lsq_gradient import _torch_impl
 from physicsnemo.mesh.calculus._lsq_intrinsic import (
     compute_point_gradient_lsq_intrinsic,
 )
@@ -34,7 +35,6 @@ from physicsnemo.mesh.primitives.curves import circle_2d, helix_3d
 from physicsnemo.mesh.primitives.planar import unit_square
 from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral, torus
 from physicsnemo.mesh.primitives.volumes import cube_volume
-from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import _torch_impl
 
 
 def _lstsq_reference(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:

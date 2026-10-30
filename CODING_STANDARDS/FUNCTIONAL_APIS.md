@@ -198,12 +198,17 @@ def my_op(x):
 **Description:**
 
 Functionals live under `physicsnemo/nn/functional` and must be re-exported from
-`physicsnemo/nn/functional/__init__.py`.
+`physicsnemo/nn/functional/__init__.py`. Functionals that only meshes use live
+instead as private modules in the `physicsnemo.mesh` module that uses them,
+behind its functions that take a `Mesh`. Expose a new capability as an argument
+of such a function, such as `adjacency=` or `implementation=`, rather than as a
+new public functional.
 
 **Rationale:**
 
-Keeping functionals in a single location makes them easy to discover and keeps
-the public API consistent.
+Keeping functionals in a single location per library makes them easy to
+discover and keeps the public API consistent. Mesh functionals ship with
+`physicsnemo.mesh` when it becomes its own library.
 
 **Example:**
 
@@ -412,8 +417,9 @@ def make_inputs_forward(cls, device="cpu"):
 
 **Description:**
 
-Add tests under `test/nn/functional/` to validate selection, optional
-dependencies, and output correctness.
+Add tests under `test/nn/functional/` (for mesh functionals, the matching
+`test/mesh/` directory) to validate selection, optional dependencies, and output
+correctness.
 
 Use a consistent test layout when possible. This is **highly recommended** for
 readability and review speed, but it is **not strictly required** when a
@@ -514,10 +520,12 @@ FUNCTIONAL_SPECS = (MyFunctionalWithoutInputs,)
 
 **Description:**
 
-Warp-backed functionals in `physicsnemo/nn/functional/**` must be integrated
-into PyTorch using `torch.library.custom_op`, `register_fake`, and (when
-backward is supported) `register_autograd`. Do not use
-`torch.autograd.Function` wrappers for Warp-backed functionals.
+Warp-backed functionals (`FunctionSpec` implementations) in
+`physicsnemo/nn/functional/**` and `physicsnemo/mesh/**` must be integrated
+into PyTorch using
+`torch.library.custom_op`, `register_fake`, and (when backward is supported)
+`register_autograd`. Do not use `torch.autograd.Function` wrappers for
+Warp-backed functionals.
 
 If a functional has no meaningful backward path, `register_autograd` is not
 required; otherwise, the custom op must register a backward implementation.

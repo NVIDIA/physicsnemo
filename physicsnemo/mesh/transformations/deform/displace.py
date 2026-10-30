@@ -83,7 +83,7 @@ def displace(
         if point_weights is None
         else _resolve_point_field(mesh, point_weights, argument_name="point_weights")
     )
-    from physicsnemo.nn.functional.geometry.deform import displace_points
+    from physicsnemo.mesh.transformations.deform._kernels import displace_points
 
     points = displace_points(
         mesh.points,

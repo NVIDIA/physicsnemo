@@ -25,26 +25,26 @@ from typing import Literal, get_type_hints
 import pytest
 import torch
 
-import physicsnemo.nn.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import (
-    closed_surface_volume_energy,
-    radial_basis_function_deform_points,
-    simplex_inversion_energy,
-    simplex_measure_energy,
-    simplex_strain_energy,
-    surface_bending_energy,
-    total_measure_energy,
-)
-from physicsnemo.nn.functional.geometry import (
+from physicsnemo.mesh.deformation import _kernels as energy_kernels
+from physicsnemo.mesh.deformation._kernels import (
     ClosedSurfaceVolumeEnergy,
     SimplexInversionEnergy,
     SimplexMeasureEnergy,
     SimplexStrainEnergy,
     SurfaceBendingEnergy,
     TotalMeasureEnergy,
+    closed_surface_volume_energy,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
+    surface_bending_energy,
+    total_measure_energy,
 )
-from physicsnemo.nn.functional.geometry.deform import energy as energy_module
+from physicsnemo.mesh.deformation._kernels import energy as energy_module
+from physicsnemo.mesh.transformations.deform._kernels import (
+    radial_basis_function_deform_points,
+)
 from test.conftest import requires_module
 
 LOCAL_ENERGY_FUNCTIONS = (
@@ -230,8 +230,8 @@ def test_public_exports_signatures_and_function_spec_contract():
     }
 
     for energy_function, energy_class in functions_and_classes:
-        assert getattr(functional, energy_function.__name__) is energy_function
-        assert not hasattr(functional, energy_class.__name__)
+        assert getattr(energy_kernels, energy_function.__name__) is energy_function
+        assert getattr(energy_kernels, energy_class.__name__) is energy_class
         assert issubclass(energy_class, FunctionSpec)
         assert (
             list(inspect.signature(energy_function).parameters)
@@ -1903,7 +1903,7 @@ def test_warp_activates_tensor_device_for_multigpu_stream_guards(monkeypatch):
 
 @requires_module("warp")
 def test_warp_custom_ops_pass_pytorch_opcheck():
-    from physicsnemo.nn.functional.geometry.deform._warp_impl.energy_op import (
+    from physicsnemo.mesh.deformation._kernels._warp_impl.energy_op import (
         closed_surface_volume_contributions_warp_impl,
         hinge_bending_terms_warp_impl,
         simplex_inversion_terms_warp_impl,

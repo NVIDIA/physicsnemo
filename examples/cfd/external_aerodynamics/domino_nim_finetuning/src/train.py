@@ -60,6 +60,9 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
 )
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.models.domino.utils import *
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+from physicsnemo.mesh.neighbors import Adjacency
 
 # This is included for GPU memory tracking:
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
@@ -74,9 +77,6 @@ from physicsnemo.utils.profiling import profile, Profiler
 
 # Profiler().enable("line_profiler")
 # Profiler().initialize()
-
-
-from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
 
 
 def _build_csr_from_neighbors(neighbors_list, device):
@@ -135,24 +135,29 @@ def compute_physics_loss(
     # Build CSR adjacency from the neighbor graph
     device = output_total_unnormalized.device
     offsets, indices = _build_csr_from_neighbors(neighbors_list, device)
+    adjacency = Adjacency(offsets=offsets, indices=indices)
     num_nodes = max(neighbors_list.keys()) + 1
 
-    # First-order gradients for all nodes using mesh_lsq_gradient
+    # First-order least-squares gradients for all nodes
     first_grads_list = []
     for b in range(batch_size):
         coords_b = coords_total_unnormalized[b].detach()
         values_b = output_total_unnormalized[b]
-        grads_b = mesh_lsq_gradient(coords_b, values_b, offsets, indices)
+        grads_b = compute_gradient_points_lsq(
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
+        )
         first_grads_list.append(grads_b)
     grad_neighbors_center = torch.stack(first_grads_list)
 
-    # Second-order gradients via mesh_lsq_gradient on first-order results
+    # Second-order gradients: least-squares gradients of the first-order results
     grad_flat = grad_neighbors_center.reshape(batch_size, num_nodes, -1)
     second_grads_list = []
     for b in range(batch_size):
         coords_b = coords_total_unnormalized[b].detach()
         values_b = grad_flat[b]
-        sg_b = mesh_lsq_gradient(coords_b, values_b, offsets, indices)
+        sg_b = compute_gradient_points_lsq(
+            Mesh(points=coords_b), values_b, adjacency=adjacency, implementation="warp"
+        )
         second_grads_list.append(sg_b)
     ggrad_all = torch.stack(second_grads_list)
     ggrad_center = ggrad_all[:, 0, :, :]

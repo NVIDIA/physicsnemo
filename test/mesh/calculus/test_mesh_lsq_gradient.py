@@ -17,8 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.nn.functional import mesh_lsq_gradient
-from physicsnemo.nn.functional.derivatives import MeshLSQGradient
+from physicsnemo.mesh.calculus._lsq_gradient import MeshLSQGradient, mesh_lsq_gradient
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 
@@ -591,7 +590,7 @@ def test_mesh_lsq_gradient_torch_rank_deficient_stencils(
     """Rank-deficient 3D stencils give the minimum-norm gradients of CPU lstsq,
     on every device. (CUDA lstsq, whose only driver gels assumes full rank, gave
     NaN for a single flat stencil and a large wrong answer for a tilted plane.)"""
-    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import _torch_impl
+    from physicsnemo.mesh.calculus._lsq_gradient import _torch_impl
 
     points, offsets, indices = _rank_deficient_case(case, device, dtype)
     values = torch.stack(

@@ -17,8 +17,10 @@
 import pytest
 import torch
 
-from physicsnemo.nn.functional import mesh_to_voxel_fraction
-from physicsnemo.nn.functional.geometry import MeshToVoxelFraction
+from physicsnemo.mesh.spatial._voxel_fraction import (
+    MeshToVoxelFraction,
+    mesh_to_voxel_fraction,
+)
 from test.conftest import requires_module
 
 

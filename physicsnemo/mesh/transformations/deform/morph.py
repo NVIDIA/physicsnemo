@@ -112,7 +112,7 @@ def morph(
         if point_weights is None
         else _resolve_point_field(mesh, point_weights, argument_name="point_weights")
     )
-    from physicsnemo.nn.functional.geometry.deform import morph_points
+    from physicsnemo.mesh.transformations.deform._kernels import morph_points
 
     points = morph_points(
         mesh.points,

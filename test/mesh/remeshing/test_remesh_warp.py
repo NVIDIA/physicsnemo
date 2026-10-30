@@ -24,7 +24,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.boundaries import is_watertight
 from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral, torus
 from physicsnemo.mesh.remeshing import remesh
-from physicsnemo.nn.functional.geometry.remeshing import remeshing
+from physicsnemo.mesh.remeshing._kernels import remeshing
 
 pytestmark = pytest.mark.cuda
 

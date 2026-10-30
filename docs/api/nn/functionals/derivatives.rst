@@ -1,6 +1,9 @@
 Derivative Functionals
 ======================
 
+For least-squares gradients on meshes and point clouds, use
+:func:`physicsnemo.mesh.calculus.compute_gradient_points_lsq`.
+
 .. note::
 
    The ``rectilinear_grid_divergence``, ``rectilinear_grid_curl``, and
@@ -41,18 +44,6 @@ Derivative Functionals
 
 .. figure:: /img/nn/functional/derivatives/rectilinear_grid_laplacian.png
    :alt: Rectilinear grid Laplacian example
-   :width: 100%
-
-.. autofunction:: physicsnemo.nn.functional.mesh_lsq_gradient
-
-.. figure:: /img/nn/functional/derivatives/mesh_lsq_gradient.png
-   :alt: Mesh LSQ gradient example
-   :width: 100%
-
-.. autofunction:: physicsnemo.nn.functional.mesh_green_gauss_gradient
-
-.. figure:: /img/nn/functional/derivatives/mesh_green_gauss_gradient.png
-   :alt: Mesh Green-Gauss gradient example
    :width: 100%
 
 .. autofunction:: physicsnemo.nn.functional.spectral_grid_gradient

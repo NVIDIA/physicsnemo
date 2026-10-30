@@ -18,9 +18,8 @@ import warnings
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 
+from ._moved_to_mesh import MOVED_TO_MESH, moved_to_mesh
 from .derivatives import (
-    mesh_green_gauss_gradient,
-    mesh_lsq_gradient,
     meshless_fd_derivatives,
     rectilinear_grid_curl,
     rectilinear_grid_divergence,
@@ -40,26 +39,7 @@ from .equivariant_ops import (
     vector_project,
 )
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
-from .geometry import (
-    closed_surface_volume_energy,
-    displace_points,
-    farthest_point_sampling,
-    free_form_deform_points,
-    mesh_poisson_disk_sample,
-    mesh_to_voxel_fraction,
-    morph_points,
-    radial_basis_function_deform_points,
-    ray_mesh_intersect,
-    remeshing,
-    shrinkwrap_points,
-    signed_distance_field,
-    simplex_inversion_energy,
-    simplex_measure_energy,
-    simplex_strain_energy,
-    sobolev_deform_points,
-    surface_bending_energy,
-    total_measure_energy,
-)
+from .geometry import farthest_point_sampling, signed_distance_field
 from .interpolation import (
     grid_to_point_interpolation,
     interpolation,
@@ -80,13 +60,10 @@ from .rendering import (
 )
 
 __all__ = [
-    "closed_surface_volume_energy",
-    "displace_points",
     "irfft",
     "irfft2",
     "drop_path",
     "farthest_point_sampling",
-    "free_form_deform_points",
     "uniform_grid_curl",
     "uniform_grid_divergence",
     "uniform_grid_laplacian",
@@ -97,14 +74,8 @@ __all__ = [
     "isosurface_render",
     "legendre_polynomials",
     "line_integral_convolution",
-    "mesh_green_gauss_gradient",
     "mesh_raycast",
     "meshless_fd_derivatives",
-    "mesh_lsq_gradient",
-    "mesh_poisson_disk_sample",
-    "mesh_to_voxel_fraction",
-    "morph_points",
-    "radial_basis_function_deform_points",
     "na1d",
     "na2d",
     "na3d",
@@ -112,11 +83,9 @@ __all__ = [
     "polar_and_dipole_basis",
     "radius_search",
     "real",
-    "ray_mesh_intersect",
     # Deprecated aliases, resolved by __getattr__ so that `import *` keeps them.
     "WeightedMultinomial",
     "weighted_multinomial",
-    "remeshing",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",
@@ -125,17 +94,10 @@ __all__ = [
     "rfft2",
     "point_cloud_render",
     "scalar_field_to_rgba",
-    "shrinkwrap_points",
     "signed_distance_field",
-    "simplex_inversion_energy",
-    "simplex_measure_energy",
-    "simplex_strain_energy",
-    "sobolev_deform_points",
     "smooth_log",
     "spectral_grid_gradient",
     "spherical_basis",
-    "surface_bending_energy",
-    "total_measure_energy",
     "uniform_grid_gradient",
     "vector_field_to_rgba",
     "vector_project",
@@ -144,11 +106,14 @@ __all__ = [
     "weight_fact",
     "wireframe_render",
 ]
+# Deprecated aliases of the mesh functionals, also resolved by __getattr__.
+__all__ += MOVED_TO_MESH[__name__]
 
 
 def __getattr__(name):
-    # Lazy legacy re-export: these moved to physicsnemo.utils, and warning only
-    # on access keeps plain 'import physicsnemo.nn.functional' silent.
+    # Lazy legacy re-exports: these moved to physicsnemo.utils or
+    # physicsnemo.mesh, and warning only on access keeps plain
+    # 'import physicsnemo.nn.functional' silent.
     if name in ("WeightedMultinomial", "weighted_multinomial"):
         warnings.warn(
             f"Importing {name!r} from 'physicsnemo.nn.functional' is deprecated. "
@@ -160,6 +125,4 @@ def __getattr__(name):
         from physicsnemo import utils
 
         return getattr(utils, name)
-    raise AttributeError(
-        f"module 'physicsnemo.nn.functional' has no attribute {name!r}"
-    )
+    return moved_to_mesh(__name__, name)

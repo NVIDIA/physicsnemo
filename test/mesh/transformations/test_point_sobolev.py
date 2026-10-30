@@ -24,11 +24,12 @@ import warnings
 import pytest
 import torch
 
-import physicsnemo.nn.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import sobolev_deform_points
-from physicsnemo.nn.functional.geometry import SobolevDeformPoints
-from physicsnemo.nn.functional.geometry.deform._sobolev_torch_impl import (
+from physicsnemo.mesh.transformations.deform._kernels import (
+    SobolevDeformPoints,
+    sobolev_deform_points,
+)
+from physicsnemo.mesh.transformations.deform._kernels._sobolev_torch_impl import (
     _assemble_p1_operators,
 )
 
@@ -91,20 +92,13 @@ def _dense_helmholtz_reference(
 
 
 def test_public_exports_and_signature():
-    geometry = importlib.import_module("physicsnemo.nn.functional.geometry")
-    deform = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
+    deform = importlib.import_module("physicsnemo.mesh.transformations.deform._kernels")
 
-    assert functional.sobolev_deform_points is sobolev_deform_points
-    assert geometry.sobolev_deform_points is sobolev_deform_points
     assert deform.sobolev_deform_points is sobolev_deform_points
-    assert geometry.SobolevDeformPoints is SobolevDeformPoints
     assert deform.SobolevDeformPoints is SobolevDeformPoints
     assert issubclass(SobolevDeformPoints, FunctionSpec)
     assert SobolevDeformPoints.implementations() == ("warp", "torch")
-    assert not hasattr(functional, "SobolevDeformPoints")
-    for module in (functional, geometry, deform):
-        assert "sobolev_deform_points" in module.__all__
-    assert "SobolevDeformPoints" in geometry.__all__
+    assert "sobolev_deform_points" in deform.__all__
     assert "SobolevDeformPoints" in deform.__all__
 
     signature = inspect.signature(sobolev_deform_points)
@@ -135,7 +129,7 @@ def test_public_exports_and_signature():
 
 def test_default_dispatch_selects_device_backend(device, monkeypatch):
     sobolev_module = importlib.import_module(
-        "physicsnemo.nn.functional.geometry.deform.sobolev"
+        "physicsnemo.mesh.transformations.deform._kernels.sobolev"
     )
     device = torch.device(device)
     points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], device=device)
@@ -1097,7 +1091,7 @@ def test_benchmark_generators_execute_registered_cases(device):
         )
         assert output.shape == args[0].shape
         assert output.dtype == args[0].dtype
-        assert output.device == device
+        assert output.device.type == device.type
         assert torch.isfinite(output).all()
         SobolevDeformPoints.compare_forward(output, output.detach())
 

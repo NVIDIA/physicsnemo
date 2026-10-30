@@ -23,29 +23,29 @@ from typing import Literal
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.mesh.deformation._kernels import (
+    closed_surface_volume_energy as _closed_surface_volume_energy,
+)
+from physicsnemo.mesh.deformation._kernels import (
+    simplex_inversion_energy as _simplex_inversion_energy,
+)
+from physicsnemo.mesh.deformation._kernels import (
+    simplex_measure_energy as _simplex_measure_energy,
+)
+from physicsnemo.mesh.deformation._kernels import (
+    simplex_strain_energy as _simplex_strain_energy,
+)
+from physicsnemo.mesh.deformation._kernels import (
+    surface_bending_energy as _surface_bending_energy,
+)
+from physicsnemo.mesh.deformation._kernels import (
+    total_measure_energy as _total_measure_energy,
+)
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities._topology import (
     _deformation_energy_cells,
     _validate_closed_oriented_triangle_surface,
     extract_triangle_hinges,
-)
-from physicsnemo.nn.functional.geometry.deform import (
-    closed_surface_volume_energy as _closed_surface_volume_energy,
-)
-from physicsnemo.nn.functional.geometry.deform import (
-    simplex_inversion_energy as _simplex_inversion_energy,
-)
-from physicsnemo.nn.functional.geometry.deform import (
-    simplex_measure_energy as _simplex_measure_energy,
-)
-from physicsnemo.nn.functional.geometry.deform import (
-    simplex_strain_energy as _simplex_strain_energy,
-)
-from physicsnemo.nn.functional.geometry.deform import (
-    surface_bending_energy as _surface_bending_energy,
-)
-from physicsnemo.nn.functional.geometry.deform import (
-    total_measure_energy as _total_measure_energy,
 )
 
 _Reduction = Literal["none", "sum", "mean"]

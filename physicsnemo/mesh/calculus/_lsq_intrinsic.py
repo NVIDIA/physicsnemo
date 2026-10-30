@@ -37,6 +37,7 @@ from physicsnemo.utils._small_linalg import (
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+    from physicsnemo.mesh.neighbors import Adjacency
 
 
 def compute_point_gradient_lsq_intrinsic(
@@ -89,6 +90,7 @@ def _compute_point_gradients_lsq_intrinsic(
     weight_power: float = 2.0,
     *,
     grouped: bool = False,
+    adjacency: "Adjacency | None" = None,
 ) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
     """Intrinsic gradients of several fields, sharing their tangent-space systems.
 
@@ -97,7 +99,7 @@ def _compute_point_gradients_lsq_intrinsic(
     their factorization; each field is then solved on its own, so the peak
     memory is that of one field. The systems are assembled and solved at once
     where the normal equations solve them, as in
-    :func:`~physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl._mesh_lsq_gradients_torch`;
+    :func:`~physicsnemo.mesh.calculus._lsq_gradient._torch_impl._mesh_lsq_gradients_torch`;
     otherwise, or with ``grouped``, in groups of one neighbor count each.
     """
     n_points = mesh.n_points
@@ -111,10 +113,12 @@ def _compute_point_gradients_lsq_intrinsic(
             _compute_point_gradients_lsq,
         )
 
-        return _compute_point_gradients_lsq(mesh, point_values, weight_power)
+        return _compute_point_gradients_lsq(
+            mesh, point_values, weight_power, adjacency=adjacency
+        )
 
-    ### Get adjacency
-    adjacency = mesh.get_point_to_points_adjacency()
+    if adjacency is None:
+        adjacency = mesh.get_point_to_points_adjacency()
 
     ### Determine output shapes
     def zero_gradients(i: int) -> torch.Tensor:

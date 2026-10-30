@@ -14,8 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .mesh_green_gauss_gradient import MeshGreenGaussGradient, mesh_green_gauss_gradient
-from .mesh_lsq_gradient import MeshLSQGradient, mesh_lsq_gradient
+from .._moved_to_mesh import MOVED_TO_MESH, moved_to_mesh
 from .meshless_finite_difference import (
     MeshlessFDDerivatives,
     meshless_fd_derivatives,
@@ -43,9 +42,7 @@ __all__ = [
     "UniformGridCurl",
     "UniformGridDivergence",
     "UniformGridLaplacian",
-    "MeshGreenGaussGradient",
     "MeshlessFDDerivatives",
-    "MeshLSQGradient",
     "RectilinearGridCurl",
     "RectilinearGridDivergence",
     "RectilinearGridGradient",
@@ -55,9 +52,7 @@ __all__ = [
     "uniform_grid_curl",
     "uniform_grid_divergence",
     "uniform_grid_laplacian",
-    "mesh_green_gauss_gradient",
     "meshless_fd_derivatives",
-    "mesh_lsq_gradient",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",
@@ -65,3 +60,10 @@ __all__ = [
     "spectral_grid_gradient",
     "uniform_grid_gradient",
 ]
+# Deprecated aliases of the mesh functionals, also resolved by __getattr__.
+__all__ += MOVED_TO_MESH[__name__]
+
+
+def __getattr__(name):
+    # Lazy legacy re-exports of the functionals moved to physicsnemo.mesh.
+    return moved_to_mesh(__name__, name)

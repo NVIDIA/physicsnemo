@@ -381,7 +381,9 @@ def test_domain_radial_basis_function_deform_evaluates_combined_components_once(
             for name, component in domain.boundaries.items()
         },
     }
-    deform_module = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
+    deform_module = importlib.import_module(
+        "physicsnemo.mesh.transformations.deform._kernels"
+    )
     original = deform_module.radial_basis_function_deform_points
     calls: list[torch.Tensor] = []
     options: list[tuple[str, bool, float]] = []
@@ -415,7 +417,9 @@ def test_domain_radial_basis_function_deform_single_component_avoids_concatenati
     monkeypatch,
 ):
     domain = DomainMesh(interior=_triangle_mesh())
-    deform_module = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
+    deform_module = importlib.import_module(
+        "physicsnemo.mesh.transformations.deform._kernels"
+    )
     original = deform_module.radial_basis_function_deform_points
     received_points: list[torch.Tensor] = []
 

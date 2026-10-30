@@ -29,7 +29,9 @@ from physicsnemo.mesh.deformation import (
     total_measure_energy,
 )
 from physicsnemo.mesh.primitives.planar import unit_square
-from physicsnemo.nn.functional import radial_basis_function_deform_points
+from physicsnemo.mesh.transformations.deform._kernels import (
+    radial_basis_function_deform_points,
+)
 
 OUTPUT = Path(__file__).parent / "square_deformation_energies.png"
 

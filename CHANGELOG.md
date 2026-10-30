@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `physicsnemo.mesh.calculus.compute_gradient_points_lsq` takes `adjacency=`,
+  a neighbor graph to use instead of the mesh's own, such as a
+  k-nearest-neighbor graph on a point cloud. It and
+  `compute_gradient_cells_lsq` take `implementation=` to choose PyTorch or Warp.
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
@@ -348,12 +352,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
+- Mesh LSQ point gradients, and the derivative, divergence, and curl functions
+  built on them, run on Warp by default for volumes and planar meshes that are
+  not `float64`, where it is faster and gives the same answer. The deprecated
+  `physicsnemo.nn.functional.mesh_lsq_gradient` follows the same rule, so
+  `float64` inputs and `weight_power` other than 2 now run on PyTorch.
 
 ### Deprecated
 
 - `weighted_multinomial` and `WeightedMultinomial` moved from
   `physicsnemo.nn.functional` to `physicsnemo.utils`. Importing them from
   `physicsnemo.nn.functional` still works but emits `LegacyFeatureWarning`.
+- Mesh functionals moved from `physicsnemo.nn.functional` into the
+  `physicsnemo.mesh` modules that use them, as private kernels, so that
+  `physicsnemo.mesh` can become its own library. Their old names in
+  `physicsnemo.nn.functional` and its `derivatives` and `geometry` subpackages
+  still work but emit `LegacyFeatureWarning`. For `mesh_lsq_gradient` on a point
+  cloud, pass its neighbor graph as `adjacency=` to
+  `physicsnemo.mesh.calculus.compute_gradient_points_lsq`, with
+  `implementation="warp"` for its default backend. `ray_mesh_intersect`,
+  `mesh_to_voxel_fraction`, `mesh_poisson_disk_sample`,
+  `mesh_green_gauss_gradient`, and the tuning arguments of `remeshing` such as
+  `hash_grid_resolution` have no public replacement. Deeper module paths, such
+  as `physicsnemo.nn.functional.geometry.deform`, no longer import.
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is
   deprecated in favour of `relative_mse`, which names what it always
   computed (target-normalized relative MSE, no square root) and delegates
@@ -388,6 +409,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Warp backend of the mesh least-squares gradient now works with
+  `torch.compile` through its backward pass, and gives second derivatives that
+  agree with its first derivatives.
 - The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
