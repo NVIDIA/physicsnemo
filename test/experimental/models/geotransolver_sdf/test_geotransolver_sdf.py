@@ -24,6 +24,9 @@ from physicsnemo.experimental.models.geotransolver_sdf import (
     GeoTransolverSDF,
     ScaledSliceGALE,
 )
+from physicsnemo.experimental.models.geotransolver_sdf.model import (
+    _nearest_within_radii,
+)
 from physicsnemo.nn.module.gale import GALE
 from test.common import validate_checkpoint, validate_forward_accuracy
 
@@ -128,11 +131,48 @@ def test_constructor(config):
 
 @pytest.mark.parametrize(
     "config",
-    [dict(neighbors_in_radius=(8,)), dict(context_chunk=0), dict(temperature_min=0.0)],
+    [
+        dict(neighbors_in_radius=(8,)),
+        dict(context_chunk=0),
+        dict(temperature_min=0.0),
+        dict(geometry_dim=2),
+    ],
 )
 def test_constructor_rejects(config):
     with pytest.raises(ValueError):
         GeoTransolverSDF(**{**SMALL, **config})
+
+
+def test_context_neighbours_match_brute_force(device):
+    # nearest first, within each radius, zeros for empty slots; also pins the knn distances to Euclidean
+    g = torch.Generator().manual_seed(1)
+    points = torch.rand(2, 200, 3, generator=g).to(device)
+    queries = torch.rand(2, 30, 3, generator=g).to(device)
+    radii, counts = (0.1, 0.25), (4, 9)
+    out = _nearest_within_radii(points, queries, radii, counts, chunk=7)
+    for b in range(2):
+        # exact distances: the matrix-product form of cdist uses TF32 where it is enabled (NGC containers)
+        d = torch.cdist(
+            queries[b], points[b], compute_mode="donot_use_mm_for_euclid_dist"
+        )
+        dist, idx = d.sort(dim=1)
+        for j, (radius, count) in enumerate(zip(radii, counts)):
+            got = out[j][b].reshape(30, count, 3)
+            ok = dist[:, :count] <= radius
+            expected = torch.where(ok[..., None], points[b][idx[:, :count]], 0.0)
+            torch.testing.assert_close(got, expected)
+
+
+def test_context_neighbours_chunks_agree(device):
+    # the single (cuML) call on CUDA and the chunked PyTorch search give the same neighbours
+    g = torch.Generator().manual_seed(2)
+    points, queries = (
+        torch.rand(1, 300, 3, generator=g).to(device),
+        torch.rand(1, 41, 3, generator=g).to(device),
+    )
+    a = _nearest_within_radii(points, queries, (0.2,), (6,), chunk=5)
+    b = _nearest_within_radii(points, queries, (0.2,), (6,), chunk=1000)
+    torch.testing.assert_close(a[0], b[0])
 
 
 def test_forward_shape(device):

@@ -134,6 +134,39 @@ class ScaledSliceGALE(GALE):
         return weights, tokens
 
 
+def _knn(
+    points: Float[torch.Tensor, "points 3"], queries: Float[torch.Tensor, "queries 3"], k: int, chunk: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    r"""Exact :math:`k` nearest points of every query, nearest first.
+
+    On CUDA one cuML call (it builds its index once, so splitting the queries would rebuild it per piece); without
+    cuML, on the CPU or when cuML runs out of memory, the PyTorch implementation on ``chunk`` queries at a time.
+
+    Parameters
+    ----------
+    points : torch.Tensor
+        Candidate points of shape :math:`(P, 3)`.
+    queries : torch.Tensor
+        Query points of shape :math:`(Q, 3)`.
+    k : int
+        Neighbours per query, at most :math:`P`.
+    chunk : int
+        Queries per call of the PyTorch implementation.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        Indices and Euclidean distances, each of shape :math:`(Q, k)`.
+    """
+    if points.is_cuda:
+        try:
+            return knn(points, queries, k, implementation="cuml")
+        except (ImportError, KeyError, MemoryError):
+            torch.cuda.empty_cache()
+    found = [knn(points, queries[s : s + chunk], k, implementation="torch") for s in range(0, len(queries), chunk)]
+    return torch.cat([f[0] for f in found]), torch.cat([f[1] for f in found])
+
+
 def _nearest_within_radii(
     points: Float[torch.Tensor, "batch points 3"],
     queries: Float[torch.Tensor, "batch queries 3"],
@@ -154,7 +187,7 @@ def _nearest_within_radii(
     counts : tuple[int, ...]
         Neighbours :math:`k_s` per radius.
     chunk : int
-        Queries per nearest-neighbour call.
+        Queries per call of the PyTorch nearest-neighbour search (see :func:`_knn`).
 
     Returns
     -------
@@ -168,9 +201,7 @@ def _nearest_within_radii(
     with torch.no_grad(), torch.autocast(device_type=queries.device.type, enabled=False):
         for i in range(b):
             p, q = points[i].float(), queries[i].float()
-            found = [knn(p, q[s : s + chunk], k) for s in range(0, nq, chunk)]
-            idx = torch.cat([f[0] for f in found])  # (Q, k), nearest first
-            dist = torch.cat([f[1] for f in found])
+            idx, dist = _knn(p, q, k, chunk)  # (Q, k), nearest first
             for j, (radius, count) in enumerate(zip(radii, counts)):
                 width = min(count, k)
                 coords = torch.where((dist[:, :width] <= radius)[..., None], p[idx[:, :width]], 0.0)  # (Q, w, 3)
@@ -197,7 +228,7 @@ class GeoTransolverSDF(Module):
     out_dim : int, optional, default=4
         Output channels per node.
     geometry_dim : int, optional, default=3
-        Width of the geometry points (coordinates).
+        Width of the geometry points; their coordinates, so 3.
     global_dim : int, optional, default=4
         Width of the global features.
     n_layers : int, optional, default=8
@@ -239,7 +270,8 @@ class GeoTransolverSDF(Module):
     activation_checkpointing : bool, optional, default=False
         Recompute the blocks and the pooled features in the backward pass.
     context_chunk : int, optional, default=512
-        Geometry points per nearest-neighbour call when building the context.
+        Geometry points per call of the PyTorch nearest-neighbour search when building the context (used on the CPU,
+        or on CUDA without cuML).
 
     Forward
     -------
@@ -258,6 +290,13 @@ class GeoTransolverSDF(Module):
     -------
     torch.Tensor
         Node outputs of shape :math:`(B, N, \text{out_dim})`.
+
+    Notes
+    -----
+    The neighbour searches and the signed distances run per sample of the batch, without gradient, in float32. The
+    model is meant for one sample per GPU (meshes of different sizes are not padded into a batch) and has not been
+    tested with domain parallelism (:class:`~physicsnemo.domain_parallel.ShardTensor`), under which
+    :class:`ScaledSliceGALE` would count the tokens of the local shard.
 
     Examples
     --------
@@ -299,6 +338,8 @@ class GeoTransolverSDF(Module):
         super().__init__(meta=ModelMetaData(amp=True, auto_grad=True))
         if len(neighbors_in_radius) != len(radii) or min(neighbors_in_radius) < 1 or context_chunk < 1:
             raise ValueError("neighbors_in_radius needs one positive entry per radius, and context_chunk must be positive")
+        if geometry_dim != 3:
+            raise ValueError("geometry_dim must be 3: the context neighbours are found from the geometry coordinates")
         self.functional_dim, self.geometry_dim, self.global_dim = int(functional_dim), int(geometry_dim), int(global_dim)
         self.radii = tuple(float(r) for r in radii)
         self.neighbors_in_radius = tuple(int(k) for k in neighbors_in_radius)
@@ -348,6 +389,26 @@ class GeoTransolverSDF(Module):
         surface_vertices: Float[torch.Tensor, "batch vertices 3"],
         surface_faces: Int[torch.Tensor, "batch triangles 3"],
     ) -> Float[torch.Tensor, "batch nodes out_dim"]:
+        r"""Predict the outputs at every node.
+
+        Parameters
+        ----------
+        local_embedding : torch.Tensor
+            Node features of shape :math:`(B, N, F)`, coordinates first.
+        geometry : torch.Tensor
+            Geometry points of shape :math:`(B, M, 3)`.
+        global_embedding : torch.Tensor
+            Global features of shape :math:`(B, 1, G)`.
+        surface_vertices : torch.Tensor
+            Surface vertices of shape :math:`(B, V, 3)`.
+        surface_faces : torch.Tensor
+            Surface triangles of shape :math:`(B, T, 3)`, facing outward.
+
+        Returns
+        -------
+        torch.Tensor
+            Node outputs of shape :math:`(B, N, \text{out_dim})`.
+        """
         if not torch.compiler.is_compiling():
             b = local_embedding.shape[0]
             if local_embedding.ndim != 3 or local_embedding.shape[-1] != self.functional_dim:
