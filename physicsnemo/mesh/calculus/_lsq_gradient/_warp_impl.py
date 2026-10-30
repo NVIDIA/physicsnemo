@@ -28,6 +28,11 @@ wp.init()
 wp.config.log_level = wp.LOG_WARNING
 
 
+# Added to the diagonal of each normal matrix, so that the systems of degenerate
+# neighborhoods stay stable in float32.
+REG_EPS = 1.0e-6
+
+
 @wp.kernel
 def _mesh_lsq_gradient_1d_kernel(
     points: wp.array2d(dtype=wp.float32),
@@ -39,6 +44,7 @@ def _mesh_lsq_gradient_1d_kernel(
     reg_eps: float,
     dist_eps: float,
     gradients: wp.array2d(dtype=wp.float32),
+    solved: wp.array(dtype=wp.int32),
 ):
     i = wp.tid()
 
@@ -48,6 +54,7 @@ def _mesh_lsq_gradient_1d_kernel(
     count = end - start
     if count < min_neighbors:
         gradients[i, 0] = 0.0
+        solved[i] = 0
         return
 
     # Gather center state and initialize normal-equation accumulators.
@@ -71,10 +78,13 @@ def _mesh_lsq_gradient_1d_kernel(
 
     # Solve the 1x1 normal equation with a numerical floor.
     gx = float(0.0)
+    solved_i = int(0)
     if m00 > dist_eps:
         gx = b0 / m00
+        solved_i = 1
 
     gradients[i, 0] = gx
+    solved[i] = solved_i
 
 
 @wp.kernel
@@ -88,6 +98,7 @@ def _mesh_lsq_gradient_2d_kernel(
     reg_eps: float,
     dist_eps: float,
     gradients: wp.array2d(dtype=wp.float32),
+    solved: wp.array(dtype=wp.int32),
 ):
     i = wp.tid()
 
@@ -98,6 +109,7 @@ def _mesh_lsq_gradient_2d_kernel(
     if count < min_neighbors:
         gradients[i, 0] = 0.0
         gradients[i, 1] = 0.0
+        solved[i] = 0
         return
 
     # Gather center state and initialize normal-equation accumulators.
@@ -133,6 +145,7 @@ def _mesh_lsq_gradient_2d_kernel(
 
     gx = float(0.0)
     gy = float(0.0)
+    solved_i = int(0)
     stability_scale = m00 * m11 + dist_eps
     if wp.abs(det) > 1.0e-6 * stability_scale:
         inv00 = m11 / det
@@ -140,9 +153,11 @@ def _mesh_lsq_gradient_2d_kernel(
         inv11 = m00 / det
         gx = inv00 * b0 + inv01 * b1
         gy = inv01 * b0 + inv11 * b1
+        solved_i = 1
 
     gradients[i, 0] = gx
     gradients[i, 1] = gy
+    solved[i] = solved_i
 
 
 @wp.kernel
@@ -156,6 +171,7 @@ def _mesh_lsq_gradient_3d_kernel(
     reg_eps: float,
     dist_eps: float,
     gradients: wp.array2d(dtype=wp.float32),
+    solved: wp.array(dtype=wp.int32),
 ):
     i = wp.tid()
 
@@ -167,6 +183,7 @@ def _mesh_lsq_gradient_3d_kernel(
         gradients[i, 0] = 0.0
         gradients[i, 1] = 0.0
         gradients[i, 2] = 0.0
+        solved[i] = 0
         return
 
     # Gather center state and initialize normal-equation accumulators.
@@ -221,6 +238,7 @@ def _mesh_lsq_gradient_3d_kernel(
     gx = float(0.0)
     gy = float(0.0)
     gz = float(0.0)
+    solved_i = int(0)
     trace = m00 + m11 + m22
     stability_scale = trace * trace * trace + dist_eps
     if wp.abs(det) > 1.0e-8 * stability_scale:
@@ -235,10 +253,12 @@ def _mesh_lsq_gradient_3d_kernel(
         gx = inv00 * b0 + inv01 * b1 + inv02 * b2
         gy = inv01 * b0 + inv11 * b1 + inv12 * b2
         gz = inv02 * b0 + inv12 * b1 + inv22 * b2
+        solved_i = 1
 
     gradients[i, 0] = gx
     gradients[i, 1] = gy
     gradients[i, 2] = gz
+    solved[i] = solved_i
 
 
 @wp.kernel
@@ -694,6 +714,7 @@ def _launch_forward(
     reg_eps: float,
     dist_eps: float,
     grads_components: torch.Tensor,
+    solved: torch.Tensor,
     wp_device,
     wp_stream,
 ) -> None:
@@ -712,6 +733,7 @@ def _launch_forward(
     wp_points = wp.from_torch(points_fp32, dtype=wp.float32)
     wp_offsets = wp.from_torch(offsets_i32, dtype=wp.int32)
     wp_indices = wp.from_torch(indices_i32, dtype=wp.int32)
+    wp_solved = wp.from_torch(solved, dtype=wp.int32)
 
     with FunctionSpec.warp_stream_scope(wp_stream):
         for comp in range(n_components):
@@ -730,6 +752,7 @@ def _launch_forward(
                     float(reg_eps),
                     float(dist_eps),
                     wp.from_torch(grads_components[comp], dtype=wp.float32),
+                    wp_solved,
                 ],
                 device=wp_device,
                 stream=wp_stream,
@@ -857,8 +880,12 @@ def mesh_lsq_gradient_impl(
     min_neighbors: int,
     reg_eps: float,
     dist_eps: float,
-) -> torch.Tensor:
-    """Compute weighted LSQ gradients with Warp kernels."""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute weighted LSQ gradients with Warp kernels.
+
+    Also returns an ``int32`` mask of the entities whose system was solved; the
+    others, with too few neighbors or a singular system, get zero gradients.
+    """
     validate_inputs(
         points=points,
         values=values,
@@ -887,6 +914,7 @@ def mesh_lsq_gradient_impl(
         dtype=torch.float32,
         device=points.device,
     )
+    solved = torch.zeros(n_entities, dtype=torch.int32, device=points.device)
 
     wp_device, wp_stream = FunctionSpec.warp_launch_context(points_fp32)
     _launch_forward(
@@ -899,6 +927,7 @@ def mesh_lsq_gradient_impl(
         reg_eps=float(reg_eps),
         dist_eps=float(dist_eps),
         grads_components=grads_components,
+        solved=solved,
         wp_device=wp_device,
         wp_stream=wp_stream,
     )
@@ -906,7 +935,7 @@ def mesh_lsq_gradient_impl(
     output = grads_components.permute(1, 2, 0).reshape(n_entities, n_dims, *value_shape)
     if output.dtype != values.dtype:
         output = output.to(dtype=values.dtype)
-    return output
+    return output, solved
 
 
 @mesh_lsq_gradient_impl.register_fake
@@ -919,7 +948,7 @@ def _mesh_lsq_gradient_impl_fake(
     min_neighbors: int,
     reg_eps: float,
     dist_eps: float,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Fake tensor propagation for LSQ custom op."""
     _ = (
         neighbor_offsets,
@@ -929,15 +958,17 @@ def _mesh_lsq_gradient_impl_fake(
         reg_eps,
         dist_eps,
     )
-    return torch.empty(
+    gradients = torch.empty(
         (values.shape[0], points.shape[1], *values.shape[1:]),
         device=values.device,
         dtype=values.dtype,
     )
+    solved = torch.empty(values.shape[0], device=values.device, dtype=torch.int32)
+    return gradients, solved
 
 
 def setup_mesh_lsq_gradient_context(
-    ctx: torch.autograd.function.FunctionCtx, inputs: tuple, output: torch.Tensor
+    ctx: torch.autograd.function.FunctionCtx, inputs: tuple, output: tuple
 ) -> None:
     """Store backward context for LSQ custom-op autograd."""
     (
@@ -950,59 +981,35 @@ def setup_mesh_lsq_gradient_context(
         reg_eps,
         dist_eps,
     ) = inputs
-    _ = output
-    ctx.save_for_backward(points, values, neighbor_offsets, neighbor_indices)
+    _, solved = output
+    ctx.save_for_backward(points, values, neighbor_offsets, neighbor_indices, solved)
     ctx.weight_power = float(weight_power)
     ctx.min_neighbors = int(min_neighbors)
     ctx.reg_eps = float(reg_eps)
     ctx.dist_eps = float(dist_eps)
 
 
-def backward_mesh_lsq_gradient(
-    ctx: torch.autograd.function.FunctionCtx,
+@torch.library.custom_op(
+    "physicsnemo::mesh_lsq_gradient_warp_backward_impl", mutates_args=()
+)
+def mesh_lsq_gradient_backward_impl(
+    points: torch.Tensor,
+    values: torch.Tensor,
+    neighbor_offsets: torch.Tensor,
+    neighbor_indices: torch.Tensor,
     grad_output: torch.Tensor,
-) -> tuple[
-    torch.Tensor | None, torch.Tensor | None, None, None, None, None, None, None
-]:
-    """Backward pass for LSQ custom op.
+    weight_power: float,
+    min_neighbors: int,
+    reg_eps: float,
+    dist_eps: float,
+    needs_points: bool,
+    needs_values: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Gradients of the LSQ op for ``points`` and ``values``, by Warp kernels.
 
-    The Warp backward kernels are not differentiable. For higher-order autograd
-    (``create_graph=True``) the gradients come from differentiating the
-    equivalent PyTorch solve instead.
+    An op of its own, so that ``torch.compile`` can trace the backward. A
+    gradient that is not needed comes back empty.
     """
-    needs_points = ctx.needs_input_grad[0]
-    needs_values = ctx.needs_input_grad[1]
-    if grad_output is None or (not needs_points and not needs_values):
-        return None, None, None, None, None, None, None, None
-
-    points, values, neighbor_offsets, neighbor_indices = ctx.saved_tensors
-    if torch.is_grad_enabled():
-        from ._torch_impl import mesh_lsq_gradient_torch
-
-        # Fresh views, so that the gradient for ``points`` leaves out the path
-        # through ``values`` when ``values`` was computed from ``points``.
-        points, values = points.view_as(points), values.view_as(values)
-        inputs = [
-            t
-            for t, needed in ((points, needs_points), (values, needs_values))
-            if needed
-        ]
-        output = mesh_lsq_gradient_torch(
-            points=points,
-            values=values,
-            neighbor_offsets=neighbor_offsets,
-            neighbor_indices=neighbor_indices,
-            weight_power=ctx.weight_power,
-            min_neighbors=ctx.min_neighbors,
-            safe_epsilon=ctx.dist_eps,
-        )
-        grads = iter(
-            torch.autograd.grad(output, inputs, grad_output, create_graph=True)
-        )
-        grad_points = next(grads) if needs_points else None
-        grad_values = next(grads) if needs_values else None
-        return grad_points, grad_values, None, None, None, None, None, None
-
     values_shape = values.shape
     n_entities = values_shape[0]
     points_fp32 = points.to(dtype=torch.float32).contiguous()
@@ -1031,10 +1038,10 @@ def backward_mesh_lsq_gradient(
             offsets_i32=offsets_i32,
             indices_i32=indices_i32,
             grad_output_components_fp32=grad_output_components,
-            weight_power=ctx.weight_power,
-            min_neighbors=ctx.min_neighbors,
-            reg_eps=ctx.reg_eps,
-            dist_eps=ctx.dist_eps,
+            weight_power=weight_power,
+            min_neighbors=min_neighbors,
+            reg_eps=reg_eps,
+            dist_eps=dist_eps,
             grad_points=grad_points_fp32,
             wp_device=wp_device,
             wp_stream=wp_stream,
@@ -1053,10 +1060,10 @@ def backward_mesh_lsq_gradient(
             offsets_i32=offsets_i32,
             indices_i32=indices_i32,
             grad_output_components_fp32=grad_output_components,
-            weight_power=ctx.weight_power,
-            min_neighbors=ctx.min_neighbors,
-            reg_eps=ctx.reg_eps,
-            dist_eps=ctx.dist_eps,
+            weight_power=weight_power,
+            min_neighbors=min_neighbors,
+            reg_eps=reg_eps,
+            dist_eps=dist_eps,
             grad_values_flat=grad_values_flat,
             wp_device=wp_device,
             wp_stream=wp_stream,
@@ -1067,7 +1074,111 @@ def backward_mesh_lsq_gradient(
         grad_values = grad_values_flat.reshape(values_shape)
         if grad_values.dtype != values.dtype:
             grad_values = grad_values.to(dtype=values.dtype)
-    return grad_points, grad_values, None, None, None, None, None, None
+    return (
+        grad_points if needs_points else points.new_empty(0),
+        grad_values if needs_values else values.new_empty(0),
+    )
+
+
+@mesh_lsq_gradient_backward_impl.register_fake
+def _mesh_lsq_gradient_backward_impl_fake(
+    points: torch.Tensor,
+    values: torch.Tensor,
+    neighbor_offsets: torch.Tensor,
+    neighbor_indices: torch.Tensor,
+    grad_output: torch.Tensor,
+    weight_power: float,
+    min_neighbors: int,
+    reg_eps: float,
+    dist_eps: float,
+    needs_points: bool,
+    needs_values: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fake tensor propagation for the LSQ backward custom op."""
+    _ = (neighbor_offsets, neighbor_indices, grad_output, weight_power)
+    _ = (min_neighbors, reg_eps, dist_eps)
+    return (
+        torch.empty(points.shape, dtype=points.dtype, device=points.device)
+        if needs_points
+        else points.new_empty(0),
+        torch.empty(values.shape, dtype=values.dtype, device=values.device)
+        if needs_values
+        else values.new_empty(0),
+    )
+
+
+def backward_mesh_lsq_gradient(
+    ctx: torch.autograd.function.FunctionCtx,
+    grad_output: torch.Tensor,
+    grad_solved: torch.Tensor | None,
+) -> tuple[
+    torch.Tensor | None, torch.Tensor | None, None, None, None, None, None, None
+]:
+    """Backward pass for LSQ custom op.
+
+    The Warp backward kernels are not differentiable. For higher-order autograd
+    (``create_graph=True``) the gradients come from differentiating the
+    equivalent PyTorch solve instead, without the entities that the Warp
+    forward left unsolved, as the Warp kernels do.
+    """
+    _ = grad_solved  # the solved mask is not differentiable
+    needs_points = ctx.needs_input_grad[0]
+    needs_values = ctx.needs_input_grad[1]
+    if grad_output is None or (not needs_points and not needs_values):
+        return None, None, None, None, None, None, None, None
+
+    points, values, neighbor_offsets, neighbor_indices, solved = ctx.saved_tensors
+    if torch.is_grad_enabled():
+        from ._torch_impl import mesh_lsq_gradient_torch
+
+        # Fresh views, so that the gradient for ``points`` leaves out the path
+        # through ``values`` when ``values`` was computed from ``points``.
+        points, values = points.view_as(points), values.view_as(values)
+        inputs = [
+            t
+            for t, needed in ((points, needs_points), (values, needs_values))
+            if needed
+        ]
+        output = mesh_lsq_gradient_torch(
+            points=points,
+            values=values,
+            neighbor_offsets=neighbor_offsets,
+            neighbor_indices=neighbor_indices,
+            weight_power=ctx.weight_power,
+            min_neighbors=ctx.min_neighbors,
+            safe_epsilon=ctx.dist_eps,
+        )
+        mask = solved.to(grad_output.dtype).view(-1, *[1] * (grad_output.dim() - 1))
+        grads = iter(
+            torch.autograd.grad(output, inputs, grad_output * mask, create_graph=True)
+        )
+        grad_points = next(grads) if needs_points else None
+        grad_values = next(grads) if needs_values else None
+        return grad_points, grad_values, None, None, None, None, None, None
+
+    grad_points, grad_values = mesh_lsq_gradient_backward_impl(
+        points,
+        values,
+        neighbor_offsets,
+        neighbor_indices,
+        grad_output,
+        ctx.weight_power,
+        ctx.min_neighbors,
+        ctx.reg_eps,
+        ctx.dist_eps,
+        needs_points,
+        needs_values,
+    )
+    return (
+        grad_points if needs_points else None,
+        grad_values if needs_values else None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 mesh_lsq_gradient_impl.register_autograd(
@@ -1083,7 +1194,7 @@ def mesh_lsq_gradient_warp(
     neighbor_indices: torch.Tensor,
     weight_power: float = 2.0,
     min_neighbors: int = 0,
-    reg_eps: float = 1.0e-6,
+    reg_eps: float = REG_EPS,
     safe_epsilon: float | None = None,
 ) -> torch.Tensor:
     """Compute weighted LSQ mesh gradients with Warp kernels.
@@ -1095,7 +1206,7 @@ def mesh_lsq_gradient_warp(
     accepted, but derivative accuracy is limited to ``float32`` precision.
     """
     dist_eps = resolve_safe_epsilon(safe_epsilon=safe_epsilon, dtype=torch.float32)
-    return mesh_lsq_gradient_impl(
+    gradients, _ = mesh_lsq_gradient_impl(
         points,
         values,
         neighbor_offsets,
@@ -1105,3 +1216,4 @@ def mesh_lsq_gradient_warp(
         float(reg_eps),
         float(dist_eps),
     )
+    return gradients
