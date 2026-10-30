@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-import torch
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.core.version_check import OptionalImport
@@ -33,14 +32,11 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
     UndeterminedShardingError,
 )
-from physicsnemo.nn.functional.natten import na1d, na2d, na3d
+from physicsnemo.nn.functional import natten as _na_ops  # noqa: F401 (defines the ops)
 
 _natten = OptionalImport("natten")
-_raw_func_map = {
-    na1d: lambda: _natten.functional.na1d,
-    na2d: lambda: _natten.functional.na2d,
-    na3d: lambda: _natten.functional.na3d,
-}
+# Argument order of the ``physicsnemo::na{1,2,3}d`` ops.
+_OP_ARGS = ("q", "k", "v", "kernel_size", "dilation", "is_causal", "scale", "backend")
 
 __all__ = ["na1d_wrapper", "na2d_wrapper", "na3d_wrapper"]
 
@@ -226,54 +222,55 @@ def _natten_wrapper(
     types: tuple[Any, ...],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> torch.Tensor | ShardTensor:
-    r"""Shared wrapper for natten functions to support sharded tensors.
+) -> ShardTensor:
+    r"""ShardTensor handler for the ``physicsnemo::na{1,2,3}d`` ops.
 
-    Registered with :meth:`ShardTensor.register_function_handler` so that calls
-    to :func:`~physicsnemo.nn.functional.natten.na1d`,
-    :func:`~physicsnemo.nn.functional.natten.na2d`, or
-    :func:`~physicsnemo.nn.functional.natten.na3d` automatically route through
-    this handler when any argument is a :class:`ShardTensor`.
+    :func:`~physicsnemo.nn.functional.natten.na1d`,
+    :func:`~physicsnemo.nn.functional.natten.na2d` and
+    :func:`~physicsnemo.nn.functional.natten.na3d` call these ops for tensor
+    subclass operands. Registered by op name, so ``__torch_function__`` routes
+    the op here in eager and under ``torch.compile``; the halo exchange and
+    the local NATTEN call carry autograd.
 
     Parameters
     ----------
     func : Callable
-        The wrapped natten function (passed by ``__torch_function__``).
+        The op overload, e.g. ``torch.ops.physicsnemo.na2d.default``.
     types : tuple[Any, ...]
         The types of the inputs (unused).
     args : tuple[Any, ...]
-        Positional arguments containing query, key, value tensors and kernel_size.
+        Op arguments, in the order of ``_OP_ARGS``.
     kwargs : dict[str, Any]
-        Keyword arguments including ``dilation``.
+        Op arguments passed by keyword.
 
     Returns
     -------
-    Union[torch.Tensor, ShardTensor]
-        Result tensor as either ``torch.Tensor`` or ShardTensor depending on input types.
+    ShardTensor
+        Neighborhood attention output, sharded like ``q``.
 
     Raises
     ------
     UndeterminedShardingError
-        If input tensor types are mismatched.
+        If q, k and v are not all ShardTensors.
     """
-    q, k, v, kernel_size = args[0], args[1], args[2], args[3]
-
-    dilation = kwargs.get("dilation", 1)
-    natten_kwargs = {_k: _v for _k, _v in kwargs.items() if _k != "dilation"}
-
-    if all(type(_t) is torch.Tensor for _t in (q, k, v)):
-        return func(
-            q, k, v, kernel_size=kernel_size, dilation=dilation, **natten_kwargs
-        )
-    elif all(isinstance(_t, ShardTensor) for _t in (q, k, v)):
-        raw_func = _raw_func_map[func]()
-        return _partial_natten(
-            q, k, v, kernel_size, dilation, base_func=raw_func, **natten_kwargs
-        )
-    else:
+    bound = {**dict(zip(_OP_ARGS, args)), **kwargs}
+    q, k, v = bound["q"], bound["k"], bound["v"]
+    if not all(isinstance(_t, ShardTensor) for _t in (q, k, v)):
         raise UndeterminedShardingError(
-            "q, k, and v must all be the same types (torch.Tensor or ShardTensor)"
+            "q, k, and v must all be ShardTensors for sharded neighborhood attention"
         )
+    raw_func = getattr(_natten.functional, func.__name__.split(".")[0])
+    return _partial_natten(
+        q,
+        k,
+        v,
+        bound["kernel_size"],
+        bound["dilation"],
+        base_func=raw_func,
+        is_causal=bound["is_causal"],
+        scale=bound["scale"],
+        backend=bound["backend"],
+    )
 
 
 # Public aliases for explicit registration
@@ -281,6 +278,7 @@ na1d_wrapper = _natten_wrapper
 na2d_wrapper = _natten_wrapper
 na3d_wrapper = _natten_wrapper
 
-ShardTensor.register_function_handler(na1d, na1d_wrapper)
-ShardTensor.register_function_handler(na2d, na2d_wrapper)
-ShardTensor.register_function_handler(na3d, na3d_wrapper)
+for _name in ("na1d", "na2d", "na3d"):
+    ShardTensor.register_named_function_handler(
+        f"physicsnemo.{_name}.default", _natten_wrapper
+    )

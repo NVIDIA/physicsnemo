@@ -16,11 +16,10 @@
 
 r"""``torch.compile`` over sharded neighborhood attention (issue #1986).
 
-Dynamo treats ``ShardTensor`` as a traceable wrapper subclass and folds
-``has_torch_function`` to ``False`` for it, so a traced ``na2d`` would call the
-raw kernel on the ShardTensor instead of the halo-exchanging handler. The raw
-kernel here is a pure-torch reference that, like an opaque kernel, refuses
-distributed inputs; it also lets the test run without NATTEN installed.
+A traced ``na2d`` on ShardTensors must emit the ``physicsnemo::na2d`` op so
+ShardTensor's named handler (halo exchange) runs, rather than the raw kernel
+seeing the ShardTensor. The raw kernel here is a pure-torch reference that,
+like an opaque kernel, refuses distributed inputs; it also lets the test run without NATTEN installed.
 """
 
 import pytest
