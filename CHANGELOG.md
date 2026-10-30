@@ -133,6 +133,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DistributedGraph` and GraphCast's distributed mode) no longer loops over
   destination nodes in Python. A 1-million-node grid now takes well under a
   second instead of half a minute or more.
+- `FNO` supports automatic mixed precision. `SpectralConv1d`-`4d` upcast
+  float16 and bfloat16 inputs to float32 and run their FFTs and mode
+  multiplication with autocast disabled, so float16 autocast no longer fails
+  with a cuFFT or `ComplexHalf` error, and bfloat16 autocast works on PyTorch
+  versions whose FFT does not accept bfloat16. Layers outside the spectral
+  convolutions still run under autocast. `FNO` is now marked as AMP-capable,
+  so `StaticCaptureTraining` and `StaticCaptureEvaluateNoGrad` enable autocast
+  for it by default; pass `use_amp=False` to keep full precision.
 - `ClusterTree` builds tighter trees by default (`split="morton"`), so
   Barnes-Hut plans need 2-4x fewer interactions at the same `theta`.
   `split="midpoint"` gives the previous trees.
@@ -422,6 +430,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DoMINO's `sample_points_on_mesh` now works on meshes with over 2^24 faces.
 - `MeshDataset.close()` no longer raises `AttributeError` with a `MeshReader`
   or `DomainMeshReader`. Both readers now have a `close()` method.
+- `SpectralConv1d`-`4d` build the output spectrum in the input spectrum's
+  complex dtype, so `SpectralConv1d` no longer returns float32 for float64
+  inputs, and `reset_parameters` keeps the weights' device and dtype instead
+  of moving them to CPU float32.
 - `GLOBE` accepts `boundary_meshes` as a TensorDict, as the DrivAerML example
   passes them. Before, every forward pass of that example failed.
 - Under `torch.compile`, GLOBE no longer recompiles on its second training
