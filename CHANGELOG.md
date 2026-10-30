@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- Adds `GeoTransolver.forward_with_geometry_features` for predictions and detached
+  geometry tokens in one pass, preserving the existing `forward` API.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - `MeshDataset(cache_host=True)` reads each sample once and serves repeats from
@@ -386,6 +388,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
+  and 2.14. It and the AirfRANS example now set
+  `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
+  Padé networks (pytorch/pytorch#193194).
+- Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
+  when `keepdim=True`, including independently sharded simulation and spatial axes.
 - Multi-node jobs launched with `srun` no longer hang in
   `DistributedManager.initialize()` when Slurm starts rank 0 on a different node
   from the one that ran `srun`. The rendezvous now uses the job step's first node.
