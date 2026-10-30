@@ -333,6 +333,8 @@ physicsnemo/experimental/datapipes/healda/ @pzharrington
 physicsnemo/experimental/models/aerojepa/ @mnabian
 physicsnemo/experimental/models/globe/ @peterdsharpe
 physicsnemo/experimental/models/smart/ @mnabian
+physicsnemo/experimental/models/geotransolver_sdf/ @sgtkeum
+test/experimental/models/geotransolver_sdf/ @sgtkeum
 physicsnemo/experimental/nn/sdf_stencil.py @sgtkeum
 physicsnemo/experimental/nn/radius_pooling.py @sgtkeum
 physicsnemo/experimental/peft/ @mnabian

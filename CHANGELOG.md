@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds an experimental `GeoTransolverSDF` model
+  (`physicsnemo.experimental.models.geotransolver_sdf`): GeoTransolver with
+  radius-pooled node features and a signed-distance stencil at every mesh node, and
+  GALE blocks whose slice normalization scales with the number of nodes
+  (`ScaledSliceGALE`).
 - Adds experimental `SignedDistanceStencil` and `RadiusPooledFeatures` layers to
   `physicsnemo.experimental.nn`: signed distances to a triangle surface at a stencil of
   probes around each point, and radius-pooled local features from voxel-downsampled

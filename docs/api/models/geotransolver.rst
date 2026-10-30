@@ -110,3 +110,24 @@ self-attention and adds a private, model-specific geometry/global-context
 cross-attention adapter. The core FLARE++ implementation therefore remains
 shared with the standalone model rather than being duplicated in
 GeoTransolver.
+
+GeoTransolver with local geometry encodings (experimental)
+----------------------------------------------------------
+
+:class:`~physicsnemo.experimental.models.geotransolver_sdf.GeoTransolverSDF`
+treats every node of a volume mesh as a query and adds two local geometry
+encodings to its features: radius-pooled features of the neighbouring nodes and
+a stencil of signed distances to the surface
+(:doc:`../nn/layers/local_geometry_encodings`). Its GALE blocks use
+:class:`~physicsnemo.experimental.models.geotransolver_sdf.ScaledSliceGALE`,
+whose slice normalization scales with the number of nodes so that meshes of very
+different sizes are sliced alike. The API is experimental.
+
+.. autoclass:: physicsnemo.experimental.models.geotransolver_sdf.GeoTransolverSDF
+   :show-inheritance:
+   :members:
+   :exclude-members: forward
+
+.. autoclass:: physicsnemo.experimental.models.geotransolver_sdf.ScaledSliceGALE
+   :show-inheritance:
+   :exclude-members: forward
