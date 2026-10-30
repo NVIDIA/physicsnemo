@@ -73,14 +73,18 @@ def backends(monkeypatch):
     return calls
 
 
-def _jittered_volume(subdivisions: int = 4, squash: float = 1.0) -> Mesh:
-    """A cube volume with its points moved by up to 0.3 cell, then z squashed."""
+def _jittered_volume(squash: float, rotate: bool, subdivisions: int = 4) -> Mesh:
+    """A cube volume with its points moved by up to 0.3 cell, then z squashed,
+    and optionally rotated so that the thin direction is off the axes."""
     mesh = cube_volume.load(subdivisions=subdivisions)
     extent = mesh.points.max(dim=0).values - mesh.points.min(dim=0).values
     spacing = extent.max() / subdivisions
     generator = torch.Generator().manual_seed(0)
     noise = 2 * torch.rand(mesh.points.shape, generator=generator) - 1
     points = (mesh.points + 0.3 * spacing * noise) * torch.tensor([1, 1, 1 / squash])
+    if rotate:
+        rotation, _ = torch.linalg.qr(torch.randn(3, 3, generator=generator))
+        points = points @ rotation.T
     return Mesh(points=points, cells=mesh.cells)
 
 
@@ -167,10 +171,11 @@ def test_default_compiles_with_its_backward():
         torch.testing.assert_close(got, expected)
 
 
-def test_default_keeps_the_gradients_of_thin_cells(backends):
-    """Jittered cells squashed 1000:1 keep a linear field's gradient, which a
-    fixed regularization would bias."""
-    mesh = _jittered_volume(squash=1000.0)
+@pytest.mark.parametrize(("squash", "rotate"), [(1e3, False), (1e4, True)])
+def test_default_keeps_the_gradients_of_thin_cells(backends, squash, rotate):
+    """Thin jittered cells keep a linear field's gradient, which a fixed
+    regularization or float32 normal equations would lose."""
+    mesh = _jittered_volume(squash, rotate)
     slope = torch.tensor([1.0, 2.0, 3.0])
     gradient = compute_gradient_points_lsq(mesh, mesh.points @ slope)
     assert backends == ["warp"]

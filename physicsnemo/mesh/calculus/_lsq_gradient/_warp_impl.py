@@ -87,6 +87,99 @@ def _mesh_lsq_gradient_1d_kernel(
     solved[i] = solved_i
 
 
+@wp.func
+def _point_2d(points: wp.array2d(dtype=wp.float32), i: int) -> wp.vec2d:
+    """Coordinates of entity ``i``, in float64."""
+    return wp.vec2d(wp.float64(points[i, 0]), wp.float64(points[i, 1]))
+
+
+@wp.func
+def _point_3d(points: wp.array2d(dtype=wp.float32), i: int) -> wp.vec3d:
+    """Coordinates of entity ``i``, in float64."""
+    return wp.vec3d(
+        wp.float64(points[i, 0]), wp.float64(points[i, 1]), wp.float64(points[i, 2])
+    )
+
+
+@wp.func
+def _weight(dist2: wp.float64, weight_power: float, dist_eps: float) -> wp.float64:
+    """Inverse-distance weight of a neighbor at squared distance ``dist2``."""
+    return wp.pow(dist2 + wp.float64(dist_eps), wp.float64(-0.5 * weight_power))
+
+
+@wp.func
+def _normal_matrix_2d(
+    points: wp.array2d(dtype=wp.float32),
+    indices: wp.array(dtype=wp.int32),
+    start: int,
+    end: int,
+    center: wp.vec2d,
+    weight_power: float,
+    reg_eps: float,
+    dist_eps: float,
+) -> wp.mat22d:
+    """``A^T W A`` of one entity, plus ``reg_eps`` on the diagonal."""
+    m = wp.diag(wp.vec2d(wp.float64(reg_eps), wp.float64(reg_eps)))
+    for p in range(start, end):
+        d = _point_2d(points, indices[p]) - center
+        m = m + _weight(wp.dot(d, d), weight_power, dist_eps) * wp.outer(d, d)
+    return m
+
+
+@wp.func
+def _normal_matrix_3d(
+    points: wp.array2d(dtype=wp.float32),
+    indices: wp.array(dtype=wp.int32),
+    start: int,
+    end: int,
+    center: wp.vec3d,
+    weight_power: float,
+    reg_eps: float,
+    dist_eps: float,
+) -> wp.mat33d:
+    """``A^T W A`` of one entity, plus ``reg_eps`` on the diagonal."""
+    r = wp.float64(reg_eps)
+    m = wp.diag(wp.vec3d(r, r, r))
+    for p in range(start, end):
+        d = _point_3d(points, indices[p]) - center
+        m = m + _weight(wp.dot(d, d), weight_power, dist_eps) * wp.outer(d, d)
+    return m
+
+
+# The normal matrices are formed and solved in float64, in which the products
+# of float32 coordinates are exact. A regularized matrix counts as singular by
+# the test that rejects the singular systems the regularization leaves (one
+# neighbor, or collinear neighbors). An unregularized one comes from neighbors
+# that span the space, so only a determinant near float64 rounding, relative
+# to the matrix's scale, counts as singular: cells far thinner than float32
+# could solve keep their gradients.
+@wp.func
+def _inverse_2d(m: wp.mat22d, reg_eps: float, dist_eps: float) -> wp.mat22d:
+    """Inverse of a normal matrix, or zero where it counts as singular."""
+    scale = m[0, 0] * m[1, 1]
+    tolerance = wp.float64(1.0e-13)
+    if reg_eps > 0.0:
+        scale = scale + wp.float64(dist_eps)
+        tolerance = wp.float64(1.0e-6)
+    if wp.abs(wp.determinant(m)) > tolerance * scale:
+        return wp.inverse(m)
+    return wp.mat22d()
+
+
+@wp.func
+def _inverse_3d(m: wp.mat33d, reg_eps: float, dist_eps: float) -> wp.mat33d:
+    """Inverse of a normal matrix, or zero where it counts as singular."""
+    trace = m[0, 0] + m[1, 1] + m[2, 2]
+    scale = trace * trace * trace
+    tolerance = wp.float64(1.0e-13)
+    if reg_eps > 0.0:
+        scale = scale + wp.float64(dist_eps)
+        tolerance = wp.float64(1.0e-8)
+    if wp.abs(wp.determinant(m)) > tolerance * scale:
+        return wp.inverse(m)
+    return wp.mat33d()
+
+
 @wp.kernel
 def _mesh_lsq_gradient_2d_kernel(
     points: wp.array2d(dtype=wp.float32),
@@ -105,58 +198,32 @@ def _mesh_lsq_gradient_2d_kernel(
     # Read the CSR neighbor segment for this entity.
     start = offsets[i]
     end = offsets[i + 1]
-    count = end - start
-    if count < min_neighbors:
+    if end - start < min_neighbors:
         gradients[i, 0] = 0.0
         gradients[i, 1] = 0.0
         solved[i] = 0
         return
 
-    # Gather center state and initialize normal-equation accumulators.
-    px = points[i, 0]
-    py = points[i, 1]
-    pval = values[i]
-
-    m00 = float(reg_eps)
-    m01 = float(0.0)
-    m11 = float(reg_eps)
-    b0 = float(0.0)
-    b1 = float(0.0)
-
-    # Accumulate A^T W A and A^T W b over neighbors.
+    # Solve M g = A^T W b, both accumulated over the neighbors in float64.
+    center = _point_2d(points, i)
+    m = _normal_matrix_2d(
+        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    )
+    inverse = _inverse_2d(m, reg_eps, dist_eps)
+    value = wp.float64(values[i])
+    b = wp.vec2d()
     for p in range(start, end):
         n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dphi = values[n] - pval
+        d = _point_2d(points, n) - center
+        dphi = wp.float64(values[n]) - value
+        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
+    g = inverse * b
 
-        dist2 = dx * dx + dy * dy + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-
-        m00 = m00 + w * dx * dx
-        m01 = m01 + w * dx * dy
-        m11 = m11 + w * dy * dy
-
-        b0 = b0 + w * dx * dphi
-        b1 = b1 + w * dy * dphi
-
-    # Solve the 2x2 system analytically with determinant-based conditioning.
-    det = m00 * m11 - m01 * m01
-
-    gx = float(0.0)
-    gy = float(0.0)
+    gradients[i, 0] = wp.float32(g[0])
+    gradients[i, 1] = wp.float32(g[1])
     solved_i = int(0)
-    stability_scale = m00 * m11 + dist_eps
-    if wp.abs(det) > 1.0e-6 * stability_scale:
-        inv00 = m11 / det
-        inv01 = -m01 / det
-        inv11 = m00 / det
-        gx = inv00 * b0 + inv01 * b1
-        gy = inv01 * b0 + inv11 * b1
+    if inverse[0, 0] > wp.float64(0.0):
         solved_i = 1
-
-    gradients[i, 0] = gx
-    gradients[i, 1] = gy
     solved[i] = solved_i
 
 
@@ -178,86 +245,34 @@ def _mesh_lsq_gradient_3d_kernel(
     # Read the CSR neighbor segment for this entity.
     start = offsets[i]
     end = offsets[i + 1]
-    count = end - start
-    if count < min_neighbors:
+    if end - start < min_neighbors:
         gradients[i, 0] = 0.0
         gradients[i, 1] = 0.0
         gradients[i, 2] = 0.0
         solved[i] = 0
         return
 
-    # Gather center state and initialize normal-equation accumulators.
-    px = points[i, 0]
-    py = points[i, 1]
-    pz = points[i, 2]
-    pval = values[i]
-
-    m00 = float(reg_eps)
-    m01 = float(0.0)
-    m02 = float(0.0)
-    m11 = float(reg_eps)
-    m12 = float(0.0)
-    m22 = float(reg_eps)
-
-    b0 = float(0.0)
-    b1 = float(0.0)
-    b2 = float(0.0)
-
-    # Accumulate A^T W A and A^T W b over neighbors.
+    # Solve M g = A^T W b, both accumulated over the neighbors in float64.
+    center = _point_3d(points, i)
+    m = _normal_matrix_3d(
+        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    )
+    inverse = _inverse_3d(m, reg_eps, dist_eps)
+    value = wp.float64(values[i])
+    b = wp.vec3d()
     for p in range(start, end):
         n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dz = points[n, 2] - pz
-        dphi = values[n] - pval
+        d = _point_3d(points, n) - center
+        dphi = wp.float64(values[n]) - value
+        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
+    g = inverse * b
 
-        dist2 = dx * dx + dy * dy + dz * dz + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-
-        m00 = m00 + w * dx * dx
-        m01 = m01 + w * dx * dy
-        m02 = m02 + w * dx * dz
-        m11 = m11 + w * dy * dy
-        m12 = m12 + w * dy * dz
-        m22 = m22 + w * dz * dz
-
-        b0 = b0 + w * dx * dphi
-        b1 = b1 + w * dy * dphi
-        b2 = b2 + w * dz * dphi
-
-    # Build cofactors and solve the 3x3 system analytically.
-    c00 = m11 * m22 - m12 * m12
-    c01 = -(m01 * m22 - m12 * m02)
-    c02 = m01 * m12 - m11 * m02
-    c11 = m00 * m22 - m02 * m02
-    c12 = -(m00 * m12 - m01 * m02)
-    c22 = m00 * m11 - m01 * m01
-
-    det = m00 * c00 + m01 * c01 + m02 * c02
-
-    gx = float(0.0)
-    gy = float(0.0)
-    gz = float(0.0)
+    gradients[i, 0] = wp.float32(g[0])
+    gradients[i, 1] = wp.float32(g[1])
+    gradients[i, 2] = wp.float32(g[2])
     solved_i = int(0)
-    trace = m00 + m11 + m22
-    stability_scale = trace * trace * trace + dist_eps
-    if wp.abs(det) > 1.0e-8 * stability_scale:
-        inv_det = 1.0 / det
-        inv00 = c00 * inv_det
-        inv01 = c01 * inv_det
-        inv02 = c02 * inv_det
-        inv11 = c11 * inv_det
-        inv12 = c12 * inv_det
-        inv22 = c22 * inv_det
-
-        gx = inv00 * b0 + inv01 * b1 + inv02 * b2
-        gy = inv01 * b0 + inv11 * b1 + inv12 * b2
-        gz = inv02 * b0 + inv12 * b1 + inv22 * b2
+    if inverse[0, 0] > wp.float64(0.0):
         solved_i = 1
-
-    gradients[i, 0] = gx
-    gradients[i, 1] = gy
-    gradients[i, 2] = gz
     solved[i] = solved_i
 
 
@@ -323,50 +338,26 @@ def _mesh_lsq_gradient_2d_backward_kernel(
 
     start = offsets[i]
     end = offsets[i + 1]
-    count = end - start
-    if count < min_neighbors:
+    if end - start < min_neighbors:
         return
 
-    px = points[i, 0]
-    py = points[i, 1]
-    m00 = float(reg_eps)
-    m01 = float(0.0)
-    m11 = float(reg_eps)
+    center = _point_2d(points, i)
+    m = _normal_matrix_2d(
+        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    )
+    q = _inverse_2d(m, reg_eps, dist_eps) * wp.vec2d(
+        wp.float64(grad_output[i, 0]), wp.float64(grad_output[i, 1])
+    )
+
+    self_contrib = wp.float64(0.0)
     for p in range(start, end):
         n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dist2 = dx * dx + dy * dy + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-        m00 = m00 + w * dx * dx
-        m01 = m01 + w * dx * dy
-        m11 = m11 + w * dy * dy
-
-    p0 = float(0.0)
-    p1 = float(0.0)
-    det = m00 * m11 - m01 * m01
-    stability_scale = m00 * m11 + dist_eps
-    if wp.abs(det) > 1.0e-6 * stability_scale:
-        inv00 = m11 / det
-        inv01 = -m01 / det
-        inv11 = m00 / det
-        go0 = grad_output[i, 0]
-        go1 = grad_output[i, 1]
-        p0 = inv00 * go0 + inv01 * go1
-        p1 = inv01 * go0 + inv11 * go1
-
-    self_contrib = float(0.0)
-    for p in range(start, end):
-        n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dist2 = dx * dx + dy * dy + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-        c = w * (p0 * dx + p1 * dy)
-        wp.atomic_add(grad_values, n, c)
+        d = _point_2d(points, n) - center
+        c = _weight(wp.dot(d, d), weight_power, dist_eps) * wp.dot(q, d)
+        wp.atomic_add(grad_values, n, wp.float32(c))
         self_contrib = self_contrib - c
 
-    wp.atomic_add(grad_values, i, self_contrib)
+    wp.atomic_add(grad_values, i, wp.float32(self_contrib))
 
 
 @wp.kernel
@@ -385,74 +376,28 @@ def _mesh_lsq_gradient_3d_backward_kernel(
 
     start = offsets[i]
     end = offsets[i + 1]
-    count = end - start
-    if count < min_neighbors:
+    if end - start < min_neighbors:
         return
 
-    px = points[i, 0]
-    py = points[i, 1]
-    pz = points[i, 2]
-    m00 = float(reg_eps)
-    m01 = float(0.0)
-    m02 = float(0.0)
-    m11 = float(reg_eps)
-    m12 = float(0.0)
-    m22 = float(reg_eps)
+    center = _point_3d(points, i)
+    m = _normal_matrix_3d(
+        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    )
+    q = _inverse_3d(m, reg_eps, dist_eps) * wp.vec3d(
+        wp.float64(grad_output[i, 0]),
+        wp.float64(grad_output[i, 1]),
+        wp.float64(grad_output[i, 2]),
+    )
+
+    self_contrib = wp.float64(0.0)
     for p in range(start, end):
         n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dz = points[n, 2] - pz
-        dist2 = dx * dx + dy * dy + dz * dz + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-        m00 = m00 + w * dx * dx
-        m01 = m01 + w * dx * dy
-        m02 = m02 + w * dx * dz
-        m11 = m11 + w * dy * dy
-        m12 = m12 + w * dy * dz
-        m22 = m22 + w * dz * dz
-
-    c00 = m11 * m22 - m12 * m12
-    c01 = -(m01 * m22 - m12 * m02)
-    c02 = m01 * m12 - m11 * m02
-    c11 = m00 * m22 - m02 * m02
-    c12 = -(m00 * m12 - m01 * m02)
-    c22 = m00 * m11 - m01 * m01
-    det = m00 * c00 + m01 * c01 + m02 * c02
-
-    p0 = float(0.0)
-    p1 = float(0.0)
-    p2 = float(0.0)
-    trace = m00 + m11 + m22
-    stability_scale = trace * trace * trace + dist_eps
-    if wp.abs(det) > 1.0e-8 * stability_scale:
-        inv_det = 1.0 / det
-        inv00 = c00 * inv_det
-        inv01 = c01 * inv_det
-        inv02 = c02 * inv_det
-        inv11 = c11 * inv_det
-        inv12 = c12 * inv_det
-        inv22 = c22 * inv_det
-        go0 = grad_output[i, 0]
-        go1 = grad_output[i, 1]
-        go2 = grad_output[i, 2]
-        p0 = inv00 * go0 + inv01 * go1 + inv02 * go2
-        p1 = inv01 * go0 + inv11 * go1 + inv12 * go2
-        p2 = inv02 * go0 + inv12 * go1 + inv22 * go2
-
-    self_contrib = float(0.0)
-    for p in range(start, end):
-        n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dz = points[n, 2] - pz
-        dist2 = dx * dx + dy * dy + dz * dz + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-        c = w * (p0 * dx + p1 * dy + p2 * dz)
-        wp.atomic_add(grad_values, n, c)
+        d = _point_3d(points, n) - center
+        c = _weight(wp.dot(d, d), weight_power, dist_eps) * wp.dot(q, d)
+        wp.atomic_add(grad_values, n, wp.float32(c))
         self_contrib = self_contrib - c
 
-    wp.atomic_add(grad_values, i, self_contrib)
+    wp.atomic_add(grad_values, i, wp.float32(self_contrib))
 
 
 @wp.kernel
@@ -528,68 +473,42 @@ def _mesh_lsq_gradient_2d_backward_points_kernel(
 
     start = offsets[i]
     end = offsets[i + 1]
-    count = end - start
-    if count < min_neighbors:
+    if end - start < min_neighbors:
         return
 
-    px = points[i, 0]
-    py = points[i, 1]
-    vi = values[i]
-    m00 = float(reg_eps)
-    m01 = float(0.0)
-    m11 = float(reg_eps)
-    b0 = float(0.0)
-    b1 = float(0.0)
-    for p in range(start, end):
-        n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        s = values[n] - vi
-        dist2 = dx * dx + dy * dy + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-        m00 = m00 + w * dx * dx
-        m01 = m01 + w * dx * dy
-        m11 = m11 + w * dy * dy
-        b0 = b0 + w * dx * s
-        b1 = b1 + w * dy * s
-
-    det = m00 * m11 - m01 * m01
-    stability_scale = m00 * m11 + dist_eps
-    if wp.abs(det) <= 1.0e-6 * stability_scale:
+    center = _point_2d(points, i)
+    m = _normal_matrix_2d(
+        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    )
+    inverse = _inverse_2d(m, reg_eps, dist_eps)
+    if inverse[0, 0] <= wp.float64(0.0):
         return
 
-    inv00 = m11 / det
-    inv01 = -m01 / det
-    inv11 = m00 / det
-
-    g0 = inv00 * b0 + inv01 * b1
-    g1 = inv01 * b0 + inv11 * b1
-
-    go0 = grad_output[i, 0]
-    go1 = grad_output[i, 1]
-    p0 = inv00 * go0 + inv01 * go1
-    p1 = inv01 * go0 + inv11 * go1
-
+    value = wp.float64(values[i])
+    b = wp.vec2d()
     for p in range(start, end):
         n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        s = values[n] - vi
-        dist2 = dx * dx + dy * dy + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
+        d = _point_2d(points, n) - center
+        dphi = wp.float64(values[n]) - value
+        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
+    g = inverse * b
+    q = inverse * wp.vec2d(wp.float64(grad_output[i, 0]), wp.float64(grad_output[i, 1]))
 
-        dg = dx * g0 + dy * g1
-        pd = dx * p0 + dy * p1
-        common = s - dg
-        beta = (-weight_power / dist2) * w
+    power = wp.float64(weight_power)
+    for p in range(start, end):
+        n = indices[p]
+        d = _point_2d(points, n) - center
+        dist2 = wp.dot(d, d) + wp.float64(dist_eps)
+        w = wp.pow(dist2, wp.float64(-0.5 * weight_power))
+        pd = wp.dot(d, q)
+        common = wp.float64(values[n]) - value - wp.dot(d, g)
+        beta = (-power / dist2) * w
+        grad_d = (beta * pd * common) * d + w * (common * q - pd * g)
 
-        grad_dx = beta * pd * common * dx + w * (common * p0 - pd * g0)
-        grad_dy = beta * pd * common * dy + w * (common * p1 - pd * g1)
-
-        wp.atomic_add(grad_points, n, 0, grad_dx)
-        wp.atomic_add(grad_points, n, 1, grad_dy)
-        wp.atomic_add(grad_points, i, 0, -grad_dx)
-        wp.atomic_add(grad_points, i, 1, -grad_dy)
+        wp.atomic_add(grad_points, n, 0, wp.float32(grad_d[0]))
+        wp.atomic_add(grad_points, n, 1, wp.float32(grad_d[1]))
+        wp.atomic_add(grad_points, i, 0, -wp.float32(grad_d[0]))
+        wp.atomic_add(grad_points, i, 1, -wp.float32(grad_d[1]))
 
 
 @wp.kernel
@@ -609,98 +528,48 @@ def _mesh_lsq_gradient_3d_backward_points_kernel(
 
     start = offsets[i]
     end = offsets[i + 1]
-    count = end - start
-    if count < min_neighbors:
+    if end - start < min_neighbors:
         return
 
-    px = points[i, 0]
-    py = points[i, 1]
-    pz = points[i, 2]
-    vi = values[i]
-
-    m00 = float(reg_eps)
-    m01 = float(0.0)
-    m02 = float(0.0)
-    m11 = float(reg_eps)
-    m12 = float(0.0)
-    m22 = float(reg_eps)
-    b0 = float(0.0)
-    b1 = float(0.0)
-    b2 = float(0.0)
-    for p in range(start, end):
-        n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dz = points[n, 2] - pz
-        s = values[n] - vi
-        dist2 = dx * dx + dy * dy + dz * dz + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
-        m00 = m00 + w * dx * dx
-        m01 = m01 + w * dx * dy
-        m02 = m02 + w * dx * dz
-        m11 = m11 + w * dy * dy
-        m12 = m12 + w * dy * dz
-        m22 = m22 + w * dz * dz
-        b0 = b0 + w * dx * s
-        b1 = b1 + w * dy * s
-        b2 = b2 + w * dz * s
-
-    c00 = m11 * m22 - m12 * m12
-    c01 = -(m01 * m22 - m12 * m02)
-    c02 = m01 * m12 - m11 * m02
-    c11 = m00 * m22 - m02 * m02
-    c12 = -(m00 * m12 - m01 * m02)
-    c22 = m00 * m11 - m01 * m01
-    det = m00 * c00 + m01 * c01 + m02 * c02
-
-    trace = m00 + m11 + m22
-    stability_scale = trace * trace * trace + dist_eps
-    if wp.abs(det) <= 1.0e-8 * stability_scale:
+    center = _point_3d(points, i)
+    m = _normal_matrix_3d(
+        points, indices, start, end, center, weight_power, reg_eps, dist_eps
+    )
+    inverse = _inverse_3d(m, reg_eps, dist_eps)
+    if inverse[0, 0] <= wp.float64(0.0):
         return
 
-    inv_det = 1.0 / det
-    inv00 = c00 * inv_det
-    inv01 = c01 * inv_det
-    inv02 = c02 * inv_det
-    inv11 = c11 * inv_det
-    inv12 = c12 * inv_det
-    inv22 = c22 * inv_det
-
-    g0 = inv00 * b0 + inv01 * b1 + inv02 * b2
-    g1 = inv01 * b0 + inv11 * b1 + inv12 * b2
-    g2 = inv02 * b0 + inv12 * b1 + inv22 * b2
-
-    go0 = grad_output[i, 0]
-    go1 = grad_output[i, 1]
-    go2 = grad_output[i, 2]
-    p0 = inv00 * go0 + inv01 * go1 + inv02 * go2
-    p1 = inv01 * go0 + inv11 * go1 + inv12 * go2
-    p2 = inv02 * go0 + inv12 * go1 + inv22 * go2
-
+    value = wp.float64(values[i])
+    b = wp.vec3d()
     for p in range(start, end):
         n = indices[p]
-        dx = points[n, 0] - px
-        dy = points[n, 1] - py
-        dz = points[n, 2] - pz
-        s = values[n] - vi
-        dist2 = dx * dx + dy * dy + dz * dz + dist_eps
-        w = wp.pow(dist2, -0.5 * weight_power)
+        d = _point_3d(points, n) - center
+        dphi = wp.float64(values[n]) - value
+        b = b + _weight(wp.dot(d, d), weight_power, dist_eps) * dphi * d
+    g = inverse * b
+    q = inverse * wp.vec3d(
+        wp.float64(grad_output[i, 0]),
+        wp.float64(grad_output[i, 1]),
+        wp.float64(grad_output[i, 2]),
+    )
 
-        dg = dx * g0 + dy * g1 + dz * g2
-        pd = dx * p0 + dy * p1 + dz * p2
-        common = s - dg
-        beta = (-weight_power / dist2) * w
+    power = wp.float64(weight_power)
+    for p in range(start, end):
+        n = indices[p]
+        d = _point_3d(points, n) - center
+        dist2 = wp.dot(d, d) + wp.float64(dist_eps)
+        w = wp.pow(dist2, wp.float64(-0.5 * weight_power))
+        pd = wp.dot(d, q)
+        common = wp.float64(values[n]) - value - wp.dot(d, g)
+        beta = (-power / dist2) * w
+        grad_d = (beta * pd * common) * d + w * (common * q - pd * g)
 
-        grad_dx = beta * pd * common * dx + w * (common * p0 - pd * g0)
-        grad_dy = beta * pd * common * dy + w * (common * p1 - pd * g1)
-        grad_dz = beta * pd * common * dz + w * (common * p2 - pd * g2)
-
-        wp.atomic_add(grad_points, n, 0, grad_dx)
-        wp.atomic_add(grad_points, n, 1, grad_dy)
-        wp.atomic_add(grad_points, n, 2, grad_dz)
-        wp.atomic_add(grad_points, i, 0, -grad_dx)
-        wp.atomic_add(grad_points, i, 1, -grad_dy)
-        wp.atomic_add(grad_points, i, 2, -grad_dz)
+        wp.atomic_add(grad_points, n, 0, wp.float32(grad_d[0]))
+        wp.atomic_add(grad_points, n, 1, wp.float32(grad_d[1]))
+        wp.atomic_add(grad_points, n, 2, wp.float32(grad_d[2]))
+        wp.atomic_add(grad_points, i, 0, -wp.float32(grad_d[0]))
+        wp.atomic_add(grad_points, i, 1, -wp.float32(grad_d[1]))
+        wp.atomic_add(grad_points, i, 2, -wp.float32(grad_d[2]))
 
 
 def _launch_forward(
