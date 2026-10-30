@@ -103,8 +103,9 @@ def compute_gradient_points_lsq(
     implementation : {"torch", "warp"} or None, optional
         Backend for the ambient-space solve. ``None`` picks Warp, which is
         faster, for ``float32`` data on a mesh whose cells fill a space of at
-        most three dimensions, with the mesh's own neighbors, and PyTorch
-        otherwise. Warp computes in ``float32``, loses accuracy on curves and
+        most three dimensions, with the mesh's own neighbors and the default
+        ``weight_power``, and PyTorch otherwise and inside ``torch.func``
+        transforms. Warp computes in ``float32``, loses accuracy on curves and
         surfaces in a higher-dimensional space, and returns zero where the
         neighbors do not determine the gradient, where PyTorch returns the
         minimum-norm solution. For speed, pass ``"warp"`` with an

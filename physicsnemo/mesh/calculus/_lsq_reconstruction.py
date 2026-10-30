@@ -47,29 +47,21 @@ def _lsq_gradients(
 ) -> list[Float[torch.Tensor, "n_entities n_spatial_dims ..."]]:
     """LSQ gradients of several fields of one dtype, on the chosen backend.
 
-    ``None`` picks Warp, which is faster, where it gives PyTorch's answer:
-    ``float32`` data in one to three dimensions, where every neighborhood
-    spans the space (``neighbors_span``). Where the neighbors do not determine
-    every gradient component, Warp returns zero and PyTorch the minimum-norm
-    solution. The ill-conditioned systems of curves and surfaces in a
-    higher-dimensional space also lose accuracy in Warp's ``float32`` normal
-    equations.
+    ``None`` takes :meth:`MeshLSQGradient.default_implementation` where every
+    neighborhood spans the space (``neighbors_span``), and PyTorch elsewhere:
+    where the neighbors do not determine every gradient component, Warp
+    returns zero and PyTorch the minimum-norm solution. Where they span the
+    space, Warp also drops the small regularization that keeps degenerate
+    neighborhoods stable, since it would bias the gradients of thin cells.
     """
-    from physicsnemo.mesh.calculus._lsq_gradient import (
-        MeshLSQGradient,
-        mesh_lsq_gradient,
-    )
+    from physicsnemo.mesh.calculus._lsq_gradient import MeshLSQGradient
 
     if implementation is None:
-        use_warp = (
-            neighbors_span
-            and "warp" in MeshLSQGradient.available_implementations()
-            and points.device.type in ("cpu", "cuda")
-            and 0 < points.shape[0]
-            and points.shape[1] <= 3
-            and torch.float64 not in {points.dtype, *(v.dtype for v in values)}
+        implementation = (
+            MeshLSQGradient.default_implementation(points, values, weight_power)
+            if neighbors_span
+            else "torch"
         )
-        implementation = "warp" if use_warp else "torch"
     elif implementation not in ("torch", "warp"):
         raise ValueError(
             f"Invalid {implementation=!r}. Must be 'torch', 'warp', or None."
@@ -89,16 +81,21 @@ def _lsq_gradients(
             min_neighbors=min_neighbors,
         )
 
+    from physicsnemo.mesh.calculus._lsq_gradient._warp_impl import (
+        REG_EPS,
+        mesh_lsq_gradient_warp,
+    )
+
     ### One Warp call for all fields: flatten, stack, and split the result.
     flat = [v.reshape(v.shape[0], -1) for v in values]
-    gradients = mesh_lsq_gradient(
+    gradients = mesh_lsq_gradient_warp(
         points,
         torch.cat(flat, dim=1),
         adjacency.offsets,
         adjacency.indices,
         weight_power=weight_power,
         min_neighbors=min_neighbors,
-        implementation="warp",
+        reg_eps=0.0 if neighbors_span else REG_EPS,
     )
     return [
         g.reshape(*g.shape[:2], *v.shape[1:])

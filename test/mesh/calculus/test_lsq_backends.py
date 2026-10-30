@@ -21,6 +21,7 @@ import torch
 
 import physicsnemo.mesh.calculus._lsq_gradient as lsq_kernels
 import physicsnemo.mesh.calculus._lsq_gradient._torch_impl as lsq_torch
+import physicsnemo.mesh.calculus._lsq_gradient._warp_impl as lsq_warp
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus import (
     compute_gradient_cells_lsq,
@@ -56,22 +57,31 @@ MESHES = {
 def backends(monkeypatch):
     """Record which backend each LSQ solve runs on."""
     calls = []
-    torch_solve, warp_solve = (
-        lsq_torch._mesh_lsq_gradients_torch,
-        lsq_kernels.mesh_lsq_gradient,
-    )
+    torch_solve = lsq_torch._mesh_lsq_gradients_torch
+    warp_solve = lsq_warp.mesh_lsq_gradient_warp
 
     def spy_torch(*args, **kwargs):
         calls.append("torch")
         return torch_solve(*args, **kwargs)
 
     def spy_warp(*args, **kwargs):
-        calls.append(kwargs["implementation"])
+        calls.append("warp")
         return warp_solve(*args, **kwargs)
 
     monkeypatch.setattr(lsq_torch, "_mesh_lsq_gradients_torch", spy_torch)
-    monkeypatch.setattr(lsq_kernels, "mesh_lsq_gradient", spy_warp)
+    monkeypatch.setattr(lsq_warp, "mesh_lsq_gradient_warp", spy_warp)
     return calls
+
+
+def _jittered_volume(subdivisions: int = 4, squash: float = 1.0) -> Mesh:
+    """A cube volume with its points moved by up to 0.3 cell, then z squashed."""
+    mesh = cube_volume.load(subdivisions=subdivisions)
+    extent = mesh.points.max(dim=0).values - mesh.points.min(dim=0).values
+    spacing = extent.max() / subdivisions
+    generator = torch.Generator().manual_seed(0)
+    noise = 2 * torch.rand(mesh.points.shape, generator=generator) - 1
+    points = (mesh.points + 0.3 * spacing * noise) * torch.tensor([1, 1, 1 / squash])
+    return Mesh(points=points, cells=mesh.cells)
 
 
 @pytest.mark.parametrize(
@@ -106,6 +116,67 @@ def test_cells_with_one_neighbor_keep_the_minimum_norm_gradient():
     mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]]))
     gradient = compute_gradient_cells_lsq(mesh, mesh.cell_centroids.sum(dim=1))
     torch.testing.assert_close(gradient, torch.ones(2, 3))
+
+
+@pytest.mark.parametrize(
+    "case", ["float64 values", "own adjacency passed", "empty mesh", "weight_power=1"]
+)
+def test_none_keeps_torch_where_warp_could_differ(backends, case):
+    """Each condition of the default sends its case to PyTorch."""
+    mesh = MESHES["volume"]()
+    values = mesh.points.sum(dim=1)
+    kwargs = {}
+    if case == "float64 values":
+        values = values.double()
+    elif case == "own adjacency passed":
+        kwargs["adjacency"] = mesh.get_point_to_points_adjacency()
+    elif case == "empty mesh":
+        mesh = Mesh(points=mesh.points[:0], cells=mesh.cells[:0])
+        values = values[:0]
+    else:
+        kwargs["weight_power"] = 1.0
+    compute_gradient_points_lsq(mesh, values, **kwargs)
+    assert backends == ["torch"]
+
+
+def test_torch_func_transforms_use_torch(backends):
+    """Custom operators do not support torch.func, so the default avoids Warp."""
+    mesh = MESHES["volume"]()
+    torch.func.grad(lambda v: compute_gradient_points_lsq(mesh, v).square().sum())(
+        mesh.points.sum(dim=1)
+    )
+    assert backends == ["torch"]
+
+
+def test_default_compiles_with_its_backward():
+    """torch.compile traces the Warp op and its backward."""
+    mesh = MESHES["volume"]()
+
+    def loss(points, values):
+        cloud = Mesh(points=points, cells=mesh.cells)
+        return compute_gradient_points_lsq(cloud, values).square().sum()
+
+    def derivatives(fn):
+        points = mesh.points.clone().requires_grad_()
+        values = mesh.points.sum(dim=1).requires_grad_()
+        fn(points, values).backward()
+        return points.grad, values.grad
+
+    compiled = torch.compile(loss, backend="aot_eager")
+    for got, expected in zip(derivatives(compiled), derivatives(loss)):
+        torch.testing.assert_close(got, expected)
+
+
+def test_default_keeps_the_gradients_of_thin_cells(backends):
+    """Jittered cells squashed 1000:1 keep a linear field's gradient, which a
+    fixed regularization would bias."""
+    mesh = _jittered_volume(squash=1000.0)
+    slope = torch.tensor([1.0, 2.0, 3.0])
+    gradient = compute_gradient_points_lsq(mesh, mesh.points @ slope)
+    assert backends == ["warp"]
+    torch.testing.assert_close(
+        gradient, slope.expand_as(gradient), rtol=0, atol=1e-2 * slope.norm().item()
+    )
 
 
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
@@ -191,6 +262,32 @@ def test_second_derivatives_through_warp_match_torch():
         torch.testing.assert_close(
             warp, reference, rtol=1e-4, atol=1e-4 * reference.abs().max().item()
         )
+
+
+def test_create_graph_keeps_unsolved_points_at_zero():
+    """A point whose one neighbor cannot determine its gradient gets zero from
+    the Warp forward, and its derivatives stay zero under create_graph."""
+    points = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    adjacency = Adjacency(
+        offsets=torch.tensor([0, 1, 4, 7, 10]),
+        indices=torch.tensor([1, 0, 2, 3, 0, 1, 3, 0, 1, 2]),
+    )
+
+    def derivative(create_graph):
+        values = torch.arange(4.0, requires_grad=True)
+        gradient = compute_gradient_points_lsq(
+            Mesh(points=points), values, adjacency=adjacency, implementation="warp"
+        )
+        (result,) = torch.autograd.grad(
+            gradient, values, torch.ones_like(gradient), create_graph=create_graph
+        )
+        return result.detach()
+
+    torch.testing.assert_close(
+        derivative(create_graph=True), derivative(create_graph=False), atol=1e-4, rtol=0
+    )
 
 
 def test_warp_backward_with_values_computed_from_points():

@@ -384,6 +384,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Warp backend of the mesh least-squares gradient now works with
+  `torch.compile` through its backward pass, and gives second derivatives that
+  agree with its first derivatives.
 - Multi-node jobs launched with `srun` no longer hang in
   `DistributedManager.initialize()` when Slurm starts rank 0 on a different node
   from the one that ran `srun`. The rendezvous now uses the job step's first node.
