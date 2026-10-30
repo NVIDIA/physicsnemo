@@ -184,10 +184,10 @@ each coefficient, as in the original `physicsnemo-sym` example) and
 training for 100,000 steps gives comparable results, reported as the
 batch-wise `mean ± std` of the predicted field at the final step:
 
-| Property                                  | OpenFOAM (true) | PINN (predicted, field) |
-| ----------------------------------------- | --------------- | ----------------------- |
-| Kinematic viscosity $\nu$ (m²/s)          | 1.00 × 10⁻²     | 9.87 × 10⁻³ ± 1.0 × 10⁻³ |
-| Thermal diffusivity $D$ (m²/s)            | 2.00 × 10⁻³     | 2.40 × 10⁻³ ± 6 × 10⁻⁴   |
+| Property                         | OpenFOAM (true) | PINN (predicted, field)  |
+| -------------------------------- | --------------- | ------------------------ |
+| Kinematic viscosity $\nu$ (m²/s) | 1.00 × 10⁻²     | 9.87 × 10⁻³ ± 1.0 × 10⁻³ |
+| Thermal diffusivity $D$ (m²/s)   | 2.00 × 10⁻³     | 2.40 × 10⁻³ ± 6 × 10⁻⁴   |
 
 The dataset corresponds to a Prandtl number of 5 ($D = \nu/5$), so the
 diffusion term $D \nabla^2 c$ is small compared to advection in the AD
@@ -204,15 +204,15 @@ If you previously ran the equivalent example
 in `physicsnemo-sym`, here is what changed in the migration to PhysicsNeMo
 v2.0. The science is unchanged — only the API is leaner.
 
-| Concern                  | Old (`physicsnemo-sym`)                                                    | New (`physicsnemo` + `physicsnemo.sym`)                          |
-| ------------------------ | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Pre-built PDEs           | `from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes`           | Define the PDE inline as a `PDE` subclass with SymPy             |
-| Network construction     | `instantiate_arch(..., cfg=cfg.arch.fully_connected)` + `Key("u")`         | `physicsnemo.models.mlp.fully_connected.FullyConnected` directly |
-| Data ingestion           | `csv_to_dict` + `PointwiseConstraint.from_numpy(...)`                     | `numpy.genfromtxt` + a plain mini-batch loop                     |
-| Residual / loss assembly | `make_nodes(detach_names=...)` + `Domain.add_constraint`                   | `PhysicsInformer(..., detach_names=...)` called explicitly       |
-| Training loop            | `Solver(cfg, domain).solve()`                                              | Plain PyTorch `for step in range(...)` loop                      |
-| Monitoring               | `PointwiseMonitor(..., metrics=...)`                                       | `PythonLogger` + `.item()` (scalar mode) or `.mean()/.std()` (field mode) |
-| Configuration            | `physicsnemo.sym.hydra` (`PhysicsNeMoConfig`, `instantiate_arch`)         | Plain Hydra `@hydra.main` + a small `config.yaml`                |
+| Concern                  | Old (`physicsnemo-sym`)                                            | New (`physicsnemo` + `physicsnemo.sym`)                                   |
+| ------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Pre-built PDEs           | `from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes`   | Define the PDE inline as a `PDE` subclass with SymPy                      |
+| Network construction     | `instantiate_arch(..., cfg=cfg.arch.fully_connected)` + `Key("u")` | `physicsnemo.models.mlp.fully_connected.FullyConnected` directly          |
+| Data ingestion           | `csv_to_dict` + `PointwiseConstraint.from_numpy(...)`              | `numpy.genfromtxt` + a plain mini-batch loop                              |
+| Residual / loss assembly | `make_nodes(detach_names=...)` + `Domain.add_constraint`           | `PhysicsInformer(..., detach_names=...)` called explicitly                |
+| Training loop            | `Solver(cfg, domain).solve()`                                      | Plain PyTorch `for step in range(...)` loop                               |
+| Monitoring               | `PointwiseMonitor(..., metrics=...)`                               | `PythonLogger` + `.item()` (scalar mode) or `.mean()/.std()` (field mode) |
+| Configuration            | `physicsnemo.sym.hydra` (`PhysicsNeMoConfig`, `instantiate_arch`)  | Plain Hydra `@hydra.main` + a small `config.yaml`                         |
 
 ## Additional reading
 

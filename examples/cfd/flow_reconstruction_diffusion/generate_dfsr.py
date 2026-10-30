@@ -89,22 +89,17 @@ def sampler(
         raise ValueError(f'Invalid scaling "{scaling}"')
 
     # Helper functions for VP & VE noise level schedules.
-    vp_sigma = (
-        lambda beta_d, beta_min: lambda t: (
-            np.e ** (0.5 * beta_d * (t**2) + beta_min * t) - 1
-        )
-        ** 0.5
+    vp_sigma = lambda beta_d, beta_min: (
+        lambda t: (np.e ** (0.5 * beta_d * (t**2) + beta_min * t) - 1) ** 0.5
     )
-    vp_sigma_deriv = (
-        lambda beta_d, beta_min: lambda t: 0.5
-        * (beta_min + beta_d * t)
-        * (sigma(t) + 1 / sigma(t))
+    vp_sigma_deriv = lambda beta_d, beta_min: (
+        lambda t: 0.5 * (beta_min + beta_d * t) * (sigma(t) + 1 / sigma(t))
     )
-    vp_sigma_inv = (
-        lambda beta_d, beta_min: lambda sigma: (
-            (beta_min**2 + 2 * beta_d * (sigma**2 + 1).log()).sqrt() - beta_min
+    vp_sigma_inv = lambda beta_d, beta_min: (
+        lambda sigma: (
+            ((beta_min**2 + 2 * beta_d * (sigma**2 + 1).log()).sqrt() - beta_min)
+            / beta_d
         )
-        / beta_d
     )
     ve_sigma = lambda t: t.sqrt()
     ve_sigma_deriv = lambda t: 0.5 / t.sqrt()
@@ -955,9 +950,8 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 if cfg.precond == "dfsr_cond":
-                    physical_gradient_func = (
-                        lambda x: vorticity_residual(scaler.inverse(x))[0]
-                        / scaler.scale()
+                    physical_gradient_func = lambda x: (
+                        vorticity_residual(scaler.inverse(x))[0] / scaler.scale()
                     )
 
                 num_of_reverse_steps = int(cfg.r * (0.7**it))

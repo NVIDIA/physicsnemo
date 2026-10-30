@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.mesh.utilities._gather import gather_rows
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -209,7 +210,7 @@ def compute_edge_support_volume_cell_fractions(
         edge_to_cells[final_edge_indices, final_slots] = final_cell_indices
 
     ### Compute circumcenters of all cells
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
+    cell_vertices = gather_rows(mesh.points, mesh.cells)  # (n_cells, 3, n_spatial_dims)
     circumcenters = compute_circumcenters(cell_vertices)  # (n_cells, n_spatial_dims)
 
     ### For each edge, compute dual edge length segments
@@ -333,7 +334,8 @@ def compute_vertex_support_volume_cell_fractions(
             _compute_meyer_mixed_voronoi_areas,
         )
 
-        cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
+        # (n_cells, 3, n_spatial_dims)
+        cell_vertices = gather_rows(mesh.points, mesh.cells)
         cell_areas = mesh.cell_areas  # (n_cells,)
 
         voronoi_areas[:] = _compute_meyer_mixed_voronoi_areas(
@@ -348,10 +350,10 @@ def compute_vertex_support_volume_cell_fractions(
     dual_volumes = torch.zeros(mesh.n_points, dtype=dtype, device=device)
     dual_volumes.scatter_add_(0, global_vertex_indices, voronoi_areas)
 
-    # Divide each per-cell area by the vertex total (guaranteed to sum to 1.0)
-    fractions = voronoi_areas / dual_volumes[global_vertex_indices].clamp(
-        min=safe_eps(dtype)
-    )
+    # Divide each per-cell area by the vertex total (guaranteed to sum to 1.0).
+    # Only a zero total (whose areas are all 0) is replaced, keeping its 0.
+    vertex_totals = dual_volumes[global_vertex_indices]
+    fractions = voronoi_areas / torch.where(vertex_totals > 0, vertex_totals, 1.0)
 
     cell_vertex_pairs = torch.stack([cell_indices_out, local_vertex_indices], dim=1)
     return fractions, cell_vertex_pairs
@@ -420,7 +422,7 @@ def compute_dual_edge_volumes_in_cells(
     cell_indices = parent_cells[matches]
 
     ### Compute circumcenters
-    cell_vertices = mesh.points[mesh.cells]
+    cell_vertices = gather_rows(mesh.points, mesh.cells)
     circumcenters = compute_circumcenters(cell_vertices)
 
     ### Compute edge midpoints

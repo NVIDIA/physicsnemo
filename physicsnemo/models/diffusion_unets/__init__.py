@@ -15,6 +15,7 @@
 # limitations under the License.
 # ruff: noqa
 
-from .song_unet import SongUNet, SongUNetPosEmbd, SongUNetPosLtEmbd
 from .dhariwal_unet import DhariwalUNet
+from .diffusion_unet_3d import DiffusionUNet3D
+from .song_unet import SongUNet, SongUNetPosEmbd, SongUNetPosLtEmbd
 from .unet import CorrDiffRegressionUNet, StormCastUNet, UNet

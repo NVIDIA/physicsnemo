@@ -16,8 +16,11 @@
 
 """Tests for utility functions."""
 
+import pytest
 import torch
 
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.utilities._gather import gather_rows
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 
 
@@ -154,3 +157,42 @@ class TestPadding:
 
         assert torch.equal(padded[:2], tensor)
         assert torch.equal(padded[2:], torch.zeros(2, 2, dtype=tensor.dtype))
+
+
+class TestGatherRows:
+    """Tests for gather_rows, the index_select gather of cell vertices."""
+
+    @pytest.mark.parametrize("index_shape", [(7,), (5, 3), (4, 2, 3), (0, 3)])
+    def test_matches_advanced_indexing(self, index_shape):
+        generator = torch.Generator().manual_seed(0)
+        values = torch.randn(9, 2, 3, generator=generator, dtype=torch.float64)
+        indices = torch.randint(0, 9, index_shape, generator=generator)
+
+        values_a = values.clone().requires_grad_(True)
+        values_b = values.clone().requires_grad_(True)
+        gathered = gather_rows(values_a, indices)
+        expected = values_b[indices]
+        assert torch.equal(gathered, expected)
+
+        upstream = torch.randn(expected.shape, generator=generator, dtype=torch.float64)
+        (gathered * upstream).sum().backward()
+        (expected * upstream).sum().backward()
+        torch.testing.assert_close(values_a.grad, values_b.grad)
+
+    def test_noncontiguous_indices(self):
+        values = torch.arange(12.0).reshape(6, 2)
+        cells = torch.tensor([[0, 1, 2], [3, 4, 5], [5, 0, 1]])
+        assert torch.equal(gather_rows(values, cells[:, 1]), values[cells[:, 1]])
+        assert torch.equal(gather_rows(values, cells[:, 1:]), values[cells[:, 1:]])
+
+    @pytest.mark.parametrize("prop", ["cell_centroids", "cell_areas", "cell_normals"])
+    def test_mesh_property_gradcheck(self, prop):
+        generator = torch.Generator().manual_seed(1)
+        points = torch.randn(8, 3, generator=generator, dtype=torch.float64)
+        cells = torch.stack(
+            [torch.randperm(8, generator=generator)[:3] for _ in range(5)]
+        )
+        assert torch.autograd.gradcheck(
+            lambda p: getattr(Mesh(points=p, cells=cells), prop),
+            (points.requires_grad_(True),),
+        )

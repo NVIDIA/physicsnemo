@@ -18,6 +18,7 @@
 
 import importlib
 import inspect
+import math
 import warnings
 
 import pytest
@@ -27,6 +28,9 @@ import physicsnemo.nn.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import sobolev_deform_points
 from physicsnemo.nn.functional.geometry import SobolevDeformPoints
+from physicsnemo.nn.functional.geometry.deform._sobolev_torch_impl import (
+    _assemble_p1_operators,
+)
 
 
 def _dense_helmholtz_reference(
@@ -1253,3 +1257,190 @@ def test_warp_backend_rejects_higher_dimensional_simplices(device):
             length_scale=0.2,
             implementation="warp",
         )
+
+
+def _linalg_p1_operators(
+    points: torch.Tensor,
+    cells: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Former cell measures and local stiffness, by det and inv of the Gram matrix."""
+
+    num_manifold_dims = cells.shape[1] - 1
+    cell_points = points[:, cells]
+    edge_matrix = cell_points[:, :, 1:, :] - cell_points[:, :, :1, :]
+    gram = edge_matrix @ edge_matrix.mT
+    cell_measures = torch.linalg.det(gram).clamp_min(0).sqrt() / math.factorial(
+        num_manifold_dims
+    )
+    basis_gradient_map = torch.cat(
+        (
+            -points.new_ones((1, num_manifold_dims)),
+            torch.eye(num_manifold_dims, dtype=points.dtype, device=points.device),
+        )
+    )
+    local_stiffness = cell_measures[..., None, None] * (
+        basis_gradient_map @ torch.linalg.inv(gram) @ basis_gradient_map.T
+    )
+    return cell_measures, local_stiffness
+
+
+def _disjoint_cells(
+    manifold_dim: int,
+    spatial_dim: int,
+    cell_shape: str,
+    *,
+    height: float = 1.0e-2,
+    num_cells: int = 64,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return float64 ``(1, N, D)`` points of disjoint random simplices.
+
+    Thin cells put their last vertex at ``height`` above the centroid of the
+    others.
+    """
+
+    vertices = torch.randn((num_cells, manifold_dim + 1, spatial_dim))
+    if cell_shape == "thin":
+        offset = torch.randn((num_cells, spatial_dim))
+        if manifold_dim > 1:
+            base_edges = vertices[:, 1:-1] - vertices[:, :1]
+            base_basis, _ = torch.linalg.qr(base_edges.mT)
+            offset = offset - (
+                base_basis @ (base_basis.mT @ offset.unsqueeze(-1))
+            ).squeeze(-1)
+        offset = offset / torch.linalg.vector_norm(offset, dim=-1, keepdim=True)
+        vertices[:, -1] = vertices[:, :-1].mean(dim=1) + height * offset
+    cells = torch.arange(num_cells * (manifold_dim + 1)).reshape(num_cells, -1)
+    return vertices.reshape(1, -1, spatial_dim).double(), cells
+
+
+def _relative_cell_error(actual: torch.Tensor, expected: torch.Tensor) -> torch.Tensor:
+    """Largest entry error of each local matrix relative to its largest entry."""
+
+    error = (actual.double() - expected).abs().amax(dim=(-1, -2))
+    return error / expected.abs().amax(dim=(-1, -2))
+
+
+@pytest.mark.parametrize("scale", [1.0e-8, 1.0, 1.0e8])
+@pytest.mark.parametrize("cell_shape", ["random", "thin"])
+@pytest.mark.parametrize(
+    ("manifold_dim", "spatial_dim"),
+    [(1, 1), (1, 3), (2, 2), (2, 3), (3, 3), (2, 4), (4, 4)],
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_p1_operators_match_linalg_gram_reference(
+    device, dtype, manifold_dim, spatial_dim, cell_shape, scale
+):
+    points, cells = _disjoint_cells(manifold_dim, spatial_dim, cell_shape)
+    # Round the inputs first, so the float64 reference sees the same cells.
+    points = (scale * points).to(dtype).to(device)
+    cells = cells.to(device)
+
+    mass, local_stiffness, stiffness_diagonal = _assemble_p1_operators(points, cells)
+    cell_measures, expected_stiffness = _linalg_p1_operators(points.double(), cells)
+
+    assert local_stiffness.dtype == dtype
+    if dtype == torch.float64:
+        rtol = 1.0e-9
+    elif manifold_dim == spatial_dim:
+        rtol = 2.0e-3
+    else:
+        rtol = 1.0e-2  # embedded cells still use G = E E^T, as before
+    expected_mass = cell_measures.mean(dim=-1, keepdim=True) / (manifold_dim + 1)
+    torch.testing.assert_close(
+        mass.double(), expected_mass.expand_as(mass), atol=0.0, rtol=rtol
+    )
+    assert _relative_cell_error(local_stiffness, expected_stiffness).max() < rtol
+    torch.testing.assert_close(
+        stiffness_diagonal,
+        local_stiffness.diagonal(dim1=-2, dim2=-1).reshape(1, -1),
+    )
+
+
+@pytest.mark.parametrize("manifold_dim", [2, 3])
+def test_p1_operators_invert_thin_full_dimensional_edges_accurately(manifold_dim):
+    points, cells = _disjoint_cells(manifold_dim, manifold_dim, "thin", height=1e-3)
+    points = points.float()
+    _, expected_stiffness = _linalg_p1_operators(points.double(), cells)
+
+    _, local_stiffness, _ = _assemble_p1_operators(points, cells)
+    _, gram_stiffness = _linalg_p1_operators(points, cells)
+
+    # Inverting E rather than G = E E^T avoids squaring its condition number.
+    error = _relative_cell_error(local_stiffness, expected_stiffness).max()
+    gram_error = _relative_cell_error(gram_stiffness, expected_stiffness).max()
+    assert error < 1.0e-3
+    assert gram_error > 100.0 * error
+
+
+@pytest.mark.parametrize("scale", [1.0e-12, 1.0e12])
+@pytest.mark.parametrize(("manifold_dim", "spatial_dim"), [(2, 2), (2, 3), (3, 3)])
+def test_p1_operators_of_tiny_and_huge_float32_cells_avoid_gram_determinant_range(
+    manifold_dim, spatial_dim, scale
+):
+    points, cells = _disjoint_cells(manifold_dim, spatial_dim, "random", num_cells=8)
+    expected_mass, expected_stiffness, _ = _assemble_p1_operators(points, cells)
+    scaled_points = (scale * points).float()
+
+    # det(G) scales as scale^(2m): it under- or overflows float32, so the
+    # former Gram-determinant check rejected these cells.
+    cell_measures, _ = _linalg_p1_operators(scaled_points, cells)
+    assert not (torch.isfinite(cell_measures) & (cell_measures > 0)).any()
+
+    mass, local_stiffness, _ = _assemble_p1_operators(scaled_points, cells)
+    torch.testing.assert_close(
+        mass.double(), scale**manifold_dim * expected_mass, atol=0.0, rtol=1.0e-5
+    )
+    expected_stiffness = scale ** (manifold_dim - 2) * expected_stiffness
+    assert _relative_cell_error(local_stiffness, expected_stiffness).max() < 1.0e-3
+
+
+@pytest.mark.parametrize(
+    "cell_points",
+    [
+        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+        [[0.0, 0.0, 0.0], [1.0, 1.0, 0.0], [2.0, 2.0, 0.0]],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        [[0.0, 0.0], [1.0, 0.0], [0.0, float("nan")]],
+        [[0.0, 0.0], [1.0, 0.0], [0.0, float("inf")]],
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_degenerate_or_nonfinite_cells_are_rejected(cell_points, dtype):
+    points = torch.tensor(cell_points, dtype=dtype)
+    cells = torch.arange(points.shape[0]).unsqueeze(0)
+
+    with pytest.raises(ValueError, match="nondegenerate"):
+        sobolev_deform_points(
+            points,
+            cells,
+            torch.zeros_like(points),
+            length_scale=1.0,
+            implementation="torch",
+        )
+
+
+@pytest.mark.parametrize(("manifold_dim", "spatial_dim"), [(1, 2), (2, 3), (3, 3)])
+def test_closed_form_p1_operators_gradcheck(manifold_dim, spatial_dim):
+    points, cells = _disjoint_cells(manifold_dim, spatial_dim, "random", num_cells=2)
+    points = points.squeeze(0).requires_grad_()
+    displacement = 0.1 * torch.randn_like(points).requires_grad_()
+
+    def operation(point_values, displacement_values):
+        return sobolev_deform_points(
+            point_values,
+            cells,
+            displacement_values,
+            length_scale=0.35,
+            max_iterations=64,
+            tolerance=1.0e-14,
+            implementation="torch",
+        )
+
+    assert torch.autograd.gradcheck(
+        operation,
+        (points, displacement),
+        eps=1.0e-6,
+        atol=2.0e-5,
+        rtol=2.0e-4,
+    )

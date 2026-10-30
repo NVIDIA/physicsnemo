@@ -46,7 +46,9 @@ def load(
 ) -> Mesh[3, 3]:
     """Create a tetrahedral volume mesh of a cylinder.
 
-    The cylinder is filled with tetrahedra using PyVista's delaunay_3d filter.
+    The interior is filled with a fan of tetrahedra from the center to each
+    triangle of a PyVista cylinder surface. The cylinder is convex, so the
+    tetrahedra fill it without overlap.
 
     Parameters
     ----------
@@ -64,9 +66,10 @@ def load(
     Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
+    from physicsnemo.mesh.generate._simplex_ops import orient_positive
     from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
-    ### Create a cylinder surface and fill it with tetrahedra
+    ### Create a cylinder surface
     # PyVista's Cylinder is centered at origin by default
     cylinder = pv.Cylinder(
         radius=radius,
@@ -74,9 +77,12 @@ def load(
         resolution=resolution,
         capping=True,
     )
+    # Weld coincident points, with a tolerance relative to the size
+    surface = from_pyvista(cylinder).clean(tolerance=1e-6 * min(radius, height))
 
-    ### Use delaunay_3d to fill the interior with tetrahedra
-    volume = cylinder.delaunay_3d()
-
-    ### Convert to physicsnemo Mesh and move to device
-    return from_pyvista(volume).to(device=device)
+    ### Fill the convex surface with a fan of tetrahedra from its center
+    points = torch.cat([surface.points, surface.points.new_zeros(1, 3)], dim=0)
+    center = torch.full((surface.n_cells, 1), surface.n_points, dtype=torch.int64)
+    cells = torch.cat([center, surface.cells], dim=1)
+    mesh = Mesh(points=points, cells=orient_positive(points, cells))
+    return mesh.to(device=device)

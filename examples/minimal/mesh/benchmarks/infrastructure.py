@@ -331,7 +331,7 @@ def plot_speedup_chart(
 
     ax.set_ylabel("Speedup over PyVista (CPU)", fontsize=12)
     ax.set_yscale("log")
-    chart_title = "Speedup over PyVista (CPU) \u2014 Largest Mesh Size"
+    chart_title = "Speedup over PyVista (CPU)"
     if title_suffix:
         chart_title += f"  [{title_suffix}]"
     ax.set_title(chart_title, fontsize=14)

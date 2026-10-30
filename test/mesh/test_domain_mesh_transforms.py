@@ -21,6 +21,7 @@ import math
 
 import pytest
 import torch
+from tensordict import TensorClass
 
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import (
@@ -30,6 +31,78 @@ from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
     two_tetrahedra,
 )
+
+
+def test_domain_mesh_inherits_tensorclass():
+    assert TensorClass in DomainMesh.__bases__
+
+
+class FieldlessDomainMesh(DomainMesh):
+    """Downstream-style DomainMesh subclass with no redeclared fields."""
+
+
+class DomainMeshWithExtra(DomainMesh):
+    """DomainMesh subtype with one additional floating field."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+class MeshWithExtra(Mesh):
+    """Nested Mesh subtype with one additional floating field."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+def test_fieldless_subclass_keeps_constructor_defaults():
+    domain = FieldlessDomainMesh(single_triangle_2d.load())
+
+    assert type(domain) is FieldlessDomainMesh
+    assert domain.n_boundaries == 0
+    assert not list(domain.global_data.keys())
+
+
+def test_subclass_with_extra_field_needs_no_init(tmp_path):
+    """A subclass that adds a field constructs, clones, moves, indexes, rebuilds
+    and round-trips without an ``__init__`` of its own."""
+    interior = single_triangle_2d.load()
+    domain = DomainMeshWithExtra(
+        interior=interior,
+        boundaries={"wall": interior.clone()},
+        extra=torch.tensor(2.0),
+    )
+    assert type(domain) is DomainMeshWithExtra
+    assert torch.equal(domain.extra, torch.tensor(2.0))
+    assert domain.boundary_names == ["wall"]
+    assert DomainMeshWithExtra(interior=interior).extra is None
+
+    for result in (
+        domain.clone(),
+        domain.to(torch.float64),
+        domain.to("cpu"),
+        domain[...],
+        domain.apply_to_meshes(lambda m: m.clone()),  # rebuilds through __init__
+    ):
+        assert type(result) is DomainMeshWithExtra
+        assert torch.equal(result.extra.float(), domain.extra)
+        assert torch.equal(result.boundaries["wall"].points.float(), interior.points)
+
+    domain.save(tmp_path / "domain")
+    loaded = DomainMeshWithExtra.load(tmp_path / "domain")
+    assert type(loaded) is DomainMeshWithExtra
+    assert torch.equal(loaded.extra, domain.extra)
+    assert torch.equal(loaded.boundaries["wall"].cells, interior.cells)
+
+
+def test_domain_mesh_is_not_subscriptable():
+    """Inheriting TensorClass must not expose its configuration subscript.
+
+    ``Mesh[m, s]`` is a dimension specialization; ``DomainMesh`` has no such
+    parametrization, so a subscript is a mistake and must say so rather than
+    return ``TensorClass``'s unrelated configuration class.
+    """
+    with pytest.raises(TypeError, match="not subscriptable"):
+        DomainMesh["nocast"]
+
 
 ### Fixtures
 
@@ -143,6 +216,16 @@ class TestApplyToMeshes:
     def test_returns_domain_mesh(self, tet_domain):
         dm2 = tet_domain.apply_to_meshes(lambda m: m)
         assert isinstance(dm2, DomainMesh)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_results_keep_the_device_fn_chose(self, tet_domain):
+        """Boundaries are not moved back to the device of the source domain."""
+        on_cuda = tet_domain.to("cuda")
+        dm2 = on_cuda.apply_to_meshes(lambda m: m.to("cpu"))
+        assert dm2.interior.points.device.type == "cpu"
+        for name in tet_domain.boundary_names:
+            assert dm2.boundaries[name].points.device.type == "cpu"
+            assert dm2.boundaries[name].cells.device.type == "cpu"
 
     def test_interior_only(self, tet_domain):
         """apply_to_meshes with boundaries=False should leave boundaries unchanged."""
@@ -777,6 +860,37 @@ def test_domain_mesh_to_float_dtype_preserves_integer_cells(known_device):
     assert dm64.boundaries["b"].points.dtype == torch.float64
     assert dm64.boundaries["b"].cells.dtype == torch.int64
     assert dm64.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_operations_preserve_subclass_fields():
+    """Transforms and dtype conversion preserve the subtype and added fields."""
+    base = single_triangle_2d.load()
+    interior = MeshWithExtra(
+        points=base.points,
+        cells=base.cells,
+        extra=torch.arange(3, dtype=torch.float32),
+    )
+    domain = DomainMeshWithExtra(
+        interior=interior,
+        boundaries={"wall": interior.clone()},
+        extra=torch.tensor(2.0, dtype=torch.float32),
+    )
+
+    translated = domain.translate([1.0, 0.0])
+    converted = domain.to(torch.float64)
+
+    assert type(translated) is DomainMeshWithExtra
+    assert type(translated.interior) is MeshWithExtra
+    assert type(translated.boundaries["wall"]) is MeshWithExtra
+    assert torch.equal(translated.extra, domain.extra)
+    assert type(converted) is DomainMeshWithExtra
+    assert type(converted.interior) is MeshWithExtra
+    assert type(converted.boundaries["wall"]) is MeshWithExtra
+    assert converted.extra.dtype == torch.float64
+    assert converted.interior.extra.dtype == torch.float64
+    assert converted.boundaries["wall"].extra.dtype == torch.float64
+    assert converted.interior.points.dtype == torch.float64
+    assert converted.interior.cells.dtype == torch.int64
 
 
 def test_domain_mesh_to_same_float_dtype_preserves_integer_cells():

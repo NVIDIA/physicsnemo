@@ -113,19 +113,20 @@ def sdf_polygon_2d(vertices, chunk: int = 65536) -> ImplicitFunction:
             p = x[s : s + chunk]
             pa = p[:, None, :] - a[None, :, :]
             ba = (b - a)[None, :, :]
-            # clamp_min: a zero-length segment (duplicate consecutive
-            # vertex) would make t = 0/0 = NaN, and the min over segments
-            # then poisons EVERY query; clamped, the degenerate segment
-            # reduces to distance-to-point.
-            t = ((pa * ba).sum(-1) / (ba * ba).sum(-1).clamp_min(1e-300)).clamp(
-                0.0, 1.0
-            )
-            d2 = ((pa - t[..., None] * ba) ** 2).sum(-1)
-            dist = d2.min(dim=1).values.clamp_min(1e-300).sqrt()
+            # A zero-length segment (duplicate consecutive vertex) would
+            # make t = 0/0 = NaN, and the min over segments then poisons
+            # EVERY query; dividing by 1 instead, the degenerate segment
+            # reduces to distance-to-point. (A 1e-300 floor is 0 in float32.)
+            ba2 = (ba * ba).sum(-1)
+            t = ((pa * ba).sum(-1) / torch.where(ba2 > 0, ba2, 1.0)).clamp(0.0, 1.0)
+            d2 = ((pa - t[..., None] * ba) ** 2).sum(-1).min(dim=1).values
+            # Exactly 0 on the boundary, with a zero gradient there rather
+            # than the NaN of sqrt'(0), so Newton projection stops on it.
+            dist = torch.where(d2 > 0, torch.where(d2 > 0, d2, 1.0).sqrt(), 0.0)
             ay, by = a[None, :, 1], b[None, :, 1]
             py = p[:, 1:2]
             straddle = (ay > py) != (by > py)
-            t_cross = (py - ay) / (by - ay + 1e-300)
+            t_cross = (py - ay) / torch.where(straddle, by - ay, 1.0)
             x_cross = a[None, :, 0] + t_cross * (b[None, :, 0] - a[None, :, 0])
             crossings = (straddle & (x_cross > p[:, 0:1])).sum(dim=1)
             sign = torch.where(crossings % 2 == 1, -1.0, 1.0).to(x.dtype)

@@ -35,6 +35,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 
 from physicsnemo.datapipes.cae.domino_datapipe import create_domino_dataset
+from physicsnemo.distributed import fused_all_reduce
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.models.domino.utils.utils import dict_to_device
@@ -43,10 +44,22 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from utils import (
     count_global_features,
+    get_keys_to_read,
     infer_shapes,
     load_scaling,
     masked_mse,
 )
+
+
+def average_over_ranks(
+    totals: Dict[str, float], num_batches: int, device: torch.device
+) -> Dict[str, float]:
+    """Average the summed per-batch metrics over the batches of all ranks."""
+    sums = torch.tensor(
+        [*totals.values(), num_batches], dtype=torch.float64, device=device
+    )
+    *values, count = fused_all_reduce(sums).tolist()
+    return {key: value / max(1.0, count) for key, value in zip(totals, values)}
 
 
 def train_one_epoch(
@@ -123,9 +136,7 @@ def train_one_epoch(
             )
 
     # Return the average loss for each metric
-    for key in totals:
-        totals[key] = totals[key] / max(1, num_batches)
-    return totals
+    return average_over_ranks(totals, num_batches, device)
 
 
 @torch.no_grad()
@@ -174,9 +185,7 @@ def evaluate(
         totals["loss_volume"] += loss_volume.item()
         num_batches += 1
 
-    for key in totals:
-        totals[key] = totals[key] / max(1, num_batches)
-    return totals
+    return average_over_ranks(totals, num_batches, device)
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
@@ -258,26 +267,24 @@ def main(cfg: DictConfig) -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(str(log_dir))
 
-    # Get surface and volume variable names
-    surface_names = (
-        list(cfg.variables.surface.solution.keys()) if include_surface else []
-    )
-    volume_names = list(cfg.variables.volume.solution.keys()) if include_volume else []
+    # Get the keys to read from each processed NPZ. The datapipe does not carry
+    # the surface/volume valid masks, so masked_mse falls back to a plain MSE.
+    keys_to_read = get_keys_to_read(model_type)
 
     # Create train and val datasets
     train_dataset = create_domino_dataset(
         cfg,
         phase="train",
-        volume_variable_names=volume_names,
-        surface_variable_names=surface_names,
+        keys_to_read=keys_to_read,
+        keys_to_read_if_available={},
         vol_factors=volume_scaling,
         surf_factors=surface_scaling,
     )
     val_dataset = create_domino_dataset(
         cfg,
         phase="val",
-        volume_variable_names=volume_names,
-        surface_variable_names=surface_names,
+        keys_to_read=keys_to_read,
+        keys_to_read_if_available={},
         vol_factors=volume_scaling,
         surf_factors=surface_scaling,
     )
@@ -318,6 +325,9 @@ def main(cfg: DictConfig) -> None:
             output_device=dist.device if device.type == "cuda" else None,
             broadcast_buffers=dist.broadcast_buffers,
             find_unused_parameters=dist.find_unused_parameters,
+            # As in the DoMINO example: DoMINO leaves the same parameters
+            # unused in every step, which DDP accepts only with a static graph.
+            static_graph=True,
         )
 
     # Initialize optimizer, scheduler, and gradient scaler

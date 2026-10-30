@@ -16,6 +16,8 @@
 
 """Tests for spatial transforms (BoundingBoxFilter, CreateGrid, KNearestNeighbors, CenterOfMass)."""
 
+import warnings
+
 import pytest
 import torch
 from tensordict import TensorDict
@@ -203,6 +205,89 @@ class TestBoundingBoxFilter:
         assert "BoundingBoxFilter" in repr_str
         assert "coords" in repr_str
         assert "values" in repr_str
+
+    @pytest.mark.parametrize(
+        "device",
+        [
+            "cpu",
+            pytest.param(
+                "cuda",
+                marks=pytest.mark.skipif(
+                    not torch.cuda.is_available(), reason="CUDA required"
+                ),
+            ),
+        ],
+    )
+    def test_matches_boolean_masking(self, device):
+        """Every filtered tensor, nested ones included, equals boolean masking."""
+        g = torch.Generator().manual_seed(0)
+        n = 1000
+        data = TensorDict(
+            {
+                "coords": torch.randn(n, 3, generator=g) * 2,
+                "values": torch.randn(n, 4, generator=g),
+                "labels": torch.randint(0, 10, (n,), generator=g),
+                "group": {"flags": torch.rand(n, 2, 2, generator=g) > 0.5},
+            }
+        ).to(device)
+        transform = BoundingBoxFilter(
+            input_keys=["coords"],
+            bbox_min=torch.full((3,), -1.0),
+            bbox_max=torch.full((3,), 1.0),
+            dependent_keys=["values", "labels", "group.flags"],
+        )
+        mask = ((data["coords"] > -1) & (data["coords"] < 1)).all(dim=-1)
+        keys = list(data.keys(include_nested=True, leaves_only=True))
+        expected = {key: data[key][mask] for key in keys}
+
+        result = transform(data.clone())
+
+        assert 0 < mask.sum() < n
+        for key in keys:
+            torch.testing.assert_close(result[key], expected[key])
+
+    def test_dependent_key_of_another_length_raises(self):
+        """A dependent tensor needs one row per point, as boolean masking does."""
+        transform = BoundingBoxFilter(
+            input_keys=["coords"],
+            bbox_min=-torch.ones(3),
+            bbox_max=torch.ones(3),
+            dependent_keys=["values"],
+        )
+        data = TensorDict({"coords": torch.zeros(5, 3), "values": torch.zeros(6, 2)})
+        with pytest.raises(IndexError, match="shape of the mask"):
+            transform(data)
+
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(), reason="CUDA required to detect synchronizations"
+    )
+    def test_one_cuda_sync_per_coordinate_key(self):
+        """Dependent keys reuse the indices found for their coordinate key."""
+        data = TensorDict(
+            {
+                "coords": torch.randn(100, 3) * 2,
+                **{f"f{i}": torch.randn(100, 4) for i in range(5)},
+            }
+        ).to("cuda")
+        transform = BoundingBoxFilter(
+            input_keys=["coords"],
+            bbox_min=-torch.ones(3, device="cuda"),
+            bbox_max=torch.ones(3, device="cuda"),
+            dependent_keys=[f"f{i}" for i in range(5)],
+        )
+        transform(data.clone())
+        torch.cuda.synchronize()
+
+        previous = torch.cuda.get_sync_debug_mode()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            torch.cuda.set_sync_debug_mode("warn")
+            try:
+                transform(data.clone())
+            finally:
+                torch.cuda.set_sync_debug_mode(previous)
+        n_syncs = sum("synchronizing CUDA operation" in str(w.message) for w in caught)
+        assert n_syncs == 1
 
 
 # ============================================================================

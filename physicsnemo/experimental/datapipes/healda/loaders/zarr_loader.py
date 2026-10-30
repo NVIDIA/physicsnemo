@@ -27,9 +27,10 @@ import urllib.parse
 
 import cftime
 import numpy as np
-import pandas as pd
 
 from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 xr = OptionalImport("xarray")
 zarr = OptionalImport("zarr")

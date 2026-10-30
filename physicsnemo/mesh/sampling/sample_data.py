@@ -30,6 +30,11 @@ from tensordict import TensorDict
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial import BVH
 from physicsnemo.nn.functional.neighbors import knn
+from physicsnemo.utils._small_linalg import (
+    best_base_first,
+    normalized_inverse,
+    undo_base_rotation,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -96,21 +101,61 @@ def _solve_barycentric_system(
 
     Notes
     -----
-    For square systems (``n_spatial_dims == n_manifold_dims``): uses direct
-    solve. For over/under-determined systems: uses least squares.
+    The systems are tiny and there is one per (query, cell) pair, so they are
+    solved in closed form rather than by batched ``torch.linalg`` calls, which
+    factorize every tiny matrix separately and, for ``solve``, synchronize CUDA
+    for an error check. Edge vectors and query are first divided by the cell's
+    mean edge length, so products of tiny or huge edge vectors stay in range.
+    The callers take the edges from the base vertex whose edges are closest to
+    orthogonal (``best_base_first``): from the tip of a needle, a well-shaped
+    cell would look degenerate.
+
+    - Square systems (``n_spatial_dims == n_manifold_dims``): the closed-form
+      inverse of the edge matrix.
+    - Other systems (edges, triangles in 3D, ...): modified Gram-Schmidt on
+      the edge vectors and the query, which solves the least-squares problem
+      as accurately as a QR factorization. The normal equations with the Gram
+      matrix would square the condition number of thin cells.
+
+    Degenerate cells, whose edges, scaled to unit length, have a numerically
+    zero determinant (within a few machine epsilons, which also catches
+    exactly singular cells whose determinant rounds to a tiny nonzero value),
+    have no barycentric coordinates. Long, thin but well-shaped cells are not
+    degenerate. Previously, on CPU, they fell back to the minimum-norm
+    least-squares solution and could contain query points; on CUDA the result
+    was undefined. They now get NaN coordinates (and a NaN
+    ``reconstruction_error`` for codimension != 0), so no containment test
+    accepts them on any device. The arithmetic runs on a nonsingular
+    substitute, so gradients stay finite. Near-singular cells keep their
+    (large) coordinates, as with ``torch.linalg.solve``.
     """
+    if relative_vectors.dtype in (
+        torch.float16,
+        torch.bfloat16,
+    ):  # tolerances need float32
+        weights, error = _solve_barycentric_system(
+            relative_vectors.float(), query_relative.float()
+        )
+        return weights.to(relative_vectors.dtype), error.to(relative_vectors.dtype)
     n_manifold_dims = relative_vectors.shape[-2]
     n_spatial_dims = relative_vectors.shape[-1]
 
-    A = relative_vectors.transpose(-2, -1)
-    b = query_relative.unsqueeze(-1)
+    ### Normalize by the mean edge length of each cell. Cells whose vertices all
+    ### coincide have no length scale; they keep 1 and are degenerate below.
+    edge_length_scale = relative_vectors.norm(dim=-1).mean(dim=-1)  # (*batch,)
+    length_scale = torch.where(edge_length_scale > 0, edge_length_scale, 1.0)
+    E = relative_vectors / length_scale[..., None, None]  # rows e_i / L
+    q = query_relative / length_scale[..., None]
+    # Exactly singular cells round to a determinant of a few eps, not always 0
+    # (e.g. with fused multiply-adds on CUDA).
+    singular_tolerance = n_manifold_dims * torch.finfo(E.dtype).eps
 
     if n_spatial_dims == n_manifold_dims:
-        ### Square system: use torch.linalg.solve
-        try:
-            weights_1_to_n = torch.linalg.solve(A, b).squeeze(-1)
-        except torch.linalg.LinAlgError:
-            weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
+        ### Square system: q = E^T w, so w = inv(E)^T q
+        # With the edges scaled to unit length, E = D Ê, w = D^-1 inv(Ê)^T q.
+        E_hat_inv, edge_lengths, is_degenerate = normalized_inverse(E)
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        weights_1_to_n = (E_hat_inv * q.unsqueeze(-1)).sum(dim=-2) / edge_lengths
 
         reconstruction_error = torch.zeros(
             weights_1_to_n.shape[:-1],
@@ -119,14 +164,54 @@ def _solve_barycentric_system(
         )
 
     else:
-        ### Over-determined or under-determined system: use least squares
-        weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
+        ### Over-determined system: project q onto the affine hull of the cell
+        # Modified Gram-Schmidt on the edges, then on q (Bjorck's stable least
+        # squares): e_k = b_k + sum_{j<k} r_jk b_j with orthogonal b_j, and
+        # q = sum_j c_j b_j + residual. det(E E^T) is the product of |b_k|^2.
+        basis = []  # b_k
+        safe_basis_sq = []  # |b_k|^2, or 1 where zero
+        edge_components = []  # edge_components[k][j] = r_jk
+        is_degenerate = torch.zeros(E.shape[:-2], dtype=torch.bool, device=E.device)
+        for k in range(n_manifold_dims):
+            b_k = E[..., k, :]
+            edge_components.append([])
+            for b_j, b_j_sq in zip(basis, safe_basis_sq):
+                r_jk = (b_k * b_j).sum(dim=-1) / b_j_sq
+                b_k = b_k - r_jk.unsqueeze(-1) * b_j
+                edge_components[k].append(r_jk)
+            b_k_sq = (b_k * b_k).sum(dim=-1)
+            # Dependent edge: its residual is at the rounding level of e_k
+            e_k_sq = (E[..., k, :] * E[..., k, :]).sum(dim=-1)
+            dependent = b_k_sq <= singular_tolerance**2 * e_k_sq
+            is_degenerate = is_degenerate | dependent
+            basis.append(b_k)
+            safe_basis_sq.append(torch.where(dependent, 1.0, b_k_sq))
 
-        reconstructed = torch.einsum(
-            "...m,...ms->...s", weights_1_to_n, relative_vectors
+        residual = q
+        query_components = []  # c_j
+        for b_j, b_j_sq in zip(basis, safe_basis_sq):
+            c_j = (residual * b_j).sum(dim=-1) / b_j_sq
+            residual = residual - c_j.unsqueeze(-1) * b_j
+            query_components.append(c_j)
+
+        ### sum_k w_k e_k = sum_j (w_j + sum_{k>j} r_jk w_k) b_j: back-substitute
+        weights = [None] * n_manifold_dims
+        for j in reversed(range(n_manifold_dims)):
+            weights[j] = query_components[j] - sum(
+                edge_components[k][j] * weights[k]
+                for k in range(j + 1, n_manifold_dims)
+            )
+        # (..., n_manifold_dims); point cells (n_manifold_dims == 0) have none.
+        weights_1_to_n = torch.stack(weights, dim=-1) if weights else residual[..., :0]
+
+        # The residual is q minus its projection onto the affine hull.
+        reconstruction_error = torch.where(
+            is_degenerate,
+            float("nan"),
+            length_scale * torch.linalg.vector_norm(residual, dim=-1),
         )
-        residual = query_relative - reconstructed
-        reconstruction_error = torch.linalg.vector_norm(residual, dim=-1)
+
+    weights_1_to_n = torch.where(is_degenerate[..., None], float("nan"), weights_1_to_n)
 
     ### w_0 = 1 - sum(w_i for i=1..n)
     w_0 = 1.0 - weights_1_to_n.sum(dim=-1, keepdim=True)
@@ -162,12 +247,15 @@ def compute_barycentric_coordinates(
         - barycentric_coords: shape (n_queries, n_cells, n_vertices_per_cell)
         - reconstruction_error: shape (n_queries, n_cells). Zero for codimension-0.
     """
+    # Edges from the best base vertex of each cell; see best_base_first
+    cell_vertices, base = best_base_first(cell_vertices)
     v0 = cell_vertices[:, 0:1, :]  # (n_cells, 1, n_spatial_dims)
     relative_vectors = cell_vertices[:, 1:, :] - v0
     query_relative = query_points.unsqueeze(1) - v0.squeeze(1).unsqueeze(0)
     relative_vectors_expanded = relative_vectors.unsqueeze(0)
 
-    return _solve_barycentric_system(relative_vectors_expanded, query_relative)
+    coords, error = _solve_barycentric_system(relative_vectors_expanded, query_relative)
+    return undo_base_rotation(coords, base), error
 
 
 def compute_barycentric_coordinates_pairwise(
@@ -208,11 +296,14 @@ def compute_barycentric_coordinates_pairwise(
     >>> bary, err = compute_barycentric_coordinates_pairwise(query_points, cell_vertices)
     >>> assert bary.shape == (1000, 3)
     """
+    # Edges from the best base vertex of each cell; see best_base_first
+    cell_vertices, base = best_base_first(cell_vertices)
     v0 = cell_vertices[:, 0, :]  # (n_pairs, n_spatial_dims)
     relative_vectors = cell_vertices[:, 1:, :] - v0.unsqueeze(1)
     query_relative = query_points - v0
 
-    return _solve_barycentric_system(relative_vectors, query_relative)
+    coords, error = _solve_barycentric_system(relative_vectors, query_relative)
+    return undo_base_rotation(coords, base), error
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +332,10 @@ def _find_containing_pairs(
     bvh : BVH
         Bounding Volume Hierarchy for the mesh.
     tolerance : float
-        Containment tolerance.
+        Relative containment tolerance. Barycentric coordinates must be
+        ``>= -tolerance``, and the distance to the cell's affine hull is
+        limited to ``tolerance`` times the largest absolute coordinate of the
+        mesh. The AABB padding covers both.
 
     Returns
     -------
@@ -254,8 +348,37 @@ def _find_containing_pairs(
     """
     device = mesh.points.device
 
+    ### Distances are compared against ``tolerance`` times the largest absolute
+    ### mesh coordinate, because float rounding error grows with |x|. The BVH
+    ### root (node 0) bounds the mesh, so its box gives this length without a
+    ### pass over the points. An empty BVH yields no candidates below.
+    if bvh.n_nodes > 0:
+        length_scale = torch.maximum(
+            bvh.node_aabb_min[0].abs(), bvh.node_aabb_max[0].abs()
+        ).amax()
+        distance_tolerance = tolerance * length_scale
+
+        ### Barycentric coordinates >= -tolerance accept the simplex scaled by
+        ### 1 + (n + 1) * tolerance about its centroid, which reaches up to
+        ### n * tolerance * (cell extent) past the cell's box on each axis
+        ### (n = n_manifold_dims). Off-hull points add distance_tolerance. Leaf
+        ### boxes contain their cells' boxes, so the largest leaf extent bounds
+        ### every cell's extent.
+        is_leaf = (bvh.leaf_count > 0).unsqueeze(-1)
+        max_leaf_extent = torch.where(
+            is_leaf, bvh.node_aabb_max - bvh.node_aabb_min, 0.0
+        ).amax()
+        aabb_padding = (
+            mesh.n_manifold_dims * tolerance * max_leaf_extent + distance_tolerance
+        )
+    else:
+        distance_tolerance = tolerance
+        aabb_padding = tolerance
+
     ### Get candidate pairs from BVH (AABB overlap test)
-    candidate_adj = bvh.find_candidate_cells(query_points, aabb_tolerance=tolerance)
+    candidate_adj = bvh.find_candidate_cells(
+        query_points, max_candidates_per_point=None, aabb_tolerance=aabb_padding
+    )
 
     if candidate_adj.n_total_neighbors == 0:
         return (
@@ -274,7 +397,9 @@ def _find_containing_pairs(
         cand_query_pts, cand_cell_verts
     )
 
-    is_inside = (bary_cand >= -tolerance).all(dim=-1) & (recon_cand <= tolerance)
+    is_inside = (bary_cand >= -tolerance).all(dim=-1) & (
+        recon_cand <= distance_tolerance
+    )
 
     ### Filter to confirmed containments. Reuse one integer compaction for all
     ### three arrays instead of independently compacting the same CUDA mask.
@@ -304,7 +429,12 @@ def find_containing_cells(
     query_points : torch.Tensor
         Query point locations, shape ``(n_queries, n_spatial_dims)``.
     tolerance : float
-        Tolerance for considering a point inside a cell.
+        Relative tolerance for considering a point inside a cell. A point is
+        inside if all barycentric coordinates are ``>= -tolerance`` and its
+        distance to the cell's affine hull (nonzero only when
+        ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+        ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+        scale with the length unit of the mesh.
     bvh : BVH or None, optional
         Pre-built BVH. Auto-built from ``mesh`` if ``None``.
 
@@ -374,7 +504,12 @@ def find_all_containing_cells(
     query_points : torch.Tensor
         Query point locations, shape ``(n_queries, n_spatial_dims)``.
     tolerance : float
-        Tolerance for considering a point inside a cell.
+        Relative tolerance for considering a point inside a cell. A point is
+        inside if all barycentric coordinates are ``>= -tolerance`` and its
+        distance to the cell's affine hull (nonzero only when
+        ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+        ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+        scale with the length unit of the mesh.
     bvh : BVH or None, optional
         Pre-built BVH. Auto-built from ``mesh`` if ``None``.
 
@@ -492,6 +627,10 @@ def match_points(
     >>> tgt_idx
     tensor([0])
     """
+    if source.shape[0] == 0 or target.shape[0] == 0:
+        # No pairs can exist; some kNN backends reject empty point sets.
+        empty = torch.empty(0, dtype=torch.long, device=source.device)
+        return empty, empty.clone()
     indices, distances = knn(points=target, queries=source, k=1)
     indices = indices[:, 0]  # (M,)
     distances = distances[:, 0]  # (M,)
@@ -659,9 +798,12 @@ def sample_data_at_points(
         before performing containment testing. Useful for codimension != 0
         manifolds where exact on-surface points are hard to construct.
     tolerance : float, optional
-        Tolerance for considering a point inside a cell. A point is inside if
-        all barycentric coordinates >= -tolerance AND reconstruction error
-        <= tolerance.
+        Relative tolerance for considering a point inside a cell. A point is
+        inside if all barycentric coordinates are ``>= -tolerance`` and its
+        distance to the cell's affine hull (nonzero only when
+        ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+        ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+        scale with the length unit of the mesh.
     bvh : BVH or None, optional
         Pre-built Bounding Volume Hierarchy. If ``None`` (default), one is
         built automatically. For repeated queries on the same mesh, pre-build

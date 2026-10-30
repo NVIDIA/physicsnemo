@@ -1,10 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Render lattice free-form deformation of a sphere with its control lattice."""
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import torch
+from _style import RESULT, SURFACE, SURFACE_EDGE, mesh_label, save, spheres
 
 from physicsnemo.mesh.io import to_pyvista
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
@@ -12,6 +30,9 @@ from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 pv.OFF_SCREEN = True
 
 OUTPUT = Path(__file__).parent / "sphere_ffd.png"
+
+CAMERA = [(7.2, -7.2, 5.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
+LATTICE = "#9aa5ad"
 
 ORIGIN = (-1.15, -1.15, -1.15)
 EXTENT = (2.3, 2.3, 2.3)
@@ -76,70 +97,114 @@ def sculpt_displacements(nodes):
     return displacements
 
 
-sphere = sphere_icosahedral.load(radius=1.0, subdivisions=3)
+def _render(actors, camera):
+    """Render PyVista actors from a fixed camera, so that panels share one scale."""
 
-bernstein_resolution = (4, 4, 4)
-bernstein_nodes = lattice_nodes(bernstein_resolution, "bernstein")
-bernstein_displacements = taper_displacements(bernstein_nodes)
-tapered = sphere.free_form_deform(
-    bernstein_displacements,
-    origin=list(ORIGIN),
-    extent=list(EXTENT),
-    basis="bernstein",
-)
+    plotter = pv.Plotter(off_screen=True, window_size=(900, 900))
+    plotter.enable_anti_aliasing("ssaa")
+    plotter.set_background("white")
+    for dataset, kwargs in actors:
+        plotter.add_mesh(dataset, **{"ambient": 0.35, **kwargs})
+    plotter.camera_position = camera
+    image = plotter.screenshot(return_img=True)
+    plotter.close()
+    return image
 
-bspline_resolution = (8, 8, 8)
-bspline_nodes = lattice_nodes(bspline_resolution, "bspline")
-bspline_displacements = sculpt_displacements(bspline_nodes)
-sculpted = sphere.free_form_deform(
-    bspline_displacements,
-    origin=list(ORIGIN),
-    extent=list(EXTENT),
-    basis="bspline",
-)
 
-panels = (
-    ("Original sphere\n4x4x4 lattice", sphere, bernstein_nodes, "#607080", 0.55),
-    (
-        "Bernstein taper\nevery node acts globally",
-        tapered,
-        bernstein_nodes + bernstein_displacements,
-        "#c04040",
-        0.55,
-    ),
-    (
-        "Cubic B-spline sculpt\n8x8x8 lattice, three local features",
-        sculpted,
-        bspline_nodes + bspline_displacements,
-        "#c04040",
-        0.3,
-    ),
-)
+def _surface(mesh):
+    """Return the shaded surface actor of a mesh."""
 
-plotter = pv.Plotter(shape=(1, 3), window_size=(2100, 800))
-for column, (title, mesh, nodes, lattice_color, opacity) in enumerate(panels):
-    plotter.subplot(0, column)
-    plotter.add_mesh(
-        to_pyvista(mesh), color="lightblue", show_edges=True, line_width=0.5
+    return (
+        to_pyvista(mesh),
+        {
+            "color": SURFACE,
+            "show_edges": True,
+            "edge_color": SURFACE_EDGE,
+            "line_width": 0.6,
+            "diffuse": 0.7,
+        },
     )
-    wireframe = lattice_wireframe(nodes)
-    plotter.add_mesh(wireframe, color=lattice_color, line_width=1.5, opacity=opacity)
-    plotter.add_points(
-        wireframe.points,
-        color=lattice_color,
-        point_size=6.0,
-        render_points_as_spheres=True,
-        opacity=min(1.0, 2 * opacity),
-    )
-    plotter.add_text(title, font_size=13, color="black")
-    plotter.camera_position = [
-        (7.2, -7.2, 5.0),
-        (0.0, 0.0, 0.0),
-        (0.0, 0.0, 1.0),
+
+
+def _arrows(starts, vectors, color):
+    """Draw displacement arrows as solid geometry."""
+
+    arrows = [
+        pv.Arrow(
+            start=start,
+            direction=vector,
+            scale=float(np.linalg.norm(vector)),
+            tip_radius=0.18,
+            shaft_radius=0.06,
+            tip_length=0.35,
+        )
+        for start, vector in zip(starts, vectors, strict=True)
     ]
-plotter.set_background("white")
-plotter.render()
-plotter.screenshot(OUTPUT, transparent_background=False)
-plotter.close()
+    return (pv.merge(arrows), {"color": color})
 
-print(f"Saved {OUTPUT}")
+
+def _panel(mesh, nodes, color, radius):
+    """Render a surface inside its control lattice, drawn as tubes and spheres."""
+
+    wireframe = lattice_wireframe(nodes)
+    actors = [
+        _surface(mesh),
+        (wireframe.tube(radius=radius), {"color": color}),
+        (spheres(wireframe.points, 2.4 * radius), {"color": color}),
+    ]
+    return _render(actors, CAMERA)
+
+
+def main():
+    """Generate the documentation image."""
+
+    sphere = sphere_icosahedral.load(radius=1.0, subdivisions=3)
+
+    bernstein_resolution = (4, 4, 4)
+    bernstein_nodes = lattice_nodes(bernstein_resolution, "bernstein")
+    bernstein_displacements = taper_displacements(bernstein_nodes)
+    tapered = sphere.free_form_deform(
+        bernstein_displacements,
+        origin=list(ORIGIN),
+        extent=list(EXTENT),
+        basis="bernstein",
+    )
+
+    bspline_resolution = (8, 8, 8)
+    bspline_nodes = lattice_nodes(bspline_resolution, "bspline")
+    bspline_displacements = sculpt_displacements(bspline_nodes)
+    sculpted = sphere.free_form_deform(
+        bspline_displacements,
+        origin=list(ORIGIN),
+        extent=list(EXTENT),
+        basis="bspline",
+    )
+
+    panels = (
+        ("sphere, 4x4x4 lattice", sphere, bernstein_nodes, LATTICE, 0.012),
+        (
+            'basis="bernstein", 4x4x4 lattice',
+            tapered,
+            bernstein_nodes + bernstein_displacements,
+            RESULT,
+            0.012,
+        ),
+        (
+            'basis="bspline", 8x8x8 lattice',
+            sculpted,
+            bspline_nodes + bspline_displacements,
+            RESULT,
+            0.006,
+        ),
+    )
+    figure, axes = plt.subplots(1, 3, figsize=(13.5, 5.3))
+    for axis, (title, mesh, nodes, color, radius) in zip(axes, panels, strict=True):
+        axis.imshow(_panel(mesh, nodes, color, radius))
+        axis.set_title(f"{title}\n{mesh_label(mesh)}")
+        axis.set_axis_off()
+    figure.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=0.88, wspace=0.02)
+    save(figure, OUTPUT)
+
+
+if __name__ == "__main__":
+    main()

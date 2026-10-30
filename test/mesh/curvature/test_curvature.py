@@ -24,6 +24,10 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from physicsnemo.mesh.curvature import (
+    gaussian_curvature_vertices,
+    mean_curvature_vertices,
+)
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import icosahedron_surface
 
@@ -474,6 +478,41 @@ class TestCurvatureEdgeCases:
         assert torch.allclose(K1, K2)
         assert torch.allclose(H1, H2)
 
+    @pytest.mark.parametrize(
+        "curvature", [gaussian_curvature_vertices, mean_curvature_vertices]
+    )
+    def test_no_grad_call_caches_no_dual_volumes(self, curvature, device):
+        """Dual volumes cached under no_grad would cut the gradient of a later call."""
+        sphere = create_sphere_mesh(subdivisions=1, device=device)
+        mesh = Mesh(points=sphere.points.clone().requires_grad_(), cells=sphere.cells)
+
+        with torch.no_grad():
+            curvature(mesh)
+
+        assert mesh._cache.get(("point", "dual_volumes_0"), None) is None
+
+    def test_gaussian_curvature_gradient_after_no_grad_call(self, device):
+        """A call under no_grad leaves the gradient of a later call unchanged.
+
+        All triangles of the sphere are acute, so its dual volumes depend on the
+        points alone and not on the cached cell areas.
+        """
+        sphere = create_sphere_mesh(subdivisions=1, device=device)
+        weights = torch.linspace(
+            -1.0, 1.0, sphere.n_points, dtype=torch.float64, device=device
+        )
+
+        def points_gradient(call_under_no_grad_first: bool) -> torch.Tensor:
+            points = sphere.points.to(torch.float64, copy=True).requires_grad_()
+            mesh = Mesh(points=points, cells=sphere.cells)
+            if call_under_no_grad_first:
+                with torch.no_grad():
+                    gaussian_curvature_vertices(mesh)
+            (gaussian_curvature_vertices(mesh) * weights).sum().backward()
+            return points.grad
+
+        torch.testing.assert_close(points_gradient(True), points_gradient(False))
+
 
 ### Test Dimension Coverage
 
@@ -633,6 +672,28 @@ class TestCurvatureNumerical:
         assert H_rel_error < 0.01, (
             f"Mean curvature error {H_rel_error:.1%} exceeds 1%. "
             f"Got {mean_H:.2f}, expected {expected_H:.2f}"
+        )
+
+    def test_tiny_radius_sphere_float32(self, device):
+        """K scales as 1/r^2 and H as 1/r down to a float32 sphere 15 um across
+        (dual areas about 5e-12), measured against the unit sphere. Scaling by
+        a power of two keeps the coordinates exact."""
+        mesh = create_sphere_mesh(radius=1.0, subdivisions=2, device=device)
+        scale = 2.0**-17
+        small = mesh.with_points(mesh.points * scale)
+        assert small.points.dtype == torch.float32
+
+        torch.testing.assert_close(
+            small.gaussian_curvature_vertices * scale**2,
+            mesh.gaussian_curvature_vertices,
+            rtol=1e-4,
+            atol=0.0,
+        )
+        torch.testing.assert_close(
+            small.mean_curvature_vertices * scale,
+            mesh.mean_curvature_vertices,
+            rtol=1e-4,
+            atol=0.0,
         )
 
     def test_large_radius_sphere(self, device):

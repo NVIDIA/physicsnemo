@@ -2425,3 +2425,167 @@ def test_domain_restrictions_and_invalid_global_references_are_rejected():
             empty_triangles,
             implementation="torch",
         )
+
+
+def _qr_stvk_terms(
+    points: torch.Tensor,
+    reference: torch.Tensor,
+    cells: torch.Tensor,
+    lame_lambda: float,
+    shear_modulus: float,
+) -> torch.Tensor:
+    """StVK terms by the former QR and triangular-solve formulation."""
+
+    simplex_dimension = cells.shape[1] - 1
+    vertices = points[cells]
+    reference_vertices = reference[cells]
+    edges = vertices[:, 1:] - vertices[:, :-1]
+    reference_edges = reference_vertices[:, 1:] - reference_vertices[:, :-1]
+    _, reference_r = torch.linalg.qr(reference_edges.mT, mode="reduced")
+    diagonal = torch.diagonal(reference_r, dim1=-2, dim2=-1)
+    reference_measure = diagonal.abs().prod(dim=-1) / math.factorial(simplex_dimension)
+    identity = torch.eye(
+        simplex_dimension, dtype=points.dtype, device=points.device
+    ).expand(reference_r.shape)
+    inverse_reference_r = torch.linalg.solve_triangular(
+        reference_r, identity, upper=True
+    )
+    deformation_gradient = edges.mT @ inverse_reference_r
+    strain = 0.5 * (deformation_gradient.mT @ deformation_gradient - identity)
+    trace = torch.diagonal(strain, dim1=-2, dim2=-1).sum(dim=-1)
+    deviatoric = strain - (trace / simplex_dimension)[..., None, None] * identity
+    volumetric_coefficient = 0.5 * lame_lambda + shear_modulus / simplex_dimension
+    terms = reference_measure * (
+        shear_modulus * deviatoric.square().sum(dim=(-1, -2))
+        + volumetric_coefficient * trace.square()
+    )
+    valid = (diagonal != 0.0).all(dim=-1) & torch.isfinite(terms)
+    return torch.where(valid, terms, torch.full_like(terms, torch.nan))
+
+
+def _disjoint_simplices(
+    manifold_dim: int,
+    spatial_dim: int,
+    cell_shape: Literal["random", "thin"],
+    *,
+    num_cells: int = 64,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return float64 current and reference points of disjoint simplices.
+
+    Thin cells put their last vertex at height 1e-2 above the centroid of the
+    others. Each cell is deformed by its own random affine map, so thin cells
+    see moderate strains.
+    """
+
+    reference = torch.randn((num_cells, manifold_dim + 1, spatial_dim))
+    if cell_shape == "thin":
+        offset = torch.randn((num_cells, spatial_dim))
+        if manifold_dim > 1:
+            base_edges = reference[:, 1:-1] - reference[:, :1]
+            base_basis, _ = torch.linalg.qr(base_edges.mT)
+            offset = offset - (
+                base_basis @ (base_basis.mT @ offset.unsqueeze(-1))
+            ).squeeze(-1)
+        offset = offset / torch.linalg.vector_norm(offset, dim=-1, keepdim=True)
+        reference[:, -1] = reference[:, :-1].mean(dim=1) + 1.0e-2 * offset
+    affine_maps = torch.eye(spatial_dim) + 0.2 * torch.randn(
+        (num_cells, spatial_dim, spatial_dim)
+    )
+    points = (reference.unsqueeze(-2) * affine_maps.unsqueeze(-3)).sum(dim=-1)
+    cells = torch.arange(num_cells * (manifold_dim + 1)).reshape(num_cells, -1)
+    return (
+        points.reshape(-1, spatial_dim).double(),
+        reference.reshape(-1, spatial_dim).double(),
+        cells,
+    )
+
+
+@pytest.mark.parametrize("scale", [1.0e-8, 1.0, 1.0e8])
+@pytest.mark.parametrize("cell_shape", ["random", "thin"])
+@pytest.mark.parametrize(
+    ("manifold_dim", "spatial_dim"),
+    [(1, 1), (1, 3), (2, 2), (2, 3), (3, 3), (2, 4)],
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_stvk_gram_schmidt_frame_matches_qr_reference(
+    device, dtype, manifold_dim, spatial_dim, cell_shape, scale
+):
+    points, reference, cells = _disjoint_simplices(
+        manifold_dim, spatial_dim, cell_shape
+    )
+    # Round the inputs first, so the float64 QR reference sees the same cells.
+    points = (scale * points).to(dtype).to(device)
+    reference = (scale * reference).to(dtype).to(device)
+    cells = cells.to(device)
+
+    output = simplex_strain_energy(
+        points,
+        reference,
+        cells,
+        lame_lambda=0.8,
+        shear_modulus=1.2,
+        reduction="none",
+        implementation="torch",
+    )
+    expected = _qr_stvk_terms(points.double(), reference.double(), cells, 0.8, 1.2)
+
+    assert output.dtype == dtype
+    # QR in float32 reaches 7e-4 on these thin cells.
+    rtol = 1.0e-9 if dtype == torch.float64 else 2.0e-3
+    torch.testing.assert_close(output.double(), expected, atol=0.0, rtol=rtol)
+
+
+@pytest.mark.parametrize(
+    ("manifold_dim", "spatial_dim"), [(1, 2), (2, 2), (2, 3), (3, 3)]
+)
+def test_stvk_degenerate_reference_is_nan_with_finite_gradients(
+    device, manifold_dim, spatial_dim
+):
+    points, reference, cells = _disjoint_simplices(
+        manifold_dim, spatial_dim, "random", num_cells=4
+    )
+    # Collapse the last edge of the first two reference cells.
+    vertices_per_cell = manifold_dim + 1
+    for cell in range(2):
+        last = (cell + 1) * vertices_per_cell - 1
+        reference[last] = reference[last - 1]
+    points = points.to(device).requires_grad_()
+    reference = reference.to(device).requires_grad_()
+    cells = cells.to(device)
+
+    output = simplex_strain_energy(
+        points, reference, cells, reduction="none", implementation="torch"
+    )
+    expected = _qr_stvk_terms(points.detach(), reference.detach(), cells, 1.0, 1.0)
+    torch.testing.assert_close(output, expected, equal_nan=True)
+    assert torch.isnan(output[:2]).all()
+    assert torch.isfinite(output[2:]).all()
+
+    gradients = torch.autograd.grad(output.nansum(), (points, reference))
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
+
+
+@pytest.mark.parametrize(
+    ("manifold_dim", "spatial_dim"), [(1, 2), (2, 3), (3, 3), (2, 4)]
+)
+def test_stvk_gram_schmidt_frame_gradcheck_and_gradgradcheck(manifold_dim, spatial_dim):
+    points, reference, cells = _disjoint_simplices(
+        manifold_dim, spatial_dim, "random", num_cells=2
+    )
+
+    def operation(current, rest):
+        return simplex_strain_energy(
+            current,
+            rest,
+            cells,
+            lame_lambda=0.8,
+            shear_modulus=1.2,
+            reduction="none",
+            implementation="torch",
+        )
+
+    inputs = (points.requires_grad_(), reference.requires_grad_())
+    assert torch.autograd.gradcheck(operation, inputs, eps=1e-6, atol=1e-5, rtol=1e-4)
+    assert torch.autograd.gradgradcheck(
+        operation, inputs, eps=1e-6, atol=1e-5, rtol=1e-4
+    )

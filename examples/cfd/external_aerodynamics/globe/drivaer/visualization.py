@@ -28,6 +28,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus.measure import cell_measures
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.drivaer.visualization")
@@ -129,9 +130,10 @@ def draw_disk_cells(
 
     Each cell is drawn as a regular ``n_sides``-gon (default: hexagon)
     centred at the cell centroid, lying in the tangent plane defined by the
-    cell normal, with area scaled so that the total disk area equals the
-    total area the subsampled cells would have if they covered the full
-    original surface (i.e. ``raw_area * n_original / n_subsampled``).
+    cell normal, with area scaled to the cell's effective measure (see
+    :func:`~physicsnemo.mesh.calculus.measure.cell_measures`). On a
+    subsampled mesh, the total disk area therefore approximates the full
+    original surface rather than the area of the kept triangles.
 
     This is useful when the mesh is a sparse subsample of a much finer
     surface: the original triangles are sub-pixel at typical plot
@@ -160,7 +162,7 @@ def draw_disk_cells(
 
     centroids = mesh.cell_centroids.float().cpu().numpy()  # (C, 3)
     normals = mesh.cell_normals.float().cpu().numpy()  # (C, 3)
-    radii = np.sqrt(mesh.cell_areas.float().cpu().numpy() / np.pi)  # (C,)
+    radii = np.sqrt(cell_measures(mesh).float().cpu().numpy() / np.pi)  # (C,)
 
     ### Build a tangent-plane basis (u, v) for each cell from its normal.
     # Choose an arbitrary vector *not* parallel to the normal, cross it

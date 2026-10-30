@@ -127,6 +127,7 @@ def test_volume_dataset_reader_boundary_policy(
     assert dataset_cfg.pipeline.reader.drop_in_file_boundaries is False
     resolved = _apply_dataset_reader_overrides(dataset_cfg, train_cfg)
     assert resolved.pipeline.reader.drop_in_file_boundaries is expected_drop
+    assert resolved.pipeline.reader.boundary_subsample == "cells"
     if model == "globe_volume":
         assert "dataset_reader_overrides" not in train_cfg
         assert train_cfg.forward_kwargs.boundary_meshes.vehicle == "boundaries.vehicle"
@@ -453,7 +454,7 @@ def test_mesh_input_config_synthetic_e2e(
     batch = collate([(ds, {})])
 
     ### Shrink GLOBE while preserving the externally-visible
-    ### `output_field_ranks` and `boundary_source_data_ranks`.
+    ### `output_schema` and `boundary_source_schemas`.
     small_model_cfg = OmegaConf.merge(
         train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES)
     )

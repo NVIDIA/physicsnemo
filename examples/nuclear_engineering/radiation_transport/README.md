@@ -157,7 +157,7 @@ via `mesh.cell_centroids` and `mesh.cell_areas`.
 `Mesh.cell_data` (per-cell tensors the loader requires):
 
 | Key | Shape | Dtype | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `scalar_flux` | `(N, 2)` | float32 | flux at first / final snapshot, cells-first |
 | `material_id` | `(N,)` | int64 | region IDs mapped by the material-property transforms |
 | `sigma_a`, `sigma_s`, `sigma_t` | `(N,)` | float32 | absorption / scattering / total cross-section |
@@ -276,7 +276,7 @@ single process.
 ### 4.3 Common overrides
 
 | Override | Effect |
-|---|---|
+| --- | --- |
 | `train.epochs=200` | Shorter run |
 | `train.optimizer.type=muon` | Use `torch.optim.Muon` for 2-D weights, Adam for biases / norms |
 | `train.amp=false` | Disable mixed precision (debug / numerical parity) |
@@ -339,7 +339,7 @@ by default); override it directly via
 Inference-specific config keys (under `inference.*`):
 
 | Key | Effect |
-|---|---|
+| --- | --- |
 | `inference.checkpoint_path` | Required. Directory containing `Transolver.0.0.mdlus` + `checkpoint.0.0.pt`. Point at the `best_model/` directory under the run's `checkpoints/`. |
 | `inference.output_dir` | Required. Where to write `metrics.yaml`, `qoi_metrics.yaml`, and `figures/`. |
 | `inference.num_samples` | Cap on the number of test simulations (default: `null` = all). |
@@ -369,13 +369,13 @@ stats paths interpolate from `case.data_root` exactly as during training.
 flattened together (denormalized to physical flux):
 
 | Key | Definition |
-|---|---|
+| --- | --- |
 | `mse` | `mean((pred − target)^2)` |
 | `rmse` | `sqrt(mse)` |
-| `mae` | `mean(|pred − target|)` |
+| `mae` | `mean(\|pred − target\|)` |
 | `l2_relative_error` | `‖pred − target‖₂ / ‖target‖₂` — the headline number |
-| `relative_error` | `mean(|pred − target| / |target|)` — sensitive to near-zero target cells, often dominated by void regions |
-| `max_error` | `max(|pred − target|)` |
+| `relative_error` | `mean(\|pred − target\| / \|target\|)` — sensitive to near-zero target cells, often dominated by void regions |
+| `max_error` | `max(\|pred − target\|)` |
 
 `metrics.yaml::per_sample_aggregate` reports `{mean, std, min, max}` of each
 metric across simulations — useful for catching outliers (one bad simulation
@@ -384,11 +384,11 @@ dominating the mean).
 `qoi_metrics.yaml` reports per-region:
 
 | Key | Definition |
-|---|---|
+| --- | --- |
 | `mae` | mean absolute error of the integrated QoI scalar |
 | `rmse` | RMSE of the integrated QoI scalar |
 | `max_error` | worst single-simulation QoI error |
-| `mean_relative_error_pct` | mean of `100 · |Q_pred − Q_true| / |Q_true|` |
+| `mean_relative_error_pct` | mean of `100 · \|Q_pred − Q_true\| / \|Q_true\|` |
 | `median_relative_error_pct` | median of the same |
 | `max_relative_error_pct` | worst single-simulation relative error |
 

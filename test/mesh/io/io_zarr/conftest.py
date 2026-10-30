@@ -16,8 +16,7 @@
 
 """Pytest configuration for mesh.io.io_zarr tests.
 
-All tests in this directory require ``zarr >= 3`` and a tensordict release
-carrying the zarr storage backend (``TensorDict.from_zarr``).
+All tests in this directory require ``zarr >= 3``.
 """
 
 import pytest
@@ -26,9 +25,6 @@ import torch
 zarr = pytest.importorskip("zarr", minversion="3.0")
 
 from tensordict import TensorDict  # noqa: E402
-
-if not hasattr(TensorDict, "from_zarr"):
-    pytest.skip("tensordict build has no zarr storage backend", allow_module_level=True)
 
 from physicsnemo.mesh import DomainMesh, Mesh  # noqa: E402
 
@@ -77,6 +73,28 @@ def make_domain_mesh(seed: int = 3) -> DomainMesh:
         },
         global_data={"rho_inf": torch.tensor(1.205)},
     )
+
+
+def write_unfinished_store(obj: Mesh | DomainMesh, store) -> None:
+    """Run to_zarr with the 4th array write failing, as a full disk would."""
+    from physicsnemo.mesh.io import to_zarr
+
+    create_array = zarr.Group.create_array
+    n_calls = 0
+
+    def failing_create_array(self, *args, **kwargs):
+        nonlocal n_calls
+        n_calls += 1
+        if n_calls == 4:
+            raise OSError("simulated full disk")
+        return create_array(self, *args, **kwargs)
+
+    zarr.Group.create_array = failing_create_array
+    try:
+        with pytest.raises(OSError, match="simulated full disk"):
+            to_zarr(obj, store)
+    finally:
+        zarr.Group.create_array = create_array
 
 
 def assert_meshes_equal(a: Mesh, b: Mesh) -> None:

@@ -669,6 +669,25 @@ class TestMeshStatistics:
         assert mean_len > 0
         assert max_len > 0
 
+    def test_statistics_edge_lengths_cover_every_cell_edge(self, device):
+        """Edge statistics summarize all edges of all cells, shared ones twice."""
+        # Unit square split along its diagonal: each cell has edges 1, 1, sqrt(2)
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            dtype=torch.float64,
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2], [0, 2, 3]], device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        stats = compute_mesh_statistics(mesh)
+
+        mean = (2 + math.sqrt(2)) / 3
+        std = math.sqrt((1 + 1 + 2) / 3 - mean**2)
+        assert stats["edge_length_stats"] == pytest.approx(
+            (1.0, mean, math.sqrt(2), std)
+        )
+
     def test_statistics_empty_mesh(self, device):
         """Test statistics on empty mesh."""
         points = torch.zeros((5, 2), device=device)

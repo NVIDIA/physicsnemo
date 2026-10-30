@@ -416,6 +416,7 @@ def test_real_entry_points_are_loaded(real_registry):
         "One2ManyRNN",
         "SRResNet",
         "DLWP",
+        "DiffusionUNet3D",
     ]
 
     for model_name in expected_models:
@@ -447,6 +448,7 @@ def test_real_entry_point_factory_loads_class(real_registry):
         ("FNO", "physicsnemo.models.fno"),
         ("Pix2Pix", "physicsnemo.models.pix2pix"),
         ("DLWP", "physicsnemo.models.dlwp"),
+        ("DiffusionUNet3D", "physicsnemo.models.diffusion_unets"),
         ("One2ManyRNN", "physicsnemo.models.rnn"),
         ("SRResNet", "physicsnemo.models.srrn"),
     ],

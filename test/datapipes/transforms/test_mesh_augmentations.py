@@ -897,3 +897,18 @@ class TestSetEpochResumeReproducibility:
             return m.points.clone()
 
         assert torch.allclose(_run([1, 2, 3]), _run([3]))
+
+
+def test_random_rotate_mesh_accepts_omegaconf_axes():
+    """Hydra instantiates transforms with OmegaConf containers; indexing a ListConfig by the
+    drawn tensor raised KeyValidationError, so the axes are normalized to a tuple."""
+    from omegaconf import OmegaConf
+
+    from physicsnemo.datapipes.transforms.mesh.augmentations import RandomRotateMesh
+
+    cfg = OmegaConf.create({"axes": ["z"]})
+    transform = RandomRotateMesh(axes=cfg.axes)
+    assert transform.axes == ("z",)
+    axis, angle = transform._sample_axis_and_angle()
+    assert axis == "z"
+    assert angle.ndim == 0

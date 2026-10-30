@@ -20,7 +20,7 @@ Each branch in ``physicsnemo.mesh.geometry._cell_areas`` is exercised with
 known analytic answers:
 
 - ``_edge_lengths``              : n_manifold_dims = 1
-- ``_triangle_areas``            : n_manifold_dims = 2  (Lagrange identity)
+- ``_triangle_areas``            : n_manifold_dims = 2  (exterior product)
 - ``_tetrahedron_volumes_3d``    : n_manifold_dims = 3, n_spatial_dims = 3
 - ``_tetrahedron_volumes_general``: n_manifold_dims = 3, n_spatial_dims > 3
 - ``_gram_det_volumes``          : n_manifold_dims >= 4
@@ -86,17 +86,66 @@ class TestEdgeLengths:
         )
 
 
-### Branch 2: _triangle_areas (n_manifold_dims = 2, Lagrange identity) ###
+### Branch 2: _triangle_areas (n_manifold_dims = 2, exterior product) ###
 
 
 class TestTriangleAreas:
-    """Tests for the n=2 branch (Lagrange identity)."""
+    """Tests for the n=2 branch (exterior product)."""
 
     def test_right_triangle_2d(self):
         """Right triangle with legs 1 in 2D: area = 0.5."""
         vecs = _relative_vectors([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(result, torch.tensor([0.5], dtype=torch.float64))
+
+    @pytest.mark.parametrize("spatial_dims", [2, 3, 4])
+    @pytest.mark.parametrize("height", [1e-4, 1e-30])
+    def test_thin_triangle_has_positive_area(self, device, spatial_dims, height):
+        """Nearly parallel edges retain their representable area and gradient."""
+        edges = torch.zeros(1, 2, spatial_dims, device=device)
+        edges[0, :, 0] = 1
+        edges[0, 1, 1] = height
+        edges.requires_grad_()
+        area = compute_cell_areas(edges)
+        torch.testing.assert_close(
+            area, torch.tensor([height / 2], device=device), rtol=1e-6, atol=0
+        )
+        area.sum().backward()
+        assert torch.isfinite(edges.grad).all()
+        torch.testing.assert_close(edges.grad[0, 1, 1], area.new_tensor(0.5))
+
+    @pytest.mark.parametrize("spatial_dims", [2, 3, 4])
+    @pytest.mark.parametrize("scale", [1e-15, 1e15])
+    def test_area_norm_avoids_underflow_and_overflow(self, device, spatial_dims, scale):
+        """Representable areas survive a norm whose raw sum of squares would not."""
+        edges = torch.zeros(1, 2, spatial_dims, device=device)
+        edges[0, 0, 0] = scale
+        edges[0, 1, 1] = scale
+        torch.testing.assert_close(
+            compute_cell_areas(edges),
+            edges.new_tensor([scale * scale / 2]),
+            rtol=1e-6,
+            atol=0,
+        )
+
+    @pytest.mark.parametrize("spatial_dims", [2, 3, 4])
+    @pytest.mark.parametrize(
+        "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+    )
+    def test_thin_and_collapsed_triangles_under_autocast(
+        self, device, spatial_dims, dtype
+    ):
+        """Autocast preserves dtype, thin areas, and finite gradients at collapse."""
+        edges = torch.zeros(2, 2, spatial_dims, dtype=dtype, device=device)
+        edges[:, :, 0] = 1
+        edges[0, 1, 1] = 1e-3
+        edges.requires_grad_()
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            area = compute_cell_areas(edges)
+        torch.testing.assert_close(area, edges.new_tensor([0.0005, 0]))
+        area.sum().backward()
+        assert torch.isfinite(edges.grad).all()
+        torch.testing.assert_close(edges.grad[0, 1, 1], edges.new_tensor(0.5))
 
     def test_right_triangle_3d(self):
         """Right triangle with legs 1 in 3D (in the xy-plane): area = 0.5."""
@@ -120,7 +169,7 @@ class TestTriangleAreas:
     def test_triangle_4d(self):
         """Right triangle with legs 1 embedded in 4D: area = 0.5.
 
-        Exercises the Lagrange identity with n_spatial_dims > 3.
+        Exercises the exterior product with n_spatial_dims > 3.
         """
         vecs = _relative_vectors(
             [[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
@@ -172,11 +221,26 @@ class TestTetrahedronVolumes3D:
         )
 
 
-### Branch 4: _tetrahedron_volumes_general (n=3, d>3, Sarrus' rule) ###
+### Branch 4: _tetrahedron_volumes_general (n=3, d>3, 3x3 minors) ###
 
 
 class TestTetrahedronVolumesGeneral:
-    """Tests for the n=3, d>3 branch (Sarrus' rule on 3x3 Gram matrix)."""
+    """Tests for the n=3, d>3 branch (norm of the 3x3 minors)."""
+
+    @pytest.mark.parametrize("spatial_dims", [3, 4, 5])
+    @pytest.mark.parametrize("height", [1e-4, 1e-30])
+    def test_thin_tetrahedron_keeps_its_volume(self, device, spatial_dims, height):
+        """Nearly flat tetrahedra keep their float32 volume, without Gram cancellation."""
+        edges = torch.zeros(1, 3, spatial_dims, device=device)
+        edges[0, 0, 0] = 1
+        edges[0, 1, 1] = 1
+        edges[0, 2, 0], edges[0, 2, 1], edges[0, 2, 2] = 0.3, 0.4, height
+        torch.testing.assert_close(
+            compute_cell_areas(edges),
+            torch.tensor([height / 6], device=device),
+            rtol=1e-6,
+            atol=0,
+        )
 
     def test_unit_tetrahedron_4d(self):
         """Unit tetrahedron with orthogonal edges embedded in 4D: volume = 1/6.

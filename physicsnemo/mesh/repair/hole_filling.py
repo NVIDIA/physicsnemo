@@ -149,6 +149,9 @@ def fill_holes(
     closed cycles) and triangulates each loop independently using fan
     triangulation from a centroid vertex inserted at the loop's center.
 
+    In ``point_data`` and ``cell_data``, the new centroid points and fan faces
+    hold NaN for floating-point fields and 0 for all other fields.
+
     Parameters
     ----------
     mesh : Mesh
@@ -273,8 +276,12 @@ def fill_holes(
         pad = torch.full(pad_shape, fill, dtype=tensor.dtype, device=device)
         return torch.cat([tensor, pad], dim=0)
 
-    new_point_data = mesh.point_data.apply(extend_point_data)
-    new_cell_data = mesh.cell_data.apply(extend_cell_data)
+    new_point_data = mesh.point_data.apply(
+        extend_point_data, batch_size=torch.Size([new_points.shape[0]])
+    )
+    new_cell_data = mesh.cell_data.apply(
+        extend_cell_data, batch_size=torch.Size([new_cells.shape[0]])
+    )
 
     from physicsnemo.mesh.mesh import Mesh
 

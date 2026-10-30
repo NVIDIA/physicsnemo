@@ -140,6 +140,31 @@ class TestToEdgeGraph:
         assert graph.cells.min() >= 0
         assert graph.cells.max() < graph.n_points
 
+    def test_segments_are_their_own_edges(self):
+        """A 1D mesh's edges are its cells, with repeated segments merged."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+            cells=torch.tensor([[1, 0], [1, 2], [2, 1], [3, 2]]),
+            cell_data=TensorDict(
+                {"weight": torch.tensor([1.0, 2.0, 4.0, 8.0])}, batch_size=[4]
+            ),
+        )
+        graph = mesh.to_edge_graph()
+
+        assert graph.n_manifold_dims == 1
+        assert graph.cells.tolist() == [[0, 1], [1, 2], [2, 3]]
+        # Cell data is averaged over the segments of each edge
+        assert graph.cell_data["weight"].tolist() == [1.0, 3.0, 8.0]
+
+    def test_matches_codimension_zero_facets(self):
+        """Every mesh's codimension-0 facets are its deduplicated cells."""
+        mesh = _two_triangles()
+        doubled = Mesh(
+            points=mesh.points, cells=torch.cat([mesh.cells, mesh.cells.flip(1)])
+        )
+        facets = doubled.get_facet_mesh(manifold_codimension=0)
+        assert facets.cells.tolist() == [[0, 1, 2], [1, 2, 3]]
+
 
 # ---------------------------------------------------------------------------
 # to_dual_graph
