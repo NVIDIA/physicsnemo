@@ -20,13 +20,23 @@ import torch
 from physicsnemo.experimental.nn import RadiusPooledFeatures
 
 
-@pytest.fixture(params=["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="no GPU"))])
+@pytest.fixture(
+    params=[
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="no GPU"),
+        ),
+    ]
+)
 def device(request):
     return torch.device(request.param)
 
 
 def _layer(**kwargs):
-    args = dict(radii=(0.1, 0.3), caps=(4, 8), voxel_sizes=(0.01, 0.03), hidden=6, query_cap=16)
+    args = dict(
+        radii=(0.1, 0.3), caps=(4, 8), voxel_sizes=(0.01, 0.03), hidden=6, query_cap=16
+    )
     args.update(kwargs)
     return RadiusPooledFeatures(**args)
 
@@ -37,7 +47,15 @@ def test_constructor():
     assert layer.radii == (0.1, 0.3) and layer.caps == (4, 8) and layer.query_cap == 16
 
 
-@pytest.mark.parametrize("kwargs", [dict(caps=(4,)), dict(radii=(0.0, 0.3)), dict(query_cap=4), dict(voxel_sizes=(0.01, -1.0))])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(caps=(4,)),
+        dict(radii=(0.0, 0.3)),
+        dict(query_cap=4),
+        dict(voxel_sizes=(0.01, -1.0)),
+    ],
+)
 def test_constructor_rejects(kwargs):
     with pytest.raises(ValueError):
         _layer(**kwargs)
@@ -45,7 +63,9 @@ def test_constructor_rejects(kwargs):
 
 def test_shapes(device):
     layer = _layer().to(device)
-    out = layer(torch.rand(2, 200, 3, device=device), torch.rand(2, 7, 3, device=device))
+    out = layer(
+        torch.rand(2, 200, 3, device=device), torch.rand(2, 7, 3, device=device)
+    )
     assert len(out) == 2 and all(o.shape == (2, 7, 6) for o in out)
 
 
@@ -61,7 +81,9 @@ def test_neighbours_within_radius_and_valid(device):
     layer = _layer().to(device)
     candidates = torch.rand(1, 300, 3, device=device)
     queries = torch.rand(1, 5, 3, device=device)
-    for (coords, valid), radius, cap in zip(layer.neighbours(candidates, queries), layer.radii, layer.caps):
+    for (coords, valid), radius, cap in zip(
+        layer.neighbours(candidates, queries), layer.radii, layer.caps
+    ):
         assert coords.shape == (1, 5, cap, 3) and valid.shape == (1, 5, cap)
         distances = (coords - queries[:, :, None]).norm(dim=-1)
         assert torch.all(distances[valid] <= radius + 1e-5)
@@ -69,15 +91,19 @@ def test_neighbours_within_radius_and_valid(device):
 
 def test_query_on_a_candidate_counts(device):
     # a query that coincides with a candidate finds it (index 0 is not mistaken for an empty slot)
-    layer = _layer(radii=(0.05,), caps=(1,), voxel_sizes=(0.01,), query_cap=1).to(device)
+    layer = _layer(radii=(0.05,), caps=(1,), voxel_sizes=(0.01,), query_cap=1).to(
+        device
+    )
     candidates = torch.tensor([[[0.0, 0.0, 0.0]]], device=device)
-    (coords, valid), = layer.neighbours(candidates, candidates.clone())
+    ((coords, valid),) = layer.neighbours(candidates, candidates.clone())
     assert bool(valid.all())
     torch.testing.assert_close(coords[0, 0, 0], candidates[0, 0])
 
 
 def test_eval_is_deterministic_and_train_draws(device):
-    layer = _layer(radii=(0.5,), caps=(2,), voxel_sizes=(0.001,), query_cap=16).to(device)
+    layer = _layer(radii=(0.5,), caps=(2,), voxel_sizes=(0.001,), query_cap=16).to(
+        device
+    )
     candidates = torch.rand(1, 400, 3, device=device)
     queries = torch.rand(1, 20, 3, device=device)
     layer.eval()
