@@ -62,6 +62,33 @@ def test_padding_leaves_cotan_weights_unchanged(device, dtype) -> None:
     assert bool(torch.isfinite(padded.laplacian(values)).all())
 
 
+def test_vertex_support_fractions_sum_to_one_on_millimetre_tets(device) -> None:
+    """Each vertex's support-volume fractions sum to 1 at any scale, also for
+    float32 tets in metres 1 mm across, whose dual volumes are about 1e-10."""
+    from physicsnemo.mesh.geometry.support_volumes import (
+        compute_vertex_support_volume_cell_fractions,
+    )
+
+    points = 1e-3 * torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        device=device,
+    )
+    cells = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], device=device)
+    mesh = Mesh(points=points, cells=cells)
+
+    fractions, pairs = compute_vertex_support_volume_cell_fractions(mesh)
+
+    vertices = cells[pairs[:, 0], pairs[:, 1]]
+    sums = torch.zeros(5, device=device).index_add_(0, vertices, fractions)
+    torch.testing.assert_close(sums, torch.ones(5, device=device))
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_degenerate_cell_weights_are_finite_and_scale_invariant(device, dtype) -> None:
     """A flat cell must be neutralised at any coordinate scale.

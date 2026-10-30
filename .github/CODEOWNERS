@@ -18,7 +18,7 @@
 # ==============================================================================
 
 # Top-level markdown files
-./*.md @ram-cherukuri @megnvidia
+./*.md @megnvidia
 
 # Keep CHANGELOG separate - don't require specific people to approve updates
 ./CHANGELOG.md
@@ -54,7 +54,7 @@ docs/img/
 # modules. Pages without a source module owner default to @megnvidia @ktangsali.
 docs/api/physicsnemo.core.rst @megnvidia @coreyjadams @CharlelieLrt @ktangsali
 docs/api/physicsnemo.distributed.rst @megnvidia @coreyjadams
-docs/api/physicsnemo.domain_parallel.rst @megnvidia @coreyjadams
+docs/api/physicsnemo.domain_parallel.rst @megnvidia @coreyjadams @peterdsharpe
 docs/api/physicsnemo.optim.rst @megnvidia @peterdsharpe
 docs/api/physicsnemo.sym.rst @megnvidia @ktangsali
 docs/api/physicsnemo.active_learning.rst @megnvidia @laserkelvin @dallasfoster
@@ -142,6 +142,7 @@ physicsnemo/sym/ @ktangsali
 physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/equivariant_ops.py @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/natten.py @pzharrington
 physicsnemo/nn/functional/geometry/sdf.py @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/geometry/deform/ @mehdiataei @loliverhennigh
@@ -166,8 +167,8 @@ physicsnemo/nn/module/pade.py @peterdsharpe
 physicsnemo/distributed/ @coreyjadams @negin513
 
 # Domain parallelism (ShardTensor, shard utilities)
-physicsnemo/domain_parallel/ @coreyjadams @negin513
-physicsnemo/domain_parallel/shard_utils/ @coreyjadams @negin513
+physicsnemo/domain_parallel/ @coreyjadams @negin513 @peterdsharpe
+physicsnemo/domain_parallel/shard_utils/ @coreyjadams @negin513 @peterdsharpe
 
 # FSDP2 utilities
 physicsnemo/distributed/fsdp2/ @negin513
@@ -180,6 +181,11 @@ physicsnemo/datapipes/ @coreyjadams @negin513
 physicsnemo/datapipes/benchmarks/
 physicsnemo/datapipes/readers/ @coreyjadams @negin513
 physicsnemo/datapipes/transforms/ @coreyjadams @negin513
+
+physicsnemo/datapipes/mesh_dataset.py @coreyjadams @negin513 @peterdsharpe
+physicsnemo/datapipes/readers/mesh.py @coreyjadams @negin513 @peterdsharpe
+physicsnemo/datapipes/transforms/geometric.py @coreyjadams @negin513 @peterdsharpe
+physicsnemo/datapipes/transforms/mesh/ @coreyjadams @negin513 @peterdsharpe
 
 physicsnemo/datapipes/cae/domino_datapipe.py  @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
@@ -194,10 +200,12 @@ physicsnemo/datapipes/healpix/ @pzharrington
 # UTILITIES
 # ==============================================================================
 
+physicsnemo/utils/_index_tuple_ops.py @peterdsharpe
 physicsnemo/utils/capture.py @nickgeneva @ktangsali
 physicsnemo/utils/checkpoint.py @CharlelieLrt @negin513
 physicsnemo/utils/insolation.py @pzharrington
 physicsnemo/utils/memory.py @coreyjadams
+physicsnemo/utils/weighted_multinomial.py @peterdsharpe
 physicsnemo/utils/zenith_angle.py @pzharrington
 
 # Logging utilities
@@ -324,7 +332,9 @@ physicsnemo/experimental/
 physicsnemo/experimental/datapipes/healda/ @pzharrington
 physicsnemo/experimental/models/aerojepa/ @mnabian
 physicsnemo/experimental/models/globe/ @peterdsharpe
+physicsnemo/experimental/models/smart/ @mnabian
 physicsnemo/experimental/peft/ @mnabian
+physicsnemo/experimental/uq/conformal/ @melo-gonzo
 
 # ==============================================================================
 # EXAMPLES - Active Learning
@@ -460,9 +470,15 @@ test/nn/
 # ==============================================================================
 
 test/distributed/ @coreyjadams @negin513
-test/domain_parallel/ @coreyjadams @negin513
+test/domain_parallel/ @coreyjadams @negin513 @peterdsharpe
 test/datapipes/core/ @coreyjadams @negin513
 test/datapipes/ @coreyjadams @negin513
+test/datapipes/test_mesh_dataset*.py @coreyjadams @negin513 @peterdsharpe
+test/datapipes/readers/test_mesh_readers.py @coreyjadams @negin513 @peterdsharpe
+test/datapipes/transforms/test_*mesh*.py @coreyjadams @negin513 @peterdsharpe
+test/datapipes/transforms/test_geometric.py @coreyjadams @negin513 @peterdsharpe
+test/datapipes/transforms/test_nested_fields.py @coreyjadams @negin513 @peterdsharpe
+test/datapipes/transforms/test_set_global_field.py @coreyjadams @negin513 @peterdsharpe
 
 # ==============================================================================
 # TESTS - Models
@@ -494,7 +510,9 @@ test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
 test/experimental/models/aerojepa/ @mnabian
+test/experimental/models/smart/ @mnabian
 test/experimental/peft/ @mnabian
+test/experimental/uq/conformal/ @melo-gonzo
 
 # ==============================================================================
 # TESTS - CI

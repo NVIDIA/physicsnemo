@@ -12,7 +12,7 @@ area, shape details) while keeping freestream conditions constant.
 
 Of the 500 simulations, this example uses 484 (436 train + 48 validation),
 inherited verbatim from the upstream [DoMINO DrivAerML
-splits](https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/bench_example/drivaer_ml_files/train.csv)
+splits](https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/benchmarking/drivaer_ml_files/train.csv)
 so cross-applicability between recipes is preserved.  The 16 missing run IDs
 are: `167, 211, 218, 221, 248, 282, 291, 295, 316, 325, 329, 364, 370, 376, 403,
 473`.

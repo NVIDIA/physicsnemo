@@ -32,9 +32,11 @@ factorization which does not support reduced-precision dtypes.
 """
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
-from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.mesh.utilities._gather import gather_rows
+from physicsnemo.mesh.utilities._normalization import safe_normalize
+from physicsnemo.utils._small_linalg import small_det
 
 
 def compute_cell_normals(
@@ -88,6 +90,37 @@ def compute_cell_normals(
 # ---------------------------------------------------------------------------
 
 
+def _compute_cell_normals_from_points(
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
+) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
+    """:func:`compute_cell_normals` of the cells' edge vectors, from the points.
+
+    Gathers the cell vertices one at a time, so that in 2D and 3D nothing
+    larger than the unnormalized normals is alive while they are normalized.
+    The values are identical to those of :func:`compute_cell_normals`.
+    """
+    if points.shape[-1] not in (2, 3):
+        # Includes points in 1D, whose cells have no edges to gather one by one
+        relative_vectors = gather_rows(points, cells[:, 1:]) - gather_rows(
+            points, cells[:, :1]
+        )
+        return _normals_general(relative_vectors)
+
+    v0 = gather_rows(points, cells[:, 0])
+    edges = [gather_rows(points, cells[:, k]) - v0 for k in range(1, cells.shape[1])]
+    del v0
+
+    if points.shape[-1] == 2:
+        # 90-degree CCW rotation, as in _normals_2d
+        normals = torch.stack([-edges[0][:, 1], edges[0][:, 0]], dim=-1)
+    else:
+        # Cross product, as in _normals_3d
+        normals = torch.linalg.cross(edges[0], edges[1])
+    del edges
+    return safe_normalize(normals, dim=-1)
+
+
 def _normals_2d(
     relative_vectors: Float[torch.Tensor, "n_cells 1 2"],
 ) -> Float[torch.Tensor, "n_cells 2"]:
@@ -118,8 +151,9 @@ def _normals_general(
 
     where :math:`E_{\setminus i}` is :math:`E` with column ``i`` removed.
 
-    Disables ``torch.autocast`` because ``torch.det`` dispatches to cuBLAS
-    LU factorization which does not support reduced-precision dtypes.
+    The minors have closed forms up to 3x3 (d = 4). Disables ``torch.autocast``
+    because beyond that ``torch.linalg.det`` dispatches to cuBLAS LU
+    factorization, which does not support reduced-precision dtypes.
     """
     n_spatial_dims = relative_vectors.shape[-1]
     n_manifold_dims = relative_vectors.shape[-2]
@@ -135,7 +169,7 @@ def _normals_general(
                 [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
                 dim=-1,
             )
-            det = submatrix.det()
+            det = small_det(submatrix)
             sign = (-1) ** (n_manifold_dims + i)
             normal_components.append(sign * det)
 

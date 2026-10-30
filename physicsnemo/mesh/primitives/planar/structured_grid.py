@@ -35,6 +35,9 @@ def load(
 ) -> Mesh[2, 2]:
     """Create a structured triangular grid in 2D space.
 
+    Every triangle is wound counterclockwise, with a positive signed area, as
+    described in :ref:`mesh-orientation-conventions`.
+
     Parameters
     ----------
     x_min : float
@@ -82,12 +85,10 @@ def load(
     v10 = v00 + n_y
     v11 = v10 + 1
 
-    cells = torch.stack(
-        [
-            torch.stack([v00, v01, v10], dim=-1),
-            torch.stack([v01, v11, v10], dim=-1),
-        ],
-        dim=1,
-    ).reshape(-1, 3)
+    # Fill the two triangles of each quad in place (no stack temporaries).
+    cells = torch.empty((v00.shape[0], 2, 3), dtype=v00.dtype, device=device)
+    cells[:, 0, 0], cells[:, 0, 1], cells[:, 0, 2] = v00, v10, v01
+    cells[:, 1, 0], cells[:, 1, 1], cells[:, 1, 2] = v01, v10, v11
+    cells = cells.reshape(-1, 3)
 
     return Mesh(points=points, cells=cells)

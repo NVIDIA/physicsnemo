@@ -16,8 +16,14 @@
 
 name: mock.MockDataset
 
+# How batches are produced; see LoaderConfig in utils/config.py.
+# Set backend: "datapipes" to try the PhysicsNeMo datapipe loading strategy.
+loader:
+  backend: "torch"
+
 num_state_channels: 3
 num_background_channels: 4
+num_past_state_channels: 3
 num_invariant_channels: 2
 num_scalar_cond_channels: 2
 image_size: [256, 128]

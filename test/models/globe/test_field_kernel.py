@@ -65,26 +65,26 @@ def make_kernel_and_input_data(
 
     torch.manual_seed(seed)
 
-    ### Build rank specs from output_fields
-    output_field_ranks = {
-        k: (0 if v == "scalar" else 1) for k, v in output_fields.items()
+    ### Build the output schema from output_fields
+    output_schema = {
+        k: {"rank": 0 if v == "scalar" else 1} for k, v in output_fields.items()
     }
 
-    ### Build source and global rank specs from counts
-    source_data_ranks = {
-        **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
-        **{f"source_vector_{i}": 1 for i in range(n_source_vectors)},
+    ### Build the source and global schemas from counts
+    source_schema = {
+        **{f"source_scalar_{i}": {"rank": 0} for i in range(n_source_scalars)},
+        **{f"source_vector_{i}": {"rank": 1} for i in range(n_source_vectors)},
     }
-    global_data_ranks = {
-        **{f"global_scalar_{i}": 0 for i in range(n_global_scalars)},
-        **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
+    global_schema = {
+        **{f"global_scalar_{i}": {"rank": 0} for i in range(n_global_scalars)},
+        **{f"global_vector_{i}": {"rank": 1} for i in range(n_global_vectors)},
     }
 
     kernel = Kernel(
         n_spatial_dims=n_spatial_dims,
-        output_field_ranks=output_field_ranks,
-        source_data_ranks=source_data_ranks,
-        global_data_ranks=global_data_ranks,
+        output_schema=output_schema,
+        source_schema=source_schema,
+        global_schema=global_schema,
         n_spherical_harmonics=n_spherical_harmonics,
         hidden_layer_sizes=hidden_layer_sizes,
         smoothing_radius=smoothing_radius,
@@ -224,6 +224,59 @@ device_params = pytest.mark.parametrize(
 )
 
 dims_params = pytest.mark.parametrize("n_dims", [2, 3])
+
+
+@pytest.mark.parametrize(
+    ("schemas", "match"),
+    [
+        ({"source_schema": {"stress": {"rank": 2}}}, r"source_schema\['stress'\]"),
+        ({"global_schema": {"T": {"rank": 2}}}, r"global_schema\['T'\]"),
+        (
+            {"output_schema": {"w": {"rank": 1, "parity": "odd"}}},
+            r"output_schema\['w'\]: pseudotensors",
+        ),
+    ],
+)
+def test_kernel_refuses_declarations_it_does_not_implement(schemas, match):
+    """A rank-2 input would otherwise be silently left out of the features,
+    and a pseudotensor would transform with the wrong sign under reflections."""
+    with pytest.raises(NotImplementedError, match=match):
+        Kernel(n_spatial_dims=3, **({"output_schema": {"p": {"rank": 0}}} | schemas))
+
+
+def test_kernel_column_order():
+    """The kernel's input and output columns must keep their order.
+
+    Trained checkpoints depend on this order.  These names sort differently
+    as dotted names and as nested keys (``-`` < ``.`` < ``_``), and with 11
+    harmonics the string order of their old keys (``10`` before ``2``)
+    differs from the natural order.  The literals are the order of earlier
+    versions.
+    """
+    nested = {"a": {"b": {"rank": 0}, "v": {"rank": 1}}}
+    global_schema = nested | {"a-c": {"rank": 0}, "a-w": {"rank": 1}}
+    kernel = Kernel(
+        n_spatial_dims=3,
+        output_schema=global_schema,
+        source_schema=global_schema | {"a_": {"rank": 0}},
+        global_schema=global_schema,
+        n_spherical_harmonics=11,
+        hidden_layer_sizes=[8],
+    )
+
+    ### Source fields by dotted name, global fields by nested key; scalars
+    ### first in both.
+    assert kernel._source_layout.keys == (
+        "a-c",
+        ("a", "b"),
+        "a_",
+        "a-w",
+        ("a", "v"),
+    )
+    assert kernel._global_layout.keys == (("a", "b"), "a-c", ("a", "v"), "a-w")
+    assert kernel.output_layout.keys == ("a-c", "a-w", "a.b", "a.v")
+    assert kernel._harmonic_order == (0, 1, 10, 2, 3, 4, 5, 6, 7, 8, 9)
+
 
 output_fields_params = pytest.mark.parametrize(
     "output_fields",

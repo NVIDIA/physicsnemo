@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
+
 from .derivatives import (
     mesh_green_gauss_gradient,
     mesh_lsq_gradient,
@@ -63,7 +67,6 @@ from .interpolation import (
 )
 from .natten import na1d, na2d, na3d
 from .neighbors import knn, radius_search
-from .normalization import safe_normalize
 from .regularization_parameterization import drop_path, weight_fact
 from .rendering import (
     isosurface_render,
@@ -75,7 +78,6 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
-from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
 
 __all__ = [
     "closed_surface_volume_energy",
@@ -111,6 +113,7 @@ __all__ = [
     "radius_search",
     "real",
     "ray_mesh_intersect",
+    # Deprecated aliases, resolved by __getattr__ so that `import *` keeps them.
     "WeightedMultinomial",
     "weighted_multinomial",
     "remeshing",
@@ -121,7 +124,6 @@ __all__ = [
     "rfft",
     "rfft2",
     "point_cloud_render",
-    "safe_normalize",
     "scalar_field_to_rgba",
     "shrinkwrap_points",
     "signed_distance_field",
@@ -142,3 +144,22 @@ __all__ = [
     "weight_fact",
     "wireframe_render",
 ]
+
+
+def __getattr__(name):
+    # Lazy legacy re-export: these moved to physicsnemo.utils, and warning only
+    # on access keeps plain 'import physicsnemo.nn.functional' silent.
+    if name in ("WeightedMultinomial", "weighted_multinomial"):
+        warnings.warn(
+            f"Importing {name!r} from 'physicsnemo.nn.functional' is deprecated. "
+            f"Use 'from physicsnemo.utils import {name}' instead. "
+            "This backward-compatibility shim will be removed in a future release.",
+            LegacyFeatureWarning,
+            stacklevel=2,
+        )
+        from physicsnemo import utils
+
+        return getattr(utils, name)
+    raise AttributeError(
+        f"module 'physicsnemo.nn.functional' has no attribute {name!r}"
+    )

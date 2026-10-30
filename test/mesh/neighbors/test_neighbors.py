@@ -398,6 +398,34 @@ class TestPointToPointsAdjacency:
                 f"expected {sorted(expected_neighbors)}, got {sorted(actual_neighbors)}"
             )
 
+    @pytest.mark.parametrize(
+        "cells",
+        [
+            [[0, 1], [1, 2], [2, 1], [3, 3]],
+            [[0, 1, 2], [1, 2, 3], [0, 0, 4]],
+            [[0, 1, 2, 3], [1, 2, 3, 4], [0, 0, 1, 2]],
+        ],
+    )
+    @pytest.mark.parametrize("dtype", [torch.int64, torch.int32])
+    def test_unpacked_edge_fallback_matches(self, cells, dtype, device, monkeypatch):
+        """The fallback for edge keys that could overflow gives the same adjacency."""
+        import physicsnemo.mesh.neighbors._adjacency as adjacency_module
+        from physicsnemo.mesh.neighbors._point_neighbors import (
+            get_point_to_points_adjacency,
+        )
+
+        # Duplicate, reversed and degenerate cells.
+        cells = torch.tensor(cells, dtype=dtype, device=device)
+        mesh = Mesh(points=torch.rand(5, 3, device=device), cells=cells)
+        packed = get_point_to_points_adjacency(mesh)
+
+        monkeypatch.setattr(adjacency_module, "_PACKED_PAIR_KEY_LIMIT", 0)
+        fallback = get_point_to_points_adjacency(mesh)
+
+        assert torch.equal(packed.offsets, fallback.offsets)
+        assert torch.equal(packed.indices, fallback.indices)
+        assert packed.indices.dtype == fallback.indices.dtype
+
 
 class TestCellToCellsAdjacency:
     """Test cell-to-cells adjacency computation."""
@@ -534,6 +562,29 @@ class TestCellToCellsAdjacency:
                     f"Codimension {adjacency_codim} neighbors should be subset of "
                     f"codimension {adjacency_codim + 1} neighbors"
                 )
+
+    @pytest.mark.parametrize("adjacency_codim", [1, 2, 3])
+    def test_unpacked_pair_fallback_matches(self, adjacency_codim, device, monkeypatch):
+        """The fallback for pair keys that could overflow gives the same adjacency."""
+        import physicsnemo.mesh.neighbors._adjacency as adjacency_module
+        from physicsnemo.mesh.neighbors._cell_neighbors import (
+            get_cell_to_cells_adjacency,
+        )
+
+        # Duplicate and degenerate cells make repeated and self-sharing pairs.
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [1, 2, 3, 4], [0, 1, 2, 3], [0, 0, 1, 2], [2, 3, 4, 5]],
+            device=device,
+        )
+        mesh = Mesh(points=torch.rand(6, 3, device=device), cells=cells)
+        packed = get_cell_to_cells_adjacency(mesh, adjacency_codim)
+
+        monkeypatch.setattr(adjacency_module, "_PACKED_PAIR_KEY_LIMIT", 0)
+        fallback = get_cell_to_cells_adjacency(mesh, adjacency_codim)
+
+        assert torch.equal(packed.offsets, fallback.offsets)
+        assert torch.equal(packed.indices, fallback.indices)
+        assert packed.indices.dtype == fallback.indices.dtype
 
 
 class TestPointToCellsAdjacency:
@@ -791,6 +842,18 @@ class TestEdgeCases:
         adj = mesh.get_cell_to_points_adjacency()
         assert adj.n_sources == 0
         assert len(adj.indices) == 0
+
+    def test_vertex_cells_have_no_point_neighbors(self, device):
+        """A cell with a single vertex joins no two points."""
+        mesh = Mesh(
+            points=torch.rand(4, 2, device=device),
+            cells=torch.tensor([[0], [1], [3]], dtype=torch.int64, device=device),
+        )
+
+        adj = mesh.get_point_to_points_adjacency()
+
+        assert adj.to_list() == [[], [], [], []]
+        assert_on_device(adj.offsets, device)
 
     def test_isolated_triangle(self, device):
         """Test single triangle (no cell neighbors)."""

@@ -32,6 +32,9 @@ def load(
 ) -> Mesh[2, 3]:
     """Create a hemisphere surface in 3D space.
 
+    The normals point outward, away from the center of the sphere, as
+    described in :ref:`mesh-orientation-conventions`.
+
     Parameters
     ----------
     radius : float
@@ -55,31 +58,41 @@ def load(
     if phi_resolution < 2:
         raise ValueError(f"phi_resolution must be at least 2, got {phi_resolution=}")
 
-    # Parametric hemisphere (upper half)
+    # Parametric hemisphere (upper half); the pole (phi=0) is a single vertex
     theta = torch.linspace(0, 2 * torch.pi, theta_resolution + 1, device=device)[:-1]
-    phi = torch.linspace(0, torch.pi / 2, phi_resolution, device=device)
+    phi = torch.linspace(0, torch.pi / 2, phi_resolution, device=device)[1:]
 
     # Vectorized point generation
     PHI, THETA = torch.meshgrid(phi, theta, indexing="ij")
     x = radius * torch.sin(PHI) * torch.cos(THETA)
     y = radius * torch.sin(PHI) * torch.sin(THETA)
     z = radius * torch.cos(PHI)
-    points = torch.stack([x, y, z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
+    ring_points = torch.stack([x, y, z], dim=-1).reshape(-1, 3)
+    pole = torch.tensor([[0.0, 0.0, radius]], device=device)
+    points = torch.cat([pole, ring_points], dim=0).to(dtype=torch.float32)
+
+    # Triangle fan from the pole to the first ring
+    j_fan = torch.arange(theta_resolution, device=device)
+    pole_fan = torch.stack(
+        [torch.zeros_like(j_fan), 1 + (j_fan + 1) % theta_resolution, 1 + j_fan],
+        dim=1,
+    )
 
     # Vectorized cell generation (periodic in theta, open in phi)
-    i_idx = torch.arange(phi_resolution - 1, device=device)
+    i_idx = torch.arange(phi_resolution - 2, device=device)
     j_idx = torch.arange(theta_resolution, device=device)
     ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
     ii_flat = ii.reshape(-1)
     jj_flat = jj.reshape(-1)
 
-    p00 = ii_flat * theta_resolution + jj_flat
-    p01 = ii_flat * theta_resolution + (jj_flat + 1) % theta_resolution
-    p10 = (ii_flat + 1) * theta_resolution + jj_flat
-    p11 = (ii_flat + 1) * theta_resolution + (jj_flat + 1) % theta_resolution
+    p00 = 1 + ii_flat * theta_resolution + jj_flat
+    p01 = 1 + ii_flat * theta_resolution + (jj_flat + 1) % theta_resolution
+    p10 = 1 + (ii_flat + 1) * theta_resolution + jj_flat
+    p11 = 1 + (ii_flat + 1) * theta_resolution + (jj_flat + 1) % theta_resolution
 
     tri1 = torch.stack([p00, p01, p10], dim=1)
     tri2 = torch.stack([p01, p11, p10], dim=1)
-    cells = torch.cat([tri1, tri2], dim=0)
+    cells = torch.cat([pole_fan, tri1, tri2], dim=0)
 
-    return Mesh(points=points, cells=cells)
+    # Reverse the winding so that normals point outward
+    return Mesh(points=points, cells=cells.flip(-1))

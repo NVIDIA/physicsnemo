@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Multi-diffusion predictor wrapper for patch-based diffusion sampling."""
+"""Predictor wrapper for patch-based diffusion and flow-matching sampling."""
 
 import warnings
 from typing import Any, Callable, Iterator, cast
@@ -32,7 +32,9 @@ from physicsnemo.diffusion.utils.utils import _unwrap_module
 
 
 class MultiDiffusionPredictor(Predictor):
-    r"""Predictor for sampling from a trained
+    r"""Predictor for patch-based diffusion and flow-matching sampling.
+
+    Wraps a trained
     :class:`~physicsnemo.diffusion.multi_diffusion.MultiDiffusionModel2D`.
 
     Satisfies the :class:`~physicsnemo.diffusion.Predictor` protocol, so it
@@ -71,19 +73,18 @@ class MultiDiffusionPredictor(Predictor):
 
     .. warning::
 
-        :class:`MultiDiffusionPredictor` is intended for **test-time
-        sampling**: it is not suitable for training. The wrapped
-        multi-diffusion model should already be trained before being passed
-        to the predictor.
+        The :class:`MultiDiffusionPredictor` class supports **test-time
+        sampling** only, not training. Train the wrapped patch-based diffusion
+        or flow-matching model before constructing the predictor.
 
     Parameters
     ----------
     model : MultiDiffusionModel2D
-        A trained multi-diffusion model. The grid patching configuration
-        must be supplied through :meth:`set_patching` after construction.
+        A trained patch-based diffusion or flow-matching model. Call
+        :meth:`set_patching` after construction to configure grid patching.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Conditioning at the global resolution, bound once at construction
-        and reused at every diffusion step. Shape :math:`(B, *cond\_dims)`.
+        and reused at every sampling step. Shape :math:`(B, *cond\_dims)`.
         Pass ``None`` for unconditional models.
     fuse : bool, default=True
         Whether to fuse per-patch outputs back to the global resolution
@@ -99,10 +100,10 @@ class MultiDiffusionPredictor(Predictor):
         pass. Useful when differentiating through the predictor on large
         domains. Works with or without ``chunk_size``.
     prediction_type : PredictorType, default="x0"
-        Output type of the wrapped model. One of ``"x0"``, ``"score"``, or
-        ``"epsilon"``. The predictor always exposes an x0-compatible
-        output; pass the appropriate conversion function below when the
-        model does not directly predict x0.
+        What the wrapped model outputs: one of ``"x0"``, ``"score"``,
+        ``"epsilon"``, or ``"flow"``. The predictor always exposes an
+        x0-compatible output; pass the appropriate conversion function
+        below when the model does not directly predict x0.
     score_to_x0_fn : callable, optional
         Conversion ``(score, x_t, t) -> x0`` applied to the model output.
         Required when ``prediction_type="score"``. Typically obtained from
@@ -113,6 +114,11 @@ class MultiDiffusionPredictor(Predictor):
         Required when ``prediction_type="epsilon"``. Typically obtained from
         a noise scheduler, e.g.
         :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.epsilon_to_x0`.
+    flow_to_x0_fn : callable, optional
+        Conversion ``(flow, x_t, t) -> x0`` applied to the model output.
+        Required when ``prediction_type="flow"``. Typically obtained from
+        a noise scheduler, e.g.
+        :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.flow_to_x0`.
     **model_kwargs : Any
         Additional keyword arguments bound once at construction and
         forwarded to the wrapped model at every call.
@@ -165,8 +171,7 @@ class MultiDiffusionPredictor(Predictor):
     torch.Size([8, 3, 8, 8])
 
     **Example 2:** Unconditional sampling. The predictor plugs straight into
-    the standard diffusion sampling stack (noise scheduler, denoiser,
-    solver):
+    the standard sampling stack (noise scheduler, denoiser, solver):
 
     >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
     >>> from physicsnemo.diffusion.samplers import sample
@@ -308,6 +313,11 @@ class MultiDiffusionPredictor(Predictor):
             Float[Tensor, " B *dims"],
         ]
         | None = None,
+        flow_to_x0_fn: Callable[
+            [Float[Tensor, " B *dims"], Float[Tensor, " B *dims"], Float[Tensor, " B"]],
+            Float[Tensor, " B *dims"],
+        ]
+        | None = None,
         **model_kwargs: Any,
     ) -> None:
         self._md_model: MultiDiffusionModel2D = _unwrap_module(
@@ -358,10 +368,16 @@ class MultiDiffusionPredictor(Predictor):
                         "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
                     )
                 self._to_x0 = epsilon_to_x0_fn
+            case "flow":
+                if flow_to_x0_fn is None:
+                    raise ValueError(
+                        "flow_to_x0_fn must be provided when prediction_type='flow'."
+                    )
+                self._to_x0 = flow_to_x0_fn
             case _:
                 raise ValueError(
-                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
-                    f"got '{prediction_type}'."
+                    f"prediction_type must be 'x0', 'score', 'epsilon', or "
+                    f"'flow', got '{prediction_type}'."
                 )
 
         # Bind the model-call helper once so the use_checkpointing branch is
@@ -730,14 +746,14 @@ class MultiDiffusionPredictor(Predictor):
         x: Float[Tensor, "B C H W"],
         t: Float[Tensor, " B"],
     ) -> Float[Tensor, "B C H W"] | Float[Tensor, "P_times_B C Hp Wp"]:
-        r"""Run the predictor on a noisy latent and diffusion time.
+        r"""Run the predictor on the current state and sampling time.
 
         Parameters
         ----------
         x : torch.Tensor
-            Noisy latent at global resolution, shape :math:`(B, C, H, W)`.
+            Current state at global resolution, shape :math:`(B, C, H, W)`.
         t : torch.Tensor
-            Diffusion time, shape :math:`(B,)`.
+            Diffusion or flow-matching time, shape :math:`(B,)`.
 
         Returns
         -------

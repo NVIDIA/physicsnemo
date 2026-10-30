@@ -46,9 +46,7 @@ from physicsnemo.models.domino.utils import (
     unstandardize,
 )
 
-sampling_module = importlib.import_module(
-    "physicsnemo.nn.functional.weighted_multinomial"
-)
+sampling_module = importlib.import_module("physicsnemo.utils.weighted_multinomial")
 
 
 def test_calculate_center_of_mass():

@@ -23,15 +23,17 @@ Supports reading from a directory of Zarr groups, one sample per group.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import torch
 
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
+
+if TYPE_CHECKING:
+    from torch.distributed.device_mesh import DeviceMesh
 
 zarr = OptionalImport("zarr")
 
@@ -88,6 +90,8 @@ class ZarrReader(Reader):
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         coordinated_subsampling: Optional[dict[str, Any]] = None,
+        domain_parallel: Optional[dict[str, Any]] = None,
+        device_mesh: Optional["DeviceMesh"] = None,
         cache_stores: bool = True,
     ) -> None:
         """
@@ -116,6 +120,14 @@ class ZarrReader(Reader):
         coordinated_subsampling : dict[str, Any], optional
             Optional dict to configure coordinated subsampling. If provided,
             must contain ``n_points`` (int) and ``target_keys`` (list of str).
+        domain_parallel : dict[str, Any], optional
+            Optional dict to configure domain-parallel (rank-local) reading;
+            see :class:`~physicsnemo.datapipes.readers.base.Reader`. Sharded
+            keys read only this rank's chunk (of the coordinated window when
+            subsampling is also configured).
+        device_mesh : torch.distributed.device_mesh.DeviceMesh, optional
+            1-D device mesh for domain-parallel reading; required with
+            ``domain_parallel``. Constructed and injected at runtime.
         cache_stores : bool, default=True
             If True, cache opened zarr stores to avoid repeated opening and
             prevent executor shutdown errors. Set to False if memory is a
@@ -137,6 +149,8 @@ class ZarrReader(Reader):
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,
             coordinated_subsampling=coordinated_subsampling,
+            domain_parallel=domain_parallel,
+            device_mesh=device_mesh,
         )
 
         self.path = Path(path).expanduser().resolve()
@@ -239,21 +253,15 @@ class ZarrReader(Reader):
         """
         return (path / "zarr.json").exists() or (path / ".zgroup").exists()
 
-    def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
-        """Load a single sample from a Zarr group."""
-        # Per-sample generator: reproducible regardless of read order/thread.
-        generator = self._index_generator(index)
+    def _open_sample(self, index: int) -> tuple[Any, set[str]]:
+        """Open the sample's group and validate required-field availability."""
         if self._single_group_mode:
             # Single group: index into first dimension of each array
             group_path = self._groups[0]
-            root = self._open_zarr_store(group_path)
         else:
             # Directory mode: each group is one sample
             group_path = self._groups[index]
-            root = self._open_zarr_store(group_path)
-
-        data = {}
-        fields_to_load = self.fields
+        root = self._open_zarr_store(group_path)
 
         # Discover available arrays and attributes for this sample at runtime
         available_arrays = set(root.array_keys())
@@ -263,7 +271,7 @@ class ZarrReader(Reader):
         # Check for missing required fields (check both arrays and attributes).
         # ``array_keys()`` lists only direct children, so a path into a
         # sub-group (``"solution/pressure"``) is resolved via ``in root``.
-        required_fields = set(fields_to_load) - set(self.default_values.keys())
+        required_fields = set(self.fields) - set(self.default_values.keys())
         missing_fields = {
             f for f in required_fields if f not in available and f not in root
         }
@@ -273,57 +281,79 @@ class ZarrReader(Reader):
                 f"Available arrays: {list(available_arrays)}, "
                 f"Available attributes: {list(available_attrs)}"
             )
+        return root, available_attrs
 
-        # Determine cyclic block indices if coordinated subsampling is enabled.
-        subsample_indices = None
-        target_keys_set = set()
-        if self._coordinated_subsampling_config is not None:
-            n_points = self._coordinated_subsampling_config["n_points"]
-            target_keys_set = set(self._coordinated_subsampling_config["target_keys"])
+    def _has_batch_axis(self, array) -> bool:
+        """Whether a sample of *array* has a batch dim (not a per-sample scalar)."""
+        return array.ndim > (1 if self._single_group_mode else 0)
 
-            # Find the range from the first available target key. A cyclic
-            # block gives every point equal inclusion probability while
-            # retaining contiguous storage locality.
-            for field in target_keys_set:
-                if field in root:
-                    if self._single_group_mode:
-                        # In single group mode, subsample along dimensions after the first
-                        array_shape = root[field].shape[1]
-                    else:
-                        array_shape = root[field].shape[0]
-                    subsample_indices = _cyclic_block_indices(
-                        array_shape, n_points, generator=generator
-                    ).numpy()
-                    break
+    def _array_rows(self, array) -> int:
+        """Row count of an array's batch dim (dim 1 in single-group mode)."""
+        return array.shape[1] if self._single_group_mode else array.shape[0]
 
-        # Load each field
-        for field in fields_to_load:
+    def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
+        """Load a single sample from a Zarr group."""
+        return self._load_sample_domain_parallel(index)[0]
+
+    def _load_sample_domain_parallel(
+        self, index: int
+    ) -> tuple[dict[str, torch.Tensor], dict[str, tuple[int, ...]]]:
+        """Read a sample: the whole window, or this rank's share of it.
+
+        Placements (when domain parallelism is on) resolve from store
+        metadata shapes before any data is read. Attributes and default
+        values always replicate.
+        """
+        # Per-sample generator: reproducible regardless of read order/thread.
+        generator = self._index_generator(index)
+        root, available_attrs = self._open_sample(index)
+        subsample_indices, target_keys_set = self._window_indices(
+            lambda key: self._array_rows(root[key]) if key in root else None,
+            generator,
+        )
+
+        # Effective global shape per array key (window length on dim 0 for
+        # windowed keys); metadata only.
+        shapes: dict[str, tuple[int, ...]] = {}
+        for field in self.fields:
             if field in root:
-                if self._single_group_mode:
-                    # Single group mode: index into first dimension
-                    if subsample_indices is not None and field in target_keys_set:
-                        # Apply subsampling on dimensions after the first
-                        data[field] = torch.from_numpy(
-                            root[field][index, subsample_indices]
-                        )
-                    else:
-                        data[field] = torch.from_numpy(root[field][index])
-                else:
-                    # Directory mode: load entire array or subsample
-                    if subsample_indices is not None and field in target_keys_set:
-                        data[field] = torch.from_numpy(root[field][subsample_indices])
-                    else:
-                        data[field] = torch.from_numpy(root[field][:])
+                array = root[field]
+                if not self._has_batch_axis(array):
+                    continue  # per-sample scalar: read whole, replicated
+                n_rows = (
+                    len(subsample_indices)
+                    if subsample_indices is not None and field in target_keys_set
+                    else self._array_rows(array)
+                )
+                trailing = (
+                    array.shape[2:] if self._single_group_mode else array.shape[1:]
+                )
+                shapes[field] = (n_rows, *trailing)
+        selection, sharded = self._selection_plan(
+            shapes, subsample_indices, target_keys_set, generator
+        )
 
+        data: dict[str, torch.Tensor] = {}
+        for field in self.fields:
+            if field in root:
+                if not self._has_batch_axis(root[field]):
+                    scalar = (
+                        root[field][index]
+                        if self._single_group_mode
+                        else root[field][()]
+                    )
+                    data[field] = torch.as_tensor(scalar)
+                elif self._single_group_mode:
+                    # Single group mode: the sample is dim 0, the batch axis is dim 1.
+                    data[field] = torch.from_numpy(root[field][index, selection[field]])
+                else:
+                    data[field] = torch.from_numpy(root[field][selection[field]])
             elif field in available_attrs:
                 # Load from attributes (discovered at runtime for this sample)
-                attr_value = root.attrs[field]
-                data[field] = self._convert_attr_to_tensor(attr_value, field)
-
+                data[field] = self._convert_attr_to_tensor(root.attrs[field], field)
             elif field in self.default_values:
                 data[field] = self.default_values[field].clone()
-
-        return data
+        return data, sharded
 
     def _convert_attr_to_tensor(self, value: Any, field_name: str) -> torch.Tensor:
         """
@@ -393,6 +423,11 @@ class ZarrReader(Reader):
     @property
     def _supports_coordinated_subsampling(self) -> bool:
         """Zarr reader supports coordinated subsampling."""
+        return True
+
+    @property
+    def _supports_domain_parallel(self) -> bool:
+        """Zarr reader supports domain-parallel (rank-local) reading."""
         return True
 
     def close(self) -> None:

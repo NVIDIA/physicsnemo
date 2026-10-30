@@ -73,6 +73,7 @@ from physicsnemo.mesh.generate.implicit_functions import (
     project_to_zero_set,
     sdf_box,
 )
+from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -84,13 +85,11 @@ def _odt_targets(points, cells, h):
     """Volume-weighted circumcenter average per vertex (Chen-Xu ODT)."""
     d = points.shape[1]
     p0 = points[cells[:, 0]]
-    rel = points[cells[:, 1:]] - p0[:, None, :]
-    rhs = 0.5 * (rel * rel).sum(-1)
-    centroid_rel = rel.sum(dim=1) / (d + 1)
+    verts_rel = points[cells] - p0[:, None, :]  # (n_cells, d+1, d), row 0 is zero
+    centroid_rel = verts_rel.sum(dim=1) / (d + 1)
     vol = signed_volumes(points, cells)
     good = vol.abs() > 1e-8 * h**d / math.factorial(d)
-    cc_rel = centroid_rel.clone()
-    cc_rel[good] = torch.linalg.solve(rel[good], rhs[good])
+    cc_rel = torch.where(good[:, None], compute_circumcenters(verts_rel), centroid_rel)
     off = cc_rel - centroid_rel
     dist = off.norm(dim=-1, keepdim=True)
     cc_rel = centroid_rel + off * (2.0 * h / dist.clamp_min(2.0 * h))
@@ -102,10 +101,8 @@ def _odt_targets(points, cells, h):
     idx = cells.reshape(-1)
     num.index_add_(0, idx, (w * cc).repeat_interleave(cells.shape[1], dim=0))
     den.index_add_(0, idx, w.repeat_interleave(cells.shape[1], dim=0))
-    has = den[:, 0] > 0
-    target = points.clone()
-    target[has] = num[has] / den[has]
-    return target
+    # Vertices in no positive-volume cell stay put (0 / 0 is never selected).
+    return torch.where(den > 0, num / den, points)
 
 
 def _gated_update(points, cells, target, vol_floor, max_halvings: int = 6):

@@ -21,6 +21,8 @@ from __future__ import annotations
 import torch
 from jaxtyping import Bool, Float, Int
 
+from physicsnemo.utils._small_linalg import small_det
+
 
 def _safe_topology_indices(
     topology: Int[torch.Tensor, "num_primitives vertices_per_primitive"],
@@ -98,34 +100,6 @@ def _simplex_factorial(simplex_dimension: int) -> float:
     return (3 * simplex_dimension * simplex_dimension - 7 * simplex_dimension + 6) / 2
 
 
-def _edge_determinant(
-    edges: Float[torch.Tensor, "batch num_simplices dimension dimension"],
-    dimension: int,
-) -> Float[torch.Tensor, "batch num_simplices"]:
-    """Return the determinant of low-dimensional edge rows."""
-
-    if dimension == 1:
-        return edges[..., 0, 0]
-    if dimension == 2:
-        return edges[..., 0, 0] * edges[..., 1, 1] - edges[..., 0, 1] * edges[..., 1, 0]
-    if dimension == 3:
-        x10 = edges[..., 0, 0]
-        x11 = edges[..., 0, 1]
-        x12 = edges[..., 0, 2]
-        x20 = edges[..., 1, 0]
-        x21 = edges[..., 1, 1]
-        x22 = edges[..., 1, 2]
-        x30 = edges[..., 2, 0]
-        x31 = edges[..., 2, 1]
-        x32 = edges[..., 2, 2]
-        return (
-            x10 * (x21 * x32 - x22 * x31)
-            - x20 * (x11 * x32 - x12 * x31)
-            + x30 * (x11 * x22 - x12 * x21)
-        )
-    return torch.linalg.det(edges)
-
-
 def _unsigned_simplex_measure(
     edges: Float[torch.Tensor, "batch num_simplices simplex_dimension num_dims"],
     simplex_dimension: int,
@@ -181,6 +155,69 @@ def _reference_measure(
     return torch.where(valid, measure, torch.full_like(measure, torch.nan)), valid
 
 
+def _reference_frame_cauchy_green(
+    edges: Float[torch.Tensor, "batch num_simplices simplex_dimension num_dims"],
+    reference_edges: Float[
+        torch.Tensor, "batch num_simplices simplex_dimension num_dims"
+    ],
+    simplex_dimension: int,
+) -> tuple[
+    Float[torch.Tensor, "batch num_simplices simplex_dimension simplex_dimension"],
+    Float[torch.Tensor, "batch num_simplices simplex_dimension"],
+    Float[torch.Tensor, "batch num_simplices"],
+]:
+    """Return the right Cauchy--Green tensor in a reference-orthonormal frame.
+
+    Modified Gram--Schmidt factors the reference edge rows as ``E0 = L Q``
+    without forming ``E0 E0^T``; forward substitution ``L H = E`` then gives
+    ``C = H H^T``. Also returns the diagonal of ``L`` for the scale-normalized
+    reference edges, and the reference measure. Degenerate reference cells use
+    unit Gram--Schmidt denominators so their masked terms and gradients stay
+    finite.
+    """
+
+    # C is invariant to a common scale of both edge sets. Normalizing by the
+    # largest reference edge coordinate keeps the squared norms of tiny or huge
+    # cells in range; the scale is detached because every normalized
+    # expression equals the unnormalized one for any fixed positive scale.
+    scale = reference_edges.abs().amax(dim=(-1, -2)).detach()
+    scale = torch.where(
+        (scale > 0.0) & torch.isfinite(scale), scale, torch.ones_like(scale)
+    )
+    edges = edges / scale[..., None, None]
+    reference_edges = reference_edges / scale[..., None, None]
+
+    basis: list[torch.Tensor] = []
+    frame_edges: list[torch.Tensor] = []
+    lengths: list[torch.Tensor] = []
+    for row in range(simplex_dimension):
+        residual = reference_edges[..., row, :]
+        frame_edge = edges[..., row, :]
+        for basis_vector, previous_frame_edge in zip(basis, frame_edges):
+            coefficient = (residual * basis_vector).sum(dim=-1, keepdim=True)
+            residual = residual - coefficient * basis_vector
+            frame_edge = frame_edge - coefficient * previous_frame_edge
+        length = torch.linalg.vector_norm(residual, dim=-1)
+        safe_length = torch.where(length > 0.0, length, torch.ones_like(length))
+        basis.append(residual / safe_length.unsqueeze(-1))
+        frame_edges.append(frame_edge / safe_length.unsqueeze(-1))
+        lengths.append(length)
+
+    # H: (batch, num_simplices, simplex_dimension, num_dims)
+    frame_edge_rows = torch.stack(frame_edges, dim=-2)
+    # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+    right_cauchy_green = (
+        frame_edge_rows.unsqueeze(-2) * frame_edge_rows.unsqueeze(-3)
+    ).sum(dim=-1)
+    diagonal = torch.stack(lengths, dim=-1)
+    reference_measure = (
+        diagonal.prod(dim=-1)
+        / _simplex_factorial(simplex_dimension)
+        * scale**simplex_dimension
+    )
+    return right_cauchy_green, diagonal, reference_measure
+
+
 def simplex_stvk_terms_torch(
     points: Float[torch.Tensor, "batch num_points num_dims"],
     reference_points: Float[torch.Tensor, "batch num_points num_dims"],
@@ -204,27 +241,14 @@ def simplex_stvk_terms_torch(
     edges = _simplex_edges(points, safe_simplices)
     reference_edges = _simplex_edges(reference_points, safe_simplices)
     simplex_dimension = simplices.shape[1] - 1
-    reference_matrix = reference_edges.transpose(-2, -1)
-    _, reference_r = torch.linalg.qr(reference_matrix, mode="reduced")
-    diagonal = torch.diagonal(reference_r, dim1=-2, dim2=-1)
-    reference_measure = diagonal.abs().prod(dim=-1) / _simplex_factorial(
-        simplex_dimension
+    right_cauchy_green, diagonal, reference_measure = _reference_frame_cauchy_green(
+        edges, reference_edges, simplex_dimension
     )
-
-    # With X0 = Q R, F = X R^-1 maps a reference-orthonormal intrinsic
-    # coordinate frame to the current embedding without forming X0^T X0.
     identity = torch.eye(
         simplex_dimension,
         dtype=points.dtype,
         device=points.device,
-    ).expand(reference_r.shape)
-    inverse_reference_r = torch.linalg.solve_triangular(
-        reference_r,
-        identity,
-        upper=True,
     )
-    deformation_gradient = edges.transpose(-2, -1) @ inverse_reference_r
-    right_cauchy_green = deformation_gradient.transpose(-2, -1) @ deformation_gradient
     strain = 0.5 * (right_cauchy_green - identity)
     trace = torch.diagonal(strain, dim1=-2, dim2=-1).sum(dim=-1)
     # This equivalent deviatoric/volumetric split remains manifestly
@@ -274,8 +298,8 @@ def simplex_measure_components_torch(
     current_finite = torch.isfinite(edges).all(dim=(-1, -2))
 
     if simplex_dimension == coordinate_dimension:
-        determinant = _edge_determinant(edges, coordinate_dimension)
-        reference_determinant = _edge_determinant(reference_edges, coordinate_dimension)
+        determinant = small_det(edges)
+        reference_determinant = small_det(reference_edges)
         reference_measure = reference_determinant.abs() / _simplex_factorial(
             simplex_dimension
         )
@@ -475,12 +499,8 @@ def closed_surface_volume_contributions_torch(
     reference_vertices = (
         _gather_vertices(reference_points, safe_triangles) - reference_origin
     )
-    point_0, point_1, point_2 = vertices.unbind(dim=2)
-    reference_0, reference_1, reference_2 = reference_vertices.unbind(dim=2)
-    current = (point_0 * torch.linalg.cross(point_1, point_2, dim=-1)).sum(dim=-1) / 6.0
-    reference = (
-        reference_0 * torch.linalg.cross(reference_1, reference_2, dim=-1)
-    ).sum(dim=-1) / 6.0
+    current = small_det(vertices) / 6.0
+    reference = small_det(reference_vertices) / 6.0
     topology_valid = topology_valid.unsqueeze(0)
     nan = torch.full_like(current, torch.nan)
     return (

@@ -18,7 +18,6 @@
 
 import builtins
 import inspect
-from typing import get_args
 
 import pytest
 
@@ -26,13 +25,6 @@ from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.neighbors import Adjacency
 from physicsnemo.mesh.spatial import BVH, ClusterTree, DualInteractionPlan
 from physicsnemo.mesh.spatial.cluster_tree import SourceAggregates
-
-
-def _annotation_parts(annotation):
-    """Yield an annotation and each recursively nested type argument."""
-    yield annotation
-    for argument in get_args(annotation):
-        yield from _annotation_parts(argument)
 
 
 def _physicsnemo_members(tensorclass):
@@ -62,28 +54,25 @@ def _physicsnemo_members(tensorclass):
     ),
 )
 def test_tensorclass_annotations_are_introspectable(tensorclass):
-    """Tensor conversion methods must not shadow builtin type annotations."""
-    conversion_methods = {
-        member
+    """Unqualified builtin annotations must resolve to the builtins.
+
+    Python 3.14 evaluates annotations lazily and looks names up in the class
+    namespace first. ``@tensorclass`` installed conversion methods such as
+    ``int`` and ``float`` there; ``TensorClass`` subclasses inherit them instead.
+    """
+    shadowing = sorted(
+        name
         for name, member in vars(tensorclass).items()
         if name in vars(builtins)
         and callable(member)
         and member is not getattr(builtins, name)
-    }
+    )
+    assert not shadowing, (
+        f"{tensorclass.__name__} shadows builtins in its class namespace: {shadowing}"
+    )
 
     for member in _physicsnemo_members(tensorclass):
         try:
-            signature = inspect.signature(member)
+            inspect.signature(member)
         except Exception as error:
             pytest.fail(f"Could not inspect {member.__qualname__}: {error}")
-
-        annotations = [
-            parameter.annotation for parameter in signature.parameters.values()
-        ]
-        annotations.append(signature.return_annotation)
-        for annotation in annotations:
-            for part in _annotation_parts(annotation):
-                assert all(part is not method for method in conversion_methods), (
-                    f"{member.__qualname__} resolved a builtin type annotation to a "
-                    "tensorclass conversion method"
-                )

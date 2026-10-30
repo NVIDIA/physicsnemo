@@ -36,7 +36,7 @@ from physicsnemo.datapipes.keys import (
 )
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
-from physicsnemo.nn.functional import weighted_multinomial
+from physicsnemo.utils import weighted_multinomial
 
 
 def shuffle_array(

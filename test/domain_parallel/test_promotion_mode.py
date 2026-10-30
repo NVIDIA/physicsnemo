@@ -109,3 +109,34 @@ def test_promotion_mode_context_manager_restores_on_exception(restore_promotion_
 def test_find_mesh_in_args_returns_none_for_plain_containers():
     assert st_mod._find_mesh_in_args(1, "x", None) is None
     assert st_mod._find_mesh_in_args({"a": [1, 2]}, (3, [4, {"b": 5}])) is None
+
+
+# ---------------------------------------------------------------------------
+# Conversion re-entry guard
+# ---------------------------------------------------------------------------
+
+
+def test_conversion_scope_restores_depth_without_deleting_attribute():
+    r"""Exiting the outermost scope leaves ``depth == 0`` in place.
+
+    ``_conversion_active`` treats 0 and "absent" identically, and dynamo can
+    trace a ``setattr`` on the thread-local but crashes on ``delattr``.
+    """
+    assert not st_mod._conversion_active()
+    with st_mod._conversion_scope():
+        assert st_mod._conversion_active()
+        assert st_mod._conversion_guard.depth == 1
+        with st_mod._conversion_scope():
+            assert st_mod._conversion_guard.depth == 2
+        assert st_mod._conversion_guard.depth == 1
+    assert hasattr(st_mod._conversion_guard, "depth")
+    assert st_mod._conversion_guard.depth == 0
+    assert not st_mod._conversion_active()
+
+
+def test_conversion_scope_restores_depth_on_exception():
+    with pytest.raises(RuntimeError, match="boom"):
+        with st_mod._conversion_scope():
+            raise RuntimeError("boom")
+    assert st_mod._conversion_guard.depth == 0
+    assert not st_mod._conversion_active()

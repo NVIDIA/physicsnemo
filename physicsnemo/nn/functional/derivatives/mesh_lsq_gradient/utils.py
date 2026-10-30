@@ -78,16 +78,28 @@ def validate_inputs(
         raise TypeError("neighbor_indices must be int32 or int64")
 
     ### Validate CSR range invariants.
-    if int(neighbor_offsets[0].item()) != 0:
+    # Gather every checked value into one tensor so that a single device-to-host
+    # transfer (one synchronization on CUDA) serves all of the checks.
+    checks = [
+        neighbor_offsets[0],
+        neighbor_offsets[-1],
+        (neighbor_offsets[1:] < neighbor_offsets[:-1]).any(),
+    ]
+    if neighbor_indices.numel() > 0:
+        checks += [neighbor_indices.min(), neighbor_indices.max()]
+    first_offset, last_offset, decreasing, *index_range = torch.stack(
+        [check.to(torch.int64) for check in checks]
+    ).tolist()
+
+    if first_offset != 0:
         raise ValueError("neighbor_offsets must start at 0")
-    if int(neighbor_offsets[-1].item()) != neighbor_indices.shape[0]:
+    if last_offset != neighbor_indices.shape[0]:
         raise ValueError("neighbor_offsets[-1] must equal len(neighbor_indices)")
-    if torch.any(neighbor_offsets[1:] < neighbor_offsets[:-1]):
+    if decreasing:
         raise ValueError("neighbor_offsets must be non-decreasing")
 
-    if neighbor_indices.numel() > 0:
-        idx_min = int(neighbor_indices.min().item())
-        idx_max = int(neighbor_indices.max().item())
+    if index_range:
+        idx_min, idx_max = index_range
         if idx_min < 0 or idx_max >= points.shape[0]:
             raise ValueError(
                 f"neighbor_indices must satisfy 0 <= index < n_entities ({points.shape[0]})"

@@ -215,8 +215,9 @@ your dataset uses different naming or parameters, update `parse_params` in
   `sim_1..sim_T` into a single target tensor.
 * The target is stacked by timestep in the channel dimension, so the model
   predicts the entire horizon in one forward pass (no autoregressive rollout).
-* The number of predicted steps is controlled by `data.future_steps`; smaller
-  simulations are padded and masked so training still works.
+* The number of predicted steps is controlled by `data.future_steps`. Shorter
+  simulations are padded with zeros so training still works, and the loss
+  includes the padded steps.
 * Use `model.model_type: surface | volume | combined` to control which outputs
   are trained.
 

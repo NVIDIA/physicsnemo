@@ -92,6 +92,21 @@ def test_polygon_tolerates_duplicate_vertex():
     assert torch.allclose(vals, ref)
 
 
+def test_polygon_float32_matches_float64():
+    """The degenerate-segment and on-boundary guards also hold in float32: a
+    duplicate vertex gives the float64 distances, not NaN for every query,
+    and the gradient on an edge is finite, as in float64."""
+    square = [[0.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    phi = sdf_polygon_2d(square)
+    pts = torch.tensor([[0.5, 0.5], [0.5, -0.5], [1.5, 0.5], [1.0, 0.7]])
+    torch.testing.assert_close(phi(pts), phi(pts.double()).float())
+
+    for dtype in (torch.float32, torch.float64):
+        x = torch.tensor([[1.0, 0.7]], dtype=dtype, requires_grad=True)
+        (grad,) = torch.autograd.grad(phi(x).sum(), x)
+        assert bool(torch.isfinite(grad).all()), dtype
+
+
 def test_polygon_orientation_invariance():
     square_ccw = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
     square_cw = list(reversed(square_ccw))

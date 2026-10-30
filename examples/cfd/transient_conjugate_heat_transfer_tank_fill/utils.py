@@ -94,6 +94,32 @@ def infer_shapes(
     return surface_channels, volume_channels, future_steps
 
 
+def get_keys_to_read(model_type: str) -> List[str]:
+    """Return the keys that ``create_domino_dataset`` reads from each NPZ.
+
+    The global parameters must be among them. The datapipe never reads the keys
+    in ``keys_to_read_if_available`` from a file, but always uses their defaults.
+    """
+    keys_to_read = [
+        "stl_coordinates",
+        "stl_centers",
+        "stl_faces",
+        "stl_areas",
+        "global_params_values",
+        "global_params_reference",
+    ]
+    if model_type in {"volume", "combined"}:
+        keys_to_read += ["volume_mesh_centers", "volume_fields"]
+    if model_type in {"surface", "combined"}:
+        keys_to_read += [
+            "surface_mesh_centers",
+            "surface_normals",
+            "surface_areas",
+            "surface_fields",
+        ]
+    return keys_to_read
+
+
 # -----------------------------------------------------------------------------
 # Scaling helpers
 # -----------------------------------------------------------------------------

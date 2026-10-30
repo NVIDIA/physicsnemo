@@ -189,16 +189,26 @@ def draw_mesh_matplotlib(
         norm = None
         scalar_mapper = None
 
+    ### Cell colors: mapped from the cell scalars if those are active, else
+    ### the neutral cell color
+    if active_scalar_source == "cells" and cell_scalar_values is not None:
+        cell_colors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+    else:
+        cell_colors = cell_neutral_color
+
     ### Draw based on spatial dimensionality
     if mesh.n_spatial_dims == 0:
         _draw_0d(
             ax,
             points_np,
+            cells_np,
             point_scalar_values,
             active_scalar_source,
             scalar_mapper,
             point_neutral_color,
+            cell_colors,
             alpha_points,
+            alpha_cells,
         )
     elif mesh.n_spatial_dims == 1:
         _draw_1d(
@@ -206,11 +216,10 @@ def draw_mesh_matplotlib(
             points_np,
             cells_np,
             point_scalar_values,
-            cell_scalar_values,
             active_scalar_source,
             scalar_mapper,
             point_neutral_color,
-            cell_neutral_color,
+            cell_colors,
             alpha_points,
             alpha_cells,
         )
@@ -220,11 +229,10 @@ def draw_mesh_matplotlib(
             points_np,
             cells_np,
             point_scalar_values,
-            cell_scalar_values,
             active_scalar_source,
             scalar_mapper,
             point_neutral_color,
-            cell_neutral_color,
+            cell_colors,
             alpha_points,
             alpha_cells,
             alpha_edges,
@@ -236,11 +244,10 @@ def draw_mesh_matplotlib(
             points_np,
             cells_np,
             point_scalar_values,
-            cell_scalar_values,
             active_scalar_source,
             scalar_mapper,
             point_neutral_color,
-            cell_neutral_color,
+            cell_colors,
             alpha_points,
             alpha_cells,
             alpha_edges,
@@ -303,19 +310,35 @@ def draw_mesh_matplotlib(
     return ax
 
 
+def _draw_vertex_cells(ax, cell_points_np, cell_colors, alpha_cells):
+    """Draw vertex cells as markers at their points (2D or 3D coordinates).
+
+    The markers are larger than the point markers, so a point drawn over its
+    vertex cell leaves a colored ring.
+    """
+    ax.scatter(*cell_points_np.T, c=cell_colors, alpha=alpha_cells, s=20, zorder=1)
+
+
 def _draw_0d(
     ax,
     points_np,
+    cells_np,
     point_scalar_values,
     active_scalar_source,
     scalar_mapper,
     point_neutral_color,
+    cell_colors,
     alpha_points,
+    alpha_cells,
 ):
     """Draw 0D manifold (point cloud) in 0D space."""
     # For 0D spatial dimensions, all points are at the origin
     # We can represent them as points at x=0
     n_points = len(points_np)
+
+    ### Draw vertex cells, also at the origin
+    if cells_np.shape[0] > 0 and alpha_cells > 0:
+        _draw_vertex_cells(ax, np.zeros((len(cells_np), 2)), cell_colors, alpha_cells)
 
     if active_scalar_source == "points" and point_scalar_values is not None:
         colors = scalar_mapper.to_rgba(point_scalar_values.cpu().numpy())
@@ -335,15 +358,14 @@ def _draw_1d(
     points_np,
     cells_np,
     point_scalar_values,
-    cell_scalar_values,
     active_scalar_source,
     scalar_mapper,
     point_neutral_color,
-    cell_neutral_color,
+    cell_colors,
     alpha_points,
     alpha_cells,
 ):
-    """Draw 1D manifold (edges) in 1D or 2D space."""
+    """Draw vertex cells or edges in 1D space."""
     # Points are 1D, so plot along x-axis (or in 2D if embedded in 2D)
     if points_np.shape[1] == 1:
         # Truly 1D: plot on x-axis
@@ -354,22 +376,23 @@ def _draw_1d(
             f"Expected 1D points for 1D spatial dimension, got shape {points_np.shape}"
         )
 
-    ### Draw cells (line segments)
+    ### Draw cells: markers for vertex cells, else line segments
     if cells_np.shape[0] > 0 and alpha_cells > 0:
-        segments = points_np[cells_np[:, :2]]  # Shape: (n_cells, 2, 1)
-        segments = np.stack(
-            [segments[:, :, 0], np.zeros((len(segments), 2))], axis=-1
-        )  # Add y=0
-
-        if active_scalar_source == "cells" and cell_scalar_values is not None:
-            colors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+        # Plot along the x-axis, at y=0
+        cell_points_np = np.stack(
+            [x[cells_np], np.zeros(cells_np.shape)], axis=-1
+        )  # Shape: (n_cells, n_vertices_per_cell, 2)
+        if cells_np.shape[1] == 1:
+            _draw_vertex_cells(ax, cell_points_np[:, 0], cell_colors, alpha_cells)
         else:
-            colors = cell_neutral_color
-
-        lc = mpl_collections.LineCollection(
-            segments, colors=colors, alpha=alpha_cells, linewidths=2, zorder=1
-        )
-        ax.add_collection(lc)
+            lc = mpl_collections.LineCollection(
+                cell_points_np,
+                colors=cell_colors,
+                alpha=alpha_cells,
+                linewidths=2,
+                zorder=1,
+            )
+            ax.add_collection(lc)
 
     ### Draw points
     if alpha_points > 0:
@@ -380,31 +403,47 @@ def _draw_1d(
 
         ax.scatter(x, np.zeros_like(x), c=colors, alpha=alpha_points, s=5, zorder=2)
 
+    ### add_collection does not rescale the view, so fit it to the lines too.
+    ### A no-op on axes whose limits the caller fixed.
+    ax.autoscale_view()
+
 
 def _draw_2d(
     ax,
     points_np,
     cells_np,
     point_scalar_values,
-    cell_scalar_values,
     active_scalar_source,
     scalar_mapper,
     point_neutral_color,
-    cell_neutral_color,
+    cell_colors,
     alpha_points,
     alpha_cells,
     alpha_edges,
     show_edges,
 ):
-    """Draw 2D manifold (triangles) in 2D space."""
+    """Draw mesh in 2D space: markers, line segments or polygons for cells."""
+    ### Draw cells: markers for vertex cells
+    if cells_np.shape[0] > 0 and cells_np.shape[1] == 1 and alpha_cells > 0:
+        _draw_vertex_cells(ax, points_np[cells_np[:, 0]], cell_colors, alpha_cells)
+
+    ### Draw cells: line segments for 1D manifolds (edges)
+    elif cells_np.shape[0] > 0 and cells_np.shape[1] == 2 and alpha_cells > 0:
+        lc = mpl_collections.LineCollection(
+            points_np[cells_np],
+            colors=cell_colors,
+            alpha=alpha_cells,
+            linewidths=2,
+            zorder=1,
+        )
+        ax.add_collection(lc)
+
     ### Draw cells (filled polygons)
-    if cells_np.shape[0] > 0 and alpha_cells > 0:
+    elif cells_np.shape[0] > 0 and alpha_cells > 0:
         # Create polygons from cells
         verts = points_np[cells_np]  # Shape: (n_cells, n_vertices_per_cell, 2)
 
-        if active_scalar_source == "cells" and cell_scalar_values is not None:
-            facecolors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
-        elif active_scalar_source == "points" and point_scalar_values is not None:
+        if active_scalar_source == "points" and point_scalar_values is not None:
             # Map per-vertex scalars to per-face colors by averaging each
             # face's vertex RGBA values (same approach as _draw_3d).
             vertex_colors = scalar_mapper.to_rgba(
@@ -412,27 +451,24 @@ def _draw_2d(
             )  # (n_points, 4)
             facecolors = vertex_colors[cells_np].mean(axis=1)  # (n_faces, 4)
         else:
-            facecolors = cell_neutral_color
+            facecolors = cell_colors
 
         if show_edges and alpha_edges > 0:
-            edgecolors = "black"
+            edgecolors = (0, 0, 0, alpha_edges)
             linewidths = 0.25
         else:
             edgecolors = "none"
             linewidths = 0
 
+        # Bake the opacities into the RGBA colors: a collection-wide alpha
+        # would override alpha_edges.
         pc = mpl_collections.PolyCollection(
             verts,
-            facecolors=facecolors,
+            facecolors=mpl_colors.to_rgba_array(facecolors, alpha_cells),
             edgecolors=edgecolors,
             linewidths=linewidths,
-            alpha=alpha_cells,
             zorder=1,
         )
-        # Set edge alpha separately if needed
-        if show_edges and alpha_edges > 0 and alpha_edges != alpha_cells:
-            pc.set_edgecolor([(0, 0, 0, alpha_edges)] * len(verts))
-
         ax.add_collection(pc)
 
     ### Draw points
@@ -441,6 +477,7 @@ def _draw_2d(
     # overlaid dots would be redundant. This matches _draw_3d behavior.
     has_colored_surface = (
         cells_np.shape[0] > 0
+        and cells_np.shape[1] >= 3
         and alpha_cells > 0
         and active_scalar_source == "points"
         and point_scalar_values is not None
@@ -473,11 +510,10 @@ def _draw_3d(
     points_np,
     cells_np,
     point_scalar_values,
-    cell_scalar_values,
     active_scalar_source,
     scalar_mapper,
     point_neutral_color,
-    cell_neutral_color,
+    cell_colors,
     alpha_points,
     alpha_cells,
     alpha_edges,
@@ -489,20 +525,15 @@ def _draw_3d(
         n_manifold_dims = cells_np.shape[1] - 1
 
         if n_manifold_dims == 0:
-            # 0D manifold in 3D: just points (handled below)
-            pass
+            # 0D manifold (vertex cells) in 3D: markers
+            _draw_vertex_cells(ax, points_np[cells_np[:, 0]], cell_colors, alpha_cells)
 
         elif n_manifold_dims == 1:
             # 1D manifold (edges) in 3D: use Line3DCollection
             segments = points_np[cells_np[:, :2]]  # Shape: (n_cells, 2, 3)
 
-            if active_scalar_source == "cells" and cell_scalar_values is not None:
-                colors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
-            else:
-                colors = cell_neutral_color
-
             lc = mpl_art3d.Line3DCollection(
-                segments, colors=colors, alpha=alpha_cells, linewidths=2, zorder=1
+                segments, colors=cell_colors, alpha=alpha_cells, linewidths=2, zorder=1
             )
             ax.add_collection3d(lc)
 
@@ -510,9 +541,7 @@ def _draw_3d(
             # 2D manifold (triangles) in 3D: use Poly3DCollection
             verts = points_np[cells_np]  # Shape: (n_cells, 3, 3)
 
-            if active_scalar_source == "cells" and cell_scalar_values is not None:
-                facecolors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
-            elif active_scalar_source == "points" and point_scalar_values is not None:
+            if active_scalar_source == "points" and point_scalar_values is not None:
                 # Map per-vertex scalars to per-face colors by averaging each
                 # face's vertex RGBA values.  This avoids a separate scatter
                 # overlay that matplotlib cannot correctly depth-sort against
@@ -522,7 +551,7 @@ def _draw_3d(
                 )  # (n_points, 4)
                 facecolors = vertex_colors[cells_np].mean(axis=1)  # (n_faces, 4)
             else:
-                facecolors = cell_neutral_color
+                facecolors = cell_colors
 
             if show_edges and alpha_edges > 0:
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)

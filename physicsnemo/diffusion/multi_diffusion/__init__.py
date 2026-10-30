@@ -20,7 +20,12 @@ from .dps_guidance import (
     MultiDiffusionDPSScorePredictor,
     MultiDiffusionModelConsistencyDPSGuidance,
 )
-from .losses import MultiDiffusionMSEDSMLoss, MultiDiffusionWeightedMSEDSMLoss
+from .losses import (
+    MultiDiffusionFlowMatchingLoss,
+    MultiDiffusionMSEDSMLoss,
+    MultiDiffusionWeightedFlowMatchingLoss,
+    MultiDiffusionWeightedMSEDSMLoss,
+)
 from .models import MultiDiffusionModel2D
 from .patching import (
     BasePatching2D,

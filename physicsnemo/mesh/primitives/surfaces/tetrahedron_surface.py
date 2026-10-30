@@ -41,7 +41,7 @@ def load(side_length: float = 1.0, device: torch.device | str = "cpu") -> Mesh[2
     """
     # Regular tetrahedron vertices
     # Place center at origin
-    a = side_length / (2**0.5)
+    a = side_length / 2
 
     vertices = [
         [a, 0, -a / (2**0.5)],

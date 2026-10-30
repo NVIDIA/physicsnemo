@@ -58,6 +58,14 @@ class HrrrEra5Dataset(StormCastDataset):
 
     Within each train/valid/test directory, there should be one zarr file per
     year containing the data of interest.
+
+    Following the data-source contract (see ``datasets/dataset.py``), the
+    ``"background"`` tensor returned by ``__getitem__`` concatenates ERA5 (the
+    low-resolution conditioning) with the previous HRRR timestep (the model's
+    past-state input) on the channel axis; ``"state"`` is the target HRRR
+    timestep only. ``background_channels()`` and ``normalize_background`` /
+    ``denormalize_background`` are extended accordingly, applying each
+    variable's own statistics to its channel block.
     """
 
     def __init__(self, params, train):
@@ -110,8 +118,13 @@ class HrrrEra5Dataset(StormCastDataset):
         self.invariants = params.invariants
 
     def background_channels(self):
-        """Metadata for the background channels. A list of channel names, one for each channel"""
-        return self.kept_era5_channels
+        """Metadata for the background channels. A list of channel names, one for each channel.
+
+        The ERA5 conditioning channels, followed by the previous-HRRR-timestep
+        channels (prefixed ``prev_`` to disambiguate from the target ``state``
+        channels of the same name).
+        """
+        return self.kept_era5_channels + [f"prev_{c}" for c in self.kept_hrrr_channels]
 
     def state_channels(self):
         """Metadata for the state channels. A list of channel names, one for each channel"""
@@ -325,18 +338,30 @@ class HrrrEra5Dataset(StormCastDataset):
         return len(self.valid_samples)
 
     def normalize_background(self, x: np.ndarray) -> np.ndarray:
-        """Convert background from physical units to normalized data."""
-        if self.normalize:
-            x -= self.means_era5
-            x /= self.stds_era5
-        return x
+        """Convert background from physical units to normalized data.
+
+        ``x`` concatenates the ERA5 block with the previous-HRRR-timestep
+        block on the channel axis (see :meth:`background_channels`); each
+        block is normalized with its own statistics. Works for both a single
+        sample ``(C, H, W)`` and a batch ``(B, C, H, W)``, since the channel
+        axis is always third from the end.
+        """
+        if not self.normalize:
+            return x
+        n_era5 = self.means_era5.shape[0]
+        era5 = (x[..., :n_era5, :, :] - self.means_era5) / self.stds_era5
+        hrrr = (x[..., n_era5:, :, :] - self.means_hrrr) / self.stds_hrrr
+        return np.concatenate([era5, hrrr], axis=-3)
 
     def denormalize_background(self, x: np.ndarray) -> np.ndarray:
-        """Convert background from normalized data to physical units."""
-        if self.normalize:
-            x *= self.stds_era5
-            x += self.means_era5
-        return x
+        """Convert background from normalized data to physical units. See
+        :meth:`normalize_background` for the channel-block convention."""
+        if not self.normalize:
+            return x
+        n_era5 = self.means_era5.shape[0]
+        era5 = x[..., :n_era5, :, :] * self.stds_era5 + self.means_era5
+        hrrr = x[..., n_era5:, :, :] * self.stds_hrrr + self.means_hrrr
+        return np.concatenate([era5, hrrr], axis=-3)
 
     def normalize_state(self, x: np.ndarray) -> np.ndarray:
         """Convert state from physical units to normalized data."""
@@ -354,25 +379,22 @@ class HrrrEra5Dataset(StormCastDataset):
 
     def _get_era5(self, ts_inp, ts_tar):
         """
-        Retrieve ERA5 samples from zarr files
+        Retrieve the raw (physical-units) ERA5 sample from zarr files
         """
 
         ds_inp, ds_tar, adjacent = self._get_ds_handles(
             self.ds_era5, self.era5_paths, ts_inp, ts_tar
         )
 
-        inp_field = (
+        return (
             ds_inp.sel(time=ts_inp, channel=self.kept_era5_channels)
             .interp(latitude=self.era5_lat, longitude=self.era5_lon)
             .data.values
         )
 
-        inp = self.normalize_background(inp_field)
-        return torch.as_tensor(inp)
-
     def _get_hrrr(self, ts_inp, ts_tar):
         """
-        Retrieve HRRR samples from zarr files
+        Retrieve the raw (physical-units) HRRR input/target pair from zarr files
         """
         ds_inp, ds_tar, adjacent = self._get_ds_handles(
             self.ds_hrrr, self.hrrr_paths, ts_inp, ts_tar
@@ -381,20 +403,28 @@ class HrrrEra5Dataset(StormCastDataset):
         inp_field = ds_inp.sel(time=ts_inp, channel=self.kept_hrrr_channels).HRRR.values
         tar_field = ds_tar.sel(time=ts_tar, channel=self.kept_hrrr_channels).HRRR.values
 
-        inp, tar = self.normalize_state(inp_field), self.normalize_state(tar_field)
-
-        return torch.as_tensor(inp), torch.as_tensor(tar)
+        return inp_field, tar_field
 
     def __getitem__(self, global_idx):
         """
-        Return data as a dict
+        Return data as a dict.
+
+        ``background`` concatenates the ERA5 conditioning with the previous
+        HRRR timestep (the model's past-state input); ``state`` is the target
+        HRRR timestep only. See :meth:`background_channels`.
         """
         time_pair = self._global_idx_to_datetime(global_idx)
-        era5_pair = self._get_era5(*time_pair)
-        hrrr_pair = self._get_hrrr(*time_pair)
+        era5_field = self._get_era5(*time_pair)
+        hrrr_inp_field, hrrr_tar_field = self._get_hrrr(*time_pair)
+
+        background = self.normalize_background(
+            np.concatenate([era5_field, hrrr_inp_field], axis=0)
+        )
+        state = self.normalize_state(hrrr_tar_field)
+
         return {
-            "background": era5_pair,
-            "state": hrrr_pair,
+            "background": torch.as_tensor(background),
+            "state": torch.as_tensor(state),
         }
 
     def _global_idx_to_datetime(self, global_idx):

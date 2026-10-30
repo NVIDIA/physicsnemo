@@ -44,6 +44,8 @@ from typing import Any, Iterator, Optional
 import torch
 from tensordict import is_tensor_collection
 
+from physicsnemo.datapipes._domain_parallel import assemble_if_proto
+
 
 @contextlib.contextmanager
 def preprocessing_stream(stream: Optional["torch.cuda.Stream"]):
@@ -88,13 +90,26 @@ def record_consumer_stream(data: Any, stream: torch.cuda.Stream) -> None:
     stream : torch.cuda.Stream
         The consumer (compute) stream.
     """
+
+    def _record(t: torch.Tensor) -> None:
+        # Distributed wrapper subclasses (ShardTensor/DTensor) must record
+        # their local tensor: record_stream on the wrapper re-enters its
+        # dispatch machinery, which has no handling for Stream arguments.
+        # Under no_grad, to_local() returns the local tensor itself instead of
+        # building a throwaway autograd view per leaf.
+        to_local = getattr(t, "to_local", None)
+        if callable(to_local):
+            with torch.no_grad():
+                t = to_local()
+        if t.is_cuda:
+            t.record_stream(stream)
+
     if isinstance(data, torch.Tensor):
-        if data.is_cuda:
-            data.record_stream(stream)
+        _record(data)
     elif is_tensor_collection(data):
         for leaf in data.values(include_nested=True, leaves_only=True):
-            if isinstance(leaf, torch.Tensor) and leaf.is_cuda:
-                leaf.record_stream(stream)
+            if isinstance(leaf, torch.Tensor):
+                _record(leaf)
     elif isinstance(data, Mapping):
         for value in data.values():
             record_consumer_stream(value, stream)
@@ -108,10 +123,11 @@ class HostPayload:
     """A sample produced by the (thread-safe) I/O stage, staged on the host.
 
     A ``HostPayload`` is the boundary object between the I/O producer and
-    the main-thread consumer. It carries a CPU ``TensorDict`` (ideally
-    pinned, so the subsequent host-to-device copy can be asynchronous)
-    plus metadata. It is produced by a worker thread, which must not
-    launch device kernels.
+    the main-thread consumer. It carries a CPU sample -- a ``TensorDict``,
+    a mesh, or a domain-parallel ``ShardedProto`` of local rows -- ideally
+    pinned, so the subsequent host-to-device copy can be asynchronous, plus
+    metadata. It is produced by a worker thread, which must not launch
+    device kernels.
 
     Parameters
     ----------
@@ -120,7 +136,8 @@ class HostPayload:
         for map-style datasets, or any opaque descriptor for
         descriptor-driven sources.
     data : Any, optional
-        Host ``TensorDict`` (or mesh) payload. ``None`` on error.
+        Host ``TensorDict``, mesh, or ``ShardedProto`` payload. ``None`` on
+        error.
     metadata : dict, optional
         Per-sample metadata produced by the reader.
     error : Exception, optional
@@ -223,6 +240,26 @@ class DatasetBase(ABC):
         lst = self._events_pending
         self._events_pending = []
         return lst
+
+    @staticmethod
+    def _assemble(data: Any) -> Any:
+        """Assemble a domain-parallel proto payload; no-op for plain samples.
+
+        Readers configured for domain-parallel reading return a
+        ``ShardedProto`` of this rank's rows; after the device transfer the
+        dataset turns it into the sample with ``Shard(0)`` ShardTensors.
+
+        Parameters
+        ----------
+        data : Any
+            Device-side payload.
+
+        Returns
+        -------
+        Any
+            The assembled sample, or *data* unchanged.
+        """
+        return assemble_if_proto(data)
 
     @abstractmethod
     def _load(self, index: int) -> tuple[Any, dict[str, Any]]:

@@ -95,6 +95,39 @@ class GeoTransolverOneShot(GeoTransolver):
         super().__init__(*args, **kwargs)
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+        r"""Predict the rollout using the existing tensor return format."""
+        prediction, _ = self._forward_rollout(sample, data_stats, with_features=False)
+        return prediction
+
+    def forward_with_geometry_features(
+        self, sample: SimSample, data_stats: dict
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        r"""Predict the rollout and return detached geometry tokens in one pass.
+
+        Parameters
+        ----------
+        sample : SimSample
+            Simulation inputs containing initial coordinates and node features.
+        data_stats : dict
+            Dataset statistics, as accepted by :meth:`forward`.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor | None]
+            Rollout of shape :math:`(N, T, F_o)` and detached geometry tokens
+            of shape :math:`(1, H, S, D_g)`, or ``None`` without a tokenizer.
+
+        Notes
+        -----
+        Direct calls bypass model-level forward hooks. Wrapper-based training
+        should invoke this method inside an adapter's ``forward``.
+        """
+        return self._forward_rollout(sample, data_stats, with_features=True)
+
+    def _forward_rollout(
+        self, sample: SimSample, data_stats: dict, *, with_features: bool
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        r"""Share rollout preprocessing and reshaping across prediction methods."""
         coords, features, N, T, Fo = _oneshot_inputs(sample, self.rollout_steps)
         fx = torch.cat([coords, features], dim=-1)
         global_emb = None
@@ -103,18 +136,20 @@ class GeoTransolverOneShot(GeoTransolver):
                 [sample.global_features[k] for k in sample.global_features], dim=0
             )
             global_emb = g.unsqueeze(0).unsqueeze(0)  # [1, 1, G]
-        raw = (
-            super()
-            .forward(
-                local_embedding=fx.unsqueeze(0),
-                geometry=coords.unsqueeze(0),
-                local_positions=coords.unsqueeze(0),
-                global_embedding=global_emb,
-            )
-            .squeeze(0)
+        inputs = dict(
+            local_embedding=fx.unsqueeze(0),
+            geometry=coords.unsqueeze(0),
+            local_positions=coords.unsqueeze(0),
+            global_embedding=global_emb,
         )
+        if with_features:
+            raw, geometry_tokens = super().forward_with_geometry_features(**inputs)
+        else:
+            raw = super().forward(**inputs)
+            geometry_tokens = None
+        raw = raw.squeeze(0)
         pred = _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
-        return pred
+        return pred, geometry_tokens
 
 
 class TransolverOneShot(Transolver):
