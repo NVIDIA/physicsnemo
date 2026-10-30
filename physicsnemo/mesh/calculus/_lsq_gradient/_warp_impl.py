@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import warp as wp
 
@@ -31,6 +33,7 @@ wp.config.log_level = wp.LOG_WARNING
 # Added to the diagonal of each normal matrix, so that the systems of degenerate
 # neighborhoods stay stable in float32.
 REG_EPS = 1.0e-6
+_REG_EPS = wp.constant(REG_EPS)
 
 
 @wp.kernel
@@ -70,7 +73,7 @@ def _mesh_lsq_gradient_1d_kernel(
         dx = points[n, 0] - px
         dphi = values[n] - pval
 
-        dist2 = dx * dx + dist_eps
+        dist2 = wp.max(dx * dx, dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
 
         m00 = m00 + w * dx * dx
@@ -165,7 +168,7 @@ def _qr_2d(
     for p in range(start, end):
         n = indices[p]
         d = _point_2d(points, n) - center
-        root_w = wp.pow(wp.dot(d, d) + dist_eps, -0.25 * weight_power)
+        root_w = wp.pow(wp.max(wp.dot(d, d), dist_eps), -0.25 * weight_power)
         y = float(0.0)
         if use_values:
             y = root_w * (values[n] - values[i])
@@ -194,7 +197,7 @@ def _qr_3d(
     for p in range(start, end):
         n = indices[p]
         d = _point_3d(points, n) - center
-        root_w = wp.pow(wp.dot(d, d) + dist_eps, -0.25 * weight_power)
+        root_w = wp.pow(wp.max(wp.dot(d, d), dist_eps), -0.25 * weight_power)
         y = float(0.0)
         if use_values:
             y = root_w * (values[n] - values[i])
@@ -207,7 +210,9 @@ def _qr_3d(
 # neighbor, or collinear neighbors). An unregularized one comes from neighbors
 # that span the space: as in PyTorch's least squares, it counts as singular
 # where a diagonal entry of R falls below float32 precision times the number
-# of rows, relative to the largest.
+# of rows, relative to the largest. Degenerate cells can still leave a vertex
+# with neighbors that do not span the space; its system is then factored again
+# with the regularization, which gives about PyTorch's minimum-norm solution.
 @wp.func
 def _solvable_2d(r: wp.mat22, rows: int, reg_eps: float, dist_eps: float) -> bool:
     """Whether the system with triangle ``r`` counts as solvable."""
@@ -233,6 +238,94 @@ def _solvable_3d(r: wp.mat33, rows: int, reg_eps: float, dist_eps: float) -> boo
     smallest = wp.min(r[0, 0], wp.min(r[1, 1], r[2, 2]))
     largest = wp.max(r[0, 0], wp.max(r[1, 1], r[2, 2]))
     return smallest > tolerance * largest
+
+
+@wp.func
+def _factor_2d(
+    points: wp.array2d(dtype=wp.float32),
+    values: wp.array(dtype=wp.float32),
+    use_values: bool,
+    indices: wp.array(dtype=wp.int32),
+    start: int,
+    end: int,
+    i: int,
+    weight_power: float,
+    reg_eps: float,
+    dist_eps: float,
+):
+    """``r``, ``z``, and whether the system of entity ``i`` counts as solvable."""
+    r, z = _qr_2d(
+        points,
+        values,
+        use_values,
+        indices,
+        start,
+        end,
+        i,
+        weight_power,
+        reg_eps,
+        dist_eps,
+    )
+    solvable = _solvable_2d(r, end - start, reg_eps, dist_eps)
+    if not solvable and reg_eps == 0.0:
+        r, z = _qr_2d(
+            points,
+            values,
+            use_values,
+            indices,
+            start,
+            end,
+            i,
+            weight_power,
+            _REG_EPS,
+            dist_eps,
+        )
+        solvable = _solvable_2d(r, end - start, _REG_EPS, dist_eps)
+    return r, z, solvable
+
+
+@wp.func
+def _factor_3d(
+    points: wp.array2d(dtype=wp.float32),
+    values: wp.array(dtype=wp.float32),
+    use_values: bool,
+    indices: wp.array(dtype=wp.int32),
+    start: int,
+    end: int,
+    i: int,
+    weight_power: float,
+    reg_eps: float,
+    dist_eps: float,
+):
+    """``r``, ``z``, and whether the system of entity ``i`` counts as solvable."""
+    r, z = _qr_3d(
+        points,
+        values,
+        use_values,
+        indices,
+        start,
+        end,
+        i,
+        weight_power,
+        reg_eps,
+        dist_eps,
+    )
+    solvable = _solvable_3d(r, end - start, reg_eps, dist_eps)
+    if not solvable and reg_eps == 0.0:
+        r, z = _qr_3d(
+            points,
+            values,
+            use_values,
+            indices,
+            start,
+            end,
+            i,
+            weight_power,
+            _REG_EPS,
+            dist_eps,
+        )
+        solvable = _solvable_3d(r, end - start, _REG_EPS, dist_eps)
+    return r, z, solvable
 
 
 @wp.func
@@ -290,12 +383,12 @@ def _mesh_lsq_gradient_2d_kernel(
         solved[i] = 0
         return
 
-    r, z = _qr_2d(
+    r, z, solvable = _factor_2d(
         points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
     g = wp.vec2()
     solved_i = int(0)
-    if _solvable_2d(r, end - start, reg_eps, dist_eps):
+    if solvable:
         g = _back_2d(r, z)
         solved_i = 1
 
@@ -329,12 +422,12 @@ def _mesh_lsq_gradient_3d_kernel(
         solved[i] = 0
         return
 
-    r, z = _qr_3d(
+    r, z, solvable = _factor_3d(
         points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
     g = wp.vec3()
     solved_i = int(0)
-    if _solvable_3d(r, end - start, reg_eps, dist_eps):
+    if solvable:
         g = _back_3d(r, z)
         solved_i = 1
 
@@ -369,7 +462,7 @@ def _mesh_lsq_gradient_1d_backward_kernel(
     for p in range(start, end):
         n = indices[p]
         dx = points[n, 0] - px
-        dist2 = dx * dx + dist_eps
+        dist2 = wp.max(dx * dx, dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
         m00 = m00 + w * dx * dx
 
@@ -381,7 +474,7 @@ def _mesh_lsq_gradient_1d_backward_kernel(
     for p in range(start, end):
         n = indices[p]
         dx = points[n, 0] - px
-        dist2 = dx * dx + dist_eps
+        dist2 = wp.max(dx * dx, dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
         c = w * p0 * dx
         wp.atomic_add(grad_values, n, c)
@@ -410,7 +503,7 @@ def _mesh_lsq_gradient_2d_backward_kernel(
         return
 
     # The values of the factorization's right-hand side are not needed here.
-    r, _ = _qr_2d(
+    r, _, solvable = _factor_2d(
         points,
         grad_values,
         False,
@@ -422,7 +515,7 @@ def _mesh_lsq_gradient_2d_backward_kernel(
         reg_eps,
         dist_eps,
     )
-    if not _solvable_2d(r, end - start, reg_eps, dist_eps):
+    if not solvable:
         return
     q = _normal_solve_2d(r, wp.vec2(grad_output[i, 0], grad_output[i, 1]))
 
@@ -431,7 +524,7 @@ def _mesh_lsq_gradient_2d_backward_kernel(
     for p in range(start, end):
         n = indices[p]
         d = _point_2d(points, n) - center
-        w = wp.pow(wp.dot(d, d) + dist_eps, -0.5 * weight_power)
+        w = wp.pow(wp.max(wp.dot(d, d), dist_eps), -0.5 * weight_power)
         c = w * wp.dot(q, d)
         wp.atomic_add(grad_values, n, c)
         self_contrib = self_contrib - c
@@ -459,7 +552,7 @@ def _mesh_lsq_gradient_3d_backward_kernel(
         return
 
     # The values of the factorization's right-hand side are not needed here.
-    r, _ = _qr_3d(
+    r, _, solvable = _factor_3d(
         points,
         grad_values,
         False,
@@ -471,7 +564,7 @@ def _mesh_lsq_gradient_3d_backward_kernel(
         reg_eps,
         dist_eps,
     )
-    if not _solvable_3d(r, end - start, reg_eps, dist_eps):
+    if not solvable:
         return
     q = _normal_solve_3d(
         r, wp.vec3(grad_output[i, 0], grad_output[i, 1], grad_output[i, 2])
@@ -482,7 +575,7 @@ def _mesh_lsq_gradient_3d_backward_kernel(
     for p in range(start, end):
         n = indices[p]
         d = _point_3d(points, n) - center
-        w = wp.pow(wp.dot(d, d) + dist_eps, -0.5 * weight_power)
+        w = wp.pow(wp.max(wp.dot(d, d), dist_eps), -0.5 * weight_power)
         c = w * wp.dot(q, d)
         wp.atomic_add(grad_values, n, c)
         self_contrib = self_contrib - c
@@ -519,7 +612,7 @@ def _mesh_lsq_gradient_1d_backward_points_kernel(
         n = indices[p]
         dx = points[n, 0] - px
         s = values[n] - vi
-        dist2 = dx * dx + dist_eps
+        dist2 = wp.max(dx * dx, dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
         m00 = m00 + w * dx * dx
         b0 = b0 + w * dx * s
@@ -533,13 +626,15 @@ def _mesh_lsq_gradient_1d_backward_points_kernel(
         n = indices[p]
         dx = points[n, 0] - px
         s = values[n] - vi
-        dist2 = dx * dx + dist_eps
+        dist2 = wp.max(dx * dx, dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
 
         dg = dx * g0
         pd = p0 * dx
         common = s - dg
-        beta = (-weight_power / dist2) * w
+        beta = float(0.0)  # the weight is constant below the distance floor
+        if dx * dx > dist_eps:
+            beta = (-weight_power / dist2) * w
         grad_d = beta * pd * common * dx + w * (common * p0 - pd * g0)
 
         wp.atomic_add(grad_points, n, 0, grad_d)
@@ -566,10 +661,10 @@ def _mesh_lsq_gradient_2d_backward_points_kernel(
     if end - start < min_neighbors:
         return
 
-    r, z = _qr_2d(
+    r, z, solvable = _factor_2d(
         points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
-    if not _solvable_2d(r, end - start, reg_eps, dist_eps):
+    if not solvable:
         return
     g = _back_2d(r, z)
     q = _normal_solve_2d(r, wp.vec2(grad_output[i, 0], grad_output[i, 1]))
@@ -579,11 +674,13 @@ def _mesh_lsq_gradient_2d_backward_points_kernel(
     for p in range(start, end):
         n = indices[p]
         d = _point_2d(points, n) - center
-        dist2 = wp.dot(d, d) + dist_eps
+        dist2 = wp.max(wp.dot(d, d), dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
         pd = wp.dot(d, q)
         common = values[n] - vi - wp.dot(d, g)
-        beta = (-weight_power / dist2) * w
+        beta = float(0.0)  # the weight is constant below the distance floor
+        if wp.dot(d, d) > dist_eps:
+            beta = (-weight_power / dist2) * w
         grad_d = (beta * pd * common) * d + w * (common * q - pd * g)
 
         wp.atomic_add(grad_points, n, 0, grad_d[0])
@@ -612,10 +709,10 @@ def _mesh_lsq_gradient_3d_backward_points_kernel(
     if end - start < min_neighbors:
         return
 
-    r, z = _qr_3d(
+    r, z, solvable = _factor_3d(
         points, values, True, indices, start, end, i, weight_power, reg_eps, dist_eps
     )
-    if not _solvable_3d(r, end - start, reg_eps, dist_eps):
+    if not solvable:
         return
     g = _back_3d(r, z)
     q = _normal_solve_3d(
@@ -627,11 +724,13 @@ def _mesh_lsq_gradient_3d_backward_points_kernel(
     for p in range(start, end):
         n = indices[p]
         d = _point_3d(points, n) - center
-        dist2 = wp.dot(d, d) + dist_eps
+        dist2 = wp.max(wp.dot(d, d), dist_eps)
         w = wp.pow(dist2, -0.5 * weight_power)
         pd = wp.dot(d, q)
         common = values[n] - vi - wp.dot(d, g)
-        beta = (-weight_power / dist2) * w
+        beta = float(0.0)  # the weight is constant below the distance floor
+        if wp.dot(d, d) > dist_eps:
+            beta = (-weight_power / dist2) * w
         grad_d = (beta * pd * common) * d + w * (common * q - pd * g)
 
         wp.atomic_add(grad_points, n, 0, grad_d[0])
@@ -844,7 +943,7 @@ def mesh_lsq_gradient_impl(
     n_entities = points_fp32.shape[0]
     n_dims = points_fp32.shape[1]
     value_shape = values.shape[1:]
-    values_flat = values_fp32.reshape(n_entities, -1)
+    values_flat = values_fp32.reshape(n_entities, math.prod(value_shape))
     n_components = values_flat.shape[1]
 
     ### Store component-wise output as (C, N, dims) for contiguous warp writes.
@@ -871,7 +970,9 @@ def mesh_lsq_gradient_impl(
         wp_stream=wp_stream,
     )
 
+    # Contiguous, as the fake implementation reports; the permuted view is not.
     output = grads_components.permute(1, 2, 0).reshape(n_entities, n_dims, *value_shape)
+    output = output.contiguous()
     if output.dtype != values.dtype:
         output = output.to(dtype=values.dtype)
     return output, solved
@@ -953,14 +1054,16 @@ def mesh_lsq_gradient_backward_impl(
     n_entities = values_shape[0]
     points_fp32 = points.to(dtype=torch.float32).contiguous()
     values_flat_fp32 = (
-        values.to(dtype=torch.float32).reshape(n_entities, -1).contiguous()
+        values.to(dtype=torch.float32)
+        .reshape(n_entities, math.prod(values_shape[1:]))
+        .contiguous()
     )
     offsets_i32 = neighbor_offsets.to(dtype=torch.int32, device=points.device)
     indices_i32 = neighbor_indices.to(dtype=torch.int32, device=points.device)
     offsets_i32, indices_i32 = offsets_i32.contiguous(), indices_i32.contiguous()
     grad_output_fp32 = grad_output.to(dtype=torch.float32).contiguous()
     value_shape = values_shape[1:]
-    n_components = int(torch.tensor(value_shape).prod().item()) if value_shape else 1
+    n_components = math.prod(value_shape)
 
     grad_output_components = grad_output_fp32.reshape(
         n_entities, grad_output_fp32.shape[1], n_components
@@ -1138,11 +1241,19 @@ def mesh_lsq_gradient_warp(
 ) -> torch.Tensor:
     """Compute weighted LSQ mesh gradients with Warp kernels.
 
+    ``reg_eps`` is added to the diagonal of each normal matrix, which keeps the
+    systems of degenerate neighborhoods stable; a system then counts as
+    singular by the determinant test of its normal matrix. With
+    ``reg_eps=0``, for neighborhoods that span the space, it counts as singular
+    by the rank of its QR factor, as in PyTorch, and is solved again with
+    ``REG_EPS``.
+
     Notes
     -----
     Warp kernels compute in ``float32`` internally. Inputs in wider floating
     dtypes are accepted and cast to ``float32`` for compute. Float64 inputs are
     accepted, but derivative accuracy is limited to ``float32`` precision.
+    Second derivatives differentiate the unregularized PyTorch solve.
     """
     dist_eps = resolve_safe_epsilon(safe_epsilon=safe_epsilon, dtype=torch.float32)
     gradients, _ = mesh_lsq_gradient_impl(

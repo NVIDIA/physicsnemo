@@ -520,8 +520,9 @@ FUNCTIONAL_SPECS = (MyFunctionalWithoutInputs,)
 
 **Description:**
 
-Warp-backed functionals in `physicsnemo/nn/functional/**` and
-`physicsnemo/mesh/**` must be integrated into PyTorch using
+Warp-backed functionals (`FunctionSpec` implementations) in
+`physicsnemo/nn/functional/**` and `physicsnemo/mesh/**` must be integrated
+into PyTorch using
 `torch.library.custom_op`, `register_fake`, and (when backward is supported)
 `register_autograd`. Do not use `torch.autograd.Function` wrappers for
 Warp-backed functionals.

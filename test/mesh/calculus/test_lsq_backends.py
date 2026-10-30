@@ -101,8 +101,8 @@ def test_none_picks_warp_where_it_gives_the_same_answer(
     backends, name, dtype, expected
 ):
     """Warp for point gradients of float32 meshes whose cells fill the space;
-    PyTorch for float64, for surfaces in 3D, whose extrinsic systems are
-    ill-conditioned, and for cell gradients."""
+    PyTorch for float64, for surfaces in 3D, whose neighbors need not span the
+    space, and for cell gradients."""
     mesh = MESHES[name]()
     mesh = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
     values = mesh.points.sum(dim=1)
@@ -152,6 +152,23 @@ def test_torch_func_transforms_use_torch(backends):
     assert backends == ["torch"]
 
 
+def test_compiled_torch_func_transforms_work():
+    """torch.compile of a torch.func transform also keeps the default off Warp.
+    No spy here: wrapping the backends would change what Dynamo traces."""
+    mesh = MESHES["volume"]()
+    values = mesh.points.sum(dim=1)
+    compiled = torch.compile(
+        torch.func.grad(lambda v: compute_gradient_points_lsq(mesh, v).square().sum()),
+        backend="aot_eager",
+    )
+    reference = torch.func.grad(
+        lambda v: (
+            compute_gradient_points_lsq(mesh, v, implementation="torch").square().sum()
+        )
+    )(values)
+    torch.testing.assert_close(compiled(values), reference)
+
+
 def test_default_compiles_with_its_backward():
     """torch.compile traces the Warp op and its backward."""
     mesh = MESHES["volume"]()
@@ -169,6 +186,87 @@ def test_default_compiles_with_its_backward():
     compiled = torch.compile(loss, backend="aot_eager")
     for got, expected in zip(derivatives(compiled), derivatives(loss)):
         torch.testing.assert_close(got, expected)
+
+
+def test_vector_fields_compile_in_one_graph():
+    """The Warp op returns the strides its fake implementation reports, so a
+    vector field's gradient can be reshaped inside one compiled graph."""
+    mesh = MESHES["volume"]()
+
+    def loss(points):
+        cloud = Mesh(points=points, cells=mesh.cells)
+        gradient = compute_gradient_points_lsq(cloud, points.square())
+        return gradient.reshape(len(points), -1).square().sum()
+
+    def derivative(fn):
+        points = mesh.points.clone().requires_grad_()
+        fn(points).backward()
+        return points.grad
+
+    compiled = torch.compile(loss, backend="aot_eager", fullgraph=True)
+    torch.testing.assert_close(derivative(compiled), derivative(loss))
+
+
+def test_warp_ops_pass_opcheck():
+    """The forward and backward custom ops agree with their fake
+    implementations and autograd registration, for vector values too."""
+    cloud, adjacency = _point_cloud(n=16, k=4)
+    values = torch.randn(16, 3, generator=torch.Generator().manual_seed(0))
+    args = (cloud.points, values, adjacency.offsets.int(), adjacency.indices.int())
+    torch.library.opcheck(
+        torch.ops.physicsnemo.mesh_lsq_gradient_warp_impl.default,
+        (*args, 2.0, 0, 0.0, 1e-10),
+    )
+    torch.library.opcheck(
+        torch.ops.physicsnemo.mesh_lsq_gradient_warp_backward_impl.default,
+        (*args, torch.randn(16, 3, 3), 2.0, 0, 0.0, 1e-10, True, True),
+    )
+
+
+@pytest.mark.parametrize("implementation", [None, "torch", "warp"])
+def test_empty_inputs(implementation):
+    """No points give empty gradients on every backend."""
+    adjacency = Adjacency(
+        offsets=torch.zeros(1, dtype=torch.long),
+        indices=torch.zeros(0, dtype=torch.long),
+    )
+    gradient = compute_gradient_points_lsq(
+        Mesh(points=torch.zeros(0, 3)),
+        torch.zeros(0),
+        adjacency=adjacency,
+        implementation=implementation,
+    )
+    assert gradient.shape == (0, 3)
+
+
+@pytest.mark.parametrize("dims", [2, 3])
+def test_default_on_degenerate_cells_matches_torch(backends, dims):
+    """Where every cell is flat, the neighbors no longer span the space: Warp
+    then regularizes, which gives about PyTorch's minimum-norm gradient."""
+    mesh = MESHES["planar" if dims == 2 else "volume"]()
+    points = mesh.points.clone()
+    points[:, -1] = 0.0
+    mesh = Mesh(points=points, cells=mesh.cells)
+    slope = torch.tensor([1.0, 2.0, 3.0])[:dims]
+    values = points @ slope
+    gradient = compute_gradient_points_lsq(mesh, values)
+    reference = compute_gradient_points_lsq(mesh, values, implementation="torch")
+    assert backends == ["warp", "torch"]
+    torch.testing.assert_close(gradient, reference, rtol=0, atol=1e-4)
+
+
+def test_default_matches_torch_at_small_scales():
+    """Warp floors squared distances as PyTorch does, so a mesh whose
+    neighbors are about as close as the floor gets PyTorch's gradients."""
+    base = cube_volume.load(subdivisions=6)
+    generator = torch.Generator().manual_seed(0)
+    noise = 2 * torch.rand(base.points.shape, generator=generator) - 1
+    scale = 1e-4
+    mesh = Mesh(points=(base.points + 0.02 * noise) * scale, cells=base.cells)
+    values = torch.sin(3 * mesh.points / scale).sum(dim=1)
+    gradient = compute_gradient_points_lsq(mesh, values)
+    reference = compute_gradient_points_lsq(mesh, values, implementation="torch")
+    assert (gradient - reference).norm() < 1e-5 * reference.norm()
 
 
 @pytest.mark.parametrize(("squash", "rotate"), [(1e3, False), (1e4, True)])
@@ -321,8 +419,11 @@ def test_warp_backward_with_values_computed_from_points():
 
 def test_invalid_backend_requests():
     mesh = MESHES["surface"]()
-    with pytest.raises(ValueError, match="Must be 'torch', 'warp', or None"):
-        compute_gradient_points_lsq(mesh, mesh.points[:, 0], implementation="cuda")
+    for intrinsic in (False, True):
+        with pytest.raises(ValueError, match="Must be 'torch', 'warp', or None"):
+            compute_gradient_points_lsq(
+                mesh, mesh.points[:, 0], intrinsic=intrinsic, implementation="cuda"
+            )
     with pytest.raises(ValueError, match="supports only intrinsic=False"):
         compute_gradient_points_lsq(
             mesh, mesh.points[:, 0], intrinsic=True, implementation="warp"

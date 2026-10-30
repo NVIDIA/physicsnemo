@@ -22,7 +22,6 @@ from typing import Literal
 import torch
 
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.utils._tracing import is_tracing
 
 from ._torch_impl import mesh_lsq_gradient_torch
 from ._warp_impl import mesh_lsq_gradient_warp
@@ -70,7 +69,7 @@ class MeshLSQGradient(FunctionSpec):
         is used by each backend.
     implementation : {"warp", "torch"} or None
         Explicit backend selection. When ``None``, dispatch selects by
-        :meth:`default_implementation`.
+        :meth:`_default_implementation`.
 
     Returns
     -------
@@ -93,7 +92,7 @@ class MeshLSQGradient(FunctionSpec):
     _COMPARE_BACKWARD_RTOL = 8e-3
 
     @classmethod
-    def default_implementation(
+    def _default_implementation(
         cls,
         points: torch.Tensor,
         values: Sequence[torch.Tensor],
@@ -101,16 +100,17 @@ class MeshLSQGradient(FunctionSpec):
     ) -> Literal["torch", "warp"]:
         """The backend that ``implementation=None`` selects for these inputs.
 
-        Warp, which is faster, for ``float32`` data on CPU or CUDA in one to
-        three dimensions, at the default ``weight_power`` of 2. Its fixed
-        regularization and distance floor assume the scale-free normal matrix
-        that this weighting gives. PyTorch otherwise, and inside ``torch.func``
-        transforms, which custom operators do not support.
+        Warp, which is faster, for data that is not ``float64`` on CPU or CUDA
+        in one to three dimensions, at the default ``weight_power`` of 2. Its
+        fixed regularization assumes the scale-free normal matrix that this
+        weighting gives. PyTorch otherwise, and inside ``torch.func``
+        transforms, also under ``torch.compile``, which custom operators do not
+        support.
         """
         warp = cls._get_impls()["warp"]
-        functorch = not is_tracing() and (
-            torch._C._functorch.peek_interpreter_stack() is not None
-        )
+        # Unlike the functorch interpreter stack, which Dynamo fills while it
+        # traces, this tells a torch.func transform from plain torch.compile.
+        functorch = torch._C._are_functorch_transforms_active()
         use_warp = (
             warp.available
             and not functorch
@@ -132,11 +132,12 @@ class MeshLSQGradient(FunctionSpec):
         weight_power: float = 2.0,
         min_neighbors: int = 0,
         safe_epsilon: float | None = None,
+        *,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> torch.Tensor:
-        """Dispatch to ``implementation``, or to :meth:`default_implementation`."""
+        """Dispatch to ``implementation``, or to :meth:`_default_implementation`."""
         if implementation is None:
-            implementation = cls.default_implementation(points, [values], weight_power)
+            implementation = cls._default_implementation(points, [values], weight_power)
         return super().dispatch(
             points,
             values,

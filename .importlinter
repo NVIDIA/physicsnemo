@@ -25,8 +25,7 @@ ignore_imports =
    # Deprecated nn.functional aliases of the mesh functionals; remove with
    # physicsnemo/nn/functional/_moved_to_mesh.py when mesh becomes a library.
    physicsnemo.nn.functional._moved_to_mesh -> physicsnemo.mesh.**
-   # Mesh uses these nn functionals until they leave nn
-   # (NVIDIA/physicsnemo-roadmap#3074).
+   # Mesh uses these nn functionals until they leave nn.
    physicsnemo.mesh.** -> physicsnemo.nn.functional.neighbors.knn
    physicsnemo.mesh.** -> physicsnemo.nn.functional.geometry.sdf
    physicsnemo.mesh.** -> physicsnemo.nn.functional.geometry.farthest_point_sampling.farthest_point_sampling

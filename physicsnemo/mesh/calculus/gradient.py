@@ -102,15 +102,16 @@ def compute_gradient_points_lsq(
         may be directed.
     implementation : {"torch", "warp"} or None, optional
         Backend for the ambient-space solve. ``None`` picks Warp, which is
-        faster, for ``float32`` data on a mesh whose cells fill a space of at
-        most three dimensions, with the mesh's own neighbors and the default
-        ``weight_power``, and PyTorch otherwise and inside ``torch.func``
-        transforms. Warp computes in ``float32``, loses accuracy on curves and
-        surfaces in a higher-dimensional space, and returns zero where the
-        neighbors do not determine the gradient, where PyTorch returns the
-        minimum-norm solution. For speed, pass ``"warp"`` with an
-        ``adjacency`` whose neighborhoods span the space, such as a
-        k-nearest-neighbor graph. Intrinsic gradients always use PyTorch.
+        faster, for data that is not ``float64`` on a mesh whose cells fill a
+        space of at most three dimensions, with the mesh's own neighbors and
+        the default ``weight_power``; and PyTorch otherwise, including inside
+        ``torch.func`` transforms. Curves and surfaces in a higher-dimensional
+        space and a custom ``adjacency`` keep PyTorch because their neighbors
+        need not span the space: there PyTorch returns the minimum-norm
+        solution, and Warp, with its small fixed regularization, about the same
+        or zero. For speed, pass ``"warp"`` with an ``adjacency`` whose
+        neighborhoods span the space, such as a k-nearest-neighbor graph.
+        Intrinsic gradients always use PyTorch.
 
     Returns
     -------
@@ -139,6 +140,10 @@ def _compute_gradients_points_lsq(
 ) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at vertices, by
     :func:`compute_gradient_points_lsq`, sharing their LSQ systems."""
+    if implementation not in (None, "torch", "warp"):
+        raise ValueError(
+            f"Invalid {implementation=!r}. Must be 'torch', 'warp', or None."
+        )
     if intrinsic and mesh.codimension > 0:
         if implementation == "warp":
             raise ValueError("implementation='warp' supports only intrinsic=False")
@@ -185,8 +190,9 @@ def compute_gradient_cells_lsq(
     implementation : {"torch", "warp"} or None, optional
         Backend for the solve. ``None`` picks PyTorch, because a cell near the
         boundary may have too few neighbors to determine the gradient: PyTorch
-        then returns the minimum-norm solution, and Warp returns zero. Warp is
-        faster and computes in ``float32``.
+        then returns the minimum-norm solution, and Warp, with its small fixed
+        regularization, about the same or zero. Warp is faster and computes in
+        ``float32``.
 
     Returns
     -------

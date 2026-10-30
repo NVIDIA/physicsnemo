@@ -25,6 +25,7 @@ to neighboring points/cells, weighted by inverse distance.
 Reference: Standard in CFD literature (Barth & Jespersen, AIAA 1989)
 """
 
+import math
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -47,18 +48,19 @@ def _lsq_gradients(
 ) -> list[Float[torch.Tensor, "n_entities n_spatial_dims ..."]]:
     """LSQ gradients of several fields of one dtype, on the chosen backend.
 
-    ``None`` takes :meth:`MeshLSQGradient.default_implementation` where every
-    neighborhood spans the space (``neighbors_span``), and PyTorch elsewhere:
-    where the neighbors do not determine every gradient component, Warp
-    returns zero and PyTorch the minimum-norm solution. Where they span the
-    space, Warp also drops the small regularization that keeps degenerate
-    neighborhoods stable, since it would bias the gradients of thin cells.
+    ``None`` takes :meth:`MeshLSQGradient._default_implementation` where every
+    neighborhood spans the space (``neighbors_span``), and PyTorch elsewhere.
+    Where the neighbors do not determine every gradient component, PyTorch
+    returns the minimum-norm solution, and Warp, with its small fixed
+    regularization, about the same or zero. Where they span the space, Warp
+    drops the regularization, which would bias the gradients of thin cells,
+    and keeps it only for the rare vertex of degenerate cells.
     """
     from physicsnemo.mesh.calculus._lsq_gradient import MeshLSQGradient
 
     if implementation is None:
         implementation = (
-            MeshLSQGradient.default_implementation(points, values, weight_power)
+            MeshLSQGradient._default_implementation(points, values, weight_power)
             if neighbors_span
             else "torch"
         )
@@ -87,7 +89,7 @@ def _lsq_gradients(
     )
 
     ### One Warp call for all fields: flatten, stack, and split the result.
-    flat = [v.reshape(v.shape[0], -1) for v in values]
+    flat = [v.reshape(v.shape[0], math.prod(v.shape[1:])) for v in values]
     gradients = mesh_lsq_gradient_warp(
         points,
         torch.cat(flat, dim=1),
@@ -184,7 +186,8 @@ def _compute_point_gradients_lsq(
 ) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
     """Gradients of several fields of one dtype at vertices, by
     :func:`compute_point_gradient_lsq`, sharing their LSQ systems."""
-    # A vertex of a cell that fills the space has neighbors spanning it.
+    # A vertex of a cell that fills the space has neighbors spanning it, unless
+    # every cell around it is degenerate.
     neighbors_span = adjacency is None and mesh.n_manifold_dims == mesh.n_spatial_dims
     if adjacency is None:
         adjacency = mesh.get_point_to_points_adjacency()

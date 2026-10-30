@@ -70,9 +70,9 @@ Choosing an Energy
     Penalizes the enclosed-volume change of a closed triangular surface in 3D.
     It accepts one edge-connected component in either inward or outward
     orientation, and every edge must have two oppositely directed incident
-    triangles. Evaluate disconnected components separately. The mesh wrapper
-    validates this contract, but the tensor functional assumes it. The term
-    does not test vertex-manifoldness or prevent self-intersection.
+    triangles. Evaluate disconnected components separately. The energy
+    validates this contract. The term does not test vertex-manifoldness or
+    prevent self-intersection.
 
 ``surface_bending_energy``
     Penalizes changes in the dihedral angle at interior edges of a triangular
@@ -209,9 +209,7 @@ the Torch backend.
 The first mesh-wrapper call after topology changes validates index bounds and
 connectivity on the host. For a CUDA mesh, that one-time validation synchronizes
 the device and is not safe inside CUDA Graph capture. Call the required energy
-once before capture to populate the topology cache. The tensor functionals avoid
-this synchronization by treating valid index values as part of their input
-contract.
+once before capture to populate the topology cache.
 
 Reference simplices, hinge edges, and hinge triangles must be nondegenerate.
 Invalid reference geometry produces ``NaN`` instead of receiving an implicit

@@ -149,11 +149,7 @@ def _make_uv_sphere(
     Float[torch.Tensor, "n_vertices 3"],
     Int[torch.Tensor, "n_faces 3"],
 ]:
-    """Construct tensor-only benchmark geometry without mesh-layer imports.
-
-    The import architecture forbids ``physicsnemo.nn`` from depending on
-    ``physicsnemo.mesh``, so this generator cannot use the UV-sphere primitive.
-    """
+    """Construct the UV-sphere vertices and faces of the benchmark inputs."""
     phi = torch.linspace(0.0, torch.pi, n_rings + 2, device=device)[1:-1]
     theta = torch.linspace(0.0, 2.0 * torch.pi, n_segments + 1, device=device)[:-1]
     phi_grid, theta_grid = torch.meshgrid(phi, theta, indexing="ij")
