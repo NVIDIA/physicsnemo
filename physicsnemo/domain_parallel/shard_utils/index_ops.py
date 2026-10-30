@@ -884,6 +884,8 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
     # If it's along an unsharded dimension, there is nearly nothing to do.
 
     input_spec = tensor._spec
+    # Dispatch passes ``dim`` as written (e.g. -1 from stack's backward).
+    dim = dim % len(input_spec.shape)
 
     input_placements = input_spec.placements
 
@@ -985,6 +987,7 @@ def sharded_select_backward_helper(
     # If it's along an unsharded dimension, there is nearly nothing to do.
 
     input_placements = grad_output._spec.placements
+    dim = dim % len(input_sizes)
 
     output_stride = _stride_from_contiguous_shape_C_style(input_sizes)
 

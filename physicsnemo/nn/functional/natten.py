@@ -16,14 +16,81 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import torch
-from torch.overrides import handle_torch_function, has_torch_function
 
 from physicsnemo.core.version_check import OptionalImport
 
 _natten = OptionalImport("natten")
+
+# Options the ``physicsnemo::na{1,2,3}d`` ops carry, with NATTEN's defaults.
+_OP_OPTIONS = {"is_causal": False, "scale": None, "backend": None}
+
+
+def _register_na_op(name: str) -> torch._ops.OpOverload:
+    r"""Define ``physicsnemo::<name>``: NATTEN's ``<name>`` as a graph op.
+
+    Tensor subclasses such as ``ShardTensor`` intercept the op by name in
+    ``__torch_function__`` (``register_named_function_handler``), in eager
+    and under ``torch.compile`` alike, and handle autograd themselves.
+    """
+
+    @torch.library.custom_op(f"physicsnemo::{name}", mutates_args=())
+    def op(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        kernel_size: int,
+        dilation: int,
+        is_causal: bool,
+        scale: Optional[float],
+        backend: Optional[str],
+    ) -> torch.Tensor:
+        return getattr(_natten.functional, name)(
+            q,
+            k,
+            v,
+            kernel_size,
+            dilation=dilation,
+            is_causal=is_causal,
+            scale=scale,
+            backend=backend,
+        )
+
+    @op.register_fake
+    def _(q, k, v, kernel_size, dilation, is_causal, scale, backend):
+        return torch.empty_like(q)
+
+    return op._opoverload
+
+
+_NA_OPS = {name: _register_na_op(name) for name in ("na1d", "na2d", "na3d")}
+
+
+def _na(name, q, k, v, kernel_size, dilation, kwargs):
+    r"""Call NATTEN on plain tensors; route tensor subclasses through the op."""
+    if all(type(t) in (torch.Tensor, torch.nn.Parameter) for t in (q, k, v)):
+        return getattr(_natten.functional, name)(
+            q, k, v, kernel_size, dilation=dilation, **kwargs
+        )
+    unsupported = set(kwargs) - set(_OP_OPTIONS)
+    if unsupported:
+        raise TypeError(
+            f"{name} on tensor subclasses supports only {sorted(_OP_OPTIONS)}, "
+            f"got {sorted(unsupported)}"
+        )
+    opts = {**_OP_OPTIONS, **kwargs}
+    return _NA_OPS[name](
+        q,
+        k,
+        v,
+        kernel_size,
+        dilation,
+        opts["is_causal"],
+        opts["scale"],
+        opts["backend"],
+    )
 
 
 def na1d(
@@ -34,12 +101,12 @@ def na1d(
     dilation: int = 1,
     **kwargs: Any,
 ) -> torch.Tensor:
-    r"""Compute 1D neighborhood attention, with ``__torch_function__`` dispatch.
+    r"""Compute 1D neighborhood attention, with tensor-subclass dispatch.
 
-    This is a thin wrapper around :func:`natten.functional.na1d` that enables
-    automatic dispatch through PyTorch's ``__torch_function__`` protocol. When
-    called with a tensor subclass (e.g. ``ShardTensor``), the registered handler
-    is invoked instead of the underlying natten implementation.
+    This is a thin wrapper around :func:`natten.functional.na1d`. Tensor
+    subclass operands (e.g. ``ShardTensor``) go through the
+    ``physicsnemo::na1d`` op, which subclasses intercept by name; there only
+    ``is_causal``, ``scale`` and ``backend`` are accepted as extra options.
 
     Parameters
     ----------
@@ -62,18 +129,7 @@ def na1d(
     torch.Tensor
         Output tensor of the same shape as ``q``.
     """
-    if has_torch_function((q, k, v)):
-        return handle_torch_function(
-            na1d,
-            (q, k, v),
-            q,
-            k,
-            v,
-            kernel_size,
-            dilation=dilation,
-            **kwargs,
-        )
-    return _natten.functional.na1d(q, k, v, kernel_size, dilation=dilation, **kwargs)
+    return _na("na1d", q, k, v, kernel_size, dilation, kwargs)
 
 
 def na2d(
@@ -84,12 +140,12 @@ def na2d(
     dilation: int = 1,
     **kwargs: Any,
 ) -> torch.Tensor:
-    r"""Compute 2D neighborhood attention, with ``__torch_function__`` dispatch.
+    r"""Compute 2D neighborhood attention, with tensor-subclass dispatch.
 
-    This is a thin wrapper around :func:`natten.functional.na2d` that enables
-    automatic dispatch through PyTorch's ``__torch_function__`` protocol. When
-    called with a tensor subclass (e.g. ``ShardTensor``), the registered handler
-    is invoked instead of the underlying natten implementation.
+    This is a thin wrapper around :func:`natten.functional.na2d`. Tensor
+    subclass operands (e.g. ``ShardTensor``) go through the
+    ``physicsnemo::na2d`` op, which subclasses intercept by name; there only
+    ``is_causal``, ``scale`` and ``backend`` are accepted as extra options.
 
     Parameters
     ----------
@@ -112,18 +168,7 @@ def na2d(
     torch.Tensor
         Output tensor of the same shape as ``q``.
     """
-    if has_torch_function((q, k, v)):
-        return handle_torch_function(
-            na2d,
-            (q, k, v),
-            q,
-            k,
-            v,
-            kernel_size,
-            dilation=dilation,
-            **kwargs,
-        )
-    return _natten.functional.na2d(q, k, v, kernel_size, dilation=dilation, **kwargs)
+    return _na("na2d", q, k, v, kernel_size, dilation, kwargs)
 
 
 def na3d(
@@ -134,12 +179,12 @@ def na3d(
     dilation: int = 1,
     **kwargs: Any,
 ) -> torch.Tensor:
-    r"""Compute 3D neighborhood attention, with ``__torch_function__`` dispatch.
+    r"""Compute 3D neighborhood attention, with tensor-subclass dispatch.
 
-    This is a thin wrapper around :func:`natten.functional.na3d` that enables
-    automatic dispatch through PyTorch's ``__torch_function__`` protocol. When
-    called with a tensor subclass (e.g. ``ShardTensor``), the registered handler
-    is invoked instead of the underlying natten implementation.
+    This is a thin wrapper around :func:`natten.functional.na3d`. Tensor
+    subclass operands (e.g. ``ShardTensor``) go through the
+    ``physicsnemo::na3d`` op, which subclasses intercept by name; there only
+    ``is_causal``, ``scale`` and ``backend`` are accepted as extra options.
 
     Parameters
     ----------
@@ -162,18 +207,7 @@ def na3d(
     torch.Tensor
         Output tensor of the same shape as ``q``.
     """
-    if has_torch_function((q, k, v)):
-        return handle_torch_function(
-            na3d,
-            (q, k, v),
-            q,
-            k,
-            v,
-            kernel_size,
-            dilation=dilation,
-            **kwargs,
-        )
-    return _natten.functional.na3d(q, k, v, kernel_size, dilation=dilation, **kwargs)
+    return _na("na3d", q, k, v, kernel_size, dilation, kwargs)
 
 
 __all__ = ["na1d", "na2d", "na3d"]
