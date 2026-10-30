@@ -162,6 +162,37 @@ class RadiusPooledFeatures(Module):
                 out.append((torch.stack(coords), torch.stack(valid)))
         return out
 
+    def pool(
+        self,
+        neighbours: list[tuple[Float[torch.Tensor, "batch queries cap 3"], Bool[torch.Tensor, "batch queries cap"]]],
+        queries: Float[torch.Tensor, "batch queries 3"],
+    ) -> tuple[Float[torch.Tensor, "batch queries hidden"], ...]:
+        r"""Features of given neighbours: the differentiable part of :meth:`forward`.
+
+        Splitting the draw (:meth:`neighbours`) from the pooling lets a caller recompute only the pooling under
+        activation checkpointing, so that the recomputation sees the same random draw.
+
+        Parameters
+        ----------
+        neighbours : list[tuple[torch.Tensor, torch.Tensor]]
+            Output of :meth:`neighbours`.
+        queries : torch.Tensor
+            Query points of shape :math:`(B, N, 3)`.
+
+        Returns
+        -------
+        tuple[torch.Tensor, ...]
+            One feature tensor of shape :math:`(B, N, \text{hidden})` per radius.
+        """
+        features = []
+        for (coords, valid), radius, mlp in zip(neighbours, self.radii, self.mlps):
+            coords = coords.to(queries.dtype)
+            # (B, N, K, 3) positions relative to the query, in units of the radius; empty slots at zero
+            relative = torch.where(valid[..., None], (coords - queries[:, :, None]) / radius, torch.zeros_like(coords))
+            h = mlp(relative).masked_fill(~valid[..., None], float("-inf")).amax(dim=2)  # (B, N, hidden)
+            features.append(torch.tanh(torch.where(torch.isfinite(h), h, torch.zeros_like(h))))
+        return tuple(features)
+
     def forward(
         self,
         candidates: Float[torch.Tensor, "batch candidates 3"],
@@ -172,11 +203,4 @@ class RadiusPooledFeatures(Module):
                 raise ValueError(f"Expected candidates of shape (B, P, 3), got {tuple(candidates.shape)}")
             if queries.ndim != 3 or queries.shape[-1] != 3 or queries.shape[0] != candidates.shape[0]:
                 raise ValueError(f"Expected queries of shape (B, N, 3), got {tuple(queries.shape)}")
-        features = []
-        for (coords, valid), radius, mlp in zip(self.neighbours(candidates, queries), self.radii, self.mlps):
-            coords = coords.to(queries.dtype)
-            # (B, N, K, 3) positions relative to the query, in units of the radius; empty slots at zero
-            relative = torch.where(valid[..., None], (coords - queries[:, :, None]) / radius, torch.zeros_like(coords))
-            h = mlp(relative).masked_fill(~valid[..., None], float("-inf")).amax(dim=2)  # (B, N, hidden)
-            features.append(torch.tanh(torch.where(torch.isfinite(h), h, torch.zeros_like(h))))
-        return tuple(features)
+        return self.pool(self.neighbours(candidates, queries), queries)
