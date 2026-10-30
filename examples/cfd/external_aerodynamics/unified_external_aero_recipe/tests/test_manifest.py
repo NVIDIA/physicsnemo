@@ -564,6 +564,41 @@ class TestMultiDatasetManifestOffsets:
             }
         )
 
+    @pytest.mark.parametrize("val_directory", [None, "missing"])
+    def test_directory_fallback_keeps_validation_sampling_fixed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        val_directory: str | None,
+    ):
+        """Reusing cases without a holdout must not reuse the anchor reader state."""
+        root = self._make_datadir(tmp_path)
+        ds_yaml = self._augmented_ds_yaml(root)
+        ds_yaml.independent_validation = True
+        ds_yaml.pipeline.reader._target_ = "ab_upt.ABUPTDomainReader"
+        if val_directory is not None:
+            ds_yaml.val_datadir = str(root / val_directory)
+        self._patch_configs(monkeypatch, {"drivaer_ml_ab_upt_joint": ds_yaml})
+        train_loader, val_loader, _, _ = build_dataloaders(
+            self._loader_cfg(
+                "drivaer_ml_ab_upt_joint", [], train_split=None, val_split=None
+            )
+        )
+        train_reader = train_loader.dataset.reader
+        val_reader = val_loader.dataset.reader
+        assert train_reader is not val_reader
+        assert train_reader._paths == val_reader._paths
+        # Exercise the real anchor sampling stream without opening placeholder
+        # files. Advancing training must leave validation's chosen anchors fixed.
+        before = val_reader._indices(100, 11, index=0, stream=2).tolist()
+        train_loader.set_epoch(3)
+        after = val_reader._indices(100, 11, index=0, stream=2).tolist()
+        train = train_reader._indices(100, 11, index=0, stream=2).tolist()
+        assert before == after
+        assert train != before
+        train_loader.dataset.close()
+        val_loader.dataset.close()
+
     def test_multiple_manifest_datasets_use_global_offsets(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):

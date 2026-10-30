@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Joint training uses both interacting surface and volume anchor streams.
+train_datadir: ${dataset_paths.drivaer_ml}
+independent_validation: true
+
+pipeline:
+  reader:
+    _target_: ab_upt.ABUPTDomainReader
+    path: ${train_datadir}
+    pattern: "run_*/domain_*.pdmsh"
+    mode: joint
+    surface_queries: ${sampling_resolution}
+    volume_queries: ${sampling_resolution}
+  transforms:
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      association: point_data
+      fields:
+        surface.pressure: pressure
+        surface.wss: stress
+        volume.velocity: velocity
+        volume.pressure: pressure
+        volume.nut: identity
+    - _target_: ${dp:NormalizeMeshFields}
+      association: point_data
+      fields:
+        surface.wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
+        volume.nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
+
+targets:
+  surface.pressure: scalar
+  surface.wss: vector
+  volume.velocity: vector
+  volume.pressure: scalar
+  volume.nut: scalar
+
+# Locations remain explicit because the two branches need not share a size.
+target_sources:
+  surface.pressure: boundaries.abupt_surface.point_data.surface.pressure
+  surface.wss: boundaries.abupt_surface.point_data.surface.wss
+  volume.velocity: interior.point_data.volume.velocity
+  volume.pressure: interior.point_data.volume.pressure
+  volume.nut: interior.point_data.volume.nut
