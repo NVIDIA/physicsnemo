@@ -441,6 +441,7 @@ examples/reservoir_simulation/
 
 examples/structural_mechanics/
 examples/structural_mechanics/crash/ @coreyjadams
+examples/structural_mechanics/jet_engine_bracket/ @sgtkeum
 examples/structural_mechanics/deforming_plate/
 
 # ==============================================================================

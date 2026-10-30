@@ -105,22 +105,27 @@ designs.
 
 | Step | Hardware | Time | Peak GPU memory |
 | --- | --- | --- | --- |
-| Train `GeoTransolverSDF`, 100 epochs | 4 H100 (80 GB) | about 80 h | about 75 GB per GPU, on the largest designs |
-| Train the stock GeoTransolver, 100 epochs | 4 H100 (80 GB) | about 27 h | |
+| Train `GeoTransolverSDF`, 100 epochs | 4 H100 (80 GB) | about 80 h wall clock | about 75 GB per GPU, on the largest designs |
+| Train the stock GeoTransolver, 100 epochs | 4 H100 (80 GB) | about 27 h (16 min per epoch) | |
 | Evaluate DeepJEB test (820 samples, float32) | 1 GPU | 8 min | 10 GB |
 | Evaluate all SimJEB designs (1,508 samples, float32) | 1 GPU | 5 min | 18 GB (largest design, 642k nodes) |
 | LoRA, 30 epochs | 1 GPU (96 GB) | 3.8 h | about 49 GB |
 
-The evaluation and LoRA times are from one RTX PRO 6000 Blackwell GPU. Activation
-checkpointing (on in `conf/model/`) is what makes training fit into 80 GB.
+The training times are from runs split into 4-hour cluster jobs; the evaluation
+and LoRA times are from one RTX PRO 6000 Blackwell GPU. Activation checkpointing
+(on in `conf/model/`) is what makes training fit into 80 GB.
 
 ## Results
 
-One run of each recipe as configured. Errors are mean per-sample relative L2
-errors over every node, evaluated in float32 (`evaluate.py`); the stress R² is the
-median over the samples. Results can differ slightly with the hardware, the number
-of GPUs and the library version: the LoRA adaptation, rerun on a different GPU,
-reproduced the test errors to within 0.005.
+One run of each recipe. The stock GeoTransolver rows come from this example as
+configured; the `GeoTransolverSDF` rows come from a run of the same model and
+recipe with the authors' training code, whose checkpoint, converted to
+`GeoTransolverSDF`, gives the same errors with this example's `evaluate.py`
+(DeepJEB test stress 0.0658 against 0.0659, SimJEB test 0.3827 against 0.3827).
+Errors are mean per-sample relative L2 errors over every node, evaluated in float32
+(`evaluate.py`); the stress R² is the median over the samples. Results can differ
+slightly with the hardware, the number of GPUs and the library version: the LoRA
+adaptation, rerun on a different GPU, reproduced the test errors to within 0.005.
 
 | Model | DeepJEB test, displacement / stress | SimJEB test, displacement / stress | SimJEB test stress R² |
 | --- | --- | --- | --- |
@@ -131,9 +136,9 @@ reproduced the test errors to within 0.005.
 
 On the DeepJEB test designs `GeoTransolverSDF` reaches a median stress R² of 0.99.
 On SimJEB, designs unlike any DeepJEB design, the error is four to six times
-larger, mostly in members thinner than 3 mm, which DeepJEB hardly contains; LoRA
-with the 241 SimJEB training designs brings it below the error of the same model
-trained on SimJEB alone (0.295).
+larger, and largest in members thinner than 3 mm, which DeepJEB hardly contains;
+LoRA with the 241 SimJEB training designs brings the test stress error below the
+0.295 of the same model trained from scratch on those designs.
 
 ## Files
 
