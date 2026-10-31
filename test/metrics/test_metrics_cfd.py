@@ -114,3 +114,18 @@ def test_compute_tke_spectrum():
     assert E.shape == (nx * ny * nz,)
     assert wv.shape == (n + 1,)
     assert tke.shape == (n + 1,)
+
+
+def test_compute_tke_spectrum_length():
+    n = 8
+    field = np.random.rand(3, n, n, n)
+
+    mk_default, E_default, _, tke_default = compute_tke_spectrum(field)
+    mk_2pi, E_2pi, _, tke_2pi = compute_tke_spectrum(field, length=2 * np.pi)
+    np.testing.assert_allclose(mk_2pi, mk_default)
+    np.testing.assert_allclose(E_2pi, E_default)
+    np.testing.assert_allclose(tke_2pi, tke_default)
+
+    # Wavenumbers scale inversely with the domain length
+    mk_unit, _, _, _ = compute_tke_spectrum(field, length=1.0)
+    np.testing.assert_allclose(mk_unit, mk_default * 2 * np.pi)
