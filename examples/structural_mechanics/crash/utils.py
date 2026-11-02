@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Shared helpers of the crash recipes: global features, optimizers, warm starts."""
+
 import json
 import os
 
@@ -72,6 +74,10 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
     Build Muon + AdamW combined optimizer (Muon for 2D params, AdamW for others).
 
     Muon requires PyTorch >= 2.9. Pass the underlying model (unwrap DDP if needed).
+    Frozen parameters (a residual model's teacher) are not optimized.
+    ``training.muon_min_dim`` (default 0): 2-D parameters whose smaller side is
+    below it go to AdamW instead of being orthogonalized by Muon (tiny matrices
+    such as an 8 x 32 per-head bias projection).
     """
     if not hasattr(torch.optim, "Muon"):
         raise ImportError(
@@ -79,23 +85,12 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
             "Install a newer PyTorch or use optimizer=adam."
         )
     base_model = model.module if hasattr(model, "module") else model
-    # training.muon_min_dim (default 0 = legacy): 2-D parameters whose smaller
-    # side is below it go to AdamW instead of being orthogonalized by Muon
-    # (tiny matrices such as an 8 x 32 per-head bias projection).
     min_dim = int(cfg.training.get("muon_min_dim", 0))
-    # training.muon_exclude_patterns (default none): parameters whose name
-    # contains one of these substrings go to AdamW regardless of shape (e.g.
-    # "modulation" for the zero-initialised conditional-norm projections).
-    patterns = tuple(str(p) for p in (cfg.training.get("muon_exclude_patterns") or ()))
-
-    def use_muon(name, parameter):
-        if any(pattern in name for pattern in patterns):
-            return False
-        return parameter.ndim == 2 and min(parameter.shape) >= min_dim
-
-    named = list(base_model.named_parameters())
-    muon_params = [p for n, p in named if use_muon(n, p)]
-    other_params = [p for n, p in named if not use_muon(n, p)]
+    named = [(n, p) for n, p in base_model.named_parameters() if p.requires_grad]
+    muon_params = [p for _, p in named if p.ndim == 2 and min(p.shape) >= min_dim]
+    other_params = [
+        p for _, p in named if not (p.ndim == 2 and min(p.shape) >= min_dim)
+    ]
     weight_decay = cfg.training.get("optimizer_weight_decay", 1e-4)
     lr = cfg.training.start_lr
     if muon_params and other_params:
@@ -128,36 +123,31 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
 
 
 def load_warm_start(
-    model: torch.nn.Module,
-    path,
-    allowed_missing_prefixes=(
-        "refinement_contact_block.",
-        "wall_contact.",
-        "coarse_feedback.",
-        "global_motion_head.",
-    ),
+    model: torch.nn.Module, path, allowed_missing_prefixes=()
 ) -> dict[str, list[str]]:
     """Initialise ``model`` from another run's ``.mdlus`` (or state-dict ``.pt``) file.
 
     Every tensor of the checkpoint must exist in the model (no unexpected keys);
     tensors the checkpoint lacks must belong to modules named by
-    ``allowed_missing_prefixes`` (the contact additions), which keep their fresh
-    initialisation. Returns the loaded and missing key lists. Used to fine-tune a
-    converged contact-free model with contact switched on, where the zero gates
-    make the start function-preserving.
+    ``allowed_missing_prefixes``, which keep their fresh initialisation. Returns
+    the loaded and missing key lists. Used to initialise a run from a finished
+    one (``training.warm_start_model``) and to load the frozen teacher of the
+    corrector.
     """
     import io
     import zipfile
 
     path = str(path)
+    state = None
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            state = torch.load(
-                io.BytesIO(archive.read("model.pt")),
-                map_location="cpu",
-                weights_only=True,
-            )
-    else:
+            if "model.pt" in archive.namelist():  # a physicsnemo .mdlus archive
+                state = torch.load(
+                    io.BytesIO(archive.read("model.pt")),
+                    map_location="cpu",
+                    weights_only=True,
+                )
+    if state is None:  # a torch.save file (a state dict or a checkpoint dict)
         state = torch.load(path, map_location="cpu", weights_only=True)
         if isinstance(state, dict) and "model_state_dict" in state:
             state = state["model_state_dict"]

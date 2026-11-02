@@ -95,7 +95,7 @@ def _cat_global(
     return out
 
 
-def _global_tokens(sample: SimSample) -> torch.Tensor | None:
+def global_tokens(sample: SimSample) -> torch.Tensor | None:
     """Return selected global features as one token, shaped ``[1, 1, G]``."""
     if sample.global_features is None:
         return None
@@ -255,7 +255,7 @@ class MeshGeoTransolverOneShot(MeshGeoTransolver):
             edge_features=sample.graph.edge_attr,
             graph=sample.graph,
             geometry=coords,
-            global_embedding=_global_tokens(sample),
+            global_embedding=global_tokens(sample),
         )
         return _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
 
@@ -278,7 +278,7 @@ class MeshGeoFLAREOneShot(MeshGeoFLARE):
             graph=sample.graph,
             geometry=coords,
             local_positions=coords,
-            global_embedding=_global_tokens(sample),
+            global_embedding=global_tokens(sample),
         )
         return _oneshot_add_coords(_oneshot_output(raw, N, T, Fo), coords)
 
@@ -305,7 +305,7 @@ class FIGConvUNetOneShot(FIGConvUNet):
 
 def _geo_global_emb(sample: SimSample):
     """Build global embedding for GeoTransolver from sample."""
-    return _global_tokens(sample)
+    return global_tokens(sample)
 
 
 def _raw_global_feature(
@@ -745,7 +745,7 @@ class _MeshAttentionAutoregressiveMixin:
         initial_velocity = self._initial_velocity(coords, sample, data_stats)
         previous_coords = coords - initial_velocity * self.dt
         current_coords = coords
-        global_embedding = _global_tokens(sample)
+        global_embedding = global_tokens(sample)
         normalized_globals = None
         if sample.global_features is not None:
             normalized_globals = torch.stack(
@@ -1306,7 +1306,7 @@ class GeoTransolverAutoregressive(GeoTransolver):
             )
             previous_coords = coords - initial_velocity.unsqueeze(0) * self.dt
         current_coords = coords
-        global_embedding = _global_tokens(sample)
+        global_embedding = global_tokens(sample)
 
         teacher_positions = None
         if self.training and self.teacher_forcing:
@@ -1379,7 +1379,6 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
         inputs = sample.node_features
         coords = inputs["coords"]  # [N,3]
         features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
-        N = coords.size(0)
         global_emb = _geo_global_emb(sample)
 
         # Initial states
@@ -1489,15 +1488,23 @@ class GeoTransolverTimeConditional(GeoTransolver):
 
     def __init__(
         self,
-        *args,
+        *,
+        num_time_steps: int,
         time_embedding: str = "scalar",
         time_fourier_bands: int = 8,
         time_dim: int = 32,
         time_as_global: bool = False,
+        dt: float | None = None,
+        args=(),
         **kwargs,
     ):
-        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
-        super().__init__(*args, **kwargs)
+        if len(args):
+            raise TypeError("GeoTransolverTimeConditional takes keyword arguments only")
+        self.rollout_steps: int = int(num_time_steps) - 1
+        # Accepted for recipe compatibility (the Yaris datapipe derives its frame
+        # interval from ``model.dt``); the backbone itself is time-step agnostic.
+        self.dt = dt
+        super().__init__(**kwargs)
         self.time_embed = TimeEmbedding(time_embedding, time_fourier_bands, time_dim)
         self.time_as_global = bool(time_as_global)
 
@@ -1505,7 +1512,7 @@ class GeoTransolverTimeConditional(GeoTransolver):
         """Per-node time code ``[N, dim]`` and the optional global token."""
         code = self.time_embed(sample.node_features["time"])
         code = code.to(sample.node_features["coords"].dtype)
-        global_embedding = _global_tokens(sample)
+        global_embedding = global_tokens(sample)
         if self.time_as_global:
             token = code.view(1, 1, -1)
             global_embedding = (
@@ -1574,11 +1581,31 @@ class GeoTransolverTimeConditional(GeoTransolver):
         """
         device = sample.node_features["coords"].device
         outputs: list[torch.Tensor] = []
-        for t in range(self.rollout_steps):
-            time = torch.tensor(t / self.rollout_steps, device=device)
-            sample.node_features["time"] = time
-            y_t2 = self._forward(sample, data_stats)
-            outputs.append(y_t2)
+        # Cases may be shorter than the configured bound (Yaris: 19-31 frames):
+        # query exactly the target's horizon while the time label keeps its
+        # normalization by rollout_steps, so it means the same physical time.
+        target = getattr(sample, "node_target", None)
+        steps = (
+            int(target.shape[1])
+            if target is not None and target.ndim == 3
+            else self.rollout_steps
+        )
+        if steps > self.rollout_steps:
+            raise ValueError(
+                f"Target has {steps} steps but the model was built for {self.rollout_steps}"
+            )
+        original = sample.node_features.get("time")
+        try:
+            for t in range(steps):
+                time = torch.tensor(t / self.rollout_steps, device=device)
+                sample.node_features["time"] = time
+                y_t2 = self._forward(sample, data_stats)
+                outputs.append(y_t2)
+        finally:
+            if original is None:
+                sample.node_features.pop("time", None)
+            else:
+                sample.node_features["time"] = original
 
         return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
 
@@ -1608,7 +1635,6 @@ class GeoTransolverOneStepRollout(GeoTransolver):
         global_emb = _geo_global_emb(sample)
 
         # Ground truth sequence [T+1, N, 3] (t0 + rollout steps)
-        N = coords0.size(0)
         gt_seq = torch.cat(
             [
                 coords0.unsqueeze(0),
