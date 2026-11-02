@@ -13,19 +13,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Lazy full-resolution Yaris data for the kNN-attention DeFormer.
+"""Lazy full-resolution Yaris data for the DeFormer recipes.
 
 Every case is one Zarr store with the same 1.48M-node reference mesh. This
-datapipe keeps the mesh at full resolution: no coarse bank, no prolongation.
+datapipe keeps the mesh at full resolution: no coarsening, no prolongation.
 Nodes listed in an outlier mask (rigid-wall nodes and fly-away nodes) are
 dropped from inputs, targets and neighborhoods. The static kNN neighborhoods
 and their standardized features are built once from the shared reference
-geometry; positions and thickness are read per case and per window, so no
+geometry; positions and thickness are read per case and per frame, so no
 trajectory is preloaded.
 
 Normalization follows the crash datapipe: per-axis position mean/std over the
 training cases (equal case weight), velocities and accelerations in
 normalized coordinates, and a per-channel thickness standardization.
+
+Optional graph attachments for the corrector and the evaluation metrics: the
+shell facets, nodal thickness and one-ring exclusions of the contact search
+(``contact_surface``), the structural mesh edges with standardized reference
+features (``mesh_edges``) and the rigid wall plane (``rigid_wall_position``).
 """
 
 from __future__ import annotations
@@ -72,22 +77,40 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+# The Yaris store layout; every array is checked where the recipe reads it.
+STORE_LAYOUT = (
+    "nodes/pos [T, N, 3], nodes/thickness [N], edges [E, 2], shell/connectivity "
+    "[S, 4] for contact, nodes/part_id [N] for the kinematics readout and "
+    "solid/connectivity [H, 8] with include_solid_edges"
+)
+
+
+def store_array(store, key, path):
+    """``store[key]`` with a layout error naming the missing array."""
+    if key not in store:
+        raise ValueError(
+            f"{path} is not a Yaris store: it lacks {key}; the reader expects "
+            + STORE_LAYOUT
+        )
+    return store[key]
+
+
 def load_splits(path):
     """Case names per split from the dataset creator's CSV (names are identity)."""
     splits = {key: [] for key in ("train", "validation", "test")}
     seen = set()
     with Path(path).open(newline="", encoding="utf-8-sig") as stream:
         for row in csv.DictReader(stream):
+            if "split" not in row or "sample_name" not in row:
+                raise ValueError(
+                    f"{path}: the split manifest needs the columns split,sample_name"
+                )
             split, name = row["split"].strip(), row["sample_name"].strip()
             name = name.removesuffix(".zarr")
             if split not in splits or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
                 raise ValueError(f"Invalid split/sample name: {split!r}/{name!r}")
             if name in seen:
                 raise ValueError(f"Duplicate/cross-split sample name: {name}")
-            if name.endswith("100_GR252303"):
-                raise ValueError(
-                    "Known mislabelled duplicate 100_GR252303 must be excluded"
-                )
             seen.add(name)
             splits[split].append(name)
     if any(not values for values in splits.values()):
@@ -261,7 +284,7 @@ class YarisFullReader:
     def open(self, path):
         """Open one Zarr case store and check its mesh against the reference."""
         store = zarr.open_group(str(path), mode="r")
-        pos = store["nodes/pos"]
+        pos = store_array(store, "nodes/pos", path)
         if len(pos.shape) != 3 or pos.shape[2] != 3:
             raise ValueError(f"Unexpected position shape {pos.shape} in {path}")
         if self.reference is None:
@@ -291,7 +314,9 @@ class YarisFullReader:
 
     def thickness(self, store):
         """Shell thickness per kept node, validated as finite and nonnegative."""
-        values = np.asarray(store["nodes/thickness"][:], dtype=np.float32).reshape(-1)
+        values = np.asarray(
+            store_array(store, "nodes/thickness", store.store.root)[:], dtype=np.float32
+        ).reshape(-1)
         if values.shape != (self.total_nodes,):
             raise ValueError("Thickness/node count mismatch")
         values = values[self.keep_ids]
@@ -318,7 +343,9 @@ class YarisFullReader:
         from every node left without an edge to its nearest kept neighbors.
         Duplicates are removed; direction is irrelevant downstream.
         """
-        edges = np.asarray(store["edges"][:], dtype=np.int64)
+        edges = np.asarray(
+            store_array(store, "edges", store.store.root)[:], dtype=np.int64
+        )
         if edges.ndim != 2 or edges.shape[1] != 2:
             raise ValueError("edges must be [E, 2]")
         if edges.size and (edges.min() < 0 or edges.max() >= self.total_nodes):
@@ -402,34 +429,6 @@ class YarisFullReader:
             faces = np.concatenate((faces[tri], quads[supported], split))
         return torch.from_numpy(np.ascontiguousarray(faces))
 
-    def design_variables(self, store):
-        """The 8 thickness-group deviations and a known-flag, ``[9]`` float32.
-
-        Deviations are fractional part-group thickness changes within about
-        +-0.25; they are scaled by 4 to order one. Six of the 99 Yaris runs
-        carry no design record: they get zeros and flag 0.
-        """
-        attrs = dict(store.attrs)
-        keys = [f"bc_thickness_group_{i}_deviation" for i in range(1, 9)]
-        values = None
-        if all(key in attrs for key in keys):
-            values = [float(attrs[key]) for key in keys]
-        else:
-            try:
-                values = [
-                    float(
-                        np.asarray(store[f"boundary_conditions/{key[3:]}"][:]).reshape(
-                            -1
-                        )[0]
-                    )
-                    for key in keys
-                ]
-            except KeyError:
-                values = None
-        if values is None or not all(math.isfinite(v) for v in values):
-            return np.zeros(9, dtype=np.float32)
-        return np.asarray([4.0 * v for v in values] + [1.0], dtype=np.float32)
-
 
 def _case_moments(args):
     """Per-case moments (equal case weight) for position, velocity, acceleration."""
@@ -510,7 +509,67 @@ def compute_frozen_stats(reader, train_paths, workers=None):
 
 
 class YarisFullGraphDataset(Dataset):
-    """Full-resolution Yaris cases with static kNN neighborhoods; one window per access."""
+    """Full-resolution Yaris cases with static kNN neighborhoods.
+
+    Parameters
+    ----------
+    reader : YarisFullReader
+        Store reader (split manifest, outlier mask, stride).
+    data_dir : str
+        Directory of the ``<case>.zarr`` stores.
+    num_samples : int
+        Number of cases of the split to use (the first ones of the manifest).
+    num_steps : int
+        Frame bound per case (``training.num_time_steps``); cases may be shorter.
+    split : {"train", "validation", "test"}
+        Split of the manifest.
+    name : str
+        Dataset name for logging.
+    stats_dir : str
+        Directory of the frozen normalization statistics and caches.
+    stats_mode : {"compute", "load"}
+        Compute the statistics from the training split (rank zero) or load them.
+    logger : logging.Logger, optional
+        Logger for startup messages.
+    sample_type : {"random_time_window", "one_time_step", "all_time_steps"}
+        One rollout window per access (autoregressive training), one
+        (case, future frame) pair per access (time-conditional training) or
+        the complete trajectory (validation and inference).
+    initial_history_steps : int
+        Observed frames: 1 for time-conditional samples, 2 for rollouts.
+    rollout_window_steps, windows_per_sample, window_seed
+        Rollout window length, windows per case and epoch and the stateless
+        draw seed of ``random_time_window``.
+    dt : float
+        Frame interval in seconds (must equal ``stride * raw_dt`` of the reader).
+    static_features, dynamic_features, dynamic_targets, global_features,
+    global_features_filepath
+        Feature selection of the generic crash datapipe; the Yaris recipe is
+        displacement-only with a thickness feature.
+    local_knn_k, local_knn_metric, local_knn_cache_dir
+        Static reference neighbourhoods of the DeFormer's local attention.
+    stats_workers : int, optional
+        Processes used to compute the frozen statistics.
+    contact_surface : bool
+        Attach the shell facets, the nodal thickness and the one-ring
+        exclusions (``graph.contact_faces``, ``shell_thickness``,
+        ``contact_surface_exclusions``) for the contact search of the corrector
+        and the penetration metrics.
+    rigid_wall_position : float, optional
+        Analytic rigid wall plane ``x = position`` in millimetres
+        (``graph.rigid_wall``; Yaris: 100), for the wall clamp and the wall
+        penetration metrics; also attaches the nodal thickness.
+    mesh_edges : bool
+        Attach the structural shell connectivity in both directions with its
+        standardized reference features (``graph.mesh_edge_index``,
+        ``mesh_edge_attr``, ``mesh_edge_mean``, ``mesh_edge_std``) for the
+        MeshGraphNet corrector; ``edge_index`` itself stays as the local
+        operator expects it (empty under the Euclidean metric).
+    frame_pairs : bool
+        ``one_time_step`` training samples hold two consecutive future frames
+        ``[N, 2, 3]`` (``k`` and ``k+1``; the last frame pairs backwards) under
+        the earlier frame's time label, for ``training.increment_loss_weight``.
+    """
 
     def __init__(
         self,
@@ -538,78 +597,14 @@ class YarisFullGraphDataset(Dataset):
         window_seed=42,
         windows_per_sample=1,
         stats_workers=None,
-        design_variables=False,
         contact_surface=False,
         rigid_wall_position=None,
-        thickness_deviation=False,
-        mixup_alpha=0.0,
-        mixup_prob=0.5,
-        mean_displacement_baseline=False,
-        delta_reference=False,
-        delta_val_references=3,
-        delta_train_nearest_prob=0.5,
-        delta_train_nearest_k=5,
-        part_tokens=False,
+        mesh_edges=False,
+        frame_pairs=False,
     ):
         self.reader, self.name, self.split = reader, name, split
-        # Part-pooled design tokens: one token per part (reference centroid,
-        # log size, mean of the node feature columns) under
-        # sample.global_features["parts"], consumed by the model's design encoder.
-        self.part_tokens = bool(part_tokens)
-        # Delta-to-reference: every sample pairs the case with a TRAINING case
-        # (the reference) at the same future frame; the node features carry
-        # both thickness fields and the reference's displacement is served as
-        # the output baseline, so the network predicts the response to the
-        # design change. Validation averages the predictions obtained from
-        # the nearest training designs (thickness-field distance).
-        self.delta_reference = bool(delta_reference)
-        if (
-            isinstance(delta_val_references, bool)
-            or int(delta_val_references) < 1
-            or not 0.0 <= float(delta_train_nearest_prob) <= 1.0
-            or isinstance(delta_train_nearest_k, bool)
-            or int(delta_train_nearest_k) < 1
-        ):
-            raise ValueError(
-                "delta_val_references and delta_train_nearest_k must be positive "
-                "integers and delta_train_nearest_prob in [0, 1]"
-            )
-        self.delta_val_references = int(delta_val_references)
-        self.delta_train_nearest_prob = float(delta_train_nearest_prob)
-        self.delta_train_nearest_k = int(delta_train_nearest_k)
-        if self.delta_reference and (mean_displacement_baseline or mixup_alpha > 0):
-            raise ValueError(
-                "delta_reference excludes mean_displacement_baseline and mixup"
-            )
-        if self.delta_reference and (
-            sample_type not in ("one_time_step", "all_time_steps")
-            or int(initial_history_steps) != 1
-        ):
-            raise ValueError("delta_reference is for the time-conditional sample types")
-        # Output baseline: the mean normalized displacement of the TRAIN cases
-        # at each future frame, served as node_features["baseline"] (one frame)
-        # or ["baseline_all"] (every validated frame); the model adds it to its
-        # prediction so the network carries a zero-mean residual.
-        self.mean_displacement_baseline = bool(mean_displacement_baseline)
-        # Design mixup (train, one_time_step): with probability mixup_prob a
-        # sample blends two training cases at the same future frame, lambda ~
-        # Beta(alpha, alpha), over the thickness features, the design token and
-        # the target positions (the reference geometry is shared).
-        if (
-            not math.isfinite(mixup_alpha)
-            or mixup_alpha < 0
-            or not 0.0 <= float(mixup_prob) <= 1.0
-        ):
-            raise ValueError("mixup_alpha must be >= 0 and mixup_prob in [0, 1]")
-        self.mixup_alpha, self.mixup_prob = float(mixup_alpha), float(mixup_prob)
-        # The 8 thickness-group deviations (+ known flag) as a global token.
-        self.design_variables = bool(design_variables)
-        # Mesh-derived design signal: each node's thickness minus its mean over
-        # the TRAIN cases, scaled by the fleet deviation std (a second feature
-        # column). General for shared-mesh datasets; needs no design metadata.
-        self.thickness_deviation = bool(thickness_deviation)
-        # Surface contact topology (shell facets, physical thickness, one-ring
-        # exclusions) and the analytic rigid wall ``x = rigid_wall_position``.
+        self.mesh_edges = bool(mesh_edges)
+        self.frame_pairs = bool(frame_pairs) and sample_type == "one_time_step"
         self.contact_surface = bool(contact_surface)
         self.rigid_wall_position = (
             None if rigid_wall_position is None else float(rigid_wall_position)
@@ -674,6 +669,10 @@ class YarisFullGraphDataset(Dataset):
                 if len(frames) > self.num_steps or len(frames) < 2:
                     raise ValueError(
                         f"{path.stem}: {len(frames)} selected frames outside [2, {self.num_steps}]"
+                    )
+                if self.frame_pairs and len(frames) < 3:
+                    raise ValueError(
+                        f"{path.stem}: frame pairs need at least two future frames"
                     )
                 counts.append(len(frames) - 1)
             self.case_future_frames = counts
@@ -740,242 +739,29 @@ class YarisFullGraphDataset(Dataset):
             for k, v in values["feature"].items()
         }
         self.edge_stats = {}
-        n_global = 9 if self.design_variables else 0
         self.global_stats = {
-            "global_mean": torch.zeros(n_global, dtype=torch.float32),
-            "global_std": torch.ones(n_global, dtype=torch.float32),
+            "global_mean": torch.zeros(0, dtype=torch.float32),
+            "global_std": torch.ones(0, dtype=torch.float32),
         }
-        self.global_features_keys = ["design"] if self.design_variables else []
-        self.thickness_fleet_mean, self.thickness_fleet_dev_std = (
-            self._thickness_fleet(data_dir) if self.thickness_deviation else (None, 0.0)
-        )
-        self.mean_displacement = (
-            self._mean_displacement(data_dir, stats_mode)
-            if self.mean_displacement_baseline
-            else None
-        )
-        self.delta_neighbours = (
-            self._delta_neighbours(data_dir, stats_mode)
-            if self.delta_reference
-            else None
-        )
-        if self.part_tokens:
-            ids = reader.part_ids(reader.open(self.paths[0]))
-            unique, inverse = np.unique(ids, return_inverse=True)
-            self.part_inverse = torch.from_numpy(inverse.astype(np.int64).reshape(-1))
-            self.part_count = int(len(unique))
-            counts = torch.bincount(self.part_inverse, minlength=self.part_count)
-            self.part_counts = counts.to(torch.float32).clamp_min(1.0)
-            reference = (
-                torch.from_numpy(reader.reference) - self.node_stats["pos_mean"]
-            ) / (self.node_stats["pos_std"] + EPS)
-            centroid = (
-                torch.zeros((self.part_count, 3)).index_add_(
-                    0, self.part_inverse, reference
-                )
-                / self.part_counts[:, None]
-            )
-            log_size = torch.log(self.part_counts) / math.log(max(self.num_nodes, 2))
-            self.part_static = torch.cat((centroid, log_size[:, None]), dim=1)
+        self.global_features_keys = []
         self.graph = self._build_graph(local_knn_cache_dir, stats_mode)
 
-    # ----- shared reference structure -----
-    def _thickness_fleet(self, data_dir):
-        """Per-node mean thickness over the TRAIN cases and the deviation scale.
-
-        Cached in the statistics directory under the split/outlier identity.
-        The scale is the root mean square of the per-node deviation over all
-        training cases and kept nodes (nodes whose thickness never changes
-        contribute zeros, so group nodes come out several scales wide).
-        """
-        digest = hashlib.sha256(
-            f"{self.reader.manifest_signature}:{self.reader.outlier_signature}".encode()
-        ).hexdigest()[:16]
-        path = self._stats_dir / f"thickness_fleet_{digest}.npz"
-        if path.exists():
-            data = np.load(path)
-            return torch.from_numpy(data["mean"].astype(np.float32)), float(
-                data["dev_std"]
-            )
-        started = time.monotonic()
-        train_paths = self.reader.paths(
-            data_dir, "train", len(self.reader.splits["train"])
-        )
-        total = square = None
-        for case in train_paths:
-            values = self.reader.thickness(self.reader.open(case)).astype(np.float64)
-            total = values if total is None else total + values
-            square = values**2 if square is None else square + values**2
-        mean = total / len(train_paths)
-        variance = np.maximum(square / len(train_paths) - mean**2, 0.0)
-        dev_std = float(np.sqrt(variance.mean()))
-        tmp = path.with_name(path.stem + ".tmp.npz")
-        np.savez(tmp, mean=mean.astype(np.float32), dev_std=dev_std)
-        os.replace(tmp, path)
-        self.logger.info(
-            f"Yaris thickness fleet mean over {len(train_paths)} training cases "
-            f"(deviation scale {dev_std:.4f} mm) in {time.monotonic() - started:.0f}s"
-        )
-        return torch.from_numpy(mean.astype(np.float32)), dev_std
-
-    def _mean_displacement(self, data_dir, stats_mode):
-        """Mean normalized displacement of the TRAIN cases per future frame.
-
-        ``[num_steps - 1, N, 3]`` float32, frame ``1 + k`` minus frame 0 over the
-        position scale, averaged over the training cases that have that frame.
-        Computed by the CPU preparation (``stats_mode="compute"``) and cached in
-        the statistics directory; training and validation load it.
-        """
-        reader = self.reader
-        digest = hashlib.sha256(
-            f"{reader.manifest_signature}:{reader.outlier_signature}:{reader.stride}:"
-            f"{reader.max_frames}:{self.num_steps}".encode()
-        ).hexdigest()[:16]
-        path = self._stats_dir / f"mean_displacement_{digest}.npy"
-        if path.exists():
-            return torch.from_numpy(np.load(path))
-        if stats_mode != "compute":
-            raise FileNotFoundError(
-                f"{path} not found; run yaris_full_prepare.py with "
-                "datapipe.mean_displacement_baseline=true first"
-            )
-        started = time.monotonic()
-        train_paths = reader.paths(data_dir, "train", len(reader.splits["train"]))
-        steps = self.num_steps - 1
-        total = np.zeros((steps, self.num_nodes, 3), dtype=np.float64)
-        count = np.zeros(steps, dtype=np.int64)
-        for case in train_paths:
-            store = reader.open(case)
-            frames = reader.frames(store)
-            n = min(len(frames) - 1, steps)
-            coords = reader.coordinates(store, frames[: n + 1]).astype(np.float64)
-            total[:n] += coords[1:] - coords[:1]
-            count[:n] += 1
-        scale = self.node_stats["pos_std"].numpy().reshape(1, 1, 3) + EPS
-        mean = (total / np.maximum(count, 1)[:, None, None] / scale).astype(np.float32)
-        tmp = path.with_name(path.stem + ".tmp.npy")
-        np.save(tmp, mean)
-        os.replace(tmp, path)
-        self.logger.info(
-            f"Yaris mean displacement baseline over {len(train_paths)} training cases "
-            f"and {steps} future frames in {time.monotonic() - started:.0f}s"
-        )
-        return torch.from_numpy(mean)
-
-    def _delta_neighbours(self, data_dir, stats_mode):
-        """Training references per case, nearest first by thickness-field distance.
-
-        Returns ``{"train_cases": [...], "train_frames": {name: frames},
-        "nearest": {case: [train names]}}`` for every case of every split,
-        excluding the case itself. Cached in the statistics directory (built by
-        the CPU preparation with ``stats_mode="compute"``).
-        """
-        reader = self.reader
-        digest = hashlib.sha256(
-            f"{reader.manifest_signature}:{reader.outlier_signature}:{reader.stride}:"
-            f"{reader.max_frames}".encode()
-        ).hexdigest()[:16]
-        path = self._stats_dir / f"delta_neighbours_{digest}.json"
-        if path.exists():
-            data = json.loads(path.read_text())
-            data["train_paths"] = {
-                case.stem: case
-                for case in reader.paths(data_dir, "train", len(reader.splits["train"]))
-            }
-            return data
-        if stats_mode != "compute":
-            raise FileNotFoundError(
-                f"{path} not found; run yaris_full_prepare.py with "
-                "datapipe.delta_reference=true first"
-            )
-        started = time.monotonic()
-        train_paths = reader.paths(data_dir, "train", len(reader.splits["train"]))
-        train_names = [case.stem for case in train_paths]
-        train_thickness = np.stack(
-            [
-                reader.thickness(reader.open(case)).astype(np.float32)
-                for case in train_paths
-            ]
-        )
-        train_frames = {
-            case.stem: int(len(reader.frames(reader.open(case))))
-            for case in train_paths
-        }
-        nearest = {}
-        for split, names in reader.splits.items():
-            for case in reader.paths(data_dir, split, len(names)):
-                thickness = reader.thickness(reader.open(case)).astype(np.float32)
-                distance = np.sqrt(np.square(train_thickness - thickness[None]).sum(1))
-                order = [
-                    train_names[i]
-                    for i in np.argsort(distance, kind="stable")
-                    if train_names[i] != case.stem
-                ]
-                nearest[case.stem] = order
-        data = dict(train_cases=train_names, train_frames=train_frames, nearest=nearest)
-        atomic_json(path, data)
-        self.logger.info(
-            f"Yaris delta references ranked for {len(nearest)} cases against "
-            f"{len(train_names)} training designs in {time.monotonic() - started:.0f}s"
-        )
-        data["train_paths"] = {case.stem: case for case in train_paths}
-        return data
-
-    def _reference_displacement(self, name, frame_indices):
-        """Features of training case ``name`` and its normalized displacement at
-        the given target frame indices (frame ``1 + k`` minus frame 0): ``[N, 3]``
-        for one index, ``[N, T, 3]`` for several."""
-        store = self.reader.open(self.delta_neighbours["train_paths"][name])
-        frames = self.reader.frames(store)
-        selected = [frames[0]] + [frames[1 + k] for k in frame_indices]
-        pos = torch.from_numpy(self.reader.coordinates(store, selected))
-        displacement = (pos[1:] - pos[:1]) / (self.node_stats["pos_std"] + EPS)
-        features = self._node_feature_tensor(store)
-        if len(frame_indices) == 1:
-            return features, displacement[0].contiguous()
-        return features, displacement.permute(1, 0, 2).contiguous()
-
-    def _delta_train_reference(self, index, case_name, k):
-        """Training reference for sample ``index``: nearest-k with probability
-        ``delta_train_nearest_prob``, else uniform over the training designs."""
-        frames = self.delta_neighbours["train_frames"]
-        ranked = [
-            name
-            for name in self.delta_neighbours["nearest"][case_name]
-            if frames[name] >= k + 2
-        ]
-        if not ranked:
-            raise ValueError(
-                f"no training reference with frame {1 + k} for {case_name}"
-            )
-        key = f"crash-delta-v1:{self.window_seed}:{self.epoch}:{index}".encode()
-        seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
-        rng = np.random.default_rng(seed)
-        pool = (
-            ranked[: self.delta_train_nearest_k]
-            if rng.random() < self.delta_train_nearest_prob
-            else ranked
-        )
-        return pool[int(rng.integers(len(pool)))]
-
+    # ----- graph -----
     def _node_feature_tensor(self, store):
-        """Standardized thickness, plus the fleet deviation column when enabled."""
+        """Standardized thickness, ``[N, 1]``."""
         thickness = torch.from_numpy(self.reader.thickness(store))
-        features = (thickness[:, None] - self.feature_stats["feature_mean"]) / (
+        return (thickness[:, None] - self.feature_stats["feature_mean"]) / (
             self.feature_stats["feature_std"] + EPS
         )
-        if self.thickness_deviation:
-            deviation = (thickness - self.thickness_fleet_mean) / (
-                self.thickness_fleet_dev_std + EPS
-            )
-            features = torch.cat((features, deviation[:, None].to(features.dtype)), 1)
-        return features
 
     def _build_graph(self, cache_dir, stats_mode):
+        """The shared graph: kNN neighbourhoods with standardized features and the
+        optional mesh edges, contact topology and rigid wall."""
         from local_neighborhoods import (
             LocalNeighborhoodCache,
             LocalNeighborhoodData,
             knn_edge_features,
+            mesh_edge_features,
             with_self_slot,
         )
 
@@ -1040,6 +826,26 @@ class YarisFullGraphDataset(Dataset):
             knn_edge_attr - self.knn_edge_stats["knn_edge_mean"].view(1, 1, -1)
         ) / (self.knn_edge_stats["knn_edge_std"].view(1, 1, -1) + EPS)
         graph.knn_metric = self.local_knn_metric
+        if self.mesh_edges:
+            # Shell (plus optional solid) connectivity in both directions with its
+            # reference displacement and length, standardized over the edge set
+            # (the mesh is shared by every design, so the statistics are too).
+            undirected = (
+                edge_index
+                if edge_index.shape[1]
+                else self.reader.structural_edges(self.reader.open(self.paths[0]))
+            )
+            mesh_edge_index = torch.cat((undirected, undirected.flip(0)), dim=1)
+            attr = mesh_edge_features(normalized_reference, mesh_edge_index)
+            values = attr.to(torch.float64)
+            mean = values.mean(dim=0)
+            variance = torch.clamp((values * values).mean(dim=0) - mean * mean, min=0)
+            graph.mesh_edge_index = mesh_edge_index
+            graph.mesh_edge_mean = mean.to(torch.float32)
+            graph.mesh_edge_std = torch.sqrt(variance + EPS).to(torch.float32)
+            graph.mesh_edge_attr = (attr - graph.mesh_edge_mean) / (
+                graph.mesh_edge_std + EPS
+            )
         if self.contact_surface or self.rigid_wall_position is not None:
             store = self.reader.open(self.paths[0])
             graph.shell_thickness = torch.from_numpy(self.reader.thickness(store))
@@ -1048,7 +854,6 @@ class YarisFullGraphDataset(Dataset):
             graph.contact_surface_exclusions = self._contact_exclusions(
                 graph.contact_faces
             )
-            graph.penetration_reference_positions = reference.clone()
         if self.rigid_wall_position is not None:
             graph.rigid_wall = torch.tensor(
                 [self.rigid_wall_position], dtype=torch.float32
@@ -1088,6 +893,7 @@ class YarisFullGraphDataset(Dataset):
         return case, index - self.case_offsets[case]
 
     def set_epoch(self, epoch):
+        """Epoch counter of the stateless window draws."""
         self.epoch = int(epoch)
 
     def _window_start(self, sample_idx, num_frames):
@@ -1131,145 +937,50 @@ class YarisFullGraphDataset(Dataset):
         node_features = dict(coords=pos[history - 1], features=features)
         if history == 2:
             node_features["previous_coords"] = pos[0]
-        if self.mean_displacement is not None and history == 1:
-            steps = int(pos.shape[0] - history)
-            node_features["baseline_all"] = (
-                self.mean_displacement[:steps].permute(1, 0, 2).contiguous()
-            )
-        references, extra_references = [], []
-        if self.delta_reference and history == 1:
-            steps = int(pos.shape[0] - history)
-            train_frames = self.delta_neighbours["train_frames"]
-            references = [
-                name
-                for name in self.delta_neighbours["nearest"][path.stem]
-                if train_frames[name] >= steps + 1
-            ][: self.delta_val_references]
-            if not references:
-                raise ValueError(
-                    f"no training reference covers the {steps} frames of {path.stem}"
-                )
-            for position, name in enumerate(references):
-                ref_features, ref_displacement = self._reference_displacement(
-                    name, list(range(steps))
-                )
-                paired = torch.cat((features, ref_features), dim=1)
-                if position == 0:
-                    node_features["features"] = paired
-                    node_features["baseline_all"] = ref_displacement
-                else:
-                    extra_references.append((paired, ref_displacement))
         sample = SimSample(
             node_features=node_features,
             node_target=pos[history:].transpose(0, 1).contiguous(),
             graph=self.graph,
-            global_features=self._global_features(store),
+            global_features=None,
         )
         sample.yaris_case_name = path.stem
         sample.yaris_target_frames = frames[history:].tolist()
-        sample.yaris_delta_references = references
-        sample.delta_references = extra_references
-        return self._attach_part_tokens(sample)
-
-    def _global_features(self, store):
-        if not self.design_variables:
-            return None
-        return {"design": torch.from_numpy(self.reader.design_variables(store))}
-
-    def _part_token_tensor(self, features):
-        """``[P, 4 + F]``: reference centroid, log size, per-part feature means."""
-        means = (
-            torch.zeros((self.part_count, features.shape[1])).index_add_(
-                0, self.part_inverse, features.float()
-            )
-            / self.part_counts[:, None]
-        )
-        return torch.cat((self.part_static, means), dim=1)
-
-    def _attach_part_tokens(self, sample):
-        if self.part_tokens:
-            tokens = self._part_token_tensor(sample.node_features["features"])
-            sample.global_features = {**(sample.global_features or {}), "parts": tokens}
         return sample
 
-    def _mixup_draw(self, index, case, k):
-        """(partner case, lambda) or None; stateless in (seed, epoch, index)."""
-        if self.split != "train" or self.mixup_alpha <= 0 or self.mixup_prob <= 0:
-            return None
-        key = f"crash-mixup-v1:{self.window_seed}:{self.epoch}:{index}".encode()
-        seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
-        rng = np.random.default_rng(seed)
-        if rng.random() >= self.mixup_prob:
-            return None
-        candidates = [
-            j
-            for j, count in enumerate(self.case_future_frames)
-            if j != case and count > k
-        ]
-        if not candidates:
-            return None
-        partner = int(candidates[int(rng.integers(len(candidates)))])
-        lam = float(rng.beta(self.mixup_alpha, self.mixup_alpha))
-        return partner, lam
-
     def _time_step_sample(self, index):
-        """Initial frame plus one future frame, labelled by normalized time."""
+        """Initial frame plus one future frame (or a consecutive pair), labelled
+        by normalized time."""
         case, k = self._pair(index)
         path = self.paths[case]
         store = self.reader.open(path)
         frames = self.reader.frames(store)
+        if self.frame_pairs:
+            # Consecutive future frames (k, k+1); the last frame pairs backwards, so
+            # every index yields a pair and every frame of the case is supervised.
+            first = k if k + 1 < self.case_future_frames[case] else k - 1
+            targets = [1 + first, 2 + first]
+        else:
+            first, targets = k, [1 + k]
         pos = torch.from_numpy(
-            self.reader.coordinates(store, [frames[0], frames[1 + k]])
+            self.reader.coordinates(store, [frames[0], *(frames[j] for j in targets)])
         )
         pos = (pos - self.node_stats["pos_mean"]) / (self.node_stats["pos_std"] + EPS)
-        features = self._node_feature_tensor(store)
-        target = pos[1].contiguous()
-        global_features = self._global_features(store)
-        name = path.stem
-        mix = self._mixup_draw(index, case, k)
-        if mix is not None:
-            partner, lam = mix
-            other_path = self.paths[partner]
-            other = self.reader.open(other_path)
-            other_frames = self.reader.frames(other)
-            other_pos = torch.from_numpy(
-                self.reader.coordinates(other, [other_frames[1 + k]])
-            )[0]
-            other_pos = (other_pos - self.node_stats["pos_mean"]) / (
-                self.node_stats["pos_std"] + EPS
-            )
-            target = lam * target + (1.0 - lam) * other_pos
-            features = lam * features + (1.0 - lam) * self._node_feature_tensor(other)
-            other_global = self._global_features(other)
-            if global_features is not None and other_global is not None:
-                global_features = {
-                    key: lam * value + (1.0 - lam) * other_global[key]
-                    for key, value in global_features.items()
-                }
-            name = f"{path.stem}+{other_path.stem}@{lam:.3f}"
+        target = (
+            pos[1:].transpose(0, 1).contiguous()  # [N, 2, 3], earlier frame first
+            if self.frame_pairs
+            else pos[1].contiguous()
+        )
         node_features = dict(
             coords=pos[0],
-            features=features,
-            time=torch.tensor(k / (self.num_steps - 1), dtype=torch.float32),
+            features=self._node_feature_tensor(store),
+            time=torch.tensor(first / (self.num_steps - 1), dtype=torch.float32),
         )
-        if self.mean_displacement is not None:
-            node_features["baseline"] = self.mean_displacement[k]
-        reference = None
-        if self.delta_reference:
-            reference = self._delta_train_reference(index, path.stem, k)
-            ref_features, ref_displacement = self._reference_displacement(
-                reference, [k]
-            )
-            node_features["features"] = torch.cat((features, ref_features), dim=1)
-            node_features["baseline"] = ref_displacement
         sample = SimSample(
             node_features=node_features,
             node_target=target.contiguous(),
             graph=self.graph,
-            global_features=global_features,
+            global_features=None,
         )
-        sample.yaris_delta_reference = reference
-        sample.yaris_case_name = name
-        sample.yaris_target_frames = [int(frames[1 + k])]
-        sample.yaris_mixup = mix
-        return self._attach_part_tokens(sample)
+        sample.yaris_case_name = path.stem
+        sample.yaris_target_frames = [int(frames[j]) for j in targets]
+        return sample

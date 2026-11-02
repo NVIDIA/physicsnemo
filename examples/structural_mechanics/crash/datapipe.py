@@ -60,11 +60,14 @@ class SimSample:
         global_features: Optional[dict[str, torch.Tensor]] = None,
         target_series: Optional[dict[str, torch.Tensor]] = None,
     ):
-        assert isinstance(node_features, dict), "node_features must be a dict"
-        assert "coords" in node_features, "node_features must contain 'coords'"
-        assert (
-            node_features["coords"].ndim == 2 and node_features["coords"].shape[1] == 3
-        ), f"'coords' must be [N,3], got {node_features['coords'].shape}"
+        if not isinstance(node_features, dict):
+            raise ValueError("node_features must be a dict")
+        if "coords" not in node_features:
+            raise ValueError("node_features must contain 'coords'")
+        if node_features["coords"].ndim != 2 or node_features["coords"].shape[1] != 3:
+            raise ValueError(
+                f"'coords' must be [N,3], got {node_features['coords'].shape}"
+            )
         self.node_features = node_features
         self.node_target = node_target
         self.graph = graph  # PyG Data or None
@@ -94,7 +97,6 @@ class SimSample:
 
     def __repr__(self) -> str:
         n = self.node_features["coords"].shape[0]
-        keys = {k: tuple(v.shape) for k, v in self.node_features.items()}
         din = 3
         for k, v in self.node_features.items():
             if k != "coords":
@@ -161,10 +163,10 @@ class CrashBaseDataset:
         contact_geodesic_gap_min: float = 0.0,
         contact_geodesic_max_pairs: int = 16_000_000,
         contact_geodesic_cache_dir: Optional[str] = None,
-        penetration_loss_metadata: bool = False,
         local_knn_k: int | None = None,
         local_knn_metric: str = "geodesic",
         local_knn_cache_dir: Optional[str] = None,
+        rigid_wall_position: float | None = None,
     ):
         super().__init__()
         self.name = name
@@ -190,9 +192,6 @@ class CrashBaseDataset:
         self.epoch = 0
         self.contact_require_elements = bool(contact_require_elements)
         self.contact_surface = bool(contact_surface)
-        self.penetration_loss_metadata = bool(penetration_loss_metadata)
-        if self.penetration_loss_metadata and not self.contact_surface:
-            raise ValueError("penetration loss metadata requires contact_surface=True")
         # Static reference neighborhoods for DeFormer's neighborhood attention.
         # ``None`` keeps the validated MeshGraphNet recipes byte-for-byte.
         if local_knn_k is not None and (
@@ -229,6 +228,16 @@ class CrashBaseDataset:
         if stats_mode not in {"compute", "load"}:
             raise ValueError("stats_mode must be either 'compute' or 'load'")
         self.stats_mode = stats_mode
+        # Analytic rigid-wall plane (graph.rigid_wall, physical units) for the
+        # wall clamp and the wall penetration statistics; the axis and sign are
+        # model settings (body-in-white: x = -29.8 mm, the furthest any node travels).
+        if rigid_wall_position is not None and not np.isfinite(
+            float(rigid_wall_position)
+        ):
+            raise ValueError("rigid_wall_position must be finite or None")
+        self.rigid_wall_position = (
+            None if rigid_wall_position is None else float(rigid_wall_position)
+        )
 
         valid_sample_types = {
             "all_time_steps",
@@ -380,15 +389,13 @@ class CrashBaseDataset:
         for rec in point_data:
             # Coordinates
             if "coords" not in rec:
-                raise KeyError(f"Missing coordinates key 'coords' in reader record")
+                raise KeyError("Missing coordinates key 'coords' in reader record")
             coords_np = rec["coords"][:num_steps]
-            assert coords_np.ndim == 3 and coords_np.shape[-1] == 3, (
-                f"coords must be [T,N,3], got {coords_np.shape}"
-            )
+            if not (coords_np.ndim == 3 and coords_np.shape[-1] == 3):
+                raise ValueError(f"coords must be [T,N,3], got {coords_np.shape}")
             self.mesh_pos_seq.append(torch.as_tensor(coords_np, dtype=torch.float32))
             if (
                 self.contact_surface_exclusion == "reference_geodesic"
-                or self.penetration_loss_metadata
                 or self.local_knn_k is not None
             ):
                 # Freeze physical INITIAL geometry before normalization. Neither
@@ -444,9 +451,10 @@ class CrashBaseDataset:
                 if len(parts) > 0
                 else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
             )
-            assert feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1], (
-                f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
-            )
+            if not (feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1]):
+                raise ValueError(
+                    f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
+                )
 
             # build slice map on first record to make future slicing trivial
             if len(self._feature_slices) == 0:
@@ -534,11 +542,13 @@ class CrashBaseDataset:
             - 'features': [N, F] concatenated (static + flattened dynamic)
         y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
-        assert 0 <= batch_idx < self.num_samples, f"batch_idx {batch_idx} out of range"
+        if not (0 <= batch_idx < self.num_samples):
+            raise ValueError(f"batch_idx {batch_idx} out of range")
         if time_idx is not None:
-            assert 0 <= time_idx < self.num_steps - 1, (
-                f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
-            )
+            if not (0 <= time_idx < self.num_steps - 1):
+                raise ValueError(
+                    f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
+                )
         pos_seq = self.mesh_pos_seq[batch_idx]  # [T,N,3]
         feats = self.node_features_data[batch_idx]  # [N,F]
         T, N, _ = pos_seq.shape
@@ -603,21 +613,25 @@ class CrashBaseDataset:
             y = y[:, time_idx]
 
             Fo = y.shape[-1]
-            assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
-                f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
-            )
-            assert y.shape == (N, Fo), (
-                f"target shape {y.shape} does not match expected (N={N}, Fo={Fo})"
-            )
+            if not (x["coords"].shape == (N, 3) and x["features"].shape == (N, F)):
+                raise ValueError(
+                    f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+                )
+            if not (y.shape == (N, Fo)):
+                raise ValueError(
+                    f"target shape {y.shape} does not match expected (N={N}, Fo={Fo})"
+                )
 
         else:
             T_out, Fo = y.shape[1], y.shape[2]
-            assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
-                f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
-            )
-            assert y.shape == (N, T_out, Fo), (
-                f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
-            )
+            if not (x["coords"].shape == (N, 3) and x["features"].shape == (N, F)):
+                raise ValueError(
+                    f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+                )
+            if not (y.shape == (N, T_out, Fo)):
+                raise ValueError(
+                    f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
+                )
         return x, y
 
     def _window_generator(self, sample_idx):
@@ -685,7 +699,8 @@ class CrashBaseDataset:
         # If no features, return empty stats compatible with normalization branch
         fdim = self.node_features_data[0].shape[1]
         for t in self.node_features_data:
-            assert t.shape[1] == fdim, f"Feature dim mismatch: {t.shape[1]} vs {fdim}"
+            if not (t.shape[1] == fdim):
+                raise ValueError(f"Feature dim mismatch: {t.shape[1]} vs {fdim}")
 
         if fdim == 0:
             mu = torch.zeros(0, dtype=torch.float32)
@@ -745,9 +760,10 @@ class CrashBaseDataset:
         invar: torch.Tensor, mu: torch.Tensor, std: torch.Tensor
     ):
         # invar: [T,N,3], mu/std: [3]
-        assert invar.shape[-1] == mu.shape[-1] == std.shape[-1] == 3, (
-            f"Expected last dim=3, got {invar.shape[-1]} / {mu.shape} / {std.shape}"
-        )
+        if not (invar.shape[-1] == mu.shape[-1] == std.shape[-1] == 3):
+            raise ValueError(
+                f"Expected last dim=3, got {invar.shape[-1]} / {mu.shape} / {std.shape}"
+            )
         return (invar - mu.view(1, 1, -1)) / (std.view(1, 1, -1) + EPS)
 
     @staticmethod
@@ -797,10 +813,11 @@ class CrashBaseDataset:
         N = series[0].shape[0]
         C = series[0].shape[1]
         for x in series:
-            assert x.shape[0] == N and x.shape[1] == C, (
-                f"Inconsistent shapes in dynamic feature '{key}': "
-                f"expected (N={N},C={C}), got {x.shape}"
-            )
+            if not (x.shape[0] == N and x.shape[1] == C):
+                raise ValueError(
+                    f"Inconsistent shapes in dynamic feature '{key}': "
+                    f"expected (N={N},C={C}), got {x.shape}"
+                )
         # Stack to [T', N, C]
         arr = np.stack(series, axis=0)
         Tprime = arr.shape[0]
@@ -886,10 +903,10 @@ class CrashGraphDataset(CrashBaseDataset):
             pos0 = self.mesh_pos_seq[i][0]
             g = self.add_edge_features(g, pos0)
             g.shell_thickness = self.shell_thickness_data[i]
-            if self.penetration_loss_metadata:
-                # Loss-only metadata, never a model input. Freeze the actual
-                # initial physical assembly, not the sampled window start.
-                g.penetration_reference_positions = self.contact_reference_positions[i]
+            if self.rigid_wall_position is not None:
+                g.rigid_wall = torch.tensor(
+                    [self.rigid_wall_position], dtype=torch.float32
+                )
             if self.contact_surface:
                 from surface_topology import (
                     SurfaceContactData,
@@ -976,7 +993,8 @@ class CrashGraphDataset(CrashBaseDataset):
                 ) / (self.knn_edge_stats["knn_edge_std"].view(1, 1, -1) + EPS)
 
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        if not (0 <= idx < self._max_idx):
+            raise ValueError(f"Index {idx} out of range")
         batch_idx, time_idx = self._resolve_idx(idx)
         g = self.graphs[batch_idx]
         x, y = self.build_xy(batch_idx, time_idx, sample_idx=idx)
@@ -1123,9 +1141,10 @@ class CrashGraphDataset(CrashBaseDataset):
 
     @staticmethod
     def _normalize_edge(edge_x: torch.Tensor, mu: torch.Tensor, std: torch.Tensor):
-        assert edge_x.shape[-1] == mu.shape[-1] == std.shape[-1], (
-            f"Edge feature dim mismatch: {edge_x.shape[-1]} vs {mu.shape[-1]} / {std.shape[-1]}"
-        )
+        if not (edge_x.shape[-1] == mu.shape[-1] == std.shape[-1]):
+            raise ValueError(
+                f"Edge feature dim mismatch: {edge_x.shape[-1]} vs {mu.shape[-1]} / {std.shape[-1]}"
+            )
         return (edge_x - mu.view(1, -1)) / (std.view(1, -1) + EPS)
 
 
@@ -1142,7 +1161,8 @@ class CrashPointCloudDataset(CrashBaseDataset):
         self.edge_stats: dict[str, Any] = {}
 
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        if not (0 <= idx < self._max_idx):
+            raise ValueError(f"Index {idx} out of range")
         batch_idx, time_idx = self._resolve_idx(idx)
         x, y = self.build_xy(batch_idx, time_idx, sample_idx=idx)
         gf = self._normalized_global_features(batch_idx)

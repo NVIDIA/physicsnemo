@@ -14,13 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Distributed training loop of the crash recipes.
+
+``Trainer`` builds the datasets, the model and the optimizer from a Hydra
+recipe, runs one optimizer step per ``SimSample`` and validates with the pooled
+normalized MSE; ``yaris_full_trainer.YarisFullTrainer`` extends it with the
+exact full-mesh validation of the Yaris recipes. Every model family is served
+through the same ``model(sample=..., data_stats=...)`` call: one-shot models
+return ``[N, T, F]``, autoregressive models an ``AutoregressiveRolloutOutput``,
+time-conditional models one frame ``[N, 3]`` in training (a
+``TimeConditionalOutput`` with the provisional position when asked) and the
+trajectory ``[N, T, 3]`` in evaluation.
+"""
+
 import logging
 import math
 import os
 import random
 import sys
 import time
-from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -46,16 +58,16 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 _tabulate = OptionalImport("tabulate")
 _torchinfo = OptionalImport("torchinfo")
 
-# Import unified datapipe and utils
 from data_startup import initialize_datasets
 from datapipe import SimSample, simsample_collate
+from losses import PositionLoss, increment_loss
 from omegaconf import open_dict
 from training_state import (
     configure_deterministic_training,
     gather_rng_states,
     restore_rank_rng,
 )
-from utils import build_muon_optimizer
+from utils import build_muon_optimizer, load_warm_start
 
 
 def execution_end_epoch(
@@ -211,11 +223,59 @@ def resolve_trainer_class(path: str | None):
     return trainer_class
 
 
+def _warmup_cosine_factor(warmup_epochs, epochs, start_lr, end_lr):
+    """Per-epoch multiplier for LambdaLR: 1 during the warmup epochs (the
+    per-step linear rise is applied by the trainer), then the cosine from
+    ``start_lr`` to ``end_lr`` over the remaining epochs, reaching ``end_lr``
+    after the last one exactly like CosineAnnealingLR(T_max=epochs)."""
+    span = max(1, epochs - warmup_epochs)
+
+    def factor(epoch):
+        if epoch < warmup_epochs:
+            return 1.0
+        progress = min(1.0, (epoch - warmup_epochs) / span)
+        lr = end_lr + (start_lr - end_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        return lr / start_lr
+
+    return factor
+
+
+def trainable_parameters(model):
+    """The parameters an optimizer should update: a frozen teacher's are skipped."""
+    return [
+        parameter
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
+
+
 class Trainer:
-    """Trainer for crash simulation models with unified SimSample input."""
+    """Trainer for crash simulation models with unified SimSample input.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        The composed Hydra recipe (``reader``, ``datapipe``, ``model``,
+        ``training``, ``inference``).
+    logger0 : RankZeroLoggingWrapper
+        Logger that prints on rank zero.
+
+    Training options read from ``cfg.training`` beyond the defaults of
+    ``conf/training/default.yaml``: ``loss`` / ``loss_space`` / ``loss_scale_mm``
+    (:class:`losses.PositionLoss`), ``coarse_loss_weight`` (provisional head of
+    the time-conditional DeFormer), ``increment_loss_weight`` (frame pairs),
+    ``acceleration_loss_weight`` and ``teacher_forcing_schedule`` (autoregressive
+    models), ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
+    run's weights), ``manual_gradient_allreduce``, ``reproducible_sampling`` /
+    ``sampler_seed``, ``deterministic``, ``early_stopping_*``,
+    ``max_epochs_this_run`` and ``memory_diagnostics``.
+    """
 
     def __init__(self, cfg: DictConfig, logger0: RankZeroLoggingWrapper):
-        assert DistributedManager.is_initialized()
+        if not DistributedManager.is_initialized():
+            raise RuntimeError(
+                "DistributedManager must be initialized before the trainer"
+            )
         self.dist = DistributedManager()
         self.cfg = cfg
         initial_history_steps = int(cfg.datapipe.get("initial_history_steps", 1))
@@ -265,25 +325,14 @@ class Trainer:
         self.coarse_loss_weight = float(cfg.training.get("coarse_loss_weight", 0.0))
         if self.coarse_loss_weight < 0.0:
             raise ValueError("training.coarse_loss_weight cannot be negative")
-        self.penetration_cfg = cfg.training.get("penetration_loss")
-        if self.penetration_cfg is not None:
-            from penetration_loss import penetration_weight
-
-            penetration_weight(
-                0,
-                **{
-                    key: self.penetration_cfg[key]
-                    for key in ("max_weight", "warmup_epochs", "ramp_epochs")
-                },
-            )
-            if not (
-                cfg.datapipe.get("penetration_loss_metadata", False)
-                or cfg.datapipe.get("contact_surface", False)
-            ):
-                raise ValueError(
-                    "penetration loss requires datapipe.penetration_loss_metadata "
-                    "(or datapipe.contact_surface on the Yaris time-conditional path)"
-                )
+        # Loss on the change between the two frames of a frame-pair sample
+        # (datapipe.frame_pairs): the predicted increment against the true one,
+        # with the position loss's kind and millimetre scale (losses.increment_loss).
+        self.increment_loss_weight = float(
+            cfg.training.get("increment_loss_weight", 0.0)
+        )
+        if self.increment_loss_weight < 0.0:
+            raise ValueError("training.increment_loss_weight cannot be negative")
 
         # --- Consistency check between model and datapipe ---
         model_name = cfg.model._target_
@@ -293,6 +342,7 @@ class Trainer:
             "MeshTransolver",
             "MeshGeoTransolver",
             "MeshGeoFLARE",
+            "ResidualTimeConditional",
         )
         is_graph_model = any(marker in model_name for marker in graph_model_markers)
 
@@ -301,10 +351,13 @@ class Trainer:
                 f"Model {model_name} requires a graph datapipe, "
                 f"but you selected {datapipe_name}."
             )
+        # The Yaris full-mesh dataset serves point models too: they read the
+        # coordinates, features and time label and ignore its graph.
         if (
             not is_graph_model
             and "Transolver" in model_name
             and "PointCloudDataset" not in datapipe_name
+            and "YarisFull" not in datapipe_name
         ):
             raise ValueError(
                 f"Model {model_name} requires a point-cloud datapipe, "
@@ -358,6 +411,17 @@ class Trainer:
                 )
             return training, validation
 
+        # A corrector recipe names the frozen network's checkpoint; a wrong path
+        # fails here, before the datasets start, not minutes later.
+        if "teacher_weights" in cfg.model and not omegaconf.OmegaConf.is_missing(
+            cfg.model, "teacher_weights"
+        ):
+            teacher_weights = str(cfg.model.teacher_weights)
+            if not os.path.isfile(teacher_weights):
+                raise FileNotFoundError(
+                    f"model.teacher_weights={teacher_weights} does not exist; it must "
+                    "be the trained network's .mdlus file"
+                )
         # Includes validation warmup: no rank may reach model NCCL broadcasts
         # while another is still building static masks on the CPU.
         dataset, val_dataset = initialize_datasets(
@@ -458,21 +522,11 @@ class Trainer:
         if warm_start:
             # Fresh run initialised from another run's weights; a resumed run's
             # own checkpoint (loaded below) takes precedence.
-            from utils import load_warm_start
-
             report = load_warm_start(
                 self.model,
                 warm_start,
                 allowed_missing_prefixes=tuple(
-                    cfg.training.get(
-                        "warm_start_allow_missing",
-                        [
-                            "refinement_contact_block.",
-                            "wall_contact.",
-                            "coarse_feedback.",
-                            "global_motion_head.",
-                        ],
-                    )
+                    cfg.training.get("warm_start_allow_missing", [])
                 ),
             )
             logger0.info(
@@ -485,7 +539,10 @@ class Trainer:
         # Log model summary and parameter count (optional: torchinfo)
         if self.dist.rank == 0:
             num_params = sum(p.numel() for p in self.model.parameters())
-            logger0.info(f"Model parameters: {num_params:,}")
+            num_trainable = sum(p.numel() for p in trainable_parameters(self.model))
+            logger0.info(
+                f"Model parameters: {num_params:,} ({num_trainable:,} trainable)"
+            )
             if _torchinfo.available:
                 try:
                     logger0.info(f"\n{_torchinfo.summary(self.model, verbose=0)}")
@@ -519,7 +576,7 @@ class Trainer:
         self.criterion = torch.nn.MSELoss()
         self._configure_position_loss(cfg)
 
-        # Optimizer (Muon requires PyTorch >= 2.9)
+        # Optimizer (Muon requires PyTorch >= 2.9); frozen parameters are skipped.
         opt_name = cfg.training.get("optimizer", "adam")
         if opt_name not in ["adam", "adamw", "muon"]:
             raise ValueError(f"Unsupported optimizer: {opt_name}")
@@ -527,23 +584,42 @@ class Trainer:
             self.optimizer = build_muon_optimizer(self.model, cfg)
         elif opt_name == "adamw":
             self.optimizer = torch.optim.AdamW(
-                self.model.parameters(),
+                trainable_parameters(self.model),
                 lr=cfg.training.start_lr,
                 weight_decay=cfg.training.optimizer_weight_decay,
                 fused=torch.cuda.is_available(),
             )
         else:
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
+                trainable_parameters(self.model),
                 lr=cfg.training.start_lr,
                 fused=torch.cuda.is_available(),
             )
         logger0.info(f"Using {self.optimizer.__class__.__name__} optimizer")
 
-        # Scheduler
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=cfg.training.epochs, eta_min=cfg.training.end_lr
-        )
+        # Scheduler: cosine per epoch; with training.lr_warmup_epochs > 0 the
+        # learning rate first rises linearly per optimizer step over those epochs
+        # (applied in train()), then the cosine runs over the remaining epochs.
+        self.lr_warmup_epochs = int(cfg.training.get("lr_warmup_epochs", 0))
+        if not 0 <= self.lr_warmup_epochs < int(cfg.training.epochs):
+            raise ValueError(
+                "training.lr_warmup_epochs must be non-negative and below training.epochs"
+            )
+        self._lr_warmup_progress = (-1, 0)  # (epoch, optimizer steps seen in it)
+        if self.lr_warmup_epochs == 0:
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=cfg.training.epochs, eta_min=cfg.training.end_lr
+            )
+        else:
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self.optimizer,
+                _warmup_cosine_factor(
+                    self.lr_warmup_epochs,
+                    int(cfg.training.epochs),
+                    float(cfg.training.start_lr),
+                    float(cfg.training.end_lr),
+                ),
+            )
         self.scaler = GradScaler(
             "cuda", enabled=self.amp and self.amp_dtype == torch.float16
         )
@@ -562,36 +638,6 @@ class Trainer:
             device=self.dist.device,
             metadata_dict=self.checkpoint_metadata,
         )
-        self._setup_ema(cfg)
-        # Concrete dropout (learned per-layer rates in the FLARE blocks when
-        # model.concrete_dropout=true): entropy regulariser weight.
-        self.concrete_dropout_lambda = float(
-            cfg.training.get("concrete_dropout_lambda", 0.0)
-        )
-        if self.concrete_dropout_lambda < 0:
-            raise ValueError("training.concrete_dropout_lambda cannot be negative")
-        # Stochastic node subsets for the supervised position loss (training only).
-        self.loss_node_fraction = float(cfg.training.get("loss_node_fraction", 1.0))
-        if not 0.0 < self.loss_node_fraction <= 1.0:
-            raise ValueError("training.loss_node_fraction must be in (0, 1]")
-        self.penetration_signature = (
-            None
-            if self.penetration_cfg is None
-            else {
-                "version": "initial-pair-allowance-node-max-v1",
-                "config": omegaconf.OmegaConf.to_container(
-                    self.penetration_cfg, resolve=True
-                ),
-            }
-        )
-        if (
-            self.epoch_init
-            and self.checkpoint_metadata.get("penetration_loss")
-            != self.penetration_signature
-        ):
-            raise ValueError(
-                "Penetration-loss settings differ from the resumed checkpoint"
-            )
 
         if self.dist.rank == 0:
             self.writer = SummaryWriter(log_dir=cfg.training.tensorboard_log_dir)
@@ -622,7 +668,6 @@ class Trainer:
                     states, self.dist.rank, self.dist.world_size, self.loader_generators
                 )
 
-    # ----- exponential moving average of the weights -----
     def _unwrapped_model(self):
         return (
             self.model.module
@@ -630,184 +675,70 @@ class Trainer:
             else self.model
         )
 
-    def _setup_ema(self, cfg):
-        """``training.ema_decay`` > 0 keeps an EMA copy used for validation.
-
-        The copy lives next to the model, is updated after every optimizer
-        step with a warm-up on the decay, is saved as ``ema/<Class>.0.<E>.mdlus``
-        next to the checkpoints and restored from there on resume (otherwise
-        it restarts from the loaded weights).
-        """
-        self.ema_decay = float(cfg.training.get("ema_decay", 0.0))
-        self.ema_model = None
-        self.ema_updates = 0
-        if not 0.0 <= self.ema_decay < 1.0:
-            raise ValueError("training.ema_decay must be in [0, 1)")
-        if self.ema_decay == 0.0:
-            return
-        source = self._unwrapped_model()
-        self.ema_model = deepcopy(source).to(self.dist.device)
-        self.ema_model.requires_grad_(False)
-        self.ema_model.eval()
-        path = self._ema_path(cfg.training.ckpt_path, self.epoch_init)
-        if self.epoch_init > 0 and path.exists():
-            from utils import load_warm_start
-
-            load_warm_start(self.ema_model, path, allowed_missing_prefixes=())
-            self.ema_updates = self.epoch_init * max(1, len(self.dataloader))
-        self.ema_source_epochs = self.epoch_init
-
-    @staticmethod
-    def _ema_path(ckpt_path, epoch):
-        from pathlib import Path
-
-        return Path(ckpt_path) / "ema" / f"MeshGeoFLARETimeConditional.0.{epoch}.mdlus"
-
-    @torch.no_grad()
-    def _update_ema(self):
-        if self.ema_model is None:
-            return
-        self.ema_updates += 1
-        decay = min(
-            self.ema_decay, (1.0 + self.ema_updates) / (10.0 + self.ema_updates)
-        )
-        source = self._unwrapped_model()
-        for target, value in zip(self.ema_model.parameters(), source.parameters()):
-            if target.is_floating_point():
-                target.lerp_(value.detach().to(target.dtype), 1.0 - decay)
-            else:
-                target.copy_(value)
-        for target, value in zip(self.ema_model.buffers(), source.buffers()):
-            target.copy_(value)
-
-    @contextmanager
-    def ema_weights(self):
-        """Temporarily put the EMA weights into the trained model (no-op without EMA)."""
-        if self.ema_model is None:
-            yield
-            return
-        source = self._unwrapped_model()
-        with torch.no_grad():
-            backup = [p.detach().clone() for p in source.parameters()]
-            backup_buffers = [b.detach().clone() for b in source.buffers()]
-            for target, value in zip(source.parameters(), self.ema_model.parameters()):
-                target.copy_(value)
-            for target, value in zip(source.buffers(), self.ema_model.buffers()):
-                target.copy_(value)
-        try:
-            yield
-        finally:
-            with torch.no_grad():
-                for target, value in zip(source.parameters(), backup):
-                    target.copy_(value)
-                for target, value in zip(source.buffers(), backup_buffers):
-                    target.copy_(value)
-
-    def save_ema(self, epoch):
-        """Rank zero writes the EMA weights for ``epoch`` (1-based) next to the checkpoints."""
-        if self.ema_model is None or self.dist.rank != 0:
-            return
-        path = self._ema_path(self.cfg.training.ckpt_path, epoch)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.ema_model.save(str(path))
-
     def _configure_position_loss(self, cfg):
-        """training.loss / loss_space / frame_weighting / edge_loss_weight options."""
-        from losses import FrameWeighter, PositionLoss
-
-        pos_std = self.data_stats["node"].get("pos_std")
+        """``training.loss`` / ``loss_space`` / ``loss_scale_mm``."""
         self.position_loss = PositionLoss(
             kind=cfg.training.get("loss", "mse"),
             space=cfg.training.get("loss_space", "normalized"),
             scale_mm=float(cfg.training.get("loss_scale_mm", 10.0)),
-            huber_delta_mm=float(cfg.training.get("huber_delta_mm", 3.0)),
-            pos_std=pos_std,
+            pos_std=self.data_stats["node"].get("pos_std"),
         )
-        weighting = cfg.training.get("frame_weighting", "none")
-        if weighting not in ("none", "ema"):
-            raise ValueError("training.frame_weighting must be 'none' or 'ema'")
-        self.frame_weighter = (
-            FrameWeighter(
-                self.rollout_steps,
-                float(cfg.training.get("frame_weighting_ema", 0.99)),
-            )
-            if weighting == "ema"
-            else None
-        )
-        self.edge_loss_weight = float(cfg.training.get("edge_loss_weight", 0.0))
-        if self.edge_loss_weight < 0.0:
-            raise ValueError("training.edge_loss_weight cannot be negative")
+
+    def _loss_reference(self, sample):
+        """The frame the position targets are displacements from, for the
+        relative L2 loss: ``node_features["coords"]`` (the undeformed mesh for a
+        time-conditional sample, the current frame for a rollout). ``None`` for
+        the other loss kinds, which do not use it."""
+        if self.position_loss.kind != "relative_l2":
+            return None
+        features = getattr(sample, "node_features", None)
+        coords = features.get("coords") if features is not None else None
+        if coords is None:
+            raise ValueError("training.loss=relative_l2 needs node_features['coords']")
+        return coords
 
     def _supervised_position_loss(self, prediction, target, sample):
-        """Position loss with the configured kind, space and frame weighting."""
-        if self.model.training and self.loss_node_fraction < 1.0:
-            keep = (
-                torch.rand(prediction.shape[0], device=prediction.device)
-                < self.loss_node_fraction
-            )
-            if bool(keep.any()):
-                prediction, target = prediction[keep], target[keep]
-        if self.frame_weighter is None:
-            return self.position_loss(prediction, target)
-        from losses import frame_indices
-
-        frames = frame_indices(sample, target, self.rollout_steps)
-        return self.frame_weighter.apply(
-            frames, self.position_loss.per_frame(prediction, target)
+        """Position loss with the configured kind and space."""
+        return self.position_loss(
+            prediction, target, reference=self._loss_reference(sample)
         )
 
-    def _edge_term(self, prediction, target, sample):
-        if self.edge_loss_weight <= 0.0:
+    def _increment_term(self, prediction, target):
+        """Weighted increment loss of a frame pair, ``None`` when the weight is 0."""
+        if self.increment_loss_weight <= 0.0:
             return None
-        from losses import edge_consistency_loss
-
-        graph = getattr(sample, "graph", None)
-        index = getattr(graph, "knn_index", None)
-        mask = getattr(graph, "knn_mask", None)
-        if index is None or mask is None:
-            raise ValueError(
-                "training.edge_loss_weight needs graph.knn_index/knn_mask (kNN datapipe)"
-            )
-        return self.edge_loss_weight * edge_consistency_loss(
-            prediction,
-            target,
-            index,
-            mask,
-            self.position_loss.pos_std
-            if self.position_loss.space == "physical"
-            else None,
-            self.position_loss.scale_mm,
+        return self.increment_loss_weight * increment_loss(
+            self.position_loss, prediction, target
         )
+
+    def _apply_lr_warmup(self, epoch: int) -> None:
+        """Linear per-step warmup to each group's base rate during the first
+        ``lr_warmup_epochs`` epochs; the epoch scheduler takes over afterwards."""
+        if self.lr_warmup_epochs <= 0 or epoch >= self.lr_warmup_epochs:
+            return
+        steps_per_epoch = max(1, len(self.dataloader))
+        last_epoch, seen = self._lr_warmup_progress
+        seen = seen + 1 if last_epoch == epoch else 1
+        self._lr_warmup_progress = (epoch, seen)
+        scale = min(
+            1.0,
+            (epoch * steps_per_epoch + seen)
+            / (self.lr_warmup_epochs * steps_per_epoch),
+        )
+        for group in self.optimizer.param_groups:
+            group["lr"] = group["initial_lr"] * scale
 
     def train(self, sample: SimSample, epoch: int = 0):
-        """Run the configured training budget with validation and restart checkpoints."""
+        """One optimizer step on ``sample``; returns the detached loss."""
         self.optimizer.zero_grad()
+        self._apply_lr_warmup(epoch)
         loss = self.forward(sample, epoch)
-        loss = self._add_concrete_dropout_term(loss)
         self.backward(loss)
         return loss.detach()
 
-    def _add_concrete_dropout_term(self, loss):
-        if self.concrete_dropout_lambda <= 0:
-            return loss
-        from physicsnemo.nn import collect_concrete_dropout_losses
-
-        term = collect_concrete_dropout_losses(self._unwrapped_model())
-        if not term.requires_grad:
-            return loss
-        term = term.to(loss.device, loss.dtype)
-        self.last_loss_components["concrete_dropout"] = term.detach()
-        return loss + self.concrete_dropout_lambda * term
-
-    def concrete_dropout_rates(self):
-        """Learned dropout probabilities per ConcreteDropout module (empty if none)."""
-        from physicsnemo.nn import get_concrete_dropout_rates
-
-        return get_concrete_dropout_rates(self._unwrapped_model())
-
     def forward(self, sample: SimSample, epoch: int = 0):
+        """The training loss of one sample (every model family)."""
         with autocast(device_type="cuda", enabled=self.amp, dtype=self.amp_dtype):
-            # Model forward - returns [N, T, Fo]
             model_kwargs = {}
             if self.teacher_forcing_schedule is not None:
                 model_kwargs["teacher_forcing_probability"] = (
@@ -818,26 +749,27 @@ class Trainer:
             model_output = self.model(
                 sample=sample, data_stats=self.data_stats, **model_kwargs
             )
-
-            # Target is [N, T, Fo]
             target = sample.node_target
             if hasattr(model_output, "coarse_prediction"):
+                # Time-conditional model: final position plus the provisional head.
                 prediction_loss = self._supervised_position_loss(
                     model_output.prediction, target, sample
                 )
-                coarse_loss = self.position_loss(model_output.coarse_prediction, target)
+                coarse_loss = self.position_loss(
+                    model_output.coarse_prediction,
+                    target,
+                    reference=self._loss_reference(sample),
+                )
                 self.last_loss_components = {
                     "trajectory": prediction_loss.detach(),
                     "coarse": coarse_loss.detach(),
                 }
                 total = prediction_loss + self.coarse_loss_weight * coarse_loss
-                edge = self._edge_term(model_output.prediction, target, sample)
-                if edge is not None:
-                    self.last_loss_components["edge"] = edge.detach()
-                    total = total + edge
-                return self.add_penetration_loss(
-                    total, model_output.prediction, sample, epoch
-                )
+                increment = self._increment_term(model_output.prediction, target)
+                if increment is not None:
+                    self.last_loss_components["increment"] = increment.detach()
+                    total = total + increment
+                return total
             is_autoregressive_output = all(
                 hasattr(model_output, field)
                 for field in (
@@ -863,13 +795,7 @@ class Trainer:
                     "trajectory": trajectory_loss.detach(),
                     "acceleration": acceleration_loss.detach(),
                 }
-                edge = self._edge_term(model_output.trajectory, target, sample)
-                if edge is not None:
-                    self.last_loss_components["edge"] = edge.detach()
-                    total_loss = total_loss + edge
-                return self.add_penetration_loss(
-                    total_loss, model_output.trajectory, sample, epoch
-                )
+                return total_loss
             if self.acceleration_loss_weight > 0.0:
                 raise TypeError(
                     "Acceleration loss requires an autoregressive model that returns "
@@ -879,60 +805,14 @@ class Trainer:
                 model_output, target, sample
             )
             self.last_loss_components = {"trajectory": trajectory_loss.detach()}
-            edge = self._edge_term(model_output, target, sample)
-            if edge is not None:
-                self.last_loss_components["edge"] = edge.detach()
-                trajectory_loss = trajectory_loss + edge
-            return self.add_penetration_loss(
-                trajectory_loss, model_output, sample, epoch
-            )
-
-    def add_penetration_loss(self, base_loss, trajectory, sample, epoch):
-        if self.penetration_cfg is None:
-            return base_loss
-        from penetration_loss import penetration_weight, rollout_penetration_loss
-
-        weight = penetration_weight(
-            epoch,
-            **{
-                key: self.penetration_cfg[key]
-                for key in ("max_weight", "warmup_epochs", "ramp_epochs")
-            },
-        )
-        self.last_loss_components["penetration_weight"] = base_loss.new_tensor(weight)
-        if weight == 0:
-            return base_loss
-        if trajectory.ndim == 2:
-            # One predicted frame (time-conditional model): the model's own
-            # crossing-aware penalty on its surface-contact search.
-            model = (
-                self.model.module
-                if isinstance(self.model, DistributedDataParallel)
-                else self.model
-            )
-            penalty_fn = getattr(model, "penetration_penalty", None)
-            if penalty_fn is None:
-                raise TypeError(
-                    "penetration loss on a single predicted frame needs a model "
-                    "with penetration_penalty (the time-conditional DeFormer)"
-                )
-            penalty, diagnostics = penalty_fn(
-                trajectory,
-                sample,
-                self.data_stats,
-                tolerance_mm=float(self.penetration_cfg["tolerance_mm"]),
-                length_scale_mm=float(self.penetration_cfg["length_scale_mm"]),
-            )
-        else:
-            penalty, diagnostics = rollout_penetration_loss(
-                trajectory, sample.graph, self.data_stats, self.penetration_cfg
-            )
-        self.last_loss_components.update(diagnostics)
-        self.last_loss_components["penetration"] = penalty.detach()
-        self.last_loss_components["penetration_weighted"] = weight * penalty.detach()
-        return base_loss + weight * penalty
+            increment = self._increment_term(model_output, target)
+            if increment is not None:
+                self.last_loss_components["increment"] = increment.detach()
+                trajectory_loss = trajectory_loss + increment
+            return trajectory_loss
 
     def backward(self, loss):
+        """Backward pass, gradient averaging and the optimizer step."""
         if self.scaler.is_enabled():
             self.scaler.scale(loss).backward()
             if self.manual_gradient_allreduce:
@@ -949,11 +829,10 @@ class Trainer:
                     torch.cuda.empty_cache()
                 average_model_gradients(self.model, self.dist.world_size)
             self.optimizer.step()
-        self._update_ema()
 
     @torch.no_grad()
     def validate(self, epoch):
-        """Run validation error computation"""
+        """Pooled normalized MSE over the validation loader (per time step and channel)."""
         self.model.eval()
 
         MSE = torch.zeros(1, device=self.dist.device)
@@ -1136,17 +1015,7 @@ def main(cfg: DictConfig) -> None:
             cfg.training.num_validation_samples > 0
             and (epoch + 1) % cfg.training.validation_freq == 0
         ):
-            with trainer.ema_weights():
-                val_stats = trainer.validate(epoch)
-            rates = trainer.concrete_dropout_rates()
-            if rates:
-                logger0.info(
-                    f"Validation epoch {epoch + 1}: concrete dropout rates "
-                    + ", ".join(f"{name}={rate:.3f}" for name, rate in rates.items())
-                )
-                if getattr(trainer, "writer", None) is not None:
-                    for name, rate in rates.items():
-                        trainer.writer.add_scalar(f"dropout_rates/{name}", rate, epoch)
+            val_stats = trainer.validate(epoch)
 
             # Log validation metrics
             mse_val = val_stats["MSE"].item()
@@ -1225,8 +1094,6 @@ def main(cfg: DictConfig) -> None:
                     "stale_evaluations": early_stopping.stale_evaluations,
                 },
             }
-            if trainer.penetration_signature is not None:
-                metadata["penetration_loss"] = trainer.penetration_signature
             if dist.rank == 0:
                 save_checkpoint(
                     cfg.training.ckpt_path,
@@ -1237,7 +1104,6 @@ def main(cfg: DictConfig) -> None:
                     epoch=epoch + 1,
                     metadata=metadata,
                 )
-                trainer.save_ema(epoch + 1)
                 logger.info(f"Saved model on rank {dist.rank}")
         if should_stop:
             break

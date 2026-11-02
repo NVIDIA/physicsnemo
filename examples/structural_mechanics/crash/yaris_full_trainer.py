@@ -32,6 +32,7 @@ from pathlib import Path
 import torch
 from datapipe import EPS, simsample_collate
 from hydra.utils import instantiate
+from penetration_metrics import PenetrationMetrics
 from torch.utils.data import DataLoader, Sampler
 from train import Trainer
 from yaris_full import atomic_json
@@ -56,174 +57,6 @@ class ExactShardSampler(Sampler):
         return len(range(self.rank, self.length, self.replicas))
 
 
-class PenetrationProbe:
-    """Crossing-aware contact statistics of predicted and true frames.
-
-    Validation diagnostic: one ``SurfaceContactGraphBuilder`` with the reference
-    side test and a reference clearance runs on every frame in physical
-    millimetres, so only new contact counts and a node that passed through a
-    shell reports its crossing depth. Per node the deepest
-    ``relu(-gap - tolerance_mm)`` is kept. ``totals[step, 0 | 1, :]`` accumulate,
-    for the prediction (0) and the target (1): crossed pairs, penetrating nodes,
-    summed node depth (mm) and the maximum node depth (mm). Any failure disables
-    the probe and zeroes its totals: a diagnostic never fails validation.
-    """
-
-    COLUMNS = ("crossed_pairs", "penetrating_nodes", "depth_sum_mm", "depth_max_mm")
-
-    def __init__(self, cfg, rollout_steps, device, logger=None):
-        from physicsnemo.experimental.models.meshtransolver.surface_contact import (
-            SurfaceContactGraphBuilder,
-        )
-
-        cfg = dict(cfg or {})
-        self.tolerance = float(cfg.get("tolerance_mm", 0.5))
-        if not math.isfinite(self.tolerance) or self.tolerance < 0:
-            raise ValueError("validation_penetration.tolerance_mm must be >= 0")
-        self.builder = SurfaceContactGraphBuilder(
-            activation_distance=float(cfg.get("activation_distance_mm", 5.0)),
-            feature_scale=float(cfg.get("feature_scale_mm", 10.0)),
-            normal_epsilon=0.1,
-            include_velocity=False,
-            implementation=str(cfg.get("implementation", "warp")),
-            max_pairs=int(cfg.get("max_pairs", 60_000_000)),
-            material_fan=True,
-            side_from_reference=True,
-            reference_clearance=float(cfg.get("reference_clearance_mm", 10.0)),
-        )
-        self.totals = torch.zeros(
-            (int(rollout_steps), 2, 4), dtype=torch.float64, device=device
-        )
-        self.logger = logger
-        self.disabled = False
-
-    def settings(self):
-        return dict(
-            tolerance_mm=self.tolerance,
-            activation_distance_mm=self.builder.activation_distance,
-            reference_clearance_mm=self.builder.reference_clearance,
-            side_from_reference=True,
-        )
-
-    def frame(self, positions, reference, thickness, graph):
-        """[4] float64: crossed pairs, penetrating nodes, depth sum, depth max."""
-        contact = self.builder(
-            positions,
-            faces=graph.contact_faces,
-            shell_thickness=thickness,
-            excluded_pairs=graph.contact_surface_exclusions,
-            reference_positions=reference,
-        )
-        gap = contact.edge_features[:, 4] * self.builder.feature_scale
-        depth = (-gap - self.tolerance).clamp_min(0.0)
-        node_depth = positions.new_zeros(positions.shape[0]).scatter_reduce(
-            0, contact.edge_index[1], depth, reduce="amax", include_self=True
-        )
-        stats = self.builder.last_discovery_stats or {}
-        crossed = positions.new_tensor(float(stats.get("crossed_pairs", 0)))
-        return torch.stack(
-            (
-                crossed,
-                (node_depth > 0).sum().to(positions.dtype),
-                node_depth.sum(),
-                node_depth.max() if node_depth.numel() else positions.new_zeros(()),
-            )
-        ).double()
-
-    def _disable(self, reason):
-        self.disabled = True
-        self.totals.zero_()
-        if self.logger is not None:
-            self.logger.warning(f"Penetration probe disabled: {reason}")
-
-    def accumulate(self, prediction, target, sample, data_stats):
-        """Add every step of one case; ``prediction``/``target`` are [N, T, 3]."""
-        if self.disabled:
-            return
-        graph = sample.graph
-        if any(
-            getattr(graph, name, None) is None
-            for name in (
-                "contact_faces",
-                "contact_surface_exclusions",
-                "shell_thickness",
-            )
-        ):
-            self._disable("graph has no contact faces (datapipe.contact_surface=false)")
-            return
-        try:
-            with torch.autocast(device_type=prediction.device.type, enabled=False):
-                std = data_stats["node"]["pos_std"].reshape(1, 3).to(prediction.device)
-                mean = (
-                    data_stats["node"]["pos_mean"].reshape(1, 3).to(prediction.device)
-                )
-                std, mean = std.float(), mean.float()
-                reference = sample.node_features["coords"].float() * std + mean
-                thickness = graph.shell_thickness.to(
-                    device=prediction.device, dtype=torch.float32
-                ).reshape(-1)
-                for step in range(int(prediction.shape[1])):
-                    for which, frames in ((0, prediction), (1, target)):
-                        row = self.frame(
-                            frames[:, step].float() * std + mean,
-                            reference,
-                            thickness,
-                            graph,
-                        )
-                        self.totals[step, which, :3] += row[:3]
-                        self.totals[step, which, 3] = torch.maximum(
-                            self.totals[step, which, 3], row[3]
-                        )
-        except Exception as error:  # noqa: BLE001 - diagnostic only
-            self._disable(f"{type(error).__name__}: {error}")
-
-    def reduce(self, world_size):
-        if world_size > 1:
-            sums = self.totals[..., :3].contiguous()
-            maxima = self.totals[..., 3].contiguous()
-            flag = torch.tensor(
-                [1.0 if self.disabled else 0.0], device=self.totals.device
-            )
-            torch.distributed.all_reduce(sums)
-            torch.distributed.all_reduce(maxima, op=torch.distributed.ReduceOp.MAX)
-            torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX)
-            self.totals = torch.cat((sums, maxima.unsqueeze(-1)), dim=-1)
-            self.disabled = bool(flag.item() > 0)
-
-    def summary(self, nodes_w_time):
-        """JSON-ready statistics per step and pooled, for prediction and target."""
-        horizon = int(nodes_w_time.numel())
-        totals = self.totals[:horizon].cpu()
-        nodes = nodes_w_time.cpu().double()
-        out = dict(self.settings(), complete=not self.disabled)
-        for which, name in ((0, "prediction"), (1, "target")):
-            t = totals[:, which]
-            out[name] = dict(
-                crossed_pairs_per_time=t[:, 0].tolist(),
-                penetrating_nodes_per_time=t[:, 1].tolist(),
-                mean_depth_mm_per_time=(t[:, 2] / nodes.clamp_min(1)).tolist(),
-                max_depth_mm_per_time=t[:, 3].tolist(),
-                crossed_pairs=float(t[:, 0].sum()),
-                penetrating_node_fraction=float(
-                    t[:, 1].sum() / nodes.sum().clamp_min(1)
-                ),
-                mean_depth_mm=float(t[:, 2].sum() / nodes.sum().clamp_min(1)),
-                max_depth_mm=float(t[:, 3].max()) if horizon else 0.0,
-            )
-        return out
-
-    def log_line(self, summary):
-        parts = []
-        for name in ("prediction", "target"):
-            s = summary[name]
-            parts.append(
-                f"{name}: crossed {s['crossed_pairs']:.0f}, penetrating "
-                f"{100 * s['penetrating_node_fraction']:.3f}% of nodes, mean depth "
-                f"{s['mean_depth_mm']:.4f} mm, max {s['max_depth_mm']:.2f} mm"
-            )
-        return " | ".join(parts) + ("" if summary["complete"] else " (INCOMPLETE)")
-
-
 def accumulate_validation(
     model,
     loader,
@@ -235,6 +68,8 @@ def accumulate_validation(
     probe=None,
     node_errors=None,
     regions=None,
+    per_case=None,
+    kinematics=None,
 ):
     """Sum squared errors per rollout step over this rank's held-out cases.
 
@@ -242,13 +77,15 @@ def accumulate_validation(
     columns 0-2 hold the summed squared normalized error per channel, column 3
     the number of nodes contributing at that step, column 4 the summed squared
     physical error (mm^2, all three channels), plus the list of case names seen.
-    An optional :class:`PenetrationProbe` accumulates its own statistics, and an
+    An optional :class:`penetration_metrics.PenetrationMetrics` accumulates its own statistics, and an
     optional ``node_errors`` tensor ``[N, 2]`` (float64) accumulates per node the
     summed squared physical error (mm^2, all channels) and the frame count.
     Optional ``regions`` = ``(masks [R, N] bool, totals [T, R, 6] float64)``
     accumulates per region and step the squared norm of the frame-mean error
     (its translational part), that mean's squared x/y/z components, the mean
-    squared error and the frame count, all in mm.
+    squared error and the frame count, all in mm. Optional ``per_case`` (a list)
+    receives one record per held-out case: its name, kept-node count and the
+    summed squared physical error per step (mm^2), for the per-case breakdown.
     """
     totals = torch.zeros((int(rollout_steps), 5), dtype=torch.float64, device=device)
     pos_std = data_stats["node"]["pos_std"].reshape(1, 1, 3).to(device)
@@ -265,30 +102,6 @@ def accumulate_validation(
             prediction = model(sample=sample, data_stats=data_stats)
             if hasattr(prediction, "trajectory"):
                 prediction = prediction.trajectory
-            extra = getattr(sample, "delta_references", None)
-            if extra:
-                # Delta-to-reference: average the predictions obtained from
-                # every selected training reference (features + baseline).
-                keep = (
-                    sample.node_features["features"],
-                    sample.node_features.get("baseline_all"),
-                )
-                total = prediction.float()
-                try:
-                    for paired, displacement in extra:
-                        sample.node_features["features"] = paired.to(device)
-                        sample.node_features["baseline_all"] = displacement.to(device)
-                        more = model(sample=sample, data_stats=data_stats)
-                        if hasattr(more, "trajectory"):
-                            more = more.trajectory
-                        total = total + more.float()
-                finally:
-                    sample.node_features["features"] = keep[0]
-                    if keep[1] is None:
-                        sample.node_features.pop("baseline_all", None)
-                    else:
-                        sample.node_features["baseline_all"] = keep[1]
-                prediction = total / (1 + len(extra))
         target = sample.node_target
         if prediction.shape != target.shape or target.shape[-1] != 3:
             raise ValueError(
@@ -300,17 +113,29 @@ def accumulate_validation(
             raise ValueError(
                 f"Case has {steps} target steps but rollout_steps={totals.shape[0]}"
             )
+        if kinematics is not None:
+            # Temporal smoothness and per-part kinematics (kinematics_readout.py).
+            kinematics.accumulate(prediction, target, sample, data_stats)
         error = (prediction.float() - target.float()).double()  # [N, T, 3]
+        physical_sq = torch.square(error * pos_std.double()).sum(dim=(0, 2))  # [T]
         totals[:steps, :3] += torch.square(error).sum(dim=0)
         totals[:steps, 3] += float(target.shape[0])
-        totals[:steps, 4] += torch.square(error * pos_std.double()).sum(dim=(0, 2))
+        totals[:steps, 4] += physical_sq
+        if per_case is not None:
+            per_case.append(
+                {
+                    "case": seen[-1],
+                    "nodes": int(target.shape[0]),
+                    "sum_sq_mm_per_time": physical_sq.cpu().tolist(),
+                }
+            )
         if probe is not None:
             probe.accumulate(prediction, target, sample, data_stats)
         if node_errors is not None:
             node_errors[:, 0] += torch.square(error * pos_std.double()).sum(dim=(1, 2))
             node_errors[:, 1] += float(steps)
         if regions is not None:
-            masks, region_totals, per_case = regions
+            masks, region_totals, region_cases = regions
             physical = error * pos_std.double()  # [N, T, 3]
             case_means = []
             for r in range(masks.shape[0]):
@@ -324,7 +149,7 @@ def accumulate_validation(
                 region_totals[:steps, r, 4] += part.square().sum(-1).mean(dim=0)
                 region_totals[:steps, r, 5] += 1.0
                 case_means.append(mean.cpu().tolist())
-            per_case.append({"case": seen[-1], "mean_error_mm": case_means})
+            region_cases.append({"case": seen[-1], "mean_error_mm": case_means})
     return totals, seen
 
 
@@ -353,6 +178,23 @@ def summarize_validation(totals):
         vector_RMSE_mm_w_time=physical_rmse_time,
         nodes_w_time=totals[:, 3],
     )
+
+
+def summarize_cases(records):
+    """Per-case vector RMSE (mm), pooled over each case's steps, sorted by name."""
+    summary = []
+    for record in sorted(records, key=lambda r: r["case"]):
+        sums = torch.as_tensor(record["sum_sq_mm_per_time"], dtype=torch.float64)
+        nodes = float(record["nodes"])
+        summary.append(
+            dict(
+                case=record["case"],
+                steps=int(sums.numel()),
+                vector_RMSE_mm=float(torch.sqrt(sums.sum() / (nodes * sums.numel()))),
+                vector_RMSE_mm_per_time=torch.sqrt(sums / nodes).tolist(),
+            )
+        )
+    return summary
 
 
 class YarisFullTrainer(Trainer):
@@ -384,6 +226,12 @@ class YarisFullTrainer(Trainer):
         self.penetration_probe_cfg = cfg.training.get("validation_penetration")
         self.validation_node_errors = bool(
             cfg.training.get("validation_node_errors", False)
+        )
+        # Temporal smoothness and per-part kinematic readouts of the validated
+        # trajectories (kinematics_readout.py), written under `kinematics` in
+        # the validation JSON with the part trajectories in a .npz next to it.
+        self.validation_kinematics = bool(
+            cfg.training.get("validation_kinematics", False)
         )
         # Reference-x bounds splitting the mesh into regions (rear, ..., front)
         # for the translational-error breakdown written with the node errors.
@@ -431,13 +279,16 @@ class YarisFullTrainer(Trainer):
         masks, totals, per_case = regions
         totals = totals[:horizon].cpu()
         bounds = [-float("inf"), *self.validation_region_bounds, float("inf")]
+        names = [f"x_{lo:g}_to_{hi:g}" for lo, hi in zip(bounds[:-1], bounds[1:])] + [
+            "all"
+        ]
         out = {"per_case_mean_error_mm": sorted(per_case, key=lambda r: r["case"])}
         for r in range(masks.shape[0]):
             t = totals[:, r]
             frames = t[:, 5].clamp_min(1.0)
             mse = t[:, 4].sum() / frames.sum()
             mean2 = t[:, 0].sum() / frames.sum()
-            out[f"x_{bounds[r]:g}_to_{bounds[r + 1]:g}"] = dict(
+            out[names[r]] = dict(
                 nodes=int(masks[r].sum()),
                 rmse_mm=float(mse.sqrt()),
                 translational_rmse_mm=float(mean2.sqrt()),
@@ -450,8 +301,31 @@ class YarisFullTrainer(Trainer):
             )
         return out
 
+    def _kinematics_readout(self):
+        """The per-part kinematics accumulator for this validation, or None."""
+        if not self.validation_kinematics:
+            return None
+        import numpy as np
+        from kinematics_readout import KinematicsReadout
+
+        dataset = self.validation_dataset
+        ids = dataset.reader.part_ids(dataset.reader.open(dataset.paths[0]))
+        part_ids, inverse = np.unique(ids, return_inverse=True)
+        part_index = torch.from_numpy(inverse.astype(np.int64).reshape(-1))
+        return KinematicsReadout(
+            part_index,
+            part_ids,
+            torch.from_numpy(np.asarray(dataset.reader.reference, dtype=np.float64)),
+            dataset.reader.dt,
+            self.validation_region_bounds,
+            int(self.rollout_steps),
+            self.dist.device,
+            logger=self.logger0,
+        )
+
     def _save_node_errors(self, epoch, node_errors):
-        """Per-node RMSE (mm) over every validated frame, plus node metadata once."""
+        """Per-node RMSE (mm) over every validated frame, plus node metadata once.
+        Returns the percentile summary of the node RMSE for the validation JSON."""
         import numpy as np
 
         self.validation_dir.mkdir(parents=True, exist_ok=True)
@@ -459,6 +333,23 @@ class YarisFullTrainer(Trainer):
         np.save(
             self.validation_dir / f"node_rmse_epoch_{epoch + 1:04d}.npy",
             rmse.cpu().numpy().astype(np.float32),
+        )
+        values = rmse.double()
+        sq = values.square()
+        order = torch.argsort(sq, descending=True)
+        total = float(sq.sum()) or 1.0
+        worst = {}
+        for frac in (0.01, 0.10):
+            k = max(1, int(frac * values.numel()))
+            worst[f"worst_{int(frac * 100)}pct_share"] = float(
+                sq[order[:k]].sum() / total
+            )
+        percentiles = dict(
+            p50=float(values.quantile(0.5)),
+            p90=float(values.quantile(0.9)),
+            p99=float(values.quantile(0.99)),
+            max=float(values.max()),
+            **worst,
         )
         meta = self.validation_dir / "node_meta.npz"
         if not meta.exists():
@@ -481,6 +372,7 @@ class YarisFullTrainer(Trainer):
                     )
                 ),
             )
+        return percentiles
 
     @torch.no_grad()
     def validate(self, epoch):
@@ -493,12 +385,14 @@ class YarisFullTrainer(Trainer):
         if self.penetration_probe_cfg is not None and bool(
             self.penetration_probe_cfg.get("enabled", False)
         ):
-            probe = PenetrationProbe(
+            probe = PenetrationMetrics(
                 self.penetration_probe_cfg,
                 self.rollout_steps,
                 self.dist.device,
                 logger=self.logger0,
+                region_bounds=self.validation_region_bounds,
             )
+        kinematics = self._kinematics_readout()
         node_errors = None
         regions = None
         if self.validation_node_errors:
@@ -511,8 +405,11 @@ class YarisFullTrainer(Trainer):
                 self.validation_dataset.reader.reference[:, 0], device=self.dist.device
             )
             bounds = [-float("inf"), *self.validation_region_bounds, float("inf")]
+            # The x regions plus the whole mesh last: its translational share is
+            # the part of the error one rigid translation per frame would remove.
             masks = torch.stack(
                 [(x >= lo) & (x < hi) for lo, hi in zip(bounds[:-1], bounds[1:])]
+                + [torch.ones_like(x, dtype=torch.bool)]
             )
             regions = (
                 masks,
@@ -523,6 +420,7 @@ class YarisFullTrainer(Trainer):
                 ),
                 [],
             )
+        case_records = []
         try:
             totals, seen = accumulate_validation(
                 self.model,
@@ -535,9 +433,13 @@ class YarisFullTrainer(Trainer):
                 probe=probe,
                 node_errors=node_errors,
                 regions=regions,
+                per_case=case_records,
+                kinematics=kinematics,
             )
             if probe is not None:
                 probe.reduce(self.dist.world_size)
+            if kinematics is not None:
+                kinematics.reduce(self.dist.world_size)
             if node_errors is not None and self.dist.world_size > 1:
                 torch.distributed.all_reduce(node_errors)
                 torch.distributed.all_reduce(regions[1])
@@ -553,12 +455,27 @@ class YarisFullTrainer(Trainer):
                 gathered = [None] * self.dist.world_size
                 torch.distributed.all_gather_object(gathered, seen)
                 seen = [case for cases in gathered for case in cases]
+                gathered_records = [None] * self.dist.world_size
+                torch.distributed.all_gather_object(gathered_records, case_records)
+                case_records = [r for records in gathered_records for r in records]
             expected = sorted(path.stem for path in self.validation_dataset.paths)
             if sorted(seen) != expected:
                 raise RuntimeError("Validation must cover every CSV case exactly once")
             if not torch.isfinite(totals).all():
                 raise ValueError("Non-finite validation accumulation")
             stats = summarize_validation(totals)
+            per_case = summarize_cases(case_records)
+            ranked = sorted(per_case, key=lambda r: r["vector_RMSE_mm"], reverse=True)
+            self.logger0.info(
+                f"Validation epoch {epoch + 1}: per-case RMSE mm worst "
+                + ", ".join(
+                    f"{r['case']} {r['vector_RMSE_mm']:.3f}" for r in ranked[:3]
+                )
+                + " | best "
+                + ", ".join(
+                    f"{r['case']} {r['vector_RMSE_mm']:.3f}" for r in ranked[-3:]
+                )
+            )
             penetration = (
                 None if probe is None else probe.summary(stats["nodes_w_time"])
             )
@@ -572,17 +489,35 @@ class YarisFullTrainer(Trainer):
                 if regions is None
                 else self._region_summary(regions, stats["nodes_w_time"].numel())
             )
+            kinematics_summary = None if kinematics is None else kinematics.summary()
+            if kinematics_summary is not None:
+                self.logger0.info(
+                    f"Validation epoch {epoch + 1}: kinematics "
+                    + kinematics.log_line(kinematics_summary)
+                )
+                if self.dist.rank == 0:
+                    self.validation_dir.mkdir(parents=True, exist_ok=True)
+                    kinematics.save(
+                        self.validation_dir / f"kinematics_epoch_{epoch + 1:04d}.npz"
+                    )
+            node_percentiles = None
             if self.dist.rank == 0 and node_errors is not None:
-                self._save_node_errors(epoch, node_errors)
+                node_percentiles = self._save_node_errors(epoch, node_errors)
             if self.dist.rank == 0:
                 reader = self.validation_dataset.reader
                 dt_ms = reader.dt * 1000.0
+                # The targets start `history` frames after the first observed one.
+                history = int(
+                    getattr(self.validation_dataset, "initial_history_steps", 1)
+                )
                 horizon = int(stats["nodes_w_time"].numel())
                 atomic_json(
                     self.validation_dir / f"epoch_{epoch + 1:04d}.json",
                     dict(
                         penetration=penetration,
                         regions=region_summary,
+                        kinematics=kinematics_summary,
+                        node_error_percentiles=node_percentiles,
                         epoch=epoch + 1,
                         cases=sorted(seen),
                         kept_nodes=int(self.validation_dataset.num_nodes),
@@ -596,8 +531,9 @@ class YarisFullTrainer(Trainer):
                         MSE_per_time=stats["MSE_w_time"].tolist(),
                         vector_RMSE_mm=stats["vector_RMSE_mm"].item(),
                         vector_RMSE_mm_per_time=stats["vector_RMSE_mm_w_time"].tolist(),
-                        target_time_ms=[(t + 2) * dt_ms for t in range(horizon)],
+                        target_time_ms=[(t + history) * dt_ms for t in range(horizon)],
                         nodes_per_time=stats["nodes_w_time"].tolist(),
+                        per_case=per_case,
                         pos_std_mm=(self.data_stats["node"]["pos_std"] + EPS)
                         .reshape(-1)
                         .tolist(),

@@ -36,11 +36,17 @@ num_training_samples: ???       # Required: set via experiment config
 num_validation_samples: 0       # 0 disables validation; override per experiment
 start_lr: 0.0001
 end_lr: 0.0000003
+# linear per-step warmup to start_lr over this many epochs before the cosine
+lr_warmup_epochs: 0
 epochs: 10000
 validation_freq: 10
 save_checkpoint_freq: 10
 early_stopping_patience: 0      # Validation evaluations; 0 disables early stopping
 early_stopping_min_delta: 0.0   # Required absolute validation-MSE improvement
+increment_loss_weight: 0.0      # Loss on the change between consecutive frames (datapipe.frame_pairs); 0 disables it
+validation_region_bounds: [-2000.0, -1000.0]  # Reference-x bounds (mm) of the per-region readouts
+restore_rng: true               # Restore the checkpoint's RNG states on resume (false after a GPU-count change)
+data_startup_timeout_seconds: 3600  # Collective timeout while rank 0 prepares statistics and caches at startup
 
 # ┌───────────────────────────────────────────┐
 # │        Performance Optimization           │

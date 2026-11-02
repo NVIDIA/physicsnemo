@@ -13,73 +13,44 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Score a Yaris time-conditional checkpoint with the exact held-out validation
-and the crossing-aware penetration statistics of predictions and ground truth.
+"""Score a Yaris checkpoint with the exact held-out validation suite.
 
-Runs inside the training environment, sharded over GPUs like training::
+Runs the validation of :class:`yaris_full_trainer.YarisFullTrainer` on a
+trained checkpoint, inside the training environment and sharded over GPUs
+like training: pooled and per-frame vector RMSE in millimetres, per-case and
+per-region breakdowns, the target-relative penetration statistics of the
+prediction and the ground truth (shell surface and, with
+``datapipe.rigid_wall_position``, the rigid wall), optionally node-error maps
+and the kinematics readout::
 
     torchrun --standalone --nproc_per_node=4 evaluate_yaris_tc.py \\
-        --config-name crash_deformer_knn_yaris_tc_loss_physical \\
+        --config-name yaris_deformer \\
         yaris.data_root=... yaris.split_manifest=... yaris.outlier_mask=... \\
         yaris.work_dir=... training.ckpt_path=<run>/checkpoints \\
         +training.validation_output_dir=<out> hydra.run.dir=<out> \\
-        datapipe.contact_surface=true [+training.load_epoch=30]
-
-A prediction ensemble averages several weight files of the same
-architecture: ``+training.ensemble_models=[a.mdlus,b.mdlus,c.mdlus]`` (the
-run's own checkpoint directory may then be empty).
+        datapipe.contact_surface=true [+training.load_epoch=30] \\
+        [+training.validation_node_errors=true +training.validation_kinematics=true]
 
 The run's own validation records are untouched: the JSON goes to
 ``<out>/epoch_<E>.json`` where ``E`` is the loaded checkpoint's epoch.
 ``datapipe.contact_surface=true`` gives contact-free models the shell facets the
-probe needs; such models ignore them.
+penetration metrics need; such models ignore them. For the corrector recipe pass
+``model.teacher_weights=<teacher .mdlus>`` as in training.
 """
 
-import copy
 from pathlib import Path
 
 import hydra
-import torch
 from omegaconf import DictConfig, open_dict
-from torch import nn
 from train import resolve_trainer_class
-from utils import load_warm_start
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
-class PredictionEnsemble(nn.Module):
-    """Average the predictions of several copies of one model architecture.
-
-    ``weights`` are ``.mdlus`` (or state-dict ``.pt``) files; each is loaded
-    into a deep copy of ``template`` with :func:`load_warm_start` (strict on
-    unexpected tensors). Evaluation only: outputs must be tensors.
-    """
-
-    def __init__(self, template: nn.Module, weights: list[str]):
-        super().__init__()
-        template = getattr(template, "module", template)
-        members = []
-        for path in weights:
-            member = copy.deepcopy(template)
-            load_warm_start(member, path, allowed_missing_prefixes=())
-            members.append(member.eval())
-        self.members = nn.ModuleList(members)
-
-    def forward(self, *args, **kwargs):
-        outputs = [member(*args, **kwargs) for member in self.members]
-        if not all(isinstance(out, torch.Tensor) for out in outputs):
-            raise TypeError("PredictionEnsemble averages tensor outputs only")
-        return torch.stack(outputs).mean(dim=0)
-
-
-@hydra.main(
-    version_base="1.3",
-    config_path="conf",
-    config_name="crash_deformer_knn_yaris_tc_loss_physical",
-)
+@hydra.main(version_base="1.3", config_path="conf", config_name="yaris_deformer")
 def main(cfg: DictConfig) -> None:
+    """Evaluate the checkpoint of ``training.ckpt_path`` and write the record."""
     DistributedManager.initialize()
     dist = DistributedManager()
     logger0 = RankZeroLoggingWrapper(PythonLogger("evaluate"), dist)
@@ -98,20 +69,14 @@ def main(cfg: DictConfig) -> None:
         # Weights only: the run's RNG checkpoint belongs to its own world size.
         cfg.training.restore_rng = False
     trainer = resolve_trainer_class(cfg.training.get("trainer_class"))(cfg, logger0)
-    members = cfg.training.get("ensemble_models")
-    if members:
-        # Prediction ensemble: every listed weight file becomes a copy of the
-        # configured model; their outputs are averaged in evaluation mode.
-        trainer.model = PredictionEnsemble(trainer.model, list(members)).to(dist.device)
-        logger0.info(f"Prediction ensemble of {len(members)} models")
-    elif trainer.epoch_init <= 0 and not cfg.training.get("warm_start_model"):
+    if trainer.epoch_init <= 0 and not cfg.training.get("warm_start_model"):
         raise RuntimeError(f"No checkpoint found under {cfg.training.ckpt_path}")
     logger0.info(
         f"Evaluating epoch {trainer.epoch_init} of {cfg.training.ckpt_path} "
         f"on {dist.world_size} rank(s); records under {output_dir}"
     )
-    # A warm-started evaluation (checkpoint soup, external weights) has no
-    # training checkpoint; its record is written as epoch 0.
+    # A warm-started evaluation (external weights) has no training checkpoint;
+    # its record is written as epoch 0.
     stats = trainer.validate(max(trainer.epoch_init - 1, -1))
     logger0.info(
         f"Validation epoch {trainer.epoch_init}: MSE: {stats['MSE'].item():.6f}"

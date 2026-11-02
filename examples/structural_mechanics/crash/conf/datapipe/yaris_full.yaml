@@ -29,29 +29,21 @@ static_features: [thickness]
 dynamic_features: []
 dynamic_targets: []
 global_features: null
+# static reference kNN neighbourhoods of the local attention (built once, cached)
 local_knn_k: ${model.local_knn_k}
 local_knn_metric: ${model.local_neighborhood}
-local_knn_cache_dir: ${yaris.work_dir}/local_knn_cache
-design_variables: false     # 8 thickness-group deviations (+ known flag) as a global token
-contact_surface: false      # shell facets, physical thickness and one-ring exclusions on the graph
-rigid_wall_position: null   # analytic rigid wall plane (Yaris: x = 100 mm)
-# second feature column: node thickness minus its mean over the training cases,
-# over the fleet deviation scale (mesh-derived design signal; model.functional_dim +1)
-thickness_deviation: false
-# design mixup on training samples: blend two cases at the same future frame with
-# lambda ~ Beta(alpha, alpha) (features, design token, target); 0 disables
-mixup_alpha: 0.0
-mixup_prob: 0.5
-# output baseline: training-mean normalized displacement per future frame (prepared
-# by yaris_full_prepare.py); the model adds it to its prediction
-mean_displacement_baseline: false
-# delta-to-reference: pair every sample with a training design at the same frame
-# (features of both, the reference's displacement as output baseline); validation
-# averages over the nearest delta_val_references training designs
-delta_reference: false
-delta_val_references: 3
-delta_train_nearest_prob: 0.5
-delta_train_nearest_k: 5
-# per-part design tokens: reference centroid, log size and per-part means of the
-# node feature columns, under global_features['parts'] (needs nodes/part_id)
-part_tokens: false
+local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
+# shell facets, nodal thickness and one-ring exclusions on the graph, for the
+# contact search of the corrector and the penetration metrics
+contact_surface: false
+# structural shell connectivity in both directions with its standardized
+# reference features (graph.mesh_edge_index / mesh_edge_attr / mesh_edge_mean /
+# mesh_edge_std), for the MeshGraphNet corrector; edge_index itself is unchanged
+mesh_edges: false
+# frame pairs (one_time_step training samples): the target holds two consecutive
+# future frames [N, 2, 3] (k and k+1; the last frame pairs backwards) under the
+# earlier frame's time label, for training.increment_loss_weight
+frame_pairs: false
+# analytic rigid wall plane x = position in mm (Yaris barrier: 100), for the
+# wall clamp and the wall penetration metrics
+rigid_wall_position: null
