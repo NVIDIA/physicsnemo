@@ -36,3 +36,13 @@ datapipe:
   local_knn_k: ${model.local_knn_k}
   local_knn_metric: ${model.local_neighborhood}
   local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
+
+model:
+  # body-in-white meshes: geodesic neighbourhoods on the structural edges, no activation
+  # checkpointing (one forward per update fits without it), no fixed frame interval
+  local_neighborhood: geodesic
+  dt: null
+  activation_checkpointing: false
+  activation_checkpointing_components: [blocks]
+  num_pre_processor_checkpoint_segments: 0
+  num_post_processor_checkpoint_segments: 0
