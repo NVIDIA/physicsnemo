@@ -191,6 +191,7 @@ def _activation_gaps(
     pairs: wp.array2d(dtype=wp.int64),
     horizon: float,
     band: float,
+    sweep_band: float,
     gaps: wp.array(dtype=float),
     uncertain: wp.array(dtype=wp.bool),
 ):
@@ -265,23 +266,33 @@ def _activation_gaps(
     tolerance = (
         256.0
         * 1.1920928955078125e-7
-        * (1.0 + coordinate_scale + thickness_scale + band)
+        * (1.0 + coordinate_scale + thickness_scale + wp.max(band, sweep_band))
     )
     gaps[tid] = gap
+    # The crossing sweep (sweep_band > band) has a second membership boundary;
+    # with sweep_band == band this is the original single-boundary condition.
     uncertain[tid] = (
-        ambiguous or not wp.isfinite(gap) or wp.abs(gap - band) <= tolerance
+        ambiguous
+        or not wp.isfinite(gap)
+        or wp.abs(gap - band) <= tolerance
+        or wp.abs(gap - sweep_band) <= tolerance
     )
 
 
 @torch.no_grad()
 def fused_activation_gaps(
-    positions, velocities, thickness, faces, pairs, horizon, band
+    positions, velocities, thickness, faces, pairs, horizon, band, sweep_band=None
 ):
     """Return detached gaps and a reference-recompute mask on the Torch stream.
 
     Caller validates physical FP32 inputs/connectivity. This is ONLY discrete
     membership acceleration: do not use these outputs as learned edge features.
+    ``sweep_band`` (default ``band``) is the crossing sweep's outer membership
+    boundary; pairs numerically near either boundary are marked for the
+    reference recompute.
     """
+    if sweep_band is None:
+        sweep_band = band
     if positions.dtype != torch.float32 or not positions.is_cuda:
         raise ValueError("fused membership requires CUDA float32 geometry")
     if pairs.shape[1] == 0:
@@ -315,6 +326,7 @@ def fused_activation_gaps(
                 wp.from_torch(pairs.contiguous()),
                 float(horizon),
                 float(band),
+                float(sweep_band),
                 wp.from_torch(gaps),
                 wp.from_torch(uncertain),
             ],

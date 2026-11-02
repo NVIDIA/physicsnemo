@@ -98,7 +98,30 @@ class SurfaceContactGraphBuilder(nn.Module):
     side test is discrete (no gradient) and inconclusive (unsigned) within a
     thousandth of the distance of the facet plane or on a degenerate facet.
     Crossings deeper than the activation band are not discovered, like any far
-    pair.
+    pair, unless ``crossing_radius`` is set.
+
+    ``side_symmetric=True`` asks the reference configuration for the same
+    interior projection as the current one before a crossing is declared: a
+    node that was beside the facet (closest point on an edge or a vertex) in
+    the reference and lies under its interior now has slid under the edge,
+    not passed through the shell, and stays an ordinary pair with its unsigned
+    gap. The default keeps the one-sided test above.
+
+    ``crossing_radius`` (physical length, larger than the activation band)
+    adds a crossing sweep: the broad phase is padded to it, and a candidate
+    whose unsigned activation gap lies between the band and the radius is
+    kept only when the side test certifies a crossing. Such a pair is fully
+    active like every crossing; approaching pairs beyond the band are still
+    excluded, so the sweep lifts the depth ceiling ``band + half thickness``
+    without widening the approach neighbourhood. Membership certification is
+    detached; live geometry is recomputed as for every pair.
+
+    ``clearance_approach_only=True`` applies ``reference_clearance`` to
+    approaching pairs only: a certified crossing of two panels that were
+    assembled within the clearance is kept, since a shell passing through a
+    neighbouring shell is new contact whatever their assembled distance. It
+    has no effect without a clearance. All three corrections need
+    ``side_from_reference``.
 
     ``reference_clearance`` (physical length) drops active pairs whose
     activation gap in the reference configuration is below it: in-plane
@@ -127,6 +150,9 @@ class SurfaceContactGraphBuilder(nn.Module):
         reference_area=None,
         side_from_reference=False,
         reference_clearance=None,
+        side_symmetric=False,
+        crossing_radius=None,
+        clearance_approach_only=False,
     ):
         super().__init__()
         for name, value in (
@@ -181,6 +207,24 @@ class SurfaceContactGraphBuilder(nn.Module):
         self.reference_clearance = (
             None if reference_clearance is None else float(reference_clearance)
         )
+        self.side_symmetric = bool(side_symmetric)
+        if self.side_symmetric and not self.side_from_reference:
+            raise ValueError("side_symmetric needs side_from_reference=True")
+        if crossing_radius is not None:
+            if not math.isfinite(crossing_radius) or not (
+                crossing_radius > self.activation_distance
+            ):
+                raise ValueError(
+                    "crossing_radius must be finite and larger than activation_distance"
+                )
+            if not self.side_from_reference:
+                raise ValueError("crossing_radius needs side_from_reference=True")
+            if self.prediction_horizon > 0:
+                raise ValueError("crossing_radius needs prediction_horizon=0")
+        self.crossing_radius = None if crossing_radius is None else float(crossing_radius)
+        self.clearance_approach_only = bool(clearance_approach_only)
+        if self.clearance_approach_only and not self.side_from_reference:
+            raise ValueError("clearance_approach_only needs side_from_reference=True")
 
     def _face_area_quadrature(self, geometry, faces, face_id):
         """Detached center-fan face area over the reference area, per pair."""
@@ -257,7 +301,52 @@ class SurfaceContactGraphBuilder(nn.Module):
             pairs,
             self.prediction_horizon,
             self.activation_distance,
+            self.crossing_radius,
         )
+
+    def _crossed(self, points, projection, reference_points, reference_projection):
+        """Discrete crossing flag of pairs from their current and reference projections."""
+        with torch.no_grad():
+            before = self._facet_side(
+                reference_points,
+                reference_projection.closest,
+                reference_projection.normal,
+                reference_projection.distance,
+                interior_only=self.side_symmetric,
+            )
+            now = self._facet_side(
+                points.detach(),
+                projection.closest.detach(),
+                projection.normal.detach(),
+                projection.distance.detach(),
+                interior_only=True,
+            )
+            return before * now < 0
+
+    def _certify_crossed(self, positions, reference_positions, thickness, faces, pairs):
+        """Detached crossing certification of candidate pairs for membership.
+
+        The same side test as the live stage, on the same detached inputs, so
+        a pair certified here is flagged crossed there too.
+        """
+        query, face_id = pairs
+        source = faces[face_id]
+        with torch.no_grad():
+            projection = closest_point_facet(
+                positions[query],
+                positions[source],
+                triangle_mask=(source[:, 2] == source[:, 3])
+                if faces.shape[1] == 4
+                else None,
+                validate_quads=False,
+                material_fan=self.material_fan,
+            )
+            _, reference_projection = self._reference_projection(
+                reference_positions, thickness, query, source
+            )
+            return self._crossed(
+                positions[query], projection, reference_positions[query], reference_projection
+            )
 
     def _reference_candidate_gaps(self, positions, velocities, thickness, faces, pairs):
         query, face_id = pairs
@@ -427,7 +516,12 @@ class SurfaceContactGraphBuilder(nn.Module):
                                 "unsupported surface quad: overlapping, folded, or degenerate center fan; "
                                 f"{label} facet IDs (first 8): {bad}"
                             )
-        node_pad = thickness * 0.5 + self.activation_distance
+        search_band = (
+            self.activation_distance
+            if self.crossing_radius is None
+            else max(self.activation_distance, self.crossing_radius)
+        )
+        node_pad = thickness * 0.5 + search_band
         face_pad = thickness[faces].amax(1) * 0.5
         search_end = None
         if self.prediction_horizon > 0:
@@ -460,23 +554,65 @@ class SurfaceContactGraphBuilder(nn.Module):
             selected = []
             candidates = active = pages = largest_page = fallback_pairs = 0
             reference_pages = largest_reference_page = 0
-            reference_excluded = 0
+            reference_excluded = sweep_pairs = clearance_crossings_kept = 0
             pending = []
             pending_count = 0
             use_fused = self._use_fused_membership(positions)
 
             def select_active(pair_ids, gaps):
-                nonlocal active, reference_excluded
-                kept = pair_ids[:, gaps < self.activation_distance]
+                nonlocal active, reference_excluded, sweep_pairs
+                nonlocal clearance_crossings_kept
+                near = gaps < self.activation_distance
+                from_sweep = None
+                if self.crossing_radius is not None:
+                    # Crossing sweep: candidates beyond the band but within the
+                    # radius are kept only when certified crossed below.
+                    from_sweep = ~near & (gaps < self.crossing_radius)
+                    keep = near | from_sweep
+                    kept = pair_ids[:, keep]
+                    from_sweep = from_sweep[keep]
+                else:
+                    kept = pair_ids[:, near]
+                passes = None
                 if self.reference_clearance is not None and kept.shape[1]:
                     # Same discrete narrow phase on the reference configuration
                     # (fused kernel where available, Torch reference otherwise).
                     reference_gap, _ = self._candidate_gaps(
                         reference_positions, None, thickness, faces, kept
                     )
-                    new = reference_gap >= self.reference_clearance
-                    reference_excluded += kept.shape[1] - int(new.sum())
-                    kept = kept[:, new]
+                    passes = reference_gap >= self.reference_clearance
+                needs_certificate = None
+                if from_sweep is not None:
+                    needs_certificate = from_sweep
+                if passes is not None and self.clearance_approach_only:
+                    needs_certificate = (
+                        ~passes
+                        if needs_certificate is None
+                        else needs_certificate | ~passes
+                    )
+                if needs_certificate is not None and bool(needs_certificate.any()):
+                    crossed = torch.zeros_like(needs_certificate)
+                    ids = needs_certificate.nonzero().flatten()
+                    crossed[ids] = self._certify_crossed(
+                        positions, reference_positions, thickness, faces, kept[:, ids]
+                    )
+                    accept = torch.ones_like(crossed)
+                    if from_sweep is not None:
+                        accept &= ~from_sweep | crossed
+                        sweep_pairs += int((from_sweep & crossed).sum())
+                    if passes is not None:
+                        exempt = ~passes & crossed if self.clearance_approach_only else None
+                        if exempt is not None:
+                            clearance_crossings_kept += int(exempt.sum())
+                            accept &= passes | exempt
+                            reference_excluded += int((~passes & ~crossed).sum())
+                        else:
+                            accept &= passes
+                            reference_excluded += kept.shape[1] - int(passes.sum())
+                    kept = kept[:, accept]
+                elif passes is not None:
+                    reference_excluded += kept.shape[1] - int(passes.sum())
+                    kept = kept[:, passes]
                 active += kept.shape[1]
                 if active > self.max_pairs:
                     raise RuntimeError(
@@ -553,6 +689,8 @@ class SurfaceContactGraphBuilder(nn.Module):
                 "narrow_phase_reference_pages": reference_pages,
                 "largest_reference_page": largest_reference_page,
                 "reference_excluded_pairs": reference_excluded,
+                "sweep_pairs": sweep_pairs,
+                "clearance_crossings_kept": clearance_crossings_kept,
                 "crossed_pairs": 0,
             }
         projection = closest_point_facet(
@@ -583,20 +721,9 @@ class SurfaceContactGraphBuilder(nn.Module):
                 reference_positions, thickness, query, source_nodes
             )
             with torch.no_grad():
-                before = self._facet_side(
-                    reference_positions[query],
-                    reference_projection.closest,
-                    reference_projection.normal,
-                    reference_projection.distance,
+                crossed = self._crossed(
+                    positions[query], projection, reference_positions[query], reference_projection
                 )
-                now = self._facet_side(
-                    positions[query].detach(),
-                    projection.closest.detach(),
-                    projection.normal.detach(),
-                    projection.distance.detach(),
-                    interior_only=True,
-                )
-                crossed = before * now < 0
                 side = torch.where(crossed, -1.0, 1.0).to(positions.dtype)
             gap = side * projection.distance - half_thickness
             activation_gap = torch.where(crossed, gap, activation_gap)

@@ -26,10 +26,10 @@ from physicsnemo.experimental.models.meshtransolver import (
 from physicsnemo.nn.functional.neighbors.surface_contact import (
     closest_point_facet,
     closest_point_triangle,
-    node_triangle_candidates,
+    node_triangle_candidate_chunks,
     supported_quad_mask,
-    swept_node_triangle_check,
 )
+from physicsnemo.nn.functional.shell_contact import linear_closest_approach
 
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -37,6 +37,13 @@ def device(request):
     if request.param == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     return request.param
+
+
+def candidates(positions, faces, *args, **kwargs):
+    """Collect the exhaustive candidate pages into sorted unique [node, face] pairs."""
+    chunks = list(node_triangle_candidate_chunks(positions, faces, *args, **kwargs))
+    pairs = torch.cat(chunks, 1) if chunks else faces.new_empty((2, 0))
+    return pairs[:, torch.argsort(pairs[0] * len(faces) + pairs[1], stable=True)]
 
 
 def scene(device="cpu", dtype=torch.float32):
@@ -228,12 +235,12 @@ def test_quad_center_fan_and_mixed_triangle(device):
 def test_whole_facet_discovery_incidence_batch_and_exclusions(device, implementation):
     x, f = scene(device)
     # All three vertices are far away from query nodes; a vertex radius misses.
-    pair = node_triangle_candidates(
+    pair = candidates(
         x, f, x.new_full((6,), 0.3), x.new_zeros(1), implementation=implementation
     )
     torch.testing.assert_close(pair, f.new_tensor([[3, 4], [0, 0]]))
     batch = f.new_tensor([0, 0, 0, 1, 0, 0])
-    pair = node_triangle_candidates(
+    pair = candidates(
         x,
         f,
         x.new_full((6,), 0.3),
@@ -242,7 +249,7 @@ def test_whole_facet_discovery_incidence_batch_and_exclusions(device, implementa
         implementation=implementation,
     )
     torch.testing.assert_close(pair, f.new_tensor([[4], [0]]))
-    pair = node_triangle_candidates(
+    pair = candidates(
         x,
         f,
         x.new_full((6,), 0.3),
@@ -261,12 +268,10 @@ def test_dense_all_pairs_no_topk_and_budget(device, implementation):
     x = torch.cat((tri.repeat(40, 1), tri.new_tensor([[0.2, 0.2, 0.05]])))
     f = torch.arange(120, device=device).reshape(-1, 3)
     args = (x, f, x.new_full((121,), 0.1), x.new_zeros(40))
-    pairs = node_triangle_candidates(
-        *args, implementation=implementation, max_pairs=10000
-    )
+    pairs = candidates(*args, implementation=implementation, max_pairs=10000)
     assert (pairs[0] == 120).sum() == 40
     with pytest.raises(RuntimeError, match="no pairs truncated"):
-        node_triangle_candidates(*args, implementation=implementation, max_pairs=20)
+        candidates(*args, implementation=implementation, max_pairs=20)
 
 
 @pytest.mark.parametrize("quad", [False, True])
@@ -278,9 +283,9 @@ def test_warp_torch_candidate_agreement_random(device, quad):
         f = f[:, :3]
     padding = torch.rand(100, device=device) * 0.1
     args = (x, f, padding, padding[: len(f)])
-    expected = node_triangle_candidates(*args, implementation="torch", chunk_size=7)
+    expected = candidates(*args, implementation="torch", chunk_size=7)
     for _ in range(2):
-        actual = node_triangle_candidates(*args, implementation="warp")
+        actual = candidates(*args, implementation="warp")
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 
 
@@ -342,28 +347,14 @@ def test_degenerate_nonfinite_and_empty(device):
     bad = x.clone()
     bad[0, 0] = float("nan")
     with pytest.raises(ValueError, match="finite"):
-        node_triangle_candidates(bad, f, x.new_ones(6), x.new_ones(1))
+        candidates(bad, f, x.new_ones(6), x.new_ones(1))
     result = closest_point_triangle(x[:0], x.new_empty((0, 3, 3)))
     assert result.closest.shape == (0, 3)
     for implementation in ("torch", "warp"):
-        pairs = node_triangle_candidates(
+        pairs = candidates(
             x, f[:0], x.new_ones(6), x.new_empty(0), implementation=implementation
         )
         assert pairs.shape == (2, 0)
-
-
-def test_swept_crossing_separated_and_unresolved(device):
-    x, f = scene(device, torch.float64)
-    tri = x[f].expand(3, -1, -1)
-    p = x.new_tensor([[2, 2, 1], [2, 2, 2], [2, 2, 0.231]])
-    q = x.new_tensor([[2, 2, -1], [2, 2, 3], [2, 2, -0.769]])
-    # Last point crosses away from dyadic samples: zero budget cannot certify it.
-    result = swept_node_triangle_check(p, q, tri, tri, x.new_zeros(3), max_depth=0)
-    assert result.hit.tolist() == [True, False, False]
-    assert result.unresolved.tolist() == [False, False, True]
-    result = swept_node_triangle_check(p, q, tri, tri, x.new_full((3,), 0.01))
-    assert result.hit.tolist() == [True, False, True]
-    assert not result.unresolved.any()
 
 
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
@@ -373,9 +364,9 @@ def test_swept_bounds_recover_crossing_candidates(device, implementation):
     previous = x.clone()
     previous[3, 2] = -1
     args = (x, f, x.new_full((6,), 0.05), x.new_zeros(1))
-    discrete = node_triangle_candidates(*args, implementation=implementation)
+    discrete = candidates(*args, implementation=implementation)
     assert not (discrete[0] == 3).any()
-    swept = node_triangle_candidates(
+    swept = candidates(
         *args, previous_positions=previous, implementation=implementation
     )
     assert (swept[0] == 3).any()
@@ -402,16 +393,6 @@ def test_quad_with_coincident_distinct_vertices_rejected(device):
         builder(x, faces=faces, shell_thickness=x.new_ones(6))
 
 
-def test_sweep_budget_never_certifies_unexamined_intervals(device):
-    x, f = scene(device)
-    p = x.new_tensor([[2, 2, 0.231], [2, 2, 0.317]])
-    q = p.clone()
-    q[:, 2] -= 1
-    tri = x[f].expand(2, -1, -1)
-    result = swept_node_triangle_check(p, q, tri, tri, x.new_zeros(2), max_intervals=1)
-    assert result.unresolved.all() and not result.hit.any()
-
-
 def test_warp_uses_torch_nondefault_cuda_stream():
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
@@ -419,8 +400,8 @@ def test_warp_uses_torch_nondefault_cuda_stream():
     with torch.cuda.stream(stream):
         x, f = scene("cuda")
         args = (x, f, x.new_full((6,), 0.3), x.new_zeros(1))
-        actual = node_triangle_candidates(*args, implementation="warp")
-        expected = node_triangle_candidates(*args, implementation="torch")
+        actual = candidates(*args, implementation="warp")
+        expected = candidates(*args, implementation="torch")
         torch.testing.assert_close(actual, expected)
     stream.synchronize()
 
@@ -464,10 +445,6 @@ def test_predictive_surface_catches_causal_crossing(device, implementation, quad
 
 
 def test_predictive_activation_gradcheck_and_zero_speed(device):
-    from physicsnemo.experimental.models.meshtransolver.surface_contact import (
-        linear_closest_approach,
-    )
-
     r = torch.tensor(
         [[1.0, 2.0, 0.4]], device=device, dtype=torch.float64, requires_grad=True
     )
@@ -691,3 +668,153 @@ def test_reference_clearance_drops_assembly_pairs(device):
     )
     with pytest.raises(ValueError, match="reference_clearance"):
         SurfaceContactGraphBuilder(implementation="torch", reference_clearance=-1.0)
+
+
+def _slide_scene(device):
+    """Node 3 passes through the plate; node 4 was beside it (closest point on
+    the edge x = 0, 1 above the plane) and now lies 1 below its interior."""
+    reference = torch.tensor(
+        [[0, 0, 0], [10, 0, 0], [0, 10, 0], [2, 2, 3.0], [-3, 2, 1.0]], device=device
+    )
+    current = reference.clone()
+    current[3, 2] = -1.0
+    current[4] = current.new_tensor([2.0, 4.0, -1.0])
+    faces = torch.tensor([[0, 1, 2]], device=device)
+    return reference, current, faces
+
+
+def test_side_symmetric_keeps_slid_under_nodes_unsigned(device):
+    reference, current, faces = _slide_scene(device)
+    thickness = reference.new_zeros(5)
+    kwargs = dict(
+        implementation="torch",
+        activation_distance=5.0,
+        include_velocity=False,
+        side_from_reference=True,
+    )
+    one_sided = SurfaceContactGraphBuilder(**kwargs)
+    symmetric = SurfaceContactGraphBuilder(side_symmetric=True, **kwargs)
+    # The corrections are off by default.
+    assert one_sided.side_symmetric is False and one_sided.crossing_radius is None
+    assert one_sided.clearance_approach_only is False
+    old = one_sided(
+        current, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    new = symmetric(
+        current, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    for graph in (old, new):
+        graph.validate(5, 8)
+        torch.testing.assert_close(graph.edge_index[1], faces.new_tensor([3, 4]))
+    # One-sided (today's default): both nodes changed plane side, both are
+    # reported as crossings 1 deep.
+    torch.testing.assert_close(
+        old.edge_features[:, 4], current.new_tensor([-0.1, -0.1])
+    )
+    stats = one_sided.last_discovery_stats
+    assert stats["crossed_pairs"] == 2
+    assert stats["sweep_pairs"] == 0 and stats["clearance_crossings_kept"] == 0
+    # Symmetric: node 4 did not project onto the plate's interior in the
+    # reference, so it is an ordinary pair 1 away; node 3 is still crossed.
+    torch.testing.assert_close(new.edge_features[:, 4], current.new_tensor([-0.1, 0.1]))
+    torch.testing.assert_close(new.edge_features[0], old.edge_features[0])
+    torch.testing.assert_close(new.edge_features[1, :4], old.edge_features[1, :4])
+    torch.testing.assert_close(new.edge_features[1, 5:], -old.edge_features[1, 5:])
+    assert symmetric.last_discovery_stats["crossed_pairs"] == 1
+    assert new.edge_weights[0] == 1.0 and old.edge_weights[1] == 1.0
+    assert new.edge_weights[1] < 1.0
+    with pytest.raises(ValueError, match="side_symmetric"):
+        SurfaceContactGraphBuilder(implementation="torch", side_symmetric=True)
+
+
+def test_crossing_radius_discovers_deep_crossings_only(device):
+    reference = torch.tensor(
+        [[0, 0, 0], [10, 0, 0], [0, 10, 0], [2, 2, 3.0], [3, 2, 3.0], [4, 2, 3.0]],
+        device=device,
+    )
+    current = reference.clone()
+    current[3, 2] = -8.0  # crossed, 8 below: beyond band 5 plus half thickness 0
+    current[4, 2] = 8.0  # approaching from 8 above: beyond the band, no sweep
+    current[5, 2] = -13.0  # crossed beyond the sweep radius
+    faces = torch.tensor([[0, 1, 2]], device=device)
+    thickness = reference.new_zeros(6)
+    kwargs = dict(
+        implementation="torch",
+        activation_distance=5.0,
+        include_velocity=False,
+        side_from_reference=True,
+    )
+    plain = SurfaceContactGraphBuilder(**kwargs)
+    swept = SurfaceContactGraphBuilder(crossing_radius=12.0, **kwargs)
+    current.requires_grad_()
+    empty = plain(
+        current, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    assert empty.edge_index.shape[1] == 0
+    graph = swept(
+        current, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    graph.validate(6, 8)
+    torch.testing.assert_close(graph.edge_index[1], faces.new_tensor([3]))
+    torch.testing.assert_close(graph.edge_features[:, 4], current.new_tensor([-0.8]))
+    assert graph.edge_weights[0] == 1.0
+    stats = swept.last_discovery_stats
+    assert stats["sweep_pairs"] == 1 and stats["crossed_pairs"] == 1
+    assert stats["active_pairs"] == 1
+    graph.edge_features.square().sum().backward()
+    assert torch.isfinite(current.grad).all() and current.grad.abs().sum() > 0
+    for bad in (5.0, 4.0, float("inf")):
+        with pytest.raises(ValueError, match="crossing_radius"):
+            SurfaceContactGraphBuilder(crossing_radius=bad, **kwargs)
+    with pytest.raises(ValueError, match="crossing_radius"):
+        SurfaceContactGraphBuilder(implementation="torch", crossing_radius=12.0)
+
+
+def test_clearance_approach_only_keeps_assembled_crossings(device):
+    # Both nodes were assembled 3 above the plate (reference gap 3 < clearance
+    # 10); node 3 approaches to 1 above, node 4 passes to 1 below.
+    reference, current, faces = _crossing_scene(device)
+    thickness = reference.new_zeros(5)
+    kwargs = dict(
+        implementation="torch",
+        activation_distance=5.0,
+        include_velocity=False,
+        side_from_reference=True,
+        reference_clearance=10.0,
+    )
+    strict = SurfaceContactGraphBuilder(**kwargs)
+    lenient = SurfaceContactGraphBuilder(clearance_approach_only=True, **kwargs)
+    dropped = strict(
+        current, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    assert dropped.edge_index.shape[1] == 0
+    assert strict.last_discovery_stats["reference_excluded_pairs"] == 2
+    graph = lenient(
+        current, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    graph.validate(5, 8)
+    torch.testing.assert_close(graph.edge_index[1], faces.new_tensor([4]))
+    torch.testing.assert_close(graph.edge_features[:, 4], current.new_tensor([-0.1]))
+    stats = lenient.last_discovery_stats
+    assert stats["reference_excluded_pairs"] == 1
+    assert stats["clearance_crossings_kept"] == 1 and stats["crossed_pairs"] == 1
+    # Sweep and exemption together: a deep crossing of an assembled pair.
+    deep = current.clone()
+    deep[4, 2] = -8.0
+    both = SurfaceContactGraphBuilder(
+        crossing_radius=12.0, clearance_approach_only=True, **kwargs
+    )
+    graph = both(
+        deep, faces=faces, shell_thickness=thickness, reference_positions=reference
+    )
+    torch.testing.assert_close(graph.edge_index[1], faces.new_tensor([4]))
+    torch.testing.assert_close(graph.edge_features[:, 4], deep.new_tensor([-0.8]))
+    stats = both.last_discovery_stats
+    assert stats["sweep_pairs"] == 1 and stats["clearance_crossings_kept"] == 1
+    # Without a clearance there is nothing to exempt; the reference side test
+    # is still required.
+    assert SurfaceContactGraphBuilder(
+        implementation="torch", side_from_reference=True, clearance_approach_only=True
+    ).clearance_approach_only
+    with pytest.raises(ValueError, match="clearance_approach_only"):
+        SurfaceContactGraphBuilder(implementation="torch", clearance_approach_only=True)
