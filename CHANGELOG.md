@@ -688,6 +688,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-write no longer leaves an unloadable truncated checkpoint. Also fixes
   `legacy_format=True`, which failed with `FileNotFoundError` on current
   fsspec versions.
+- `save_checkpoint` now also writes the training-state file
+  (`checkpoint.<rank>.<epoch>.pt`) and plain PyTorch model weights
+  atomically, so a process killed mid-save no longer leaves a truncated
+  latest training state that `load_checkpoint` fails to resume from.
 - `RandomRotateMesh` defaults to `mode="axis_aligned"` when `axes` is given.
   Unified external aero recipe translation configs pass tensor bounds so
   `torch.distributions.Uniform` instantiates.

@@ -54,7 +54,7 @@ from torch.optim.lr_scheduler import LRScheduler
 
 import physicsnemo
 from physicsnemo.core.filesystem import LOCAL_CACHE, _download_cached
-from physicsnemo.core.module import Module
+from physicsnemo.core.module import Module, _atomic_write
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.capture import _StaticCapture
 from physicsnemo.utils.logging import PythonLogger
@@ -793,6 +793,10 @@ def save_checkpoint(
       ``checkpoint.{mp_rank}.{epoch}.pt`` containing their combined
       ``state_dict`` entries, plus ``epoch`` and ``metadata``.
 
+    Each file is written under a temporary name and moved into place once
+    complete, so a process killed mid-save leaves the previous checkpoint
+    loadable instead of a truncated file.
+
     When any model is FSDP-wrapped or contains DTensor/ShardTensor
     parameters the function enters *distributed* mode: all ranks **must**
     call it, state is gathered via DCP collective helpers, and only rank 0
@@ -920,7 +924,7 @@ def save_checkpoint(
                 if isinstance(inner, physicsnemo.core.Module):
                     inner.save(file_name, _state_dict=state_dict)
                 else:
-                    with fs.open(file_name, "wb") as fp:
+                    with _atomic_write(fs, file_name) as fp:
                         torch.save(state_dict, fp)
                 checkpoint_logging.success(f"Saved model state dictionary: {file_name}")
         else:
@@ -928,7 +932,7 @@ def save_checkpoint(
                 if isinstance(inner, physicsnemo.core.Module):
                     inner.save(file_name)
                 else:
-                    with fs.open(file_name, "wb") as fp:
+                    with _atomic_write(fs, file_name) as fp:
                         torch.save(model.state_dict(), fp)
                 checkpoint_logging.success(f"Saved model state dictionary: {file_name}")
 
@@ -989,7 +993,7 @@ def save_checkpoint(
         checkpoint_dict["metadata"] = metadata
 
     if bool(checkpoint_dict) and should_write:
-        with fs.open(output_filename, "wb") as fp:
+        with _atomic_write(fs, output_filename) as fp:
             torch.save(checkpoint_dict, fp)
         checkpoint_logging.success(f"Saved training checkpoint: {output_filename}")
 
