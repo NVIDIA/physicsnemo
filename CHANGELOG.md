@@ -388,6 +388,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.metrics.cae.cfd.compute_tke_spectrum` no longer raises
+  `UnboundLocalError` when `length` is passed; the domain length now sets the
+  grid spacing used for the wavenumbers.
 - The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
