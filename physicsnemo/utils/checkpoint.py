@@ -824,7 +824,8 @@ def save_checkpoint(
         that scaler's state is saved instead.
     epoch : int | None, optional
         Epoch index to embed in the filename and the checkpoint dict.
-        When ``None``, the next available index is used.
+        When ``None``, every file of this save takes the next index after
+        all existing weights and training-state files.
     metadata : dict[str, Any] | None, optional
         Arbitrary key-value pairs persisted alongside the training state
         (e.g. best validation loss, MLflow run ID).
@@ -895,16 +896,32 @@ def save_checkpoint(
     if is_distributed:
         torch.distributed.barrier()
 
+    model_types = {
+        name: "mdlus" if isinstance(_unwrap_fsdp(m), physicsnemo.core.Module) else "pt"
+        for name, m in named_models.items()
+    }
+    # With automatic numbering, every file of this save takes one index: the
+    # next after any existing weights or training state, so files left by an
+    # interrupted save cannot pair with a later save's files.
+    index = epoch
+    if index is None:
+        next_files = [
+            _get_checkpoint_filename(
+                path, name, saving=True, model_type=kind, distributed=is_distributed
+            )
+            for name, kind in [("checkpoint", "pt"), *model_types.items()]
+        ]
+        index = max(int(PurePath(f).name.rsplit(".", 2)[1]) for f in next_files)
+
     # == Saving model checkpoint ==
     for name, model in named_models.items():
         inner = _unwrap_fsdp(model)
-        model_type = "mdlus" if isinstance(inner, physicsnemo.core.Module) else "pt"
         file_name = _get_checkpoint_filename(
             path,
             name,
-            index=epoch,
+            index=index,
             saving=True,
-            model_type=model_type,
+            model_type=model_types[name],
             distributed=is_distributed,
         )
 
@@ -982,7 +999,7 @@ def save_checkpoint(
 
     output_filename = _get_checkpoint_filename(
         path,
-        index=epoch,
+        index=index,
         saving=True,
         model_type="pt",
         distributed=is_distributed,
