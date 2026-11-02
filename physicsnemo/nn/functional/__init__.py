@@ -78,6 +78,17 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
+from .shell_contact import (
+    ShellContactPairs,
+    ShellContactSearch,
+    clamp_to_wall,
+    project_shell_penetrations,
+    shell_contact_edge_features,
+    shell_contact_pairs,
+    shell_penetration_depths,
+    smooth_contact_cutoff,
+    wall_penetration_depths,
+)
 
 __all__ = [
     "closed_surface_volume_energy",
@@ -124,6 +135,15 @@ __all__ = [
     "rfft",
     "rfft2",
     "point_cloud_render",
+    "ShellContactPairs",
+    "ShellContactSearch",
+    "clamp_to_wall",
+    "project_shell_penetrations",
+    "shell_contact_edge_features",
+    "shell_contact_pairs",
+    "shell_penetration_depths",
+    "smooth_contact_cutoff",
+    "wall_penetration_depths",
     "scalar_field_to_rgba",
     "shrinkwrap_points",
     "signed_distance_field",

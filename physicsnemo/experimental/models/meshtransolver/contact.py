@@ -16,28 +16,44 @@
 
 r"""Contact graph representation, feature encoding, and gated latent messages.
 
-DeFormer's reference recipe populates this graph with predictive node-to-face
-contact and live barycentric interpolation, using ``SurfaceContactGraphBuilder``.
-Candidate search is separate from the learned message block. The legacy radius
-builder and obstacle graph fields remain for historical model/configuration
-compatibility; they are not used by the reference surface-contact recipe.
+Candidate search is separate from the learned message block
+(:class:`SparseContactBlock`). DeFormer's reference recipe populates the graph
+with predictive node-to-face contact and live barycentric interpolation through
+``SurfaceContactGraphBuilder``, the reference backend.
+:class:`SparseContactGraphBuilder` is the simple node-to-node radius backend
+(selected by ``contact_graph_backend: legacy`` in the crash example); the
+``obstacle_mask`` field serves analytic obstacle contacts.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.nn.functional.shell_contact import (
+    CONTACT_FEATURE_DIM,
+    KINEMATIC_CONTACT_FEATURE_DIM,
+    contact_edge_features,
+    smooth_contact_cutoff,
+)
 
 _torch_cluster = OptionalImport("torch_cluster")
 
-CONTACT_FEATURE_DIM = 8
-KINEMATIC_CONTACT_FEATURE_DIM = 12
 _EPS = 1.0e-8
+
+__all__ = [
+    "CONTACT_FEATURE_DIM",
+    "KINEMATIC_CONTACT_FEATURE_DIM",
+    "ContactGraph",
+    "SparseContactBlock",
+    "SparseContactGraphBuilder",
+    "contact_edge_features",
+    "merge_contact_graphs",
+    "smooth_contact_cutoff",
+]
 
 
 @dataclass(frozen=True)
@@ -209,91 +225,56 @@ def merge_contact_graphs(*graphs: ContactGraph) -> ContactGraph:
     )
 
 
-def contact_edge_features(
-    relative_displacement: torch.Tensor,
-    signed_gap: torch.Tensor,
-    feature_scale: float,
-    contact_normal: torch.Tensor | None = None,
-    relative_velocity: torch.Tensor | None = None,
-    velocity_scale: float = 1.0,
-    normal_epsilon: float | None = None,
-) -> torch.Tensor:
-    r"""Encode displacement, distance, signed gap, and contact normal.
-
-    The displacement points from the receiving node to its contact partner. The
-    first five channels are normalized by ``feature_scale``; normals remain unitless.
-    Optional relative velocity appends three velocity channels and the normal
-    relative speed, normalized by ``velocity_scale`` (8 or 12 channels total).
-    """
-
-    if feature_scale <= 0.0:
-        raise ValueError("feature_scale must be positive")
-    if relative_displacement.ndim != 2 or relative_displacement.shape[-1] != 3:
-        raise ValueError("relative_displacement must have shape [E, 3]")
-    if signed_gap.ndim == 1:
-        signed_gap = signed_gap.unsqueeze(-1)
-    if signed_gap.shape != (relative_displacement.shape[0], 1):
-        raise ValueError("signed_gap must have shape [E] or [E, 1]")
-
-    distance = torch.linalg.vector_norm(relative_displacement, dim=-1, keepdim=True)
-    if normal_epsilon is not None and (
-        not math.isfinite(normal_epsilon) or normal_epsilon <= 0
-    ):
-        raise ValueError("normal_epsilon must be positive and finite")
-    if contact_normal is None:
-        # A physical regularization length bounds the normal Jacobian by 1/eps.
-        # At coincidence the direction is zero, not an arbitrary unit vector.
-        denominator = (
-            (
-                relative_displacement.square().sum(-1, keepdim=True) + normal_epsilon**2
-            ).sqrt()
-            if normal_epsilon is not None
-            else distance.clamp_min(_EPS)
-        )
-        contact_normal = relative_displacement / denominator
-    if contact_normal.shape != relative_displacement.shape:
-        raise ValueError("contact_normal must have shape [E, 3]")
-    features = torch.cat(
-        (
-            relative_displacement / feature_scale,
-            distance / feature_scale,
-            signed_gap / feature_scale,
-            contact_normal,
-        ),
-        dim=-1,
-    )
-    if relative_velocity is not None:
-        if relative_velocity.shape != relative_displacement.shape:
-            raise ValueError("relative_velocity must have shape [E, 3]")
-        if velocity_scale <= 0.0:
-            raise ValueError("velocity_scale must be positive")
-        # Negative normal relative speed denotes approach for n=(x_j-x_i)/d.
-        normal_speed = (relative_velocity * contact_normal).sum(-1, keepdim=True)
-        features = torch.cat(
-            (
-                features,
-                relative_velocity / velocity_scale,
-                normal_speed / velocity_scale,
-            ),
-            dim=-1,
-        )
-    return features
-
-
-def smooth_contact_cutoff(distance: torch.Tensor, radius: float) -> torch.Tensor:
-    """Compact C1 taper, equal to one at zero and zero beyond the radius."""
-    if radius <= 0.0:
-        raise ValueError("radius must be positive")
-    fraction = (distance.clamp_min(0.0) / radius).clamp_max(1.0)
-    return (1.0 - fraction.square()).square()
-
-
 class SparseContactGraphBuilder(nn.Module):
-    r"""Build thickness-aware node-to-node contact candidates.
+    r"""Build thickness-aware node-to-node contact candidates within a radius.
 
-    Small graphs use a deterministic ``torch.cdist`` implementation. Larger graphs
-    use ``torch_cluster.radius_graph`` and therefore require PhysicsNeMo's ``gnns``
-    optional dependency group.
+    The simple radius backend (``contact_graph_backend: legacy`` in the crash
+    example): every pair of nodes of the same graph whose signed gap (centre
+    distance minus the mean of the two shell thicknesses) lies within
+    ``search_radius`` is a directed candidate edge, the ``max_neighbors``
+    smallest gaps per destination node are kept, and the edge features are
+    :func:`~physicsnemo.nn.functional.shell_contact.contact_edge_features`.
+    Small graphs use a deterministic ``torch.cdist`` implementation. Larger
+    graphs use ``torch_cluster.radius_graph`` and therefore require
+    PhysicsNeMo's ``gnns`` optional dependency group.
+
+    Parameters
+    ----------
+    search_radius : float
+        Positive signed-gap radius within which a node pair is a candidate.
+    max_neighbors : int
+        Candidates kept per destination node, smallest signed gap first.
+    candidate_neighbors : int, optional
+        Raw neighbors ``torch_cluster.radius_graph`` collects per node before
+        filtering; ``None`` uses ``max(4 * max_neighbors, 64)``. Default is
+        ``None``.
+    exclude_structural_edges : bool, optional
+        Drop candidates that are edges of ``structural_edge_index``. Default is
+        ``True``.
+    exclude_same_component : bool, optional
+        Drop candidates within one component of ``component_ids`` (then
+        required at forward). Default is ``False``.
+    brute_force_threshold : int, optional
+        Largest node count searched densely with ``torch.cdist``; above it
+        ``torch_cluster`` is required. Default is 4096.
+
+    Forward
+    -------
+    positions : torch.Tensor
+        Node positions of shape ``[N, 3]``.
+    structural_edge_index : torch.Tensor, optional
+        Structural edges ``[2, E]`` to exclude.
+    batch : torch.Tensor, optional
+        Graph ID per node ``[N]``; candidates never cross graphs.
+    shell_thickness : torch.Tensor, optional
+        Nonnegative shell thickness per node, ``[N]`` or ``[N, 1]``.
+    component_ids : torch.Tensor, optional
+        Component ID per node ``[N]`` for ``exclude_same_component``.
+
+    Outputs
+    -------
+    ContactGraph
+        Candidate edges with their features and an all-false ``obstacle_mask``.
     """
 
     def __init__(
@@ -482,7 +463,47 @@ class SparseContactGraphBuilder(nn.Module):
 
 
 class SparseContactBlock(nn.Module):
-    r"""Convert sparse contact edges into a gated residual latent update."""
+    r"""Convert sparse contact edges into a gated residual latent update.
+
+    Each edge of the :class:`ContactGraph` forms a message from the source
+    latent (the barycentric interpolation of ``source_nodes`` for surface
+    contacts, the learned obstacle embedding where ``obstacle_mask`` is set),
+    the destination latent and the edge features. Messages are scaled by the
+    taper ``edge_weights``, aggregated per destination node and passed with the
+    node latent through a node MLP with ``tanh`` output; the result is tapered
+    so a node whose contacts vanish receives exactly zero, then scaled by a
+    learnable gate. An empty graph returns the input with zero gradients for
+    every parameter, so distributed ranks with and without contact agree.
+
+    Parameters
+    ----------
+    hidden_dim : int
+        Node latent width :math:`D`.
+    contact_dim : int, optional
+        Contact edge feature width. Default is ``CONTACT_FEATURE_DIM`` (8);
+        ``KINEMATIC_CONTACT_FEATURE_DIM`` (12) with the velocity channels.
+    gate_init : float, optional
+        Initial value of the learnable output gate; 0.0 makes the block an
+        identity at initialisation. Default is 0.0.
+    aggregation : {"sum", "mean"}, optional
+        Sum the weighted messages per destination node, or divide by the weight
+        sum clamped at one. Default is ``"mean"``.
+
+    Forward
+    -------
+    node_latent : torch.Tensor
+        Node latent of shape ``[N, D]``.
+    contact_graph : ContactGraph
+        Validated against ``N`` and ``contact_dim``.
+    return_correction : bool, optional
+        Return the gated correction alone instead of ``node_latent`` plus it.
+        Default is ``False``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Updated latent, or the correction, of shape ``[N, D]``.
+    """
 
     def __init__(
         self,
