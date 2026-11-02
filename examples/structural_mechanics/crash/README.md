@@ -9,138 +9,215 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 
 In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, FIGConvUNet, MeshTransolver, MeshGeoTransolver, and MeshGeoFLARE architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
-For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). DeFormer adds structural mesh message passing around a geometry-aware FLARE backbone, with optional predictive node-to-face contact for closed-loop autoregressive dynamics.
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). DeFormer, described next, adds local neighbourhood stages around a geometry-aware FLARE backbone and a contact-aware corrector, and predicts every frame of a full-vehicle crash independently from the initial mesh.
 
-### DeFormer with geodesic-filtered surface contact
+### DeFormer: deformation transformer with a contact-aware corrector
 
-The reference contact configuration is
-`crash_deformer_contact_autoregressive`.
-It combines the corrected latent-space mesh processor with original point-space
-FLARE (`GALE_FA`), predictive node-to-face messages, reference-geodesic exclusions,
-and fixed four-step truncated BPTT. Its default budget is 500 epochs without
-teacher forcing or early stopping; validation rolls out all 24 predicted steps
-after two observed frames. Node inputs are velocity and thickness, with position
-used by the geometry and contact pathways. The paired baselines are
-`crash_deformer_autoregressive` (no contact) and `crash_geoflare_autoregressive`
-(no structural or contact message passing).
+**DeFormer** is the crash surrogate of this example: a time-conditional
+deformation transformer (the *network*) followed by a decoupled, contact-aware
+MeshGraphNet *corrector*. Given the undeformed mesh, the shell thickness and a
+query time, it predicts the deformed shape of a full vehicle at that time; every
+frame of a crash is predicted independently from the initial mesh, so there is
+no error accumulation and the frames can be computed in parallel. On the
+full-resolution Toyota Yaris frontal-impact dataset (99 thickness-variation
+designs, 1.48M nodes per design, 5 ms frames) the network reaches a pooled
+validation RMSE of 7.6 mm against 10.1 mm for a GeoTransolver baseline of the
+same width and depth, and the corrector lowers it to 7.5 mm while cutting the
+spurious shell crossings about sevenfold. The paper is "DeFormer: Deformation
+Transformers with Contact-Aware Local Corrections for Full-Vehicle Crash
+Simulation".
 
-See [reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md).
-The 5 mm geodesic gap floor is an explicit modeling assumption, separate from
-the message-activation band, not a recovered solver-deck setting. Dataset paths
-and splits must be supplied by the user; no proprietary datasets or trained
-checkpoints are included.
+The network (`time_conditional.MeshGeoFLARETimeConditional`,
+`conf/model/deformer_time_conditional.yaml`):
 
-The code retains the historical names `MeshGeoFLARE` (reusable model) and
-`MeshGeoFLAREAutoregressive` (crash rollout wrapper) for checkpoint and Hydra
-compatibility. These implement the two **DeFormer** experiments above; the
-GeoFLARE baseline uses `GeoTransolverAutoregressive`. All three configs explicitly
-select original FLARE (`GALE_FA`), not FLARE++.
-Other hybrid classes, nearest-node/legacy contact backends, and analytic bumper
-obstacle options are compatibility interfaces, not alternative reference recipes.
-They are not used by the surface-contact experiment.
+* a GeoTransolver/FLARE global stage (`attention_type: GALE_FA`, 6 blocks,
+  width 256, 128 slices) made time-conditional with a learned Fourier time code
+  (8 bands, 32 channels) that enters every node's input and the global token;
+* local stages of static kNN neighbourhood attention over the undeformed mesh
+  (k = 32 Euclidean neighbours, the fused Triton kernel of
+  `physicsnemo.experimental.models.meshtransolver`): a pre-processor before the
+  backbone and a two-stage decoder after it, where stage A emits a provisional
+  shape through a zero-initialised head and stage B, an independent copy of
+  stage A, adds a gated correction;
+* a physical-space MSE loss (position error in millimetres over one 10 mm
+  scale for all three axes) plus 0.1 times the same loss on the provisional
+  shape; Muon/AdamW, cosine schedule, 60 epochs, bf16 autocast, activation
+  checkpointing of the FLARE blocks so a 1.48M-node forward fits one GPU.
+  9,672,505 parameters.
 
-### Experimental: DeFormer with static kNN neighborhood attention
+The corrector (`residual_model.ResidualTimeConditional` around
+`mgn_corrector.MeshGraphNetCorrector`, `conf/model/mgn_corrector.yaml`):
 
-`crash_deformer_knn_autoregressive` replaces DeFormer's two MeshGraphNet
-processors with attention over a **static reference neighborhood**: each node
-attends to itself plus its `k` nearest neighbors selected once on the initial
-mesh, with reference displacement/distance entering the attention logits and
-values. Everything else is the no-contact DeFormer recipe (FLARE backbone,
-zero-initialized residual gates, FiLM conditioning, BPTT-4, Muon, 500 epochs),
-so the comparison isolates the local operator. Contact is off in this entry
-point; the contact block is unchanged and can be re-enabled later.
+* the frozen network is recomputed on the fly (no prediction files); the
+  corrector reads its predicted shape through message passing on the shell
+  mesh edges (reference geometry, predicted geometry and their difference per
+  edge) and on *contact edges* discovered on the predicted shape by the
+  crossing-aware node-to-facet search of
+  `physicsnemo.nn.functional.shell_contact` (5 mm band, 10 mm reference
+  clearance so that assembled flanges do not count as contact, both message
+  directions);
+* 8 layers of width 128, zero-initialised decoder (epoch 0 reproduces the
+  network), 30 epochs with a one-epoch learning-rate warm-up. 1,250,659
+  parameters;
+* at evaluation the corrected positions are clamped at the rigid wall plane
+  (`model.final_clamp_to_wall`, `datapipe.rigid_wall_position: 100`), which
+  removes the remaining wall crossings at unchanged RMSE.
 
-Two neighbor metrics share one switch, resolved by the datapipe and checked by
-the model:
+The library pieces DeFormer relies on are PhysicsNeMo's: the fused kNN
+attention kernel, activation checkpointing of the FLARE blocks, `physicsnemo.Module`
+serialization (`.mdlus` checkpoints) and the Warp contact-search kernels behind
+the `shell_contact` functional.
 
-```bash
-# Geodesic: shortest path along structural edges, weighted by reference lengths.
-torchrun --nproc_per_node=<NUM_GPUS> train.py \
-  --config-name=crash_deformer_knn_autoregressive \
-  model.local_neighborhood=geodesic hydra.run.dir=./outputs/deformer_knn_geodesic \
-  training.raw_data_dir=/data/crash/train \
-  training.raw_data_dir_validation=/data/crash/validation
+#### Recipes
 
-# Euclidean: straight-line reference distance; can connect stacked, unconnected shells.
-torchrun --nproc_per_node=<NUM_GPUS> train.py \
-  --config-name=crash_deformer_knn_autoregressive \
-  model.local_neighborhood=euclidean hydra.run.dir=./outputs/deformer_knn_euclidean \
-  training.raw_data_dir=/data/crash/train \
-  training.raw_data_dir_validation=/data/crash/validation
-```
+| Recipe | Model | Purpose |
+|---|---|---|
+| `yaris_deformer` | network | the DeFormer network on the Yaris mesh (60 epochs) |
+| `yaris_deformer_corrector` | network + corrector | the contact-aware corrector on the frozen network (30 epochs) |
+| `yaris_geotransolver` | GeoTransolver (FLARE variant) | the point-model baseline under the identical protocol |
+| `crash_deformer_knn_time_conditional` | network | the same network on the body-in-white VTP data (26 frames, 100 epochs) |
+| `crash_geoflare_time_conditional` | GeoTransolver | its baseline on the body-in-white data |
 
-Neighborhoods are computed from the frozen physical initial geometry (never a
-sampled window or future frame), once per distinct initial mesh, and cached under
-`datapipe.local_knn_cache_dir` by a content hash of geometry, topology, `k`,
-metric and algorithm source. Geodesic selection runs a bounded Dijkstra per node
-in Python (minutes for a 385k-node mesh); Euclidean selection uses a KD-tree.
-Features are standardized with train-only statistics (`knn_edge_stats.json`),
-like structural edges. Checkpoints from the kNN variant, the MPNN DeFormer and
-the two metrics are not interchangeable. Peak memory per block scales with
-`N x (k+1) x width`; `model.local_knn_k=16` halves it.
+The three Yaris recipes share one data recipe (`conf/reader/yaris_full.yaml`,
+`conf/datapipe/yaris_full.yaml`) and differ only in the model group and the
+corrector's additions; `conf/README.md` lists every key.
 
-Suggested protocol: compare the full 24-step validation MSE at matched epochs
-against `crash_deformer_autoregressive` trained under the same world size and
-seed, and record seconds per update and peak memory. This is an experimental
-option with no accuracy claim; it does not alter the validated reference recipes.
+#### Data preparation
 
-`crash_deformer_knn_v2_autoregressive` is the second design of that block
-(un-normalized difference values, concatenate-then-MLP update with the
-attention log-sum-exp, float32 geometric bias, split key/value, small matrices
-on AdamW); see `conf/README.md` for the key table. It exists because the first
-design tracked the MPNN DeFormer until epoch 300 and then plateaued near
-1.0e-3 while the MPNN reached 6.7e-4.
+The Yaris recipes read one Zarr store per design with a shared reference mesh:
+`nodes/pos` (`[T, N, 3]` positions in mm at 1 ms), `nodes/thickness` (`[N]`),
+`nodes/part_id` (`[N]`), `edges` (`[E, 2]` shell edges), `shell/connectivity`
+(`[S, 4]` quads, triangles with the last id repeated) and optionally
+`solid/connectivity` (`[H, 8]` hexahedra). The Yaris stores are delivered in
+this layout by the dataset's own preparation pipeline, together with the two
+files below. It is not the layout PhysicsNeMo-Curator's crash ETL writes
+(`mesh_pos`, `thickness`, `edges`, read by `zarr_reader.py` for the VTP-derived
+recipes; see [Data Preprocessing](#data-preprocessing)); a store in another
+layout is rejected with a message naming the missing arrays. Two more files are
+needed:
 
-### Experimental: time-conditional DeFormer
+* `splits.csv` with columns `split,sample_name` (`train`, `validation`, `test`)
+  naming the stores: the dataset creator's split is the authority, and a case
+  that must be left out is omitted from this file rather than special-cased in
+  code;
+* `outlier_nodes.npz` with a boolean `exclude` array over the nodes: rigid-wall
+  nodes and fly-away nodes that are dropped from inputs, targets and
+  neighbourhoods (pass `yaris.outlier_mask=null` to keep every node).
 
-`crash_deformer_knn_time_conditional` predicts each future frame independently
-from the initial mesh with the kNN-attention local processors before and after
-FLARE, a Fourier time code (node inputs and a global token), a zero-initialized
-provisional position head after post stage A and an independent post stage B
-for the final correction (`time_conditional.py`). Its matched baseline is
-`crash_geoflare_time_conditional`; see `conf/README.md`.
-`crash_deformer_knn_time_conditional_adaln` adds time-conditioned LayerNorms
-throughout the network (GenCast norm conditioning, adaLN-zero): function
-preserving at initialisation, so it isolates the value of letting the time code
-modulate every layer. `crash_deformer_knn_time_conditional_contact` discovers
-surface contact on the provisional shape from stage A and feeds its gated
-messages to stage B, giving the time-conditional model the contact mechanism of
-the autoregressive DeFormer without a rollout.
-
-### Experimental: full-resolution Yaris with kNN neighborhood attention
-
-`crash_deformer_knn_yaris_autoregressive` runs the kNN-attention DeFormer on the
-1.48M-node Yaris Zarr stores at full resolution, without mesh coarsening and
-without contact. The `yaris_full` reader/datapipe pair reads one window per
-access (no trajectory preloading), uses the dataset creator's `splits.csv` as
-the split authority, and drops the nodes flagged in an outlier mask (rigid-wall
-nodes and fly-away nodes) from inputs, targets and neighborhoods. All stores
-share one reference mesh, so the Euclidean neighborhoods, their standardized
-features and the frozen TRAIN statistics (per-axis position std, normalized
-velocity/acceleration moments, thickness) are built once. Because the store
-edge list covers shells only, `model.local_neighborhood=euclidean` is the
-default; geodesic selection would isolate every solid and beam node.
-
-Memory policy: FLARE blocks and the geometry context are activation
-checkpointed (`model.activation_checkpointing=true`) inside each checkpointed
-rollout step, so one block's activations are live at a time. Prepare the
-statistics and caches on a CPU node, then train:
+Every recipe takes the same four paths: `yaris.data_root` (the stores),
+`yaris.split_manifest`, `yaris.outlier_mask` and `yaris.work_dir` (statistics,
+neighbourhood caches, checkpoints and validation records of the run). Prepare
+the frozen normalization statistics and the kNN neighbourhood cache once, on a
+CPU node (minutes for 1.48M nodes):
 
 ```bash
-python yaris_full_prepare.py --config-name=crash_deformer_knn_yaris_autoregressive \
+cd examples/structural_mechanics/crash
+python yaris_full_prepare.py --config-name yaris_deformer \
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
-  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_knn
-
-torchrun --nproc_per_node=<NUM_GPUS> train.py \
-  --config-name=crash_deformer_knn_yaris_autoregressive \
-  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
-  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_knn
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_deformer
 ```
 
-The frozen statistics carry an identity (split manifest, outlier mask, kept
-node count, stride, dt); a changed mask or split invalidates them. Validation
-uses the generic normalized-MSE path over every remaining transition of each
-held-out case.
+The statistics carry an identity (split manifest, outlier mask, kept node
+count, stride, dt); a changed mask or split invalidates them. The corrector
+and the baseline can point `yaris.work_dir` at their own directories and reuse
+the network's statistics by copying `stats/` or by overriding
+`datapipe.stats_dir`. `yaris_full_prepare.py` reads the environment variable
+`YARIS_STATS_WORKERS` (default 8) for its parallel statistics workers. The
+prepare step may be skipped: rank 0 then computes the statistics serially when
+training starts while the other ranks wait, bounded by
+`training.data_startup_timeout_seconds` (one hour by default).
+
+#### Train the network
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_deformer
+```
+
+The reference run used 16 GPUs for 60 epochs (about 6.6 h on GB300s). Pair
+seeds with `training.seed=43 training.sampler_seed=1`. Checkpoints land in
+`<work_dir>/checkpoints/` as `MeshGeoFLARETimeConditional.0.<epoch>.mdlus`
+plus the optimizer state; the exact held-out validation (every validation
+design once, pooled over its own horizon) writes `<work_dir>/validation/epoch_<EEEE>.json`
+(zero-padded, e.g. `epoch_0060.json`) every `training.validation_freq` epochs.
+Re-running the same command resumes from `<work_dir>/checkpoints` with the
+optimizer and RNG states; after a change of the GPU count pass
+`training.restore_rng=false`. The reference runs are the only measured
+configuration (16 GB300 GPUs with activation checkpointing on); the per-GPU
+memory of the 1.48M-node forward on smaller cards has not been measured, and
+the exact validation additionally holds two float64 `[N, T, 3]` error tensors
+(about 1.1 GB each) on every device.
+
+#### Train the corrector
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer_corrector \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_corrector \
+  datapipe.stats_dir=/runs/yaris_deformer/stats \
+  model.teacher_weights=/runs/yaris_deformer/checkpoints/MeshGeoFLARETimeConditional.0.60.mdlus
+```
+
+The recipe turns on the contact topology (`datapipe.contact_surface`), the mesh
+edges (`datapipe.mesh_edges`), the rigid wall (`datapipe.rigid_wall_position`)
+and the evaluation-time wall clamp. Options kept as documented switches:
+`model.teacher_window=true model.functional_dim=45` also feeds the network's
+displacement one frame earlier and later; `datapipe.frame_pairs=true
+training.increment_loss_weight=1.0` adds a loss on the change between
+consecutive frames; `model.final_projection_iterations=4` projects penetrating
+nodes onto the shell thickness envelope at evaluation (off by default: it also
+removes true crossings).
+
+#### Evaluate
+
+`evaluate_yaris_tc.py` scores a checkpoint with the full validation suite
+without touching the run's own records: pooled and per-frame vector RMSE in
+millimetres, per-case and per-region breakdowns, the target-relative
+penetration statistics of the shell surface and the rigid wall (only
+penetration the ground truth does not have counts against a model) and,
+optionally, node-error maps and the temporal-smoothness and per-part kinematics
+readout:
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> evaluate_yaris_tc.py --config-name yaris_deformer_corrector \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_corrector \
+  datapipe.stats_dir=/runs/yaris_deformer/stats \
+  model.teacher_weights=/runs/yaris_deformer/checkpoints/MeshGeoFLARETimeConditional.0.60.mdlus \
+  training.ckpt_path=/runs/yaris_corrector/checkpoints +training.load_epoch=30 \
+  +training.validation_output_dir=/runs/eval/corrector hydra.run.dir=/runs/eval/corrector \
+  +training.validation_node_errors=true +training.validation_kinematics=true
+```
+
+For the network or the baseline use their recipe with `datapipe.contact_surface=true`
+(the penetration metrics need the shell facets; the models ignore them) and
+`++training.validation_penetration.wall_position_mm=100` for the wall family.
+The record is `<validation_output_dir>/epoch_<EEEE>.json` (zero-padded).
+
+A model-only checkpoint, the `.mdlus` file without the `checkpoint.0.<E>.pt`
+training state (the form in which trained weights are distributed), is scored
+with `+training.warm_start_model=<file>.mdlus`; `training.ckpt_path` may then
+point at an empty directory. The corrector's `.mdlus` can also be loaded
+directly with
+`physicsnemo.Module.from_checkpoint(path, override_args={"teacher_weights": "<network .mdlus>"})`;
+without the override it looks for the network's weights at the path recorded
+when it was trained.
+
+#### Autoregressive DeFormer (body-in-white data)
+
+The autoregressive form of DeFormer, from which the time-conditional network
+grew, stays available for the body-in-white VTP data: `crash_deformer_autoregressive`
+(DeFormer with MeshGraphNet local stages, no contact), `crash_deformer_contact_autoregressive`
+(predictive node-to-face contact inside the network with reference-geodesic
+exclusions, see [SURFACE_CONTACT_REFERENCE_GEODESIC.md](SURFACE_CONTACT_REFERENCE_GEODESIC.md)),
+`crash_deformer_knn_autoregressive` (static kNN neighbourhood attention as the
+local operator) and `crash_deformer_knn_yaris_autoregressive` (the same on the
+Yaris mesh), against the `crash_geoflare_autoregressive` baseline. They roll
+out closed-loop with four-step truncated BPTT from two observed frames. The
+code retains the historical names `MeshGeoFLARE` (reusable model) and
+`MeshGeoFLAREAutoregressive` (rollout wrapper) for checkpoint and Hydra
+compatibility; all recipes select original FLARE (`GALE_FA`).
 
 ### Body-in-White Crash Modeling
 
@@ -180,6 +257,13 @@ For graph-based models (e.g., MeshGraphNet) or the graph datapipe, install the P
 pip install "nvidia-physicsnemo[gnns]"
 # or with uv:
 uv sync --extra gnns
+```
+
+The Yaris recipes read Zarr stores (`zarr` >= 3, in the `datapipes-extras`
+extra) and build their graphs with `torch_geometric` (the `gnns` extra):
+
+```bash
+pip install "nvidia-physicsnemo[gnns,datapipes-extras]"
 ```
 
 Reference-geodesic preprocessing also requires SciPy, declared in the existing
@@ -291,7 +375,13 @@ The main script is `train.py`.
 ### Config Structure
 
 The existing bumper and body-in-white one-shot/time-conditional experiments remain
-available. This contribution adds three autoregressive entry points:
+available. This contribution adds the recipes of the table at the top of this
+README: the three Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,
+`yaris_geotransolver`), the two body-in-white time-conditional recipes
+(`crash_deformer_knn_time_conditional`, `crash_geoflare_time_conditional`) and
+the autoregressive family (`crash_geoflare_autoregressive`,
+`crash_deformer_autoregressive`, `crash_deformer_contact_autoregressive`,
+`crash_deformer_knn_autoregressive`, `crash_deformer_knn_yaris_autoregressive`).
 
 | Experiment | Model |
 |------------|-------|
@@ -301,9 +391,12 @@ available. This contribution adds three autoregressive entry points:
 
 The DeFormer experiment inherits the GeoFLARE data/training recipe and switches to
 a graph datapipe and mesh model. The contact experiment inherits DeFormer and adds
-contact, reproducible sampling, and memory settings. Two model definitions live in
-`conf/model/`; reader, datapipe, training, and inference defaults are shared with
-the existing examples. See [configuration layout](conf/README.md) for overrides.
+contact, reproducible sampling, and memory settings. Four model definitions were
+added to `conf/model/` (`deformer_time_conditional`, `mgn_corrector`,
+`deformer_autoregressive`, `geoflare_autoregressive`; the Yaris baseline uses the
+shared `geotransolver_time_conditional`); reader, datapipe, training and
+inference defaults are shared with the existing examples. See
+[configuration layout](conf/README.md) for overrides.
 
 ### Launch Training
 
@@ -366,31 +459,6 @@ Use the same switch for training and inference, and a separate checkpoint/output
 directory for each mode: four- and seven-channel checkpoints are not interchangeable.
 Legacy explicit `node_input_mode=position_velocity` with `functional_dim=7`
 remains supported with the new switch disabled; do not combine both mechanisms.
-
-Penetration regularization is a separate, default-off training option:
-
-```bash
-python train.py --config-name=crash_deformer_contact_penetration_autoregressive \
-  training.raw_data_dir=/data/crash/train \
-  training.raw_data_dir_validation=/data/crash/validation
-```
-
-This inherits the reference contact architecture and training settings, adding
-loss-only initial physical geometry and a soft shell-overlap penalty. For each
-node, the loss penalizes its largest excess overlap with a nonexcluded face,
-after subtracting that pair's initial overlap and a 0.25 mm tolerance. Squared
-excess is normalized by a 1 mm length scale, averaged over all nodes and rollout
-steps, and added to position MSE. The weight is zero for the first 50 epochs,
-ramps linearly for 50 epochs, and then stays at `1e-5`. Geometry is evaluated in
-physical units, with gradients through all predicted BPTT steps. Validation
-remains position MSE. These are experimental settings, not a solver contact law.
-
-Add `model.include_position_features=true` to combine both options. The ordinary
-contact recipe has neither penetration metadata nor penetration-loss evaluation.
-The penalty adds no network parameters and is not needed for inference. It is
-an endpoint regularizer, so it cannot guarantee nonpenetration or detect a full
-crossing between saved frames. Use fresh output directories when changing the
-objective: resume guards reject mismatched penetration settings.
 
 The contact recipe requires valid triangle/quad connectivity and nodal shell
 thickness in physical units (mm for the reference data). It rebuilds live
@@ -597,6 +665,12 @@ datapipe:
 | `crash_deformer_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, no contact | `python train.py --config-name=crash_deformer_autoregressive` |
 | `crash_deformer_contact_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, geodesic surface contact | `python train.py --config-name=crash_deformer_contact_autoregressive` |
 | `crash_deformer_knn_autoregressive.yaml` | Full-car crash (VTP) | Experimental DeFormer BPTT-4, static kNN neighborhood attention instead of MPNNs, no contact | `python train.py --config-name=crash_deformer_knn_autoregressive` |
+| `crash_deformer_knn_yaris_autoregressive.yaml` | Yaris full mesh (Zarr) | DeFormer BPTT-4 with kNN attention, no contact | `python train.py --config-name=crash_deformer_knn_yaris_autoregressive yaris.data_root=...` |
+| `crash_geoflare_time_conditional.yaml` | Full-car crash (VTP) | GeoTransolver time-conditional baseline | `python train.py --config-name=crash_geoflare_time_conditional` |
+| `crash_deformer_knn_time_conditional.yaml` | Full-car crash (VTP) | DeFormer network, time-conditional | `python train.py --config-name=crash_deformer_knn_time_conditional` |
+| `yaris_deformer.yaml` | Yaris full mesh (Zarr) | DeFormer network | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_deformer yaris.data_root=...` |
+| `yaris_deformer_corrector.yaml` | Yaris full mesh (Zarr) | DeFormer corrector on the frozen network | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_deformer_corrector yaris.data_root=... model.teacher_weights=...` |
+| `yaris_geotransolver.yaml` | Yaris full mesh (Zarr) | GeoTransolver time-conditional baseline | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_geotransolver yaris.data_root=...` |
 
 ### Choosing a time scheme
 
