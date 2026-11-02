@@ -310,9 +310,12 @@ def _cell_line(
     """One group of cells on the systematic line: ``(pi, order)``, each ``(n_cells,)``.
 
     ``pi`` is :func:`_pps_inclusion_probabilities` of the float64 ``measures`` for
-    ``share``, a float64 scalar of at most ``n_cells``. ``order`` is the Morton order
-    of the float64 ``centroids`` in ``frame``. Groups laid in one frame, each after
-    the ones before it, make one line for :func:`_systematic_sample`.
+    ``share``, a float64 scalar of at most ``n_cells``, with ``n_cells >= 1`` (skip
+    empty groups). ``order`` is the Morton order of the float64 ``centroids`` in
+    ``frame``. Groups laid in one frame, each after the ones before it, make one line
+    for :func:`_systematic_sample`. Lay them with one call per group:
+    ``_compute_morton_codes(..., groups=...)`` spans each group's grid over all its
+    cells, zero-measure padding included.
     """
     pi = _pps_inclusion_probabilities(measures, share)
     ### More samples than positive-measure cells keeps every positive cell, and the
