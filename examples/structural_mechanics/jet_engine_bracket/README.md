@@ -105,32 +105,36 @@ designs.
 
 | Step | Hardware | Time | Peak GPU memory |
 | --- | --- | --- | --- |
+| Train `GeoTransolverSDF`, 100 epochs | 4 H200 (141 GB) | 34 h (20 min per epoch) | |
 | Train `GeoTransolverSDF`, 100 epochs | 4 H100 (80 GB) | about 80 h wall clock | about 75 GB per GPU, on the largest designs |
 | Train the stock GeoTransolver, 100 epochs | 4 H100 (80 GB) | about 27 h (16 min per epoch) | |
-| Evaluate DeepJEB test (820 samples, float32) | 1 GPU | 8 min | 10 GB |
+| Evaluate DeepJEB test (820 samples, float32) | 1 GPU | 6–8 min | 10 GB |
 | Evaluate all SimJEB designs (1,508 samples, float32) | 1 GPU | 5 min | 18 GB (largest design, 642k nodes) |
 | LoRA, 30 epochs | 1 GPU (96 GB) | 3.8 h | about 49 GB |
+| LoRA, 30 epochs | 4 H200 (141 GB) | 56 min | |
 
-The training times are from runs split into 4-hour cluster jobs; the evaluation
-and LoRA times are from one RTX PRO 6000 Blackwell GPU. Activation checkpointing
+The H200 training ran as one job on a shared cluster that preempted it several
+times; it resumed from the epoch checkpoints, and the time counts the training
+epochs only. The H100 training times are from runs split into 4-hour cluster jobs
+(the `GeoTransolverSDF` one with the authors' training code); the single-GPU
+evaluation and LoRA times are from one RTX PRO 6000 Blackwell GPU. Activation checkpointing
 (on in `conf/model/`) is what makes training fit into 80 GB.
 
 ## Results
 
-One run of each recipe. The stock GeoTransolver rows come from this example as
-configured; the `GeoTransolverSDF` rows come from a run of the same model and
-recipe with the authors' training code, whose checkpoint, converted to
-`GeoTransolverSDF`, gives the same errors with this example's `evaluate.py`
-(DeepJEB test stress 0.0658 against 0.0659, SimJEB test 0.3827 against 0.3827).
-Errors are mean per-sample relative L2 errors over every node, evaluated in float32
-(`evaluate.py`); the stress R² is the median over the samples. Results can differ
-slightly with the hardware, the number of GPUs and the library version: the LoRA
-adaptation, rerun on a different GPU, reproduced the test errors to within 0.005.
+One run of each recipe with this example (`train.py`, `evaluate.py`,
+`finetune.py`): `GeoTransolverSDF` on 4 H200 GPUs, the stock GeoTransolver on
+4 H100 GPUs. Errors are mean per-sample relative L2 errors over every node,
+evaluated in float32 (`evaluate.py`); the stress R² is the median over the samples.
+Results can differ slightly with the hardware, the number of GPUs, the seed and the
+library version: an earlier run of the same model and recipe with the authors'
+training code gave a DeepJEB test stress error of 0.066 and, after LoRA, a SimJEB
+test stress error of 0.255, and LoRA reruns with two other seeds stayed within 0.002.
 
 | Model | DeepJEB test, displacement / stress | SimJEB test, displacement / stress | SimJEB test stress R² |
 | --- | --- | --- | --- |
-| `GeoTransolverSDF` | 0.031 / 0.066 | 0.374 / 0.383 | 0.67 |
-| + LoRA on SimJEB | | 0.186 / 0.255 | 0.86 |
+| `GeoTransolverSDF` | 0.031 / 0.061 | 0.364 / 0.378 | 0.68 |
+| + LoRA on SimJEB | | 0.189 / 0.257 | 0.87 |
 | Stock GeoTransolver | 0.036 / 0.083 | 0.396 / 0.453 | 0.52 |
 | + LoRA on SimJEB | | 0.224 / 0.326 | 0.76 |
 
