@@ -382,6 +382,88 @@ def test_load_checkpoint_checks_all_models_before_restoring(
     assert metadata == {}
 
 
+@pytest.mark.parametrize("automatic_index", [False, True])
+@pytest.mark.parametrize("failing_file", ["weights", "training_state"])
+def test_save_checkpoint_killed_mid_write_keeps_previous_epoch(
+    tmp_path, monkeypatch, model_generator, failing_file, automatic_index
+):
+    """A save that dies part-way through a file leaves no partial checkpoint
+    file, resuming restores the previous complete save, and the next save's
+    weights and training state pair up again."""
+    from fsspec.implementations.local import LocalFileSystem
+
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    model = model_generator(8)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+    def save(generation, epoch):
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.fill_(generation)
+        optimizer.param_groups[0]["lr"] = generation * 0.01
+        save_checkpoint(
+            tmp_path,
+            models=model,
+            optimizer=optimizer,
+            epoch=None if automatic_index else epoch,
+        )
+
+    def assert_resumes(generation, epoch):
+        fresh = model_generator(8)
+        fresh_optimizer = torch.optim.Adam(fresh.parameters(), lr=0.5)
+        loaded_epoch = load_checkpoint(
+            tmp_path, models=fresh, optimizer=fresh_optimizer
+        )
+        assert loaded_epoch == (0 if automatic_index else epoch)
+        for parameter in fresh.parameters():
+            torch.testing.assert_close(
+                parameter, torch.full_like(parameter, generation)
+            )
+        assert fresh_optimizer.param_groups[0]["lr"] == generation * 0.01
+
+    save(1, epoch=1)
+    files_before = sorted(p.name for p in tmp_path.iterdir())
+    first, failed = (0, 1) if automatic_index else (1, 2)
+
+    # Simulate the process dying part-way through writing one file of the
+    # second save: some bytes reach the filesystem, then an error.
+    real_open = LocalFileSystem.open
+
+    def dying_open(self, path, mode="rb", *args, **kwargs):
+        f = real_open(self, path, mode, *args, **kwargs)
+        is_training_state = Path(path).name.startswith("checkpoint.")
+        if "w" in mode and is_training_state == (failing_file == "training_state"):
+            f.write(b"partial")
+            f.close()
+            raise RuntimeError("killed mid-write")
+        return f
+
+    monkeypatch.setattr(LocalFileSystem, "open", dying_open)
+    with pytest.raises(RuntimeError, match="killed mid-write"):
+        save(2, epoch=2)
+    monkeypatch.undo()
+
+    files_after = sorted(p.name for p in tmp_path.iterdir())
+    if failing_file == "training_state":
+        # The weights were complete before the training state failed.
+        assert [n for n in files_after if n not in files_before] == [
+            n.replace(f".0.{first}.", f".0.{failed}.")
+            for n in files_before
+            if not n.startswith("checkpoint.")
+        ]
+    else:
+        assert files_after == files_before
+    # A hard kill skips the cleanup and leaves the temporary file behind.
+    (tmp_path / f"checkpoint.0.{failed}.pt.tmp-0123abcd").write_bytes(b"partial")
+    assert_resumes(1, epoch=1)
+
+    # The resumed run saves new weights (generation 3) for the same epoch; they
+    # must come back with their own training state, not the leftover weights.
+    save(3, epoch=2)
+    assert_resumes(3, epoch=2)
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
 def test_compiled_model_checkpointing(
     tmp_path, device, rtol: float = 1e-3, atol: float = 1e-3

@@ -1808,7 +1808,7 @@ def _level_major_point_walk(tree, targets, theta):
 def test_point_plan_order_is_the_per_tree_walks_joined(device, implementation, n_dims):
     """The forest walk's near and far streams are the near and far entries of
     one level-major walk per tree, listed tree by tree (tree 0 near, tree 0 far,
-    tree 1 near, ...) and stably sorted by target: ISLA's per-tree lists."""
+    tree 1 near, ...) and stably sorted by target."""
     points, groups, _, n_groups = _group_case(device, n_dims)
     forest, trees = ClusterTree.from_point_groups(
         points, groups, n_groups=n_groups, leaf_size=4
