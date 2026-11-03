@@ -32,6 +32,7 @@ shards.
 """
 
 from collections.abc import Sequence
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -101,6 +102,43 @@ def build_noise_scheduler(
         raise ValueError(
             "training.loss.sigma_distribution must be 'lognormal' or 'loguniform'"
         )
+
+
+def sampling_formulation(loss_type: str) -> Literal["edm", "flow"]:
+    """Noise schedule family used for sampling a model trained with ``loss_type``
+    (``training.loss.type``), passed to :func:`~utils.nn.diffusion_model_forward`."""
+    return "flow" if loss_type == "flow_matching" else "edm"
+
+
+def build_sampling_scheduler(
+    loss_cfg, sampler_args: dict[str, Any]
+) -> EDMNoiseScheduler | RectifiedFlowNoiseScheduler:
+    """Create the noise scheduler used to sample a diffusion model.
+
+    Used by both the validation in training and ``inference.py``, so that they
+    sample in the same way.
+
+    Parameters
+    ----------
+    loss_cfg : object
+        Loss config (``training.loss``). With ``type: "flow_matching"``, sampling
+        starts at ``t_max``, the highest training time (pure noise for
+        ``t_max = 1``).
+    sampler_args : dict
+        Sampler arguments (``sampler.args``). For the EDM schedule, the
+        ``sigma_min``, ``sigma_max`` and ``rho`` of the sampling time steps.
+
+    Returns
+    -------
+    EDMNoiseScheduler | RectifiedFlowNoiseScheduler
+    """
+    if loss_cfg.type == "flow_matching":
+        return RectifiedFlowNoiseScheduler(t_max=loss_cfg.t_max)
+    return EDMNoiseScheduler(
+        sigma_min=sampler_args.get("sigma_min", 0.002),
+        sigma_max=sampler_args.get("sigma_max", 80.0),
+        rho=sampler_args.get("rho", 7.0),
+    )
 
 
 def build_diffusion_loss(

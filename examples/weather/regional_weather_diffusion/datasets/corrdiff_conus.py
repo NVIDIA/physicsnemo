@@ -29,9 +29,10 @@ from physicsnemo.utils.zenith_angle import cos_zenith_angle
 from .dataset import CustomDataset
 
 
-class _CorrDiffEra5HrrrDataset(CustomDataset):
+class _CorrDiffConusDataset(CustomDataset):
     """Same-time ERA5 -> HRRR downscaling samples over the contiguous US, the
-    dataset of CorrDiff-ERA5-HRRR (``config/corrdiff_era5_hrrr.yaml``).
+    dataset of CorrDiff-ERA5-HRRR (``config/replication_corrdiff_conus.yaml``),
+    see ``docs/CORRDIFF_CONUS_DATASET.md``.
 
     Expects the data under ``data_path`` with the following layout:
 
@@ -293,9 +294,9 @@ class _CorrDiffEra5HrrrDataset(CustomDataset):
         return x * self.hrrr_std + self.hrrr_mean
 
 
-class CorrDiffEra5HrrrDataset(_CorrDiffEra5HrrrDataset):
+class CorrDiffConusDataset(_CorrDiffConusDataset):
     """The dataset as the training recipe constructs it, from the ``dataset``
-    config (``name: data_loader_corrdiff_era5_hrrr.CorrDiffEra5HrrrDataset``) and a ``train`` flag."""
+    config (``name: corrdiff_conus.CorrDiffConusDataset``) and a ``train`` flag."""
 
     def __init__(self, params: dict, train: bool):
         super().__init__(train=train, **params)

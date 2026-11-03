@@ -13,21 +13,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# Defaults
 
-# CorrDiff-ERA5-HRRR: kilometer-scale downscaling of ERA5 to the 3 km HRRR grid
-# over the contiguous US with x-prediction rectified flow matching:
+
+# Configuration for replicating the training of the CorrDiff-ERA5-HRRR diffusion-only
+# downscaling model (https://huggingface.co/nvidia/corrdiff-era5-hrrr): ERA5 to the
+# 3 km HRRR grid over the contiguous US, with x-prediction rectified flow matching:
 #   - noisy states x_t = (1 - t) x0 + t eps with t drawn uniformly from [0, 1]
 #   - the DiT predicts the clean HRRR state x0, the loss is ||x0_hat - x0||^2
 #   - trained on random 256 x 256 patches of the 1024 x 1792 HRRR domain
+# For new downscaling projects, reference_downscaling.yaml is recommended; see the
+# README section "Flow Matching" for how to train it with flow matching.
 
+
+# Defaults
 defaults:
 
   # Dataset
-  - dataset/corrdiff_era5_hrrr
+  - dataset/corrdiff_conus  # custom dataset, see docs/CORRDIFF_CONUS_DATASET.md
 
   # Model
-  - model/corrdiff_era5_hrrr
+  - model/replication_corrdiff_conus
 
   # Training
   - training/default
@@ -41,7 +46,7 @@ defaults:
   - _self_
 
 training:
-  experiment_name: 'corrdiff-era5-hrrr'
+  experiment_name: 'corrdiff-conus'
   num_data_workers: 8
 
   checkpoint_freq: 7812 # How often to save the checkpoints (8 GB each), measured in number of training steps (7812 steps = 0.5M samples)

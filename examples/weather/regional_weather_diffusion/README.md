@@ -10,7 +10,11 @@ This recipe provides a toolkit for training and simple inference for regional AI
 using diffusion. Examples of the types of models that can be trained with it include:
 
 - [CorrDiff](https://arxiv.org/html/2309.15214),
-a _downscaling_ model that generates local high-resolution weather samples probabilistically from a lower-resolution input at the same time. The regression+diffusion setup used in the [original CorrDiff](https://nvidia.github.io/earth2studio/main/modules/generated/models/dx/CorrDiffTaiwan/) is supported, while purely diffusion-based downscaling can also be trained. This recipe is now better supported and recommended over the [original CorrDiff recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/corrdiff).
+a _downscaling_ model that generates local high-resolution weather samples probabilistically from a lower-resolution input at the same time. The regression+diffusion setup used in the [original CorrDiff](https://nvidia.github.io/earth2studio/main/modules/generated/models/dx/CorrDiffTaiwan/) is supported, while purely diffusion-based downscaling can also be trained. This recipe is now better supported and recommended over the [original CorrDiff recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/corrdiff). [CorrDiff-ERA5-HRRR](https://huggingface.co/nvidia/corrdiff-era5-hrrr), which downscales ERA5 to the 3 km HRRR grid over the contiguous US, is a diffusion-only DiT trained with [flow matching](#flow-matching) and can be replicated with the `replication_corrdiff_conus` config.
+
+<p align="center">
+<img src="../../../docs/img/corrdiff_era5_hrrr_t2m_downscaling.png"/>
+</p>
 
 - [StormCast](https://arxiv.org/abs/2408.10958),
 a generative diffusion model designed to emulate NOAA’s High-Resolution Rapid Refresh (HRRR) model, a 3 km
@@ -118,7 +122,7 @@ The training script `train.py` initializes the training experiment and launches 
 training.outdir: 'rundir' # Root path under which to save training outputs
 training.experiment_name: 'stormcast-training' # Name for the training experiment
 training.run_id: '0' # Unique ID to use for this training run
-training.rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiment outputs will be saved
+training.rundir: ${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiment outputs will be saved
 ```
 The `training.run_id` setting can be used for distinguishing between different runs of the same configuration. The final training output directory is constructed by composing together the `training.outdir` root path (defaults to `rundir`), the `training.experiment_name`, and the `training.run_id`. By default, the outputs of [`inference.py`](#inference) are saved in the `inference` subdirectory of this directory.
 
@@ -182,7 +186,7 @@ python train.py --config-name replication_stormcast_v1 training.loss.type=regres
 
 ### Training Diffusion Models
 
-Diffusion model training is launched by setting `training.loss.type` to `edm` (the default).
+Diffusion model training is launched by setting `training.loss.type` to `edm` (the default), or to `flow_matching` to train with [flow matching](#flow-matching).
 
 To train a diffusion model that uses the regression model output (unnecessary for diffusion-only models), there are two config items that must be defined:
   1. `'regression'` included in `model.diffusion_conditions`.
@@ -196,6 +200,60 @@ With that, launching diffusion training for the original StormCast configuration
 python train.py --config-name replication_stormcast_v1 training.experiment_name=diffusion
 ```
 
+### Flow Matching
+
+By default, diffusion models are trained with the EDM denoising score matching loss. They can instead be trained with [rectified flow matching](https://arxiv.org/abs/2209.03003), as used by CorrDiff-ERA5-HRRR. Three settings define how a diffusion model is trained:
+
+- `training.loss.type`: the noise schedule and the loss. `edm` trains with denoising score matching on the EDM schedule (`EDMNoiseScheduler`, `WeightedMSEDSMLoss`); `flow_matching` trains with rectified flow matching (`RectifiedFlowNoiseScheduler`, `WeightedFlowMatchingLoss`), with times drawn uniformly from `[training.loss.t_min, training.loss.t_max]`, where $t = 0$ is clean data and $t = 1$ is pure noise.
+- `training.loss.prediction_type`: what the network outputs: `x0` (the clean state, the default), `epsilon` (the noise), `score`, or `flow` (the velocity). The loss and the sampler convert between these with the noise scheduler. With `flow_matching` and `x0`, the network predicts the clean state ([x-prediction](https://arxiv.org/abs/2511.13720)) and the loss is the plain mean squared error on it.
+- `model.preconditioner`: how the network is wrapped. `edm` (the default) applies the EDM input, output and noise-level scalings with `EDMPreconditioner`, so the wrapped network predicts `x0`; it requires `prediction_type: x0`. `time_scaled` only multiplies the times by `model.time_scale` (default 999) before the network's timestep embedding (`TimeScaledModel` in [`utils/nn.py`](./utils/nn.py)), so the network output is the prediction itself. Use `time_scaled` with `flow_matching`.
+
+To train one of the `reference_*` diffusion models with flow matching, make these changes in your copy of the config:
+
+```yaml
+defaults:
+  ...
+  - sampler/rectified_flow  # in place of sampler/edm_deterministic
+  ...
+
+model:
+  preconditioner: time_scaled
+
+training:
+  loss:
+    type: 'flow_matching'  # remove the EDM sigma_* settings here and in sampler.args
+```
+
+The `rectified_flow` sampler ([`config/sampler/rectified_flow.yaml`](config/sampler/rectified_flow.yaml)) integrates the rectified-flow ODE from pure noise with `num_steps` steps of the `heun` or `euler` solver. Its `time_shift` $a$ warps the sampling times as $t \to a t / (1 + (a - 1) t)$, as in [Stable Diffusion 3](https://arxiv.org/abs/2403.03206), to spend more steps at high noise levels. This is needed when sampling a larger domain than used in training: larger images need stronger noise to destroy their large-scale structure. Keep `time_shift: 1` when sampling at the training resolution.
+
+#### Replicating CorrDiff-ERA5-HRRR
+
+The `replication_corrdiff_conus` config trains [CorrDiff-ERA5-HRRR](https://huggingface.co/nvidia/corrdiff-era5-hrrr) with x-prediction flow matching:
+
+- **Data**: same-time pairs of ERA5 and HRRR over a 1024 × 1792 pixel CONUS domain, read by the custom dataset `corrdiff_conus.CorrDiffConusDataset` (see [docs/CORRDIFF_CONUS_DATASET.md](docs/CORRDIFF_CONUS_DATASET.md)). The `"state"` holds 99 HRRR variables; the `"background"` holds 26 ERA5 variables interpolated to the HRRR grid, the cosine of the solar zenith angle, and three static fields. The scalar conditions are the sine and cosine of the time of year and presence flags for `tcwv` and `sp`, which the dataset drops with probability 0.5 during training so that the model also runs without them. The model trains on random 256 × 256 patches (`dataset.patch_shape`).
+- **Model** ([`config/model/replication_corrdiff_conus.yaml`](config/model/replication_corrdiff_conus.yaml)): a 678M-parameter DiT (28 blocks, hidden size 1152, 18 heads, 2 × 2 pixel patches) with 31 × 31 token neighborhood attention, 2D rotary position embeddings and normalized queries and keys, wrapped with `preconditioner: time_scaled`. The query and key normalization uses [NVIDIA Apex](https://github.com/NVIDIA/apex), which the PhysicsNeMo and NGC PyTorch containers include.
+- **Training**: 781,250 steps at batch size 64 (50M samples) with AdamW, learning rate $10^{-4}$, a 1000-step warmup followed by cosine decay, BF16 mixed precision, and gradient clipping at 1. With 2 samples per GPU, training uses about 68 GB of memory per GPU. Each checkpoint takes 8 GB, so `training.checkpoint_freq` is set to 7812 steps (0.5M samples).
+
+To train it with 8 GPUs on one node:
+
+```bash
+torchrun --standalone --nproc_per_node=8 train.py --config-name replication_corrdiff_conus dataset.data_path=/path/to/data
+```
+
+A smaller model, such as `model.hyperparameters.hidden_size=768 model.hyperparameters.depth=16 model.hyperparameters.num_heads=12`, trains about four times faster.
+
+The trained model samples the full 1024 × 1792 domain, which has 28 times more pixels than the training patches. The released model uses `time_shift: 32` with 50 Heun steps on the full domain (see [Inference](#inference)), while the validation during training samples the training patches with `time_shift: 1`. The released checkpoint has the following ensemble-mean RMSE and spread against HRRR for 8 members on 2025-10-24 00 UTC:
+
+| Variable | Ensemble-mean RMSE | Ensemble spread |
+| --- | --- | --- |
+| `u10m` | 1.05 m/s | 0.95 m/s |
+| `v10m` | 1.15 m/s | 1.01 m/s |
+| `t2m` | 0.70 K | 0.58 K |
+| `mslp` | 49.2 Pa | 38.9 Pa |
+| `refc` | 4.70 dBZ | 4.30 dBZ |
+
+To test flow matching training without data, use `--config-name test_flow_matching` (a small DiT on mock data), or run the `test_flow_matching*` and `test_rectified_flow*` tests in `test_training.py`.
+
 ### Testing Training
 
 To run a quick end-to-end test of training, copy the `config/lite.yaml` config file and swap `reference_downscaling` for your training config file. Then launch training using your modified `lite.yaml` config file. It applies overrides that make the training run for a few steps and go through all essential steps (initialization, training, validation and checkpoint saving). This verifies that training runs without obvious problems, though it is not expected to provide a useful model and will likely not reveal problems that only appear after longer training, such as training instabilities.
@@ -204,7 +262,7 @@ To run a quick end-to-end test of training, copy the `config/lite.yaml` config f
 
 Checkpoints are saved every `training.checkpoint_freq` steps and at the end of training, in `{training.rundir}/checkpoints_regression` or `{training.rundir}/checkpoints_diffusion`. Each consists of two files:
 
-- `<ModelClass>.0.<step>.mdlus` (e.g. `StormCastUNet.0.16000.mdlus` or `EDMPreconditioner.0.16000.mdlus`): the model weights and architecture, loadable with `physicsnemo.Module.from_checkpoint(path)`. Use the best one (typically the one with the lowest validation loss) for inference, `model.regression_weights` or `training.initial_weights`.
+- `<ModelClass>.0.<step>.mdlus` (e.g. `StormCastUNet.0.16000.mdlus`, `EDMPreconditioner.0.16000.mdlus`, or `TimeScaledModel.0.16000.mdlus` with `model.preconditioner: time_scaled`): the model weights and architecture, loadable with `physicsnemo.Module.from_checkpoint(path)`. Use the best one (typically the one with the lowest validation loss) for inference, `model.regression_weights` or `training.initial_weights`.
 - `checkpoint.0.<step>.pt`: the optimizer and scheduler states, needed to resume training but not for inference.
 
 Training automatically resumes from the latest checkpoint in `training.rundir`, which makes it easy to continue interrupted runs (`training.max_run_steps` can be used to stop a job after a given number of steps). To start a new run instead, change `training.experiment_name` or `training.run_id`, or delete the old run directory. Set `training.resume_checkpoint` to a step number to resume from a specific checkpoint.
@@ -255,7 +313,7 @@ training:
     # sigma_bin_edges: []  # optional: explicit strictly-increasing bin edges
 ```
 
-When `sigma_bin_edges` is not provided, bins are computed automatically so that each bin has equal probability mass under the configured sigma distribution (`lognormal` or `loguniform`). This feature is ignored for regression models.
+When `sigma_bin_edges` is not provided, bins are computed automatically so that each bin has equal probability mass under the configured sigma distribution (`lognormal` or `loguniform`). With `flow_matching`, the bins instead divide the time range `[t_min, t_max]` evenly. This feature is ignored for regression models.
 
 ## Datasets
 
@@ -266,6 +324,7 @@ The dataset used by the training process is set by the `dataset.name` configurat
 - `xarray.XarrayDataset`: a flexible Xarray-based dataset that can be configured to train many types of models. For more complex use cases or for loading data from custom data formats, it can be used as a starting point and modified or subclassed. See [docs/XARRAY_DATASET.md](docs/XARRAY_DATASET.md).
 - `mock.MockDataset`: supplies random data in different configurations; useful for testing training loops.
 - `data_loader_hrrr_era5.HrrrEra5Dataset`: legacy dataloader for StormCast; reads HRRR and ERA5 data from zarr-formatted files. See [docs/HRRR_ERA5_DATASET.md](docs/HRRR_ERA5_DATASET.md).
+- `corrdiff_conus.CorrDiffConusDataset`: dataloader for CorrDiff-ERA5-HRRR; serves same-time ERA5 and HRRR pairs over the contiguous US, with random training patches and randomly dropped inputs. See [docs/CORRDIFF_CONUS_DATASET.md](docs/CORRDIFF_CONUS_DATASET.md).
 
 ### Adding Custom Datasets
 
@@ -292,6 +351,15 @@ python inference.py --config-name reference_downscaling +inference=default \
 ```
 
 This generates an ensemble of 4 samples for each of the validation dataset samples 0, 10 and 20, and saves them along with the corresponding targets, in physical units, to `samples.zarr` in `inference.output_dir` (by default `{training.rundir}/inference`). It also saves a plot of `t2m` for each sample, comparing the first ensemble member to the target. For regression+diffusion models, the regression model is loaded from `model.regression_weights` unless `inference.regression_checkpoint` is given, and its prediction is also saved if `inference.save_regression=true`. Other parts of the config can be overridden as in training, e.g. `sampler.args.num_steps=32`.
+
+Models trained with [flow matching](#flow-matching) are sampled with the rectified-flow sampler of their config. For example, to sample CorrDiff-ERA5-HRRR on the full domain as the released model does:
+
+```bash
+python inference.py --config-name replication_corrdiff_conus +inference=default \
+    inference.diffusion_checkpoint=<checkpoint_dir>/TimeScaledModel.0.<step>.mdlus \
+    dataset.patch_shape=null sampler.args.time_shift=32 sampler.args.num_steps=50 \
+    inference.indices=[0] inference.ensemble_size=4 inference.plot_variables=[t2m]
+```
 
 **This is not autoregressive rollout.** `inference.py` does not feed its predictions back into the model as input for a following step; each sample uses its own input from the dataset. (Prior versions of this recipe carried predictions forward through the two-element `state` convention; that convention has been removed -- see [Adding Custom Datasets](docs/CUSTOM_DATASET.md).) For autoregressive rollout or more complex inference workflows, `inference.py` can be used as a starting point, or you can bring your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations. Earth2Studio also provides model creation skills (for coding agents) that help with writing wrappers for new models.
 
@@ -342,3 +410,7 @@ Consider the following solutions:
 - [Elucidating the design space of diffusion-based generative models](https://openreview.net/pdf?id=k7FuTOWMOc7)
 - [Score-Based Generative Modeling through Stochastic Differential Equations](https://arxiv.org/abs/2011.13456)
 - [Learning Accurate Storm-Scale Evolution from Observations](https://arxiv.org/abs/2601.17268)
+- [Residual Corrective Diffusion Modeling for Km-scale Atmospheric Downscaling (CorrDiff)](https://arxiv.org/abs/2309.15214)
+- [Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow](https://arxiv.org/abs/2209.03003)
+- [Back to Basics: Let Denoising Generative Models Denoise (x-prediction)](https://arxiv.org/abs/2511.13720)
+- [Scaling Rectified Flow Transformers for High-Resolution Image Synthesis (Stable Diffusion 3)](https://arxiv.org/abs/2403.03206)

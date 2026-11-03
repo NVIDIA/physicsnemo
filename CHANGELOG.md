@@ -84,8 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per step. The solvers share an extended semi-linear callback API
   (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
   solvers by string key through `physicsnemo.diffusion.samplers.sample`.
-- Adds flow matching (`training.loss.type: flow_matching`) and the CorrDiff-ERA5-HRRR
-  downscaling recipe to the `examples/weather/regional_weather_diffusion` example.
+- The `examples/weather/regional_weather_diffusion` recipe can train diffusion
+  models with rectified flow matching (`training.loss.type: flow_matching`) and
+  sample them in validation and `inference.py`. Adds the
+  `replication_corrdiff_conus` config and dataset for replicating the
+  CorrDiff-ERA5-HRRR downscaling model over the contiguous US.
 - `ClusterTree.find_dual_interaction_pairs(source_admissible=...)` marks source
   nodes that must never be approximated by their aggregate, such as nodes
   whose normals differ too much.

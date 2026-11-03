@@ -13,10 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# Defaults
-name: data_loader_corrdiff_era5_hrrr.CorrDiffEra5HrrrDataset # Dataset class module and name, in any module in `datasets` folder
 
-# Main dataset, see datasets/data_loader_corrdiff_era5_hrrr.py for the expected layout
+
+# Dataset of CorrDiff-ERA5-HRRR, see docs/CORRDIFF_CONUS_DATASET.md
+
+name: corrdiff_conus.CorrDiffConusDataset # Dataset class module and name, in any module in `datasets` folder
+
+# Main dataset, see datasets/corrdiff_conus.py for the expected layout
 data_path: 'data' # Path to the dataset
 years: [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025] # Years of data to load
 

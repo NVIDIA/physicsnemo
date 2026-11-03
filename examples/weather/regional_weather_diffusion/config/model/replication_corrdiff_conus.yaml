@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# CorrDiff-ERA5-HRRR model config - corresponds to the released checkpoint:
+# https://huggingface.co/nvidia/corrdiff-era5-hrrr
+# A 678M-parameter diffusion transformer (DiT) with neighborhood attention and 2D rotary
+# position embeddings, trained with x-prediction rectified flow matching
+# (training.loss.type: flow_matching).
+#
+# For new downscaling models, it is recommended to start from reference_dit.yaml instead.
+# Note that this model is not the CorrDiff Taiwan model (replication_corrdiff.yaml), which
+# is a regression+diffusion U-Net trained with the EDM loss.
+
+
+# Model conditions: pure downscaling; the dataset appends the static fields to the
+# low-resolution ERA5 "background"
+diffusion_conditions: ["background"]
+
+# Preconditioner: the times are multiplied by time_scale before the DiT timestep
+# embedding, and the network output is the prediction itself (training.loss.prediction_type)
+preconditioner: time_scaled
+time_scale: 999.0 # flow-matching times in [0, 1] are multiplied by this
+
+# Model hyperparameters
+architecture: "dit"
+hyperparameters:
+  hidden_size: 1152
+  depth: 28
+  num_heads: 18
+  patch_size: 2
+  attn_kernel_size: 31
+  attention_backend: "natten2d_rope"
+  layernorm_backend: "torch"
+  attn_kwargs:
+    qk_norm: true  # needed to stabilize 16-bit training
+    norm_layer: apex  # Apex LayerNorm keeps the bf16 dtype that NATTEN needs for queries, keys and values

@@ -1137,8 +1137,8 @@ def test_rectified_flow_sampling_from_pure_noise(
     assert abs(x.std().item() - std) < 0.02
 
 
-def _write_corrdiff_era5_hrrr_data(path: Path) -> dict:
-    """Write a small dataset in the layout that CorrDiffEra5HrrrDataset expects.
+def _write_corrdiff_conus_data(path: Path) -> dict:
+    """Write a small dataset in the layout that CorrDiffConusDataset expects.
     The ERA5 fields are linear in latitude and longitude, so their bilinear
     interpolation to the HRRR grid is exact."""
     times = pd.date_range("2025-01-01", periods=6, freq="h")
@@ -1206,15 +1206,15 @@ def _write_corrdiff_era5_hrrr_data(path: Path) -> dict:
     }
 
 
-def test_corrdiff_era5_hrrr_dataset(tmp_path: Path):
+def test_corrdiff_conus_dataset(tmp_path: Path):
     """Test time filtering, cropping, interpolation, normalization, patches,
-    and presence flags of CorrDiffEra5HrrrDataset on a small synthetic dataset."""
-    from datasets.data_loader_corrdiff_era5_hrrr import CorrDiffEra5HrrrDataset
+    and presence flags of CorrDiffConusDataset on a small synthetic dataset."""
+    from datasets.corrdiff_conus import CorrDiffConusDataset
 
     dist = DistributedManager()
     if dist.world_size > 1:
         pytest.skip("Skipping: single-process test.")
-    data = _write_corrdiff_era5_hrrr_data(tmp_path)
+    data = _write_corrdiff_conus_data(tmp_path)
     params = dict(
         data_path=str(tmp_path),
         years=[2025],
@@ -1228,7 +1228,7 @@ def test_corrdiff_era5_hrrr_dataset(tmp_path: Path):
 
     # Validation on the full domain: the dataset skips the invalid HRRR hour
     # and the hour missing in ERA5, and keeps every input
-    valid = CorrDiffEra5HrrrDataset(dict(params, patch_shape=None), train=False)
+    valid = CorrDiffConusDataset(dict(params, patch_shape=None), train=False)
     assert list(valid.times) == list(data["times"][[2, 3]])
     assert valid.image_shape() == (10, 12)
     assert len(valid.background_channels()) == 3 + 1 + 3
@@ -1262,7 +1262,7 @@ def test_corrdiff_era5_hrrr_dataset(tmp_path: Path):
 
     # Training patches: with drop_prob = 1, the dataset replaces tcwv and sp by
     # their climatological mean (zero) and sets their presence flags to zero
-    train_ds = CorrDiffEra5HrrrDataset(dict(params, patch_shape=[4, 4]), train=True)
+    train_ds = CorrDiffConusDataset(dict(params, patch_shape=[4, 4]), train=True)
     assert len(train_ds) == 2
     item = train_ds[1]
     assert item["state"].shape == (2, 4, 4)

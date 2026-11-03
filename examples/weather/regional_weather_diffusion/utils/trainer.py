@@ -33,17 +33,15 @@ from physicsnemo.diffusion.metrics.losses import (
     WeightedFlowMatchingLoss,
     WeightedMSEDSMLoss,
 )
-from physicsnemo.diffusion.noise_schedulers import (
-    EDMNoiseScheduler,
-    NoiseScheduler,
-    RectifiedFlowNoiseScheduler,
-)
+from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 
 from utils.loss import (
     RegressionLoss,
     SigmaBinTracker,
     build_diffusion_loss,
     build_noise_scheduler,
+    build_sampling_scheduler,
+    sampling_formulation,
 )
 
 from utils.config import MainConfig
@@ -236,7 +234,7 @@ class Trainer:
         self.loss_type = cfg.training.loss.type
         self.net_name = "regression" if self.loss_type == "regression" else "diffusion"
         # Noise schedule family and the quantity the network predicts
-        self.formulation = "flow" if self.loss_type == "flow_matching" else "edm"
+        self.formulation = sampling_formulation(self.loss_type)
         self.prediction_type = cfg.training.loss.prediction_type
 
         # Invalid-region masking for the DiT NATTEN backend. When enabled, the
@@ -739,16 +737,9 @@ class Trainer:
         loss_fn = build_diffusion_loss(self.net, noise_scheduler, loss_params)
         self.train_noise_scheduler = noise_scheduler
 
-        sa = self.cfg.sampler.args.__dict__
-        if self.loss_type == "flow_matching":
-            # Sampling starts at the highest training time, pure noise for t_max = 1
-            sampling_scheduler = RectifiedFlowNoiseScheduler(t_max=loss_params.t_max)
-        else:
-            sampling_scheduler = EDMNoiseScheduler(
-                sigma_min=sa.get("sigma_min", 0.002),
-                sigma_max=sa.get("sigma_max", 80.0),
-                rho=sa.get("rho", 7.0),
-            )
+        sampling_scheduler = build_sampling_scheduler(
+            loss_params, self.cfg.sampler.args.__dict__
+        )
         self.sampling_scheduler = self.parallel_helper.make_domain_parallel_scheduler(
             sampling_scheduler
         )
