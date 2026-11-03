@@ -137,6 +137,12 @@ install_natten() {
     git clone --recursive --branch v0.21.7 --depth 1 https://github.com/SHI-Labs/NATTEN.git "${source_dir}"
     (
         cd "${source_dir}"
+        # PyTorch 2.15+ headers require C++20, but NATTEN hardcodes C++17.
+        sed -i \
+            -e 's/set(CXX_STD "17"/set(CXX_STD "20"/' \
+            -e 's/-std=c++17/-std=c++20/' \
+            csrc/CMakeLists.txt
+        grep -q 'set(CXX_STD "20"' csrc/CMakeLists.txt
         MAX_JOBS=64 python setup.py bdist_wheel
         uv pip install --reinstall dist/*.whl
     )
