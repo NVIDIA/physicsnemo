@@ -392,6 +392,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The container build compiles NATTEN from source with C++20 when no
+  prebuilt NATTEN wheel is supplied, so it builds on PyTorch 2.15 base
+  images, whose headers require C++20.
 - `physicsnemo.metrics.cae.cfd.compute_tke_spectrum` no longer raises
   `UnboundLocalError` when `length` is passed; the domain length now sets the
   grid spacing used for the wavenumbers.
