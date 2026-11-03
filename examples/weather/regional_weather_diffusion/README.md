@@ -25,7 +25,7 @@ version](https://nvidia.github.io/earth2studio/main/modules/generated/models/px/
 - [StormScope](https://arxiv.org/abs/2601.17268),
 a _nowcasting/nearcasting_ model for clouds and precipitation, using satellite radiances and radar measurements as training data. StormScope's generative model architecture allows the uncertainty of the predicted variables to be accurately quantified.
 
-All of the above models can be formulated in terms of a high-resolution state update guided by a conditioning. In the code, we refer to the high-resolution training target in generic terms as `state` and to everything the model conditions on as `background`, including any past state history a forecasting model needs as input. See [Model Inputs and Outputs](#model-inputs-and-outputs) and [Adding Custom Datasets](datasets/CUSTOM_DATASET.md) for details.
+All of the above models can be formulated in terms of a high-resolution state update guided by a conditioning. In the code, we refer to the high-resolution training target in generic terms as `state` and to everything the model conditions on as `background`, including any past state history a forecasting model needs as input. See [Model Inputs and Outputs](#model-inputs-and-outputs) and [Adding Custom Datasets](docs/CUSTOM_DATASET.md) for details.
 
 ## Getting Started
 
@@ -55,7 +55,7 @@ The first command writes data files in the format read by the default `XarrayDat
 
 To train a model on your own data:
 
-1. Convert your data to the format described in [datasets/XARRAY_DATASET.md](datasets/XARRAY_DATASET.md), or [implement a custom dataset](datasets/CUSTOM_DATASET.md).
+1. Convert your data to the format described in [docs/XARRAY_DATASET.md](docs/XARRAY_DATASET.md), or [implement a custom dataset](docs/CUSTOM_DATASET.md).
 2. Copy the `reference_*` config closest to your problem (see [Configuration Basics](#configuration-basics)), e.g. `cp config/reference_downscaling.yaml config/my_model.yaml`, and edit its `dataset` section to point to your data and select your variables.
 3. Test the config by setting it in `config/lite.yaml` in place of `reference_downscaling` and running `python train.py --config-name lite`.
 4. Launch the training with `python train.py --config-name my_model`, or with `torchrun` to use multiple GPUs (see [Distributed Training](#distributed-training)).
@@ -95,7 +95,7 @@ Also in the `config` directory are several top-level configs:
 
  - `reference_*`: recommended starting points for new projects:
    - `reference_downscaling`: diffusion-only downscaling with a DiT (the default used by `train.py`)
-   - `reference_corrdiff`: CorrDiff-style regression+diffusion downscaling with a U-Net
+   - `reference_regression_diffusion_downscaling`: CorrDiff-style regression+diffusion downscaling with a U-Net
    - `reference_stormcast`: StormCast-style forecasting guided by low-resolution conditioning, with a DiT
    - `reference_stormscope`: StormScope-style nowcasting with a DiT
  - `replication_*`: configs for reproducing the training of published models
@@ -152,7 +152,7 @@ DiT-type models additionally support scalar conditions that are single numbers t
 #### Diffusion-Only vs Regression+Diffusion
 
 - **Diffusion-only** (`reference_downscaling`, `reference_stormcast`, `reference_stormscope`): a single diffusion model generates `"state"` directly. This is simpler to train and run and has worked well in StormCast-CONUS and StormScope, but may require tuning the noise distribution to your dataset.
-- **Regression+diffusion** (`reference_corrdiff`, as in CorrDiff and the original StormCast): a regression model trained with a mean squared error loss predicts the expected `"state"`, and a diffusion model generates the residual on top of it. This can make the diffusion task easier, at the cost of training two models and running both at inference. Train the [regression model](#training-regression-models) first, then the [diffusion model](#training-diffusion-models).
+- **Regression+diffusion** (`reference_regression_diffusion_downscaling`, as in CorrDiff and the original StormCast): a regression model trained with a mean squared error loss predicts the expected `"state"`, and a diffusion model generates the residual on top of it. This can make the diffusion task easier, at the cost of training two models and running both at inference. Train the [regression model](#training-regression-models) first, then the [diffusion model](#training-diffusion-models).
 
 We recommend starting with diffusion-only training for most new projects.
 
@@ -160,7 +160,7 @@ We recommend starting with diffusion-only training for most new projects.
 
 The architecture is selected with `model.architecture`:
 
-- **`dit`** (recommended for new projects): a diffusion transformer with [NATTEN](https://natten.org/) neighborhood attention. Supports scalar conditions and [mask tokens](datasets/CUSTOM_DATASET.md#spatial-mask), but currently only diffusion model training.
+- **`dit`** (recommended for new projects): a diffusion transformer with [NATTEN](https://natten.org/) neighborhood attention. Supports scalar conditions and [mask tokens](docs/CUSTOM_DATASET.md#spatial-mask), but currently only diffusion model training.
 - **`unet`**: a SongUNet-family U-Net, as used in CorrDiff and the original StormCast. Required for regression models and lead time labels.
 
 `model.hyperparameters` is passed to the [`DiT`](../../../physicsnemo/models/dit/dit.py) or [SongUNet](../../../physicsnemo/models/diffusion_unets/) class via `utils/nn.py`; see their docstrings for all options. The main ones are:
@@ -188,7 +188,7 @@ To train a diffusion model that uses the regression model output (unnecessary fo
   1. `'regression'` included in `model.diffusion_conditions`.
   2. `model.regression_weights` set to the path of a PhysicsNeMo (`.mdlus`) checkpoint with model weights for the pre-trained regression model. These are saved in the checkpoint directory during training (see [Checkpoints and Resuming](#checkpoints-and-resuming)).
 
-The `reference_corrdiff` and `replication_stormcast_v1` top-level configs show examples of how to specify these settings.
+The `reference_regression_diffusion_downscaling` and `replication_stormcast_v1` top-level configs show examples of how to specify these settings.
 
 With that, launching diffusion training for the original StormCast configuration looks something like:
 
@@ -263,13 +263,13 @@ The dataset used by the training process is set by the `dataset.name` configurat
 
 ### Included Datasets
 
-- `xarray.XarrayDataset`: a flexible Xarray-based dataset that can be configured to train many types of models. For more complex use cases or for loading data from custom data formats, it can be used as a starting point and modified or subclassed. See [datasets/XARRAY_DATASET.md](datasets/XARRAY_DATASET.md).
+- `xarray.XarrayDataset`: a flexible Xarray-based dataset that can be configured to train many types of models. For more complex use cases or for loading data from custom data formats, it can be used as a starting point and modified or subclassed. See [docs/XARRAY_DATASET.md](docs/XARRAY_DATASET.md).
 - `mock.MockDataset`: supplies random data in different configurations; useful for testing training loops.
-- `data_loader_hrrr_era5.HrrrEra5Dataset`: legacy dataloader for StormCast; reads HRRR and ERA5 data from zarr-formatted files. See [datasets/HRRR_ERA5_DATASET.md](datasets/HRRR_ERA5_DATASET.md).
+- `data_loader_hrrr_era5.HrrrEra5Dataset`: legacy dataloader for StormCast; reads HRRR and ERA5 data from zarr-formatted files. See [docs/HRRR_ERA5_DATASET.md](docs/HRRR_ERA5_DATASET.md).
 
 ### Adding Custom Datasets
 
-When `xarray.XarrayDataset` is not sufficient, you can define a custom dataset class. See [datasets/CUSTOM_DATASET.md](datasets/CUSTOM_DATASET.md) for the interface it must implement, how to configure it, and the optional spatial mask and loading strategies.
+When `xarray.XarrayDataset` is not sufficient, you can define a custom dataset class. See [docs/CUSTOM_DATASET.md](docs/CUSTOM_DATASET.md) for the interface it must implement, how to configure it, and the optional spatial mask and loading strategies.
 
 ## Experiment Tracking
 
@@ -279,7 +279,7 @@ This recipe also supports both TensorBoard and Weights & Biases (WandB), which c
 
 Validation runs every `training.validation_freq` steps and evaluates `training.validation_steps` batches (16 by default) of the validation set, using the same samples and noise every time so that the validation loss is comparable between steps. Increase `training.validation_steps` if these samples don't represent the validation set well. Images of generated samples and power spectra are also saved in the logs and in `{training.rundir}/images` for variables listed in `training.validation_plot_variables`.
 
-Diffusion losses typically drop quickly at first and then slowly. Their late improvements are small even while sample quality still improves. The validation images and spectra are therefore usually more informative than the loss alone: a a ratio of generated to target spectral power close to 1 means that the generated fields have realistic small-scale detail. If the loss increases or spikes, see [Training Is Unstable](#training-is-unstable--not-converging).
+Diffusion losses typically drop quickly at first and then slowly. Their late improvements are small even while sample quality still improves. The validation images and spectra are therefore usually more informative than the loss alone: a ratio of generated to target spectral power close to 1 means that the generated fields have realistic small-scale detail. If the loss increases or spikes, see [Training Is Unstable](#training-is-unstable--not-converging).
 
 ## Inference
 
@@ -293,7 +293,7 @@ python inference.py --config-name reference_downscaling +inference=default \
 
 This generates an ensemble of 4 samples for each of the validation dataset samples 0, 10 and 20, and saves them along with the corresponding targets, in physical units, to `samples.zarr` in `inference.output_dir` (by default `{training.rundir}/inference`). It also saves a plot of `t2m` for each sample, comparing the first ensemble member to the target. For regression+diffusion models, the regression model is loaded from `model.regression_weights` unless `inference.regression_checkpoint` is given, and its prediction is also saved if `inference.save_regression=true`. Other parts of the config can be overridden as in training, e.g. `sampler.args.num_steps=32`.
 
-**This is not autoregressive rollout.** `inference.py` does not feed its predictions back into the model as input for a following step; each sample uses its own input from the dataset. (Prior versions of this recipe carried predictions forward through the two-element `state` convention; that convention has been removed -- see [Adding Custom Datasets](datasets/CUSTOM_DATASET.md).) For autoregressive rollout or more complex inference workflows, `inference.py` can be used as a starting point, or you can bring your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations.
+**This is not autoregressive rollout.** `inference.py` does not feed its predictions back into the model as input for a following step; each sample uses its own input from the dataset. (Prior versions of this recipe carried predictions forward through the two-element `state` convention; that convention has been removed -- see [Adding Custom Datasets](docs/CUSTOM_DATASET.md).) For autoregressive rollout or more complex inference workflows, `inference.py` can be used as a starting point, or you can bring your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations. Earth2Studio also provides model creation skills (for coding agents) that help with writing wrappers for new models.
 
 ## Troubleshooting / Frequently Asked Questions
 
@@ -317,7 +317,7 @@ Ensure that the `model.diffusion_conditions` and `model.regression_conditions` s
 
 If training seems slow, check your GPU utilization. If it's low, the problem is likely a bottleneck with the data loading. Another way to identify a data bottleneck is to test your model using `MockDataset` (set `dataset.name=mock.MockDataset`); if training with `MockDataset` is much faster than with real data, it likely indicates a data loading bottleneck. Many datasets used in regional high-resolution models contain lots of data. Depending on the dataset size and format, consider the following optimizations:
   * Increasing `training.num_data_workers` (or `dataset.loader.num_workers`, which overrides it)
-  * If your dataset implements one, switching to the PhysicsNeMo `datapipes` loading strategy (`dataset.loader.backend: "datapipes"`) -- see [Loading Strategy: `torch` vs `datapipes`](datasets/CUSTOM_DATASET.md#loading-strategy-torch-vs-datapipes)
+  * If your dataset implements one, switching to the PhysicsNeMo `datapipes` loading strategy (`dataset.loader.backend: "datapipes"`) -- see [Loading Strategy: `torch` vs `datapipes`](docs/CUSTOM_DATASET.md#loading-strategy-torch-vs-datapipes)
   * Parallel loading of data in multiple threads within the dataset; controlled by `dataset.num_threads` if using the reference `XarrayDataset`
   * Optimized data preprocessing using e.g. [Numba](https://numba.pydata.org/)
   * Data compression, if bandwidth from storage is the limiting factor
@@ -331,7 +331,7 @@ Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile
 
 Consider the following solutions:
   * Ensure that your data is normalized to near zero mean and unit variance.
-  * Skewed and heavy-tailed data distributions may introduce instability. Consider applying a nonlinear transformation in preprocessing, or in the dataset (see [Normalization Statistics](datasets/XARRAY_DATASET.md#normalization-statistics) for `XarrayDataset`), to bring the variable distribution closer to a normal distribution. For instance, some variables become better behaved when log-transformed. Ensure that the distribution of the transformed variable is near zero mean and unit variance.
+  * Skewed and heavy-tailed data distributions may introduce instability. Consider applying a nonlinear transformation in preprocessing, or in the dataset (see [Normalization Statistics](docs/XARRAY_DATASET.md#normalization-statistics) for `XarrayDataset`), to bring the variable distribution closer to a normal distribution. For instance, some variables become better behaved when log-transformed. Ensure that the distribution of the transformed variable is near zero mean and unit variance.
   * The default lognormal sampling of noise levels may introduce instability in some cases. Consider setting `training.loss.sigma_distribution` to `loguniform`, and `training.loss.sigma_min` and `training.loss.sigma_max` to the ends of the noise level range (for example, 0.01 and 200, respectively).
   * If using DiT, we recommend setting `model.hyperparameters.attn_kwargs.qk_norm=true`; without this option, DiT has proven to be unstable in the current implementation. It is already set in the reference configurations.
   * If you have many state variables, the diffusion model may not have the capacity to denoise them all. Increasing the model width (`model.hyperparameters.hidden_size` for DiT, `model.hyperparameters.model_channels` for U-Net) may help, at the cost of increased compute and memory requirements.

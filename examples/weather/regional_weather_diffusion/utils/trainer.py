@@ -346,7 +346,7 @@ class Trainer:
         self._channel_loss_weight = self._build_channel_loss_weight()
 
         # Dataloaders. The dataset owns its loading strategy (see
-        # `StormCastDataSource.make_loader`); the trainer only states what it
+        # `CustomDataSource.make_loader`); the trainer only states what it
         # needs via the LoaderSpec.
         self.train_dataloader = self._setup_loader(self.dataset_train)
         self.dataset_iterator = self.parallel_helper.sharded_data_iter(
@@ -396,7 +396,7 @@ class Trainer:
 
         Parameters
         ----------
-        source : StormCastDataSource
+        source : CustomDataSource
             Data source to draw batches from.
         shuffle : bool, optional
             Whether the sampler shuffles the rank-local slice.

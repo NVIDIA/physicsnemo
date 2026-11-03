@@ -18,7 +18,7 @@
 # Configuration for replicating the training of the CorrDiff regression+diffusion
 # downscaling model on the Taiwan dataset (https://arxiv.org/abs/2309.15214).
 # For new downscaling projects, reference_downscaling.yaml (diffusion-only DiT) or
-# reference_corrdiff.yaml (regression+diffusion U-Net) is recommended.
+# reference_regression_diffusion_downscaling.yaml (regression+diffusion U-Net) is recommended.
 
 
 # Defaults

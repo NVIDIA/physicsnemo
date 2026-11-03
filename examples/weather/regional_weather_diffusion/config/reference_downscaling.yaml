@@ -17,7 +17,7 @@
 
 # Reference configuration for training downscaling models. This configuration trains
 # a diffusion-only downscaling model with DiT. For CorrDiff-style models, see
-# reference_corrdiff.yaml.
+# reference_regression_diffusion_downscaling.yaml.
 
 
 # Defaults

@@ -30,7 +30,7 @@ import xarray as xr
 
 from physicsnemo.utils.zenith_angle import zenith_azimuth_angles_from_timestamp
 
-from .dataset import StormCastDataset
+from .dataset import CustomDataset
 
 # reserved array name of the solar angles, which are computed rather than read
 SOLAR_ANGLES = "solar_angles"
@@ -73,7 +73,7 @@ class AccessPattern:
             )
 
 
-class _XarrayDataset(StormCastDataset):
+class _XarrayDataset(CustomDataset):
     """Generic reader for regional training data stored in xarray-compatible files.
 
     Which arrays, channels and time steps make up the ``"state"`` and ``"background"``

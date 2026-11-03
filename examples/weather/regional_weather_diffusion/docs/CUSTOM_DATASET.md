@@ -2,20 +2,20 @@
 
 When `xarray.XarrayDataset` is not sufficient, a more flexible option is to define a
 custom dataset class. These datasets must follow the
-`StormCastDataSource`/`StormCastDataset` interface defined in `datasets/dataset.py`.
+`CustomDataSource`/`CustomDataset` interface defined in `datasets/dataset.py`.
 Refer to the docstrings in that file for a full specification of what the functions must
 accept and return. You can use the `datasets/mock.py` implementation as a minimal
 synthetic example and the `xarray.XarrayDataset` implementation as a real-world example;
 often it is sufficient to modify or subclass the latter to fit your needs.
 
-Most custom datasets should subclass `StormCastDataset`, the map-style (`__getitem__`)
+Most custom datasets should subclass `CustomDataset`, the map-style (`__getitem__`)
 tier that most existing datasets use and that gets the classic PyTorch `DataLoader` for
-free. `StormCastDataSource` is the lower-level contract it builds on -- implement it
+free. `CustomDataSource` is the lower-level contract it builds on -- implement it
 directly only if your data source isn't naturally indexable (e.g. a streaming source);
 see [Loading Strategy: `torch` vs `datapipes`](#loading-strategy-torch-vs-datapipes)
 below.
 
-The `StormCastDataset` subclass must implement the following methods:
+The `CustomDataset` subclass must implement the following methods:
 
 * `__len__`: Returns the number of items in the dataset.
 * `__getitem__`: Returns the data for the item at index `idx`, a dict with the following
@@ -70,7 +70,7 @@ The following methods are optional and are not used for training:
 * `latitude` and `longitude`: Return the latitude and longitude grids, respectively.
   Saved in the `inference.py` outputs if available.
 
-The `StormCastDataset` interface also supports lead-time aware training. To enable this:
+The `CustomDataset` interface also supports lead-time aware training. To enable this:
 
 * Set the `self.lead_time_steps` attribute of the dataset to the number of possible lead
   times (an integer larger than 0).
@@ -115,7 +115,7 @@ returning it for every sample is recommended.
 Every dataset serves batches through `make_loader(spec)`, where `spec` is a `LoaderSpec`
 describing what the trainer needs (batch size, worker count, device, an already
 rank-sharded sample stream, etc. -- see `datasets/dataset.py`).
-`StormCastDataset.make_loader` defaults to building the classic PyTorch `DataLoader`
+`CustomDataset.make_loader` defaults to building the classic PyTorch `DataLoader`
 (fork worker processes), which is what every dataset in this recipe used before and
 requires no changes to keep using.
 

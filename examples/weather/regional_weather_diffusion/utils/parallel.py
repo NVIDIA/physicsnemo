@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 import numpy as np
 import torch
-from datasets.dataset import LoaderSpec, StormCastDataSource
+from datasets.dataset import LoaderSpec, CustomDataSource
 from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy
@@ -246,7 +246,7 @@ class ParallelHelper:
 
     def loader_spec(
         self,
-        source: StormCastDataSource,
+        source: CustomDataSource,
         *,
         batch_size: int,
         num_workers: int = 0,
@@ -265,7 +265,7 @@ class ParallelHelper:
 
         Parameters
         ----------
-        source : StormCastDataSource
+        source : CustomDataSource
             Source the loader will draw from; only its length is read here.
         batch_size : int
             Local (per-rank) batch size in training samples.
@@ -284,7 +284,7 @@ class ParallelHelper:
         Returns
         -------
         LoaderSpec
-            Spec to hand to :meth:`~datasets.dataset.StormCastDataSource.make_loader`.
+            Spec to hand to :meth:`~datasets.dataset.CustomDataSource.make_loader`.
         """
         spec_fields = {
             "backend",

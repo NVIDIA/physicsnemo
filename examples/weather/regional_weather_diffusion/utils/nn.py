@@ -253,7 +253,7 @@ def unpack_batch(
             "batch['state'] must be a single tensor (the training target). "
             "The two-element [input, target] convention has been removed: "
             "concatenate any past state your model needs as input onto the "
-            "'background' tensor instead. See datasets/CUSTOM_DATASET.md for "
+            "'background' tensor instead. See docs/CUSTOM_DATASET.md for "
             "details."
         )
 
