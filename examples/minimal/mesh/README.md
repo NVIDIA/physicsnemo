@@ -152,6 +152,7 @@ The following pages have more information:
 
 - [PhysicsNeMo-Mesh User Guide](https://docs.nvidia.com/physicsnemo/latest/user-guide/mesh.html)
 - [PhysicsNeMo-Mesh API Reference](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api/mesh/index.html)
+- [PhysicsNeMo-Mesh paper](https://arxiv.org/abs/2610.39072)
 - [physicsnemo.mesh README](../../../physicsnemo/mesh/README.md)
 - [TensorDict](https://github.com/pytorch/tensordict) and
   [PyVista](https://pyvista.org/)

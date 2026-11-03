@@ -388,6 +388,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.metrics.cae.cfd.compute_tke_spectrum` no longer raises
+  `UnboundLocalError` when `length` is passed; the domain length now sets the
+  grid spacing used for the wavenumbers.
 - The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
@@ -685,6 +688,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-write no longer leaves an unloadable truncated checkpoint. Also fixes
   `legacy_format=True`, which failed with `FileNotFoundError` on current
   fsspec versions.
+- `save_checkpoint` now also writes training state and plain PyTorch weights
+  atomically, so an interrupted save no longer leaves a truncated checkpoint.
+  With `epoch=None`, all files of a save share one index, so `load_checkpoint`
+  restores weights and training state from the same save.
 - `RandomRotateMesh` defaults to `mode="axis_aligned"` when `axes` is given.
   Unified external aero recipe translation configs pass tensor bounds so
   `torch.distributions.Uniform` instantiates.
