@@ -335,8 +335,6 @@ physicsnemo/experimental/models/globe/ @peterdsharpe
 physicsnemo/experimental/models/smart/ @mnabian
 physicsnemo/experimental/nn/sdf_stencil.py @sgtkeum
 physicsnemo/experimental/nn/radius_pooling.py @sgtkeum
-test/experimental/nn/test_sdf_stencil.py @sgtkeum
-test/experimental/nn/test_radius_pooling.py @sgtkeum
 physicsnemo/experimental/peft/ @mnabian
 physicsnemo/experimental/uq/conformal/ @melo-gonzo
 
@@ -513,6 +511,8 @@ test/optim/ @peterdsharpe
 test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
+test/experimental/nn/test_sdf_stencil.py @sgtkeum
+test/experimental/nn/test_radius_pooling.py @sgtkeum
 test/experimental/models/aerojepa/ @mnabian
 test/experimental/models/smart/ @mnabian
 test/experimental/peft/ @mnabian

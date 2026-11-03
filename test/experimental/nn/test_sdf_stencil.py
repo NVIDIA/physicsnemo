@@ -153,3 +153,39 @@ def test_forward_rejects_shapes():
         layer(torch.zeros(1, 4, 2), v[None], f[None])
     with pytest.raises(ValueError):
         layer(torch.zeros(1, 4, 3), v, f[None])
+
+
+def test_probe_limit_smaller_than_the_stencil(device):
+    # max_probes_per_call below the probes of one point still splits the distance calls
+    v, f = _cube(device)
+    points = torch.rand(1, 5, 3, device=device) - 0.5
+    full = SignedDistanceStencil(spacings=(0.1, 0.3), out_features=4).to(device)
+    small = SignedDistanceStencil(
+        spacings=(0.1, 0.3), out_features=4, max_probes_per_call=8
+    ).to(device)
+    torch.testing.assert_close(
+        small.probe_values(points, v[None], f[None]),
+        full.probe_values(points, v[None], f[None]),
+    )
+
+
+def test_empty_points(device):
+    v, f = _cube(device)
+    layer = SignedDistanceStencil(spacings=(0.2,), out_features=4).to(device)
+    assert layer.probe_values(
+        torch.zeros(1, 0, 3, device=device), v[None], f[None]
+    ).shape == (1, 0, layer.num_probes)
+    assert layer(torch.zeros(1, 0, 3, device=device), v[None], f[None]).shape == (
+        1,
+        0,
+        4,
+    )
+
+
+def test_probe_values_rejects_shapes():
+    v, f = _cube("cpu")
+    layer = SignedDistanceStencil(spacings=(0.2,), out_features=4)
+    with pytest.raises(ValueError):
+        layer.probe_values(torch.zeros(1, 3, 2), v[None], f[None])
+    with pytest.raises(ValueError):
+        layer.probe_values(torch.zeros(1, 3, 3), v, f[None])

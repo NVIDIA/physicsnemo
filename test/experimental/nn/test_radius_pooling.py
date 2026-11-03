@@ -133,3 +133,26 @@ def test_forward_rejects_shapes():
         layer(torch.zeros(1, 10, 2), torch.zeros(1, 3, 3))
     with pytest.raises(ValueError):
         layer(torch.zeros(1, 10, 3), torch.zeros(2, 3, 3))
+
+
+def test_empty_candidates_and_queries(device):
+    layer = _layer().to(device).eval()
+    feats = layer(
+        torch.zeros(1, 0, 3, device=device), torch.rand(1, 4, 3, device=device)
+    )
+    assert all(h.shape == (1, 4, 6) and torch.all(h == 0) for h in feats)
+    feats = layer(
+        torch.rand(1, 50, 3, device=device), torch.zeros(1, 0, 3, device=device)
+    )
+    assert all(h.shape == (1, 0, 6) for h in feats)
+
+
+def test_public_methods_reject_shapes():
+    layer = _layer()
+    with pytest.raises(ValueError):
+        layer.neighbours(torch.zeros(1, 10, 2), torch.zeros(1, 3, 3))
+    drawn = layer.neighbours(torch.rand(1, 10, 3), torch.rand(1, 3, 3))
+    with pytest.raises(ValueError):
+        layer.pool(drawn[:1], torch.rand(1, 3, 3))
+    with pytest.raises(ValueError):
+        layer.pool(drawn, torch.rand(1, 4, 3))

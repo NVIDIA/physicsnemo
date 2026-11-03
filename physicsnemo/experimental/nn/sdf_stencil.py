@@ -137,19 +137,32 @@ class SignedDistanceStencil(Module):
         torch.Tensor
             Values of shape :math:`(B, N, P)` in float32, :math:`P` = ``num_probes``, negative inside.
         """
+        if not torch.compiler.is_compiling():
+            if points.ndim != 3 or points.shape[-1] != 3:
+                raise ValueError(f"Expected points of shape (B, N, 3), got {tuple(points.shape)}")
+            if vertices.ndim != 3 or vertices.shape[-1] != 3 or vertices.shape[0] != points.shape[0]:
+                raise ValueError(f"Expected vertices of shape (B, V, 3), got {tuple(vertices.shape)}")
+            if faces.ndim != 3 or faces.shape[-1] != 3 or faces.shape[0] != points.shape[0]:
+                raise ValueError(f"Expected faces of shape (B, F, 3), got {tuple(faces.shape)}")
         b, n, _ = points.shape
         offsets, scales = self.offsets.float(), self.scales.float()
         rows = max(1, self.max_probes_per_call // self.num_probes)
+        limit = self.max_probes_per_call
         out = []
         with torch.autocast(device_type=points.device.type, enabled=False):
             for i in range(b):
                 v, f, c = vertices[i].float().contiguous(), faces[i].long().contiguous(), points[i].float()
-                pieces = []
+                pieces = [c.new_zeros((0, self.num_probes))]
                 for s in range(0, n, rows):
-                    # (rows, P, 3) probe positions -> signed distances
+                    # (rows, P, 3) probe positions -> signed distances, at most max_probes_per_call per call
                     probes = (c[s : s + rows, None] + offsets[None]).reshape(-1, 3)
-                    sdf = signed_distance_field(v, f, probes, use_sign_winding_number=self.use_sign_winding_number)
-                    pieces.append((sdf[0] if isinstance(sdf, (tuple, list)) else sdf).reshape(-1, self.num_probes))
+                    values = []
+                    for t in range(0, probes.shape[0], limit):
+                        sdf = signed_distance_field(
+                            v, f, probes[t : t + limit], use_sign_winding_number=self.use_sign_winding_number
+                        )
+                        values.append(sdf[0] if isinstance(sdf, (tuple, list)) else sdf)
+                    pieces.append(torch.cat(values).reshape(-1, self.num_probes))
                 out.append(torch.clamp(torch.cat(pieces) / scales, -self.clip, self.clip))
         return torch.stack(out)
 
