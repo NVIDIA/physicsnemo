@@ -29,8 +29,8 @@ from physicsnemo.mesh import Mesh
 class TaggedMesh(Mesh):
     """Custom mesh subtype used to guard functional update behavior."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __post_init__(self) -> None:
+        super().__post_init__()
         object.__setattr__(self, "constructed_spatial_dims", self.n_spatial_dims)
 
     def tag(self) -> str:
@@ -462,7 +462,7 @@ class TestWithCells:
     def test_rejects_floating_point_cells(self):
         mesh = self._cached_triangle()
 
-        with pytest.raises(TypeError, match="int-like dtype"):
+        with pytest.raises(TypeError, match="integer dtype"):
             mesh.with_cells(mesh.cells.to(torch.float32))
 
     def test_result_containers_are_independent(self):

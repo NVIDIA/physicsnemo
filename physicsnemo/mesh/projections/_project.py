@@ -264,12 +264,13 @@ def project(
             )
 
     ### Connectivity is unchanged, so retain topology while invalidating all
-    # projection-dependent geometry caches.
-    projected_mesh = mesh.with_points(new_points)
+    # projection-dependent geometry caches. Replace the data first, so that
+    # with_points transfers explicit cell measures to the projected geometry.
+    projected_mesh = mesh
     if transform_point_data or transform_cell_data or transform_global_data:
         projected_mesh = projected_mesh.with_data(
             point_data=new_point_data if transform_point_data else None,
             cell_data=new_cell_data if transform_cell_data else None,
             global_data=new_global_data if transform_global_data else None,
         )
-    return projected_mesh
+    return projected_mesh.with_points(new_points)

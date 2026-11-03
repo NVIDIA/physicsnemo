@@ -11,7 +11,7 @@ from physicsnemo.models.fno.fno import FNO
 # [code]
 normaliser = { # Dictionary with mean and std of the permeability and darcy fields
     "permeability": (1.25, 0.75), 
-    "darcy": (4.52e-2, 2.79e-2),
+    "darcy": (3.63e-2, 2.44e-2),
 }
 dataloader = Darcy2D(
     resolution=256, batch_size=64, nr_permeability_freq=5, normaliser=normaliser

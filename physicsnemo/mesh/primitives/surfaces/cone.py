@@ -16,7 +16,7 @@
 
 """Cone surface in 3D space.
 
-Dimensional: 2D manifold in 3D space (has boundary at base).
+Dimensional: 2D manifold in 3D space (closed, no boundary).
 """
 
 import torch
@@ -57,20 +57,23 @@ def load(
         raise ValueError(f"n_height must be at least 2, got {n_height=}")
 
     ### Create conical side
+    # Rings from the base up to (not including) the apex, which is one vertex
     theta = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
-    z_levels = torch.linspace(0, height, n_height, device=device)
+    z_levels = torch.linspace(0, height, n_height, device=device)[:-1]
 
     # Vectorized side point generation (radius decreases with height)
-    i_vals = torch.arange(n_height, device=device, dtype=torch.float32)
+    i_vals = torch.arange(n_height - 1, device=device, dtype=torch.float32)
     r_vals = radius * (1 - i_vals / (n_height - 1))
     R, THETA = torch.meshgrid(r_vals, theta, indexing="ij")
     Z, _ = torch.meshgrid(z_levels, theta, indexing="ij")
     x = R * torch.cos(THETA)
     y = R * torch.sin(THETA)
     side_points = torch.stack([x, y, Z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
+    apex_idx = (n_height - 1) * n_circ
+    apex = torch.tensor([[0.0, 0.0, height]], dtype=torch.float32, device=device)
 
     # Vectorized side cell generation (periodic in theta, open in height)
-    i_idx = torch.arange(n_height - 1, device=device)
+    i_idx = torch.arange(n_height - 2, device=device)
     j_idx = torch.arange(n_circ, device=device)
     ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
     ii_flat = ii.reshape(-1)
@@ -84,8 +87,20 @@ def load(
     tri1 = torch.stack([p00, p01, p10], dim=1)
     tri2 = torch.stack([p01, p11, p10], dim=1)
 
+    # Triangle fan from the last ring to the apex
+    j_fan = torch.arange(n_circ, device=device)
+    last_ring = (n_height - 2) * n_circ
+    apex_fan = torch.stack(
+        [
+            last_ring + j_fan,
+            last_ring + (j_fan + 1) % n_circ,
+            torch.full_like(j_fan, apex_idx),
+        ],
+        dim=1,
+    )
+
     ### Add base cap
-    base_center_idx = n_height * n_circ
+    base_center_idx = apex_idx + 1
     base_center = torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float32, device=device)
 
     # Vectorized base cap triangles
@@ -100,7 +115,7 @@ def load(
         dim=1,
     )
 
-    points = torch.cat([side_points, base_center], dim=0)
-    cells = torch.cat([tri1, tri2, base_cells], dim=0)
+    points = torch.cat([side_points, apex, base_center], dim=0)
+    cells = torch.cat([tri1, tri2, apex_fan, base_cells], dim=0)
 
     return Mesh(points=points, cells=cells)

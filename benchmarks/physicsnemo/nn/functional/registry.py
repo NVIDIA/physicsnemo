@@ -17,6 +17,7 @@
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
 from physicsnemo.core.function_spec import FunctionSpec
+from physicsnemo.mesh.utilities._normalization import SafeNormalize
 from physicsnemo.nn.functional.derivatives import (
     MeshGreenGaussGradient,
     MeshlessFDDerivatives,
@@ -62,7 +63,7 @@ from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
     WeightFact,
 )
-from physicsnemo.nn.functional.weighted_multinomial import WeightedMultinomial
+from physicsnemo.utils.weighted_multinomial import WeightedMultinomial
 
 # FunctionSpec classes listed here must implement ``make_inputs_forward`` for ASV.
 # ``make_inputs_backward`` is optional and only used when backward benchmarks run.
@@ -72,6 +73,8 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     # Regularization / parameterization.
     DropPath,
     WeightFact,
+    # Normalization.
+    SafeNormalize,
     # Neighbor queries.
     KNN,
     RadiusSearch,

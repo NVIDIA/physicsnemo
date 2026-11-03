@@ -22,7 +22,7 @@ install_pyspng() {
         uv pip install "${DEPS_DIR}/${PYSPNG_ARM64_WHEEL}"
     else
         echo "No custom wheel for pyspng found. Installing pyspng for: ${TARGETPLATFORM} from PyPI"
-        uv pip install "pyspng>=0.1.0"
+        uv pip install "pyspng>=0.1.4"
     fi
 }
 
@@ -41,7 +41,7 @@ install_numcodecs() {
 
 install_onnxruntime() {
     if [[ "${TARGETPLATFORM}" == "linux/amd64" ]]; then
-        uv pip install "onnxruntime-gpu>1.19.0"
+        uv pip install "onnxruntime-gpu>=1.30.0"
     elif [[ "${TARGETPLATFORM}" == "linux/arm64" && "${ONNXRUNTIME_ARM64_WHEEL}" != "unknown" ]]; then
         uv pip install --no-deps "${DEPS_DIR}/${ONNXRUNTIME_ARM64_WHEEL}"
     else
@@ -90,7 +90,7 @@ install_pyg_lib() {
 
     echo "No custom pyg_lib wheel present; building from source"
     uv pip install ninja wheel
-    uv pip install --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.5.0"
+    uv pip install --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.9.0"
 }
 
 install_torch_cluster() {
@@ -134,7 +134,7 @@ install_natten() {
 
     echo "No custom NATTEN wheel present; building from source"
     local source_dir="${BUILD_ROOT}/NATTEN"
-    git clone --recursive --branch v0.21.5 --depth 1 https://github.com/SHI-Labs/NATTEN.git "${source_dir}"
+    git clone --recursive --branch v0.21.7 --depth 1 https://github.com/SHI-Labs/NATTEN.git "${source_dir}"
     (
         cd "${source_dir}"
         MAX_JOBS=64 python setup.py bdist_wheel

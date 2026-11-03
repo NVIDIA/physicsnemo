@@ -113,6 +113,8 @@ class MeshGraphNet(Module):
         The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
         :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
+        A :class:`~physicsnemo.nn.module.gnn_layers.DistributedGraph` runs the model on this
+        rank's part of a graph split across GPUs, with node and edge features of that part.
 
     Outputs
     -------

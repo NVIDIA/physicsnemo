@@ -5,7 +5,7 @@
 > bug fixes, or new features. It remains here for reference only.
 >
 > Start new projects from the regional high-resolution weather model example in
-> [`examples/weather/stormcast`](../stormcast) instead. That example unifies
+> [`examples/weather/regional_weather_diffusion`](../regional_weather_diffusion) instead. That example unifies
 > regional diffusion-based weather models. It covers the downscaling setting that
 > CorrDiff implements, plus other diffusion-based settings such as autoregressive
 > regional forecasting.
@@ -381,7 +381,9 @@ To train CorrDiff on a custom dataset, you need to implement a custom dataset cl
 
 The most important method is `__getitem__`, which must return a tuple of tensors:
 ```python
-def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+def __getitem__(
+    self, idx: int
+) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """
     Returns:
         Tuple containing:

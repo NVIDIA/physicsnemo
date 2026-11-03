@@ -1,6 +1,6 @@
-nvidia-physicsnemo
-pyvista[all,trame]
-matplotlib
+# Until PhysicsNeMo 2.3.0 is released, install it from the main branch.
+# See README.md.
+nvidia-physicsnemo[mesh-extras]
 jupyter
 ipykernel
 ipywidgets

@@ -32,6 +32,8 @@ pipeline:
     pattern: "run_*/domain_*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
+    # The default ("both") keeps only ~1/27 of the requested boundary cells.
+    boundary_subsample: cells
     # The volume model consumes the interior as a point cloud (interior.points +
     # interior.point_data); dropping interior tet topology makes the point
     # subsample a cheap contiguous block read instead of a full slice_points
@@ -47,13 +49,19 @@ pipeline:
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_point_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
         _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
+        validate_args: false
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]

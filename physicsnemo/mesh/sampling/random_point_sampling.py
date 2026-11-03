@@ -20,8 +20,9 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float, Int
+
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -96,7 +97,7 @@ def sample_random_points_on_cells(
         )
 
     ### Validate indices
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if len(cell_indices) > 0:
             if cell_indices.min() < 0:
                 raise IndexError(
@@ -121,7 +122,7 @@ def sample_random_points_on_cells(
             rate=torch.ones((), device=mesh.points.device, dtype=dtype),
         )
     else:
-        if torch.compiler.is_compiling():
+        if is_tracing():
             raise NotImplementedError(
                 f"alpha={alpha!r} is not supported under torch.compile.\n"
                 f"PyTorch does not yet support sampling from a Gamma distribution\n"
@@ -137,7 +138,15 @@ def sample_random_points_on_cells(
     raw_barycentric_coords = distribution.sample((n_samples, mesh.n_manifold_dims + 1))
 
     ### Normalize so they sum to 1
-    barycentric_coords = F.normalize(raw_barycentric_coords, p=1, dim=-1)
+    # By the actual sums: small alpha gives rows with tiny sums, which an eps
+    # floor (as in F.normalize) would leave summing to less than 1, outside
+    # the cell. A row that is all zero falls back to the cell's centroid.
+    sums = raw_barycentric_coords.sum(dim=-1, keepdim=True)
+    barycentric_coords = torch.where(
+        sums > 0,
+        raw_barycentric_coords / torch.where(sums > 0, sums, 1.0),
+        1.0 / raw_barycentric_coords.shape[-1],
+    )
 
     ### Compute weighted combination of cell vertices
     # Get the vertices for the selected cells: (n_samples, n_manifold_dims + 1, n_spatial_dims)

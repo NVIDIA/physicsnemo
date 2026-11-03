@@ -66,6 +66,13 @@ class TestPyVistaDatasetPrimitives:
         # Each cell should have 4 vertices (tetrahedron)
         assert tetbeam.cells.shape[1] == 4
 
+    @pytest.mark.parametrize("example_name", ["tetbeam", "hexbeam"])
+    def test_volume_dataset_positively_oriented(self, example_name):
+        """Every tetrahedron has positive signed volume."""
+        mesh = getattr(primitives.pyvista_datasets, example_name).load()
+
+        assert mesh.validate(check_inverted_cells=True)["n_inverted_cells"] == 0
+
     @pytest.mark.parametrize("example_name", ["airplane", "bunny"])
     def test_device_transfer_cpu(self, example_name):
         """Test that PyVista datasets can be loaded on CPU."""

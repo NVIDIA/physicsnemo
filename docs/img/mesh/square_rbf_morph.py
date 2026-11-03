@@ -18,22 +18,17 @@
 
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 import torch
+from _style import EDGE, FACE, FIXED, RESULT, clean_axis, mesh_label, save
 from matplotlib.collections import PolyCollection
 
 from physicsnemo.mesh.primitives.planar import unit_square
 
 OUTPUT = Path(__file__).parent / "square_rbf_morph.png"
 
-MESH_COLOR = "#a8c6c9"
-EDGE_COLOR = "#263238"
-ANCHOR_COLOR = "#c36a2d"
-HANDLE_COLOR = "#5b9f00"
+ANCHOR_COLOR = FIXED
+HANDLE_COLOR = RESULT
 
 
 def _draw_mesh(axis, mesh):
@@ -43,17 +38,12 @@ def _draw_mesh(axis, mesh):
     cells = mesh.cells.detach().cpu().numpy()
     triangles = PolyCollection(
         points[cells],
-        facecolors=MESH_COLOR,
-        edgecolors=EDGE_COLOR,
-        linewidths=0.45,
+        facecolors=FACE,
+        edgecolors=EDGE,
+        linewidths=0.7,
     )
     axis.add_collection(triangles)
-    axis.set_xlim(-0.12, 1.2)
-    axis.set_ylim(-0.12, 1.5)
-    axis.set_aspect("equal")
-    axis.set_xlabel("x")
-    axis.set_ylabel("y")
-    axis.grid(False)
+    clean_axis(axis, ((-0.05, 1.12), (-0.05, 1.42)))
 
 
 def _draw_controls(axis, controls, displacements, *, deformed):
@@ -67,10 +57,10 @@ def _draw_controls(axis, controls, displacements, *, deformed):
     axis.scatter(
         controls[:-1, 0],
         controls[:-1, 1],
-        s=75,
+        s=130,
         color=ANCHOR_COLOR,
         edgecolor="white",
-        linewidth=0.8,
+        linewidth=1.2,
         zorder=4,
         label="fixed anchors",
     )
@@ -78,10 +68,10 @@ def _draw_controls(axis, controls, displacements, *, deformed):
         axis.scatter(
             source[0],
             source[1],
-            s=65,
+            s=120,
             facecolor="none",
             edgecolor=HANDLE_COLOR,
-            linewidth=1.5,
+            linewidth=1.8,
             zorder=4,
         )
         handle = destination
@@ -90,10 +80,10 @@ def _draw_controls(axis, controls, displacements, *, deformed):
     axis.scatter(
         handle[0],
         handle[1],
-        s=85,
+        s=160,
         color=HANDLE_COLOR,
         edgecolor="white",
-        linewidth=0.8,
+        linewidth=1.2,
         zorder=5,
         label="moved handle",
     )
@@ -101,16 +91,18 @@ def _draw_controls(axis, controls, displacements, *, deformed):
         "",
         xy=destination,
         xytext=source,
-        arrowprops={"arrowstyle": "-|>", "color": HANDLE_COLOR, "lw": 2.0},
+        arrowprops={"arrowstyle": "-|>", "color": HANDLE_COLOR, "lw": 2.4},
         zorder=4,
     )
+    if deformed:
+        return
+    dx, dy = displacements[-1]
     axis.text(
-        destination[0] + 0.025,
-        destination[1] + 0.015,
-        r"$\Delta=(0.15,\ 0.35)$",
-        color="#397000",
-        fontsize=11,
-        fontweight="bold",
+        destination[0] + 0.035,
+        destination[1] - 0.01,
+        f"displacement ({dx:.2f}, {dy:.2f})",
+        color=HANDLE_COLOR,
+        va="center",
     )
 
 
@@ -140,36 +132,27 @@ def main():
         rtol=2.0e-5,
     )
 
-    figure, axes = plt.subplots(1, 2, figsize=(12.0, 5.8))
+    figure, axes = plt.subplots(1, 2, figsize=(12.0, 7.6))
     panels = (
-        ("Original 2D mesh\nfour anchors and one handle", mesh, False),
-        ("Global TPS deformation\nexact handle displacement", morphed, True),
+        ("unit_square, four anchors and one handle", mesh, False),
+        ('kernel="thin_plate_spline", handle moves exactly', morphed, True),
     )
     for axis, (title, panel_mesh, deformed) in zip(axes, panels, strict=True):
         _draw_mesh(axis, panel_mesh)
         _draw_controls(axis, controls, displacements, deformed=deformed)
-        axis.set_title(title, fontsize=16)
+        axis.set_title(f"{title}\n{mesh_label(panel_mesh)}")
 
     handles, labels = axes[0].get_legend_handles_labels()
     figure.legend(
         handles,
         labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, 0.025),
+        bbox_to_anchor=(0.5, 0.0),
         ncol=2,
         frameon=False,
-        fontsize=11,
     )
-    figure.subplots_adjust(
-        left=0.07,
-        right=0.98,
-        bottom=0.18,
-        top=0.84,
-        wspace=0.24,
-    )
-    figure.savefig(OUTPUT, dpi=140, facecolor="white")
-    plt.close(figure)
-    print(f"Saved {OUTPUT}")
+    figure.subplots_adjust(left=0.01, right=0.99, bottom=0.08, top=0.9, wspace=0.06)
+    save(figure, OUTPUT)
 
 
 if __name__ == "__main__":

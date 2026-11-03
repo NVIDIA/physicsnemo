@@ -129,6 +129,50 @@ class TestCellDataToPointData:
         with pytest.raises(ValueError):
             mesh.cell_data_to_point_data()
 
+    def test_key_conflict_between_field_and_group_raises_error(self):
+        """A cell field named like a point data group conflicts with it."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"p": {"ref": torch.tensor([1.0, 2.0, 3.0])}},
+            cell_data={"p": torch.tensor([7.0])},
+        )
+
+        with pytest.raises(ValueError):
+            mesh.cell_data_to_point_data()
+
+    def test_key_conflict_between_empty_group_and_field_raises_error(self):
+        """An empty cell data group named like a nested point field conflicts."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"g": {"p": torch.tensor([1.0, 2.0, 3.0])}},
+            cell_data={"g": {"p": {}}},
+        )
+
+        with pytest.raises(ValueError):
+            mesh.cell_data_to_point_data()
+
+    def test_groups_with_disjoint_fields_merge(self):
+        """Groups of the same name merge when their fields differ."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"g": {"a": torch.tensor([1.0, 2.0, 3.0])}},
+            cell_data={"g": {"b": torch.tensor([7.0])}},
+        )
+
+        result = mesh.cell_data_to_point_data()
+
+        assert torch.equal(result.point_data["g", "a"], torch.tensor([1.0, 2.0, 3.0]))
+        assert torch.equal(result.point_data["g", "b"], torch.tensor([7.0, 7.0, 7.0]))
+
     def test_overwrite_keys(self):
         """Test that overwrite_keys=True allows overwriting."""
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
@@ -184,6 +228,31 @@ class TestCellDataToPointData:
         assert torch.is_floating_point(material)
         # Point 1 is shared by both cells: mean(1, 2) = 1.5 (not truncated to 1).
         assert torch.allclose(material[1], torch.tensor(1.5, dtype=material.dtype))
+
+    @pytest.mark.parametrize("dtype", [torch.complex64, torch.complex128])
+    def test_complex_cell_field_preserves_imaginary_part(self, dtype):
+        """Regression: complex cell fields keep their dtype and imaginary part.
+
+        Complex tensors are not "floating point" by ``torch``'s definition, so
+        a complex field was previously promoted to float64 like an integer
+        field, silently discarding the imaginary part.
+        """
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            cell_data={"impedance": torch.tensor([1 + 2j, 3 + 6j], dtype=dtype)},
+        )
+
+        result = mesh.cell_data_to_point_data()
+
+        impedance = result.point_data["impedance"]
+        assert impedance.dtype == dtype
+        # Points 0 and 3 belong to one cell each; points 1 and 2 are shared, so
+        # they average to (1+2j + 3+6j) / 2 = 2+4j.
+        expected = torch.tensor([1 + 2j, 2 + 4j, 2 + 4j, 3 + 6j], dtype=dtype)
+        torch.testing.assert_close(impedance, expected)
 
 
 class TestPointDataToCellData:
@@ -290,6 +359,27 @@ class TestPointDataToCellData:
         assert result.dtype == dtype
         torch.testing.assert_close(result, torch.tensor([7.0 / 3.0]).to(dtype))
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16], ids=str)
+    @pytest.mark.parametrize("n_vertices_per_cell", [2, 3, 4])
+    def test_reduced_precision_field_matches_mean(self, dtype, n_vertices_per_cell):
+        """Half-precision fields round once, exactly as ``mean(dim=1)`` does."""
+        generator = torch.Generator().manual_seed(0)
+        n_points = 50
+        point_values = (torch.randn(n_points, 3, generator=generator) * 20).to(dtype)
+        cells = torch.randint(
+            0, n_points, (200, n_vertices_per_cell), generator=generator
+        )
+        mesh = Mesh(
+            points=torch.randn(n_points, 3, generator=generator),
+            cells=cells,
+            point_data={"field": point_values},
+        )
+
+        result = mesh.point_data_to_cell_data().cell_data["field"]
+
+        assert result.dtype == dtype
+        assert torch.equal(result, point_values[cells].mean(dim=1))
+
     def test_preserves_original_data(self):
         """Test that original point data is preserved."""
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
@@ -318,6 +408,34 @@ class TestPointDataToCellData:
         )
 
         ### Should raise error
+        with pytest.raises(ValueError):
+            mesh.point_data_to_cell_data()
+
+    def test_key_conflict_between_group_and_field_raises_error(self):
+        """A point data group named like a cell field conflicts with it."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"q": {"x": torch.tensor([1.0, 2.0, 3.0])}},
+            cell_data={"q": torch.tensor([42.0])},
+        )
+
+        with pytest.raises(ValueError):
+            mesh.point_data_to_cell_data()
+
+    def test_key_conflict_between_empty_group_and_field_raises_error(self):
+        """An empty point data group named like a cell field conflicts with it."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"p": {}},
+            cell_data={"p": torch.tensor([42.0])},
+        )
+
         with pytest.raises(ValueError):
             mesh.point_data_to_cell_data()
 

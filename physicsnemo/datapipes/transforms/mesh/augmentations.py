@@ -119,6 +119,9 @@ class RandomScaleMesh(MeshTransform):
         """
         super().__init__()
         self._distribution = distribution or torch.distributions.Uniform(0.9, 1.1)
+        # The default factors lie in [0.9, 1.1], so the scale is invertible and
+        # need not be tested on the device; other distributions may reach zero.
+        self._assume_invertible = True if distribution is None else None
         self.transform_point_data = transform_point_data
         self.transform_cell_data = transform_cell_data
         self.transform_global_data = transform_global_data
@@ -155,6 +158,7 @@ class RandomScaleMesh(MeshTransform):
             transform_point_data=self.transform_point_data,
             transform_cell_data=self.transform_cell_data,
             transform_global_data=self.transform_global_data,
+            assume_invertible=self._assume_invertible,
         )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
@@ -179,6 +183,7 @@ class RandomScaleMesh(MeshTransform):
             transform_point_data=self.transform_point_data,
             transform_cell_data=self.transform_cell_data,
             transform_global_data=self.transform_global_data,
+            assume_invertible=self._assume_invertible,
         )
 
     def extra_repr(self) -> str:
@@ -277,19 +282,23 @@ class RandomRotateMesh(MeshTransform):
 
     Two modes are supported:
 
-    * ``"axis_aligned"`` (default) -- picks one of the candidate *axes*
-      uniformly at random and samples an angle from *distribution*.
-      This limits rotations to the three cardinal planes.
+    * ``"axis_aligned"`` -- picks one of the candidate *axes* uniformly
+      at random and samples an angle from *distribution*.  This limits
+      rotations to the three cardinal planes.
     * ``"uniform"`` -- samples a rotation uniformly from SO(3) via random
-      unit quaternions (3-D meshes only).  *axes* and *distribution* are
-      ignored in this mode.
+      unit quaternions (3-D meshes only).  *distribution* is ignored in this
+      mode, and *axes* must not be given (``ValueError``): a caller who
+      lists axes wants axis-aligned rotations.
+
+    When *mode* is not given it defaults to ``"axis_aligned"`` if *axes*
+    is given and ``"uniform"`` otherwise.
     """
 
     def __init__(
         self,
         axes: list[Literal["x", "y", "z"]] | None = None,
         distribution: torch.distributions.Distribution | None = None,
-        mode: Literal["axis_aligned", "uniform"] = "uniform",
+        mode: Literal["axis_aligned", "uniform"] | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
@@ -305,10 +314,13 @@ class RandomRotateMesh(MeshTransform):
             Distribution from which the rotation angle (radians) is
             sampled.  Defaults to ``Uniform(-pi, pi)``.
             Only used when ``mode="axis_aligned"``.
-        mode : {"axis_aligned", "uniform"}
+        mode : {"axis_aligned", "uniform"} or None
             ``"axis_aligned"`` picks a random cardinal axis and angle
             each call.  ``"uniform"`` samples a rotation uniformly from
-            SO(3) via random quaternions (3-D only).
+            SO(3) via random quaternions (3-D only).  Defaults to
+            ``"axis_aligned"`` when *axes* is given, ``"uniform"``
+            otherwise.  Passing *axes* together with ``mode="uniform"``
+            is contradictory and raises ``ValueError``.
         transform_point_data : bool
             If ``True``, transform point-data fields under rotation.
         transform_cell_data : bool
@@ -317,9 +329,15 @@ class RandomRotateMesh(MeshTransform):
             If ``True``, transform global-data fields under rotation.
         """
         super().__init__()
+        if mode is None:
+            ### Passing axes without a mode is a request for axis-aligned
+            ### rotations; silently falling back to SO(3) would ignore them.
+            mode = "axis_aligned" if axes is not None else "uniform"
+        elif mode == "uniform" and axes is not None:
+            raise ValueError("axes cannot be combined with mode='uniform'")
         if mode not in ("axis_aligned", "uniform"):
             raise ValueError(f"mode must be 'axis_aligned' or 'uniform', got {mode!r}")
-        self.axes = axes if axes is not None else ["x", "y", "z"]
+        self.axes = tuple(axes) if axes is not None else ("x", "y", "z")
         self._distribution = distribution or torch.distributions.Uniform(
             -math.pi, math.pi
         )
@@ -447,6 +465,7 @@ class RandomRotateMesh(MeshTransform):
                     transform_cell_data=self.transform_cell_data,
                     transform_global_data=self.transform_global_data,
                     assume_invertible=True,
+                    assume_similarity=True,
                 )
             case "axis_aligned":
                 axis, angle = self._sample_axis_and_angle()
@@ -493,6 +512,7 @@ class RandomRotateMesh(MeshTransform):
                     transform_cell_data=self.transform_cell_data,
                     transform_global_data=self.transform_global_data,
                     assume_invertible=True,
+                    assume_similarity=True,
                 )
             case "axis_aligned":
                 axis, angle = self._sample_axis_and_angle()

@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Benchmark utilities for PhysicsNeMo-Mesh tutorial 6.
+"""Benchmark utilities for PhysicsNeMo-Mesh tutorial 9 (``tutorial_9_ml_integration.ipynb``).
 
 This package provides:
+
 - ``benchmark()`` - a timing harness with CUDA synchronization and warmup
 - ``compiled_ops`` - ``@torch.compile`` wrapped mesh operations
 - ``raw_ops`` - uncompiled mesh operations (same logic, no ``torch.compile``)

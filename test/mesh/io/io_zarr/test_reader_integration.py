@@ -20,14 +20,23 @@ followed by in-memory subsampling)."""
 
 from pathlib import Path
 
+import pytest
 import torch
-from conftest import assert_meshes_equal, make_domain_mesh, make_mesh
+from conftest import (
+    assert_meshes_equal,
+    make_domain_mesh,
+    make_mesh,
+    make_point_cloud,
+    write_unfinished_store,
+)
 
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
     _subsample_mesh,
 )
+from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import point_measures, set_point_measures
 from physicsnemo.mesh.io import from_zarr, to_zarr
 
 
@@ -48,6 +57,19 @@ def test_domain_mesh_reader_reads_zarr(tmp_path):
     assert_meshes_equal(dm.interior, back.interior)
     for name in dm.boundary_names:
         assert_meshes_equal(dm.boundaries[name], back.boundaries[name])
+
+
+@pytest.mark.parametrize("domain", [False, True])
+def test_partial_read_rejects_unfinished_store(tmp_path, domain):
+    """Subsampled reads, which bypass from_zarr, also reject a partial store."""
+    sample = make_domain_mesh() if domain else make_mesh()
+    write_unfinished_store(sample, tmp_path / "sample.zarr")
+    reader_type = DomainMeshReader if domain else MeshReader
+    reader = reader_type(
+        tmp_path, pattern="*.zarr", subsample_n_points=8, pin_memory=False
+    )
+    with pytest.raises(ValueError, match="did not finish"):
+        reader[0]
 
 
 def test_pushdown_matches_eager_subsample(tmp_path):
@@ -99,6 +121,94 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
         assert_meshes_equal(boundaries[n], lazy.boundaries[n])
 
 
+@pytest.mark.parametrize("interior_has_cells", [False, True])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"subsample_n_points": 30},
+        {"subsample_n_cells": 20},
+        {"subsample_n_cells": 20, "subsample_n_points": 30},
+        {
+            "subsample_n_cells": 20,
+            "subsample_n_points": 30,
+            "boundary_subsample": "cells",
+        },
+        {
+            "subsample_n_cells": 20,
+            "subsample_n_points": 30,
+            "boundary_subsample": "points",
+        },
+        {
+            "subsample_n_cells": 20,
+            "subsample_n_points": 30,
+            "drop_interior_cells": True,
+        },
+        {"interior_n_points_range": (20, 40)},
+        {"subsample_n_cells": 20, "interior_n_points_range": (20, 40)},
+    ],
+)
+def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, options):
+    """One seed selects the same rows from a zarr store as from a memmap file."""
+    interior = (
+        make_mesh(n_points=80, n_cells=60, seed=5)
+        if interior_has_cells
+        else make_point_cloud(seed=5)
+    )
+    domain = DomainMesh(
+        interior=interior,
+        boundaries={
+            "wall": make_mesh(n_points=60, n_cells=50, seed=6),
+            "inlet": make_mesh(n_points=50, n_cells=40, seed=7),
+        },
+    )
+    domain.save(tmp_path / "case.pdmsh")
+    to_zarr(domain, tmp_path / "case.zarr", chunk_rows=8)
+    loaded = []
+    for pattern in ("*.pdmsh", "*.zarr"):
+        reader = DomainMeshReader(
+            tmp_path, pattern=pattern, pin_memory=False, **options
+        )
+        reader.set_generator(torch.Generator().manual_seed(17))
+        loaded.append(reader[0][0])
+    from_memmap, from_store = loaded
+    assert_meshes_equal(from_memmap.interior, from_store.interior)
+    assert sorted(from_memmap.boundary_names) == sorted(from_store.boundary_names)
+    for name in from_memmap.boundary_names:
+        assert_meshes_equal(from_memmap.boundaries[name], from_store.boundaries[name])
+
+
+@pytest.mark.parametrize("pattern", ["*.pdmsh", "*.zarr"])
+def test_unseeded_interior_count_is_drawn_once(tmp_path, pattern):
+    """Without a seed, the zarr read and the reader share one count draw."""
+    domain = DomainMesh(
+        interior=make_point_cloud(seed=5),
+        boundaries={"wall": make_mesh(n_points=60, n_cells=50, seed=6)},
+    )
+    domain.save(tmp_path / "case.pdmsh")
+    to_zarr(domain, tmp_path / "case.zarr", chunk_rows=8)
+    lo, hi = 5, domain.interior.n_points
+    reader = DomainMeshReader(
+        tmp_path, pattern=pattern, interior_n_points_range=(lo, hi)
+    )
+    for seed in range(20):
+        torch.manual_seed(seed)
+        expected = int(torch.randint(lo, hi + 1, (1,)))
+        torch.manual_seed(seed)
+        assert reader[0][0].interior.n_points == expected
+
+
+def test_close_releases_store_handles(tmp_path):
+    """close() drops the cached zarr groups; the next read reopens them."""
+    to_zarr(make_domain_mesh(), tmp_path / "case.zarr")
+    reader = DomainMeshReader(tmp_path, pattern="*.zarr", subsample_n_points=5)
+    reader.set_generator(torch.Generator().manual_seed(0))
+    first, _ = reader[0]
+    reader.close()
+    assert not reader._zarr_groups
+    again, _ = reader[0]
+    assert_meshes_equal(first.interior, again.interior)
+
+
 def test_mixed_directory_discovery(tmp_path):
     """zarr and memmap samples coexist; each routes to the right loader."""
     m1 = make_mesh(seed=1)
@@ -109,3 +219,31 @@ def test_mixed_directory_discovery(tmp_path):
     metas = {Path(reader[i][1]["source_path"]).name: reader[i][0] for i in (0, 1)}
     assert_meshes_equal(m1, metas["a.mesh.zarr"])
     assert_meshes_equal(m2, metas["b.pmsh"])
+
+
+@pytest.mark.parametrize("domain", [False, True])
+@pytest.mark.parametrize("n_keep", [4, 20])
+def test_point_quadrature_subsampling_matches_between_formats(tmp_path, domain, n_keep):
+    """Partial reads apply the same correction as eager reads, exactly once."""
+    cloud = Mesh(
+        points=torch.arange(30, dtype=torch.float32).reshape(10, 3),
+        point_data={"index": torch.arange(10)},
+    )
+    set_point_measures(cloud, torch.arange(10, dtype=torch.float32) + 1, dimension=3)
+    sample = DomainMesh(interior=cloud) if domain else cloud
+    sample.save(tmp_path / "sample.pmsh")
+    to_zarr(sample, tmp_path / "sample.zarr", chunk_rows=2)
+    reader_type = DomainMeshReader if domain else MeshReader
+    loaded = []
+    for pattern in ("*.pmsh", "*.zarr"):
+        reader = reader_type(
+            tmp_path, pattern=pattern, subsample_n_points=n_keep, pin_memory=False
+        )
+        reader.set_generator(torch.Generator().manual_seed(5))
+        sampled, _ = reader[0]
+        points = sampled.interior if domain else sampled
+        expected = (points.point_data["index"] + 1).float() * (10 / min(n_keep, 10))
+        torch.testing.assert_close(point_measures(points), expected)
+        torch.testing.assert_close(point_measures(points.scale(2.0)), expected * 8)
+        loaded.append(points)
+    assert_meshes_equal(*loaded)

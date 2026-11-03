@@ -233,6 +233,237 @@ def test_load_model_weights(
     assert torch.allclose(ref_output, loaded_output, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("epoch", [None, 3])
+@pytest.mark.parametrize("missing_weights", ["deleted", "renamed"])
+def test_load_checkpoint_refuses_missing_model_weights(
+    tmp_path, model_generator, epoch, missing_weights
+):
+    """Missing weights cannot restore training state around a fresh model."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    model = model_generator(8)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    save_checkpoint(tmp_path, models=model, optimizer=optimizer, epoch=3)
+    weights = next(
+        p for p in tmp_path.iterdir() if not p.name.startswith("checkpoint.")
+    )
+    if missing_weights == "deleted":
+        weights.unlink()
+    else:
+        weights.rename(weights.with_name("FormerName.0.3" + weights.suffix))
+
+    fresh = model_generator(8)
+    fresh_optimizer = torch.optim.Adam(fresh.parameters(), lr=0.5)
+    metadata = {}
+    with pytest.raises(FileNotFoundError, match="uninitialized") as exc:
+        load_checkpoint(
+            tmp_path,
+            models=fresh,
+            optimizer=fresh_optimizer,
+            epoch=epoch,
+            metadata_dict=metadata,
+        )
+    assert type(fresh).__name__ in str(exc.value)
+    assert "checkpoint.0.3.pt" in str(exc.value)
+    assert fresh_optimizer.param_groups[0]["lr"] == 0.5
+    assert metadata == {}
+
+
+def test_load_checkpoint_without_training_state(tmp_path, model_generator):
+    """Fresh runs, absent epochs, and weights-only exports remain loadable."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    fresh = model_generator(8)
+    assert load_checkpoint(tmp_path / "nonexistent", models=fresh) == 0
+    assert load_checkpoint(tmp_path, models=fresh) == 0
+
+    source = model_generator(8)
+    save_checkpoint(tmp_path, models=source, epoch=3)
+    assert load_checkpoint(tmp_path, models=fresh, epoch=4) == 0
+    (tmp_path / "checkpoint.0.3.pt").unlink()
+    assert load_checkpoint(tmp_path, models=fresh) == 0
+    for name, value in source.state_dict().items():
+        torch.testing.assert_close(fresh.state_dict()[name], value)
+
+
+@pytest.mark.parametrize("automatic_index", [False, True])
+@pytest.mark.parametrize("latest_weights", ["complete", "deleted", "newer"])
+def test_load_checkpoint_uses_training_checkpoint_index(
+    tmp_path, model_generator, automatic_index, latest_weights
+):
+    """All weights come from the selected training checkpoint's filename index."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    source = model_generator(8)
+    optimizer = torch.optim.Adam(source.parameters(), lr=0.01)
+    for epoch in (1, 2):
+        with torch.no_grad():
+            for parameter in source.parameters():
+                parameter.fill_(epoch)
+        optimizer.param_groups[0]["lr"] = epoch * 0.01
+        save_checkpoint(
+            tmp_path,
+            models=source,
+            optimizer=optimizer,
+            epoch=None if automatic_index else epoch,
+            metadata={"generation": epoch},
+        )
+    index = 1 if automatic_index else 2
+    if latest_weights == "deleted":
+        next(
+            p
+            for p in tmp_path.glob(f"*.0.{index}.*")
+            if not p.name.startswith("checkpoint.")
+        ).unlink()
+    elif latest_weights == "newer":
+        with torch.no_grad():
+            for parameter in source.parameters():
+                parameter.fill_(3)
+        # Simulate a newer weights file without a matching training-state file.
+        save_checkpoint(tmp_path, models=source)
+
+    fresh = model_generator(8)
+    before = {name: value.clone() for name, value in fresh.state_dict().items()}
+    fresh_optimizer = torch.optim.Adam(fresh.parameters(), lr=0.5)
+    metadata = {}
+    if latest_weights == "deleted":
+        with pytest.raises(FileNotFoundError, match=rf"checkpoint\.0\.{index}\.pt"):
+            load_checkpoint(
+                tmp_path,
+                models=fresh,
+                optimizer=fresh_optimizer,
+                metadata_dict=metadata,
+            )
+        for name, value in fresh.state_dict().items():
+            torch.testing.assert_close(value, before[name])
+        assert fresh_optimizer.param_groups[0]["lr"] == 0.5
+        assert metadata == {}
+    else:
+        restored_epoch = load_checkpoint(
+            tmp_path, models=fresh, optimizer=fresh_optimizer, metadata_dict=metadata
+        )
+        assert restored_epoch == (0 if automatic_index else 2)
+        for parameter in fresh.parameters():
+            torch.testing.assert_close(parameter, torch.full_like(parameter, 2))
+        assert fresh_optimizer.param_groups[0]["lr"] == 0.02
+        assert metadata == {"generation": 2}
+
+
+@pytest.mark.parametrize("epoch", [None, 3])
+def test_load_checkpoint_checks_all_models_before_restoring(
+    tmp_path, model_generator, epoch
+):
+    """A missing second model cannot leave the first model partially restored."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    sources = [model_generator(8), model_generator(8)]
+    save_checkpoint(tmp_path, models=sources, epoch=3)
+    next(tmp_path.glob(f"{type(sources[1]).__name__}1.0.3.*")).unlink()
+    fresh = [model_generator(8), model_generator(8)]
+    before = [{k: v.clone() for k, v in m.state_dict().items()} for m in fresh]
+    optimizer = torch.optim.Adam(fresh[0].parameters(), lr=0.5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    scheduler_before = scheduler.state_dict().copy()
+    metadata = {}
+    with pytest.raises(FileNotFoundError):
+        load_checkpoint(
+            tmp_path,
+            models=fresh,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=epoch,
+            metadata_dict=metadata,
+        )
+    for model, original in zip(fresh, before):
+        for name, value in model.state_dict().items():
+            torch.testing.assert_close(value, original[name])
+    assert optimizer.param_groups[0]["lr"] == 0.5
+    assert scheduler.state_dict() == scheduler_before
+    assert metadata == {}
+
+
+@pytest.mark.parametrize("automatic_index", [False, True])
+@pytest.mark.parametrize("failing_file", ["weights", "training_state"])
+def test_save_checkpoint_killed_mid_write_keeps_previous_epoch(
+    tmp_path, monkeypatch, model_generator, failing_file, automatic_index
+):
+    """A save that dies part-way through a file leaves no partial checkpoint
+    file, resuming restores the previous complete save, and the next save's
+    weights and training state pair up again."""
+    from fsspec.implementations.local import LocalFileSystem
+
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    model = model_generator(8)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+    def save(generation, epoch):
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.fill_(generation)
+        optimizer.param_groups[0]["lr"] = generation * 0.01
+        save_checkpoint(
+            tmp_path,
+            models=model,
+            optimizer=optimizer,
+            epoch=None if automatic_index else epoch,
+        )
+
+    def assert_resumes(generation, epoch):
+        fresh = model_generator(8)
+        fresh_optimizer = torch.optim.Adam(fresh.parameters(), lr=0.5)
+        loaded_epoch = load_checkpoint(
+            tmp_path, models=fresh, optimizer=fresh_optimizer
+        )
+        assert loaded_epoch == (0 if automatic_index else epoch)
+        for parameter in fresh.parameters():
+            torch.testing.assert_close(
+                parameter, torch.full_like(parameter, generation)
+            )
+        assert fresh_optimizer.param_groups[0]["lr"] == generation * 0.01
+
+    save(1, epoch=1)
+    files_before = sorted(p.name for p in tmp_path.iterdir())
+    first, failed = (0, 1) if automatic_index else (1, 2)
+
+    # Simulate the process dying part-way through writing one file of the
+    # second save: some bytes reach the filesystem, then an error.
+    real_open = LocalFileSystem.open
+
+    def dying_open(self, path, mode="rb", *args, **kwargs):
+        f = real_open(self, path, mode, *args, **kwargs)
+        is_training_state = Path(path).name.startswith("checkpoint.")
+        if "w" in mode and is_training_state == (failing_file == "training_state"):
+            f.write(b"partial")
+            f.close()
+            raise RuntimeError("killed mid-write")
+        return f
+
+    monkeypatch.setattr(LocalFileSystem, "open", dying_open)
+    with pytest.raises(RuntimeError, match="killed mid-write"):
+        save(2, epoch=2)
+    monkeypatch.undo()
+
+    files_after = sorted(p.name for p in tmp_path.iterdir())
+    if failing_file == "training_state":
+        # The weights were complete before the training state failed.
+        assert [n for n in files_after if n not in files_before] == [
+            n.replace(f".0.{first}.", f".0.{failed}.")
+            for n in files_before
+            if not n.startswith("checkpoint.")
+        ]
+    else:
+        assert files_after == files_before
+    # A hard kill skips the cleanup and leaves the temporary file behind.
+    (tmp_path / f"checkpoint.0.{failed}.pt.tmp-0123abcd").write_bytes(b"partial")
+    assert_resumes(1, epoch=1)
+
+    # The resumed run saves new weights (generation 3) for the same epoch; they
+    # must come back with their own training state, not the leftover weights.
+    save(3, epoch=2)
+    assert_resumes(3, epoch=2)
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
 def test_compiled_model_checkpointing(
     tmp_path, device, rtol: float = 1e-3, atol: float = 1e-3

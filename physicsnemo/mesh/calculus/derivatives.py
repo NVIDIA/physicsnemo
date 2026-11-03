@@ -20,9 +20,11 @@ Provides high-level interface for gradient, divergence, curl, and Laplacian
 computations using both DEC and LSQ methods.
 """
 
-from typing import TYPE_CHECKING, Literal, Sequence
+from typing import TYPE_CHECKING, Callable, Literal, Sequence
 
 if TYPE_CHECKING:
+    import torch
+
     from physicsnemo.mesh.mesh import Mesh
 
 
@@ -47,6 +49,35 @@ def _make_output_key(
     if isinstance(key, str):
         return f"{key}{suffix}"
     return key[:-1] + (key[-1] + suffix,)
+
+
+def _gradients_by_dtype(
+    fields: list["torch.Tensor"],
+    compute: Callable[[list["torch.Tensor"]], list["torch.Tensor"]],
+) -> list["torch.Tensor"]:
+    """Gradients of the fields, computing those of each dtype together.
+
+    Parameters
+    ----------
+    fields : list[torch.Tensor]
+        Fields to differentiate.
+    compute : Callable
+        Gradients of a list of fields of one dtype, which share their LSQ
+        systems.
+
+    Returns
+    -------
+    list[torch.Tensor]
+        The gradient of each field, in the order of ``fields``.
+    """
+    by_dtype: dict = {}
+    for i, field in enumerate(fields):
+        by_dtype.setdefault(field.dtype, []).append(i)
+    gradients: list = [None] * len(fields)
+    for indices in by_dtype.values():
+        for i, gradient in zip(indices, compute([fields[i] for i in indices])):
+            gradients[i] = gradient
+    return gradients
 
 
 def compute_point_derivatives(
@@ -108,8 +139,8 @@ def compute_point_derivatives(
     >>> grad_p = mesh_with_grad.point_data["pressure_gradient"]
     """
     from physicsnemo.mesh.calculus.gradient import (
+        _compute_gradients_points_lsq,
         compute_gradient_points_dec,
-        compute_gradient_points_lsq,
         project_to_tangent_space,
     )
 
@@ -126,26 +157,30 @@ def compute_point_derivatives(
     ### Clone point_data so we don't mutate the original mesh
     new_point_data = mesh.point_data.clone()
 
+    ### LSQ: fields of one dtype share their LSQ systems
+    # ("both" is the extrinsic LSQ gradient and its tangent projection)
+    if method == "lsq":
+        lsq_gradients = _gradients_by_dtype(
+            [mesh.point_data[key] for key in key_list],
+            lambda fields: _compute_gradients_points_lsq(
+                mesh, fields, intrinsic=gradient_type == "intrinsic"
+            ),
+        )
+
     ### Compute gradients for each key
-    for key in key_list:
+    for i, key in enumerate(key_list):
         field_values = mesh.point_data[key]
 
         ### Compute gradient based on method and gradient_type
         if method == "lsq":
             if gradient_type == "intrinsic":
-                grad_intrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=True
-                )
+                grad_intrinsic = lsq_gradients[i]
                 grad_extrinsic = None
             elif gradient_type == "extrinsic":
-                grad_extrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=False
-                )
+                grad_extrinsic = lsq_gradients[i]
                 grad_intrinsic = None
             else:  # "both"
-                grad_extrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=False
-                )
+                grad_extrinsic = lsq_gradients[i]
                 grad_intrinsic = project_to_tangent_space(
                     mesh, grad_extrinsic, location="points"
                 )
@@ -225,7 +260,7 @@ def compute_cell_derivatives(
         If ``method="dec"`` is requested.
     """
     from physicsnemo.mesh.calculus.gradient import (
-        compute_gradient_cells_lsq,
+        _compute_gradients_cells_lsq,
         project_to_tangent_space,
     )
 
@@ -242,13 +277,22 @@ def compute_cell_derivatives(
     ### Clone cell_data so we don't mutate the original mesh
     new_cell_data = mesh.cell_data.clone()
 
-    ### Compute gradients for each key
-    for key in key_list:
-        field_values = mesh.cell_data[key]
+    ### LSQ: fields of one dtype share their LSQ systems
+    if method == "lsq":
+        lsq_gradients: list["torch.Tensor | None"] = list(
+            _gradients_by_dtype(
+                [mesh.cell_data[key] for key in key_list],
+                lambda fields: _compute_gradients_cells_lsq(mesh, fields),
+            )
+        )
 
+    ### Compute gradients for each key
+    for i, key in enumerate(key_list):
         ### Compute extrinsic gradient
         if method == "lsq":
-            grad_extrinsic = compute_gradient_cells_lsq(mesh, field_values)
+            # Released from the list, so that an extrinsic gradient that is
+            # only projected is freed once projected
+            grad_extrinsic, lsq_gradients[i] = lsq_gradients[i], None
         elif method == "dec":
             raise NotImplementedError(
                 "DEC cell gradients not yet implemented. Use method='lsq'."

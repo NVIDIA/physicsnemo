@@ -18,12 +18,9 @@
 
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 import torch
+from _style import EDGE, FACE, FIXED, RESULT, SECOND, clean_axis, mesh_label, save
 from matplotlib.collections import PolyCollection
 
 from physicsnemo.mesh.deformation import (
@@ -36,11 +33,10 @@ from physicsnemo.nn.functional import radial_basis_function_deform_points
 
 OUTPUT = Path(__file__).parent / "square_deformation_energies.png"
 
-MESH_COLOR = "#a8c6c9"
-EDGE_COLOR = "#263238"
-ANCHOR_COLOR = "#c36a2d"
-HANDLE_COLOR = "#5b9f00"
-AUXILIARY_COLOR = "#6f5aa8"
+ANCHOR_COLOR = FIXED
+HANDLE_COLOR = RESULT
+AUXILIARY_COLOR = SECOND
+LIMITS = ((-0.06, 1.08), (-0.06, 1.56))
 
 
 def _backend() -> tuple[torch.device, str]:
@@ -128,17 +124,12 @@ def _draw_mesh(axis, points: torch.Tensor, cells: torch.Tensor) -> None:
     axis.add_collection(
         PolyCollection(
             points_np[cells_np],
-            facecolors=MESH_COLOR,
-            edgecolors=EDGE_COLOR,
-            linewidths=0.38,
+            facecolors=FACE,
+            edgecolors=EDGE,
+            linewidths=0.8,
         )
     )
-    axis.set_xlim(-0.16, 1.35)
-    axis.set_ylim(-0.16, 1.65)
-    axis.set_aspect("equal")
-    axis.set_xlabel("x")
-    axis.set_ylabel("y")
-    axis.grid(False)
+    clean_axis(axis, LIMITS)
 
 
 def _draw_controls(
@@ -157,20 +148,20 @@ def _draw_controls(
     axis.scatter(
         shown[:4, 0],
         shown[:4, 1],
-        s=55,
+        s=110,
         color=ANCHOR_COLOR,
         edgecolor="white",
-        linewidth=0.7,
+        linewidth=1.2,
         zorder=5,
         label="fixed anchors",
     )
     axis.scatter(
         shown[4:8, 0],
         shown[4:8, 1],
-        s=48,
+        s=100,
         color=AUXILIARY_COLOR,
         edgecolor="white",
-        linewidth=0.7,
+        linewidth=1.2,
         zorder=5,
         label="optimized controls",
     )
@@ -181,20 +172,20 @@ def _draw_controls(
         axis.scatter(
             source[0],
             source[1],
-            s=58,
+            s=110,
             facecolor="none",
             edgecolor=HANDLE_COLOR,
-            linewidth=1.3,
+            linewidth=1.8,
             zorder=5,
         )
     handle = source if original else destination
     axis.scatter(
         handle[0],
         handle[1],
-        s=72,
+        s=150,
         color=HANDLE_COLOR,
         edgecolor="white",
-        linewidth=0.7,
+        linewidth=1.2,
         zorder=6,
         label="target handle",
     )
@@ -202,26 +193,8 @@ def _draw_controls(
         "",
         xy=destination,
         xytext=source,
-        arrowprops={"arrowstyle": "-|>", "color": HANDLE_COLOR, "lw": 1.8},
+        arrowprops={"arrowstyle": "-|>", "color": HANDLE_COLOR, "lw": 2.4},
         zorder=4,
-    )
-
-
-def _annotate(axis, area_error: float, minimum_jacobian: float) -> None:
-    """Place geometric residuals in a panel-local caption."""
-
-    axis.text(
-        0.5,
-        1.015,
-        f"relative area error {area_error:.2e}\n"
-        f"minimum signed ratio {minimum_jacobian:.3f}",
-        transform=axis.transAxes,
-        ha="center",
-        va="bottom",
-        color="#455a64",
-        fontsize=9.2,
-        linespacing=1.15,
-        clip_on=False,
     )
 
 
@@ -313,21 +286,21 @@ def main() -> None:
 
     panels = (
         (
-            "Reference mesh\nfixed RBF controls",
+            "reference mesh, fixed RBF controls",
             reference.points,
             torch.zeros_like(controls),
             original_metrics,
             True,
         ),
         (
-            "Target deformation\nwithout geometric penalties",
+            "RBF target, no penalties",
             unregularized,
             _displacements(controls, unregularized_auxiliary, target_displacement),
             unregularized_metrics,
             False,
         ),
         (
-            "Penalty-regularized\nstrain + area + inversion",
+            "strain + area + inversion penalties",
             regularized,
             _displacements(controls, auxiliary.detach(), target_displacement),
             regularized_metrics,
@@ -335,34 +308,29 @@ def main() -> None:
         ),
     )
 
-    figure, axes = plt.subplots(1, 3, figsize=(15.6, 5.3))
+    figure, axes = plt.subplots(1, 3, figsize=(13.5, 7.0))
     for axis, (title, points, displacements, residuals, original) in zip(
         axes, panels, strict=True
     ):
         _draw_mesh(axis, points, reference.cells)
         _draw_controls(axis, controls, displacements, original=original)
-        _annotate(axis, *residuals)
-        axis.set_title(title, fontsize=14, pad=40)
+        area_error, minimum_ratio = residuals
+        axis.set_title(
+            f"{title}\n{mesh_label(reference)}\n"
+            f"area error {area_error:.1e}, min ratio {minimum_ratio:.2f}"
+        )
 
     handles, labels = axes[0].get_legend_handles_labels()
     figure.legend(
         handles,
         labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, 0.01),
+        bbox_to_anchor=(0.5, 0.0),
         ncol=3,
         frameon=False,
-        fontsize=10.5,
     )
-    figure.subplots_adjust(
-        left=0.045,
-        right=0.985,
-        bottom=0.19,
-        top=0.79,
-        wspace=0.22,
-    )
-    figure.savefig(OUTPUT, dpi=145, facecolor="white")
-    plt.close(figure)
+    figure.subplots_adjust(left=0.01, right=0.99, bottom=0.07, top=0.86, wspace=0.04)
+    save(figure, OUTPUT)
     print(f"Saved {OUTPUT} with {implementation} on {device}")
 
 

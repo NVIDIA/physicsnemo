@@ -527,6 +527,24 @@ class TestRandomRotateMesh:
         with pytest.raises(ValueError, match="mode must be"):
             RandomRotateMesh(mode="bogus")
 
+    def test_axes_without_mode_is_axis_aligned(self):
+        """axes without an explicit mode should restrict rotations to those axes."""
+        aug = _seed(RandomRotateMesh(axes=["z"]), 0)
+        assert aug.mode == "axis_aligned"
+        mesh = _simple_mesh_3d()
+        for _ in range(20):
+            rotated = aug(mesh)
+            assert torch.allclose(rotated.points[:, 2], mesh.points[:, 2], atol=1e-6)
+
+    def test_no_axes_defaults_to_uniform(self):
+        """Without axes or mode, rotations should be uniform over SO(3)."""
+        assert RandomRotateMesh().mode == "uniform"
+
+    def test_axes_with_uniform_mode_raises(self):
+        """axes combined with an explicit mode='uniform' is contradictory."""
+        with pytest.raises(ValueError, match="axes cannot be combined"):
+            RandomRotateMesh(axes=["z"], mode="uniform")
+
     def test_uniform_mode_3d_only(self):
         """mode='uniform' should reject non-3D meshes."""
         aug = RandomRotateMesh(mode="uniform")
@@ -879,3 +897,18 @@ class TestSetEpochResumeReproducibility:
             return m.points.clone()
 
         assert torch.allclose(_run([1, 2, 3]), _run([3]))
+
+
+def test_random_rotate_mesh_accepts_omegaconf_axes():
+    """Hydra instantiates transforms with OmegaConf containers; indexing a ListConfig by the
+    drawn tensor raised KeyValidationError, so the axes are normalized to a tuple."""
+    from omegaconf import OmegaConf
+
+    from physicsnemo.datapipes.transforms.mesh.augmentations import RandomRotateMesh
+
+    cfg = OmegaConf.create({"axes": ["z"]})
+    transform = RandomRotateMesh(axes=cfg.axes)
+    assert transform.axes == ("z",)
+    axis, angle = transform._sample_axis_and_angle()
+    assert axis == "z"
+    assert angle.ndim == 0

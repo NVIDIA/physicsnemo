@@ -1,0 +1,1 @@
+{"interior": {"type": "Mesh"}, "boundaries": {"type": "TensorDict"}, "global_data": {"type": "TensorDict"}, "shape": [], "device": "cpu", "_type": "<class 'tensordict._td.TensorDict'>"}

@@ -30,8 +30,10 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.mesh.curvature._laplacian import compute_laplacian_at_points
-from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
-from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.mesh.geometry.dual_meshes import (
+    compute_dual_volumes_0,
+    get_or_compute_dual_volumes_0,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -110,11 +112,17 @@ def mean_curvature_vertices(
     laplacian_magnitude = torch.norm(laplacian_coords, dim=-1)  # (n_points,)
 
     ### Compute dual volumes (Voronoi areas)
-    dual_volumes = compute_dual_volumes_0(mesh)  # (n_points,)
+    # The cache does not track gradients: an entry made under torch.no_grad()
+    # has none. So points that require gradients neither read nor fill it.
+    if mesh.points.requires_grad:
+        dual_volumes = compute_dual_volumes_0(mesh)  # (n_points,)
+    else:
+        dual_volumes = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
 
     ### Compute mean curvature
     # H = ||L @ points|| / (2 * dual_volume)
-    dual_volumes_safe = torch.clamp(dual_volumes, min=safe_eps(dual_volumes.dtype))
+    # Isolated vertices (dual_volume = 0) divide by 1 here and get NaN below
+    dual_volumes_safe = torch.where(dual_volumes > 0, dual_volumes, 1.0)
     mean_curvature = laplacian_magnitude / (2.0 * dual_volumes_safe)
 
     ### Determine sign using normal orientation

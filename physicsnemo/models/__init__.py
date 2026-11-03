@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .diffusion_unets import DiffusionUNet3D
 from .dit import DiT
 from .domino import DoMINO
 from .mlp import FullyConnected
