@@ -14,17 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Defaults
-defaults:
-  - regression
 
-# Minimal training config with frequent printouts and checkpoint saving.
-# Can be used to test that training runs without errors.
-# Do not use for real training runs.
+# StormCast CONUS model config - corresponds to the model StormCastCONUS:
+# https://nvidia.github.io/earth2studio/main/modules/generated/models/px/StormCastCONUS/
+#
+# For new StormCast-type models, it is recommended to use the better-optimized config
+# of reference_dit.yaml instead of this one.
 
-training:
-  print_progress_freq: 5 # How often to print progress, measured in number of training steps
-  checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
-  validation_freq: 5 # how often to record the validation loss, measured in number of training steps
-  batch_size: 2
-  total_train_steps: 20
+
+# Model conditions
+diffusion_conditions: ["background", "invariant"]
+
+# Model hyperparameters
+architecture: "dit"
+hyperparameters:
+  depth: 16
+  hidden_size: 768
+  attn_kernel_size: 31
+  num_heads: 12
+  patch_size: 4
+  use_nan_mask_tokens: false
