@@ -26,10 +26,10 @@ import xarray as xr
 
 from physicsnemo.utils.zenith_angle import cos_zenith_angle
 
-from .dataset import StormCastDataset
+from .dataset import CustomDataset
 
 
-class _CorrDiffEra5HrrrDataset(StormCastDataset):
+class _CorrDiffEra5HrrrDataset(CustomDataset):
     """Same-time ERA5 -> HRRR downscaling samples over the contiguous US, the
     dataset of CorrDiff-ERA5-HRRR (``config/corrdiff_era5_hrrr.yaml``).
 

@@ -174,21 +174,29 @@ def get_preconditioned_unet(
     else:
         lead_time_channels = 0
 
+    # SongUNetPosEmbd and SongUNetPosLtEmbd concatenate the positional grid to their input
+    grid_channels = (
+        model_params.get("N_grid_channels", 4)
+        if model_type.startswith("SongUNetPos")
+        else 0
+    )
+    extra_channels = lead_time_channels + grid_channels
+
     if name == "diffusion":
         unet_module = importlib.import_module("physicsnemo.models.diffusion_unets")
         model_class = getattr(unet_module, model_params.pop("model_type"))
         out_channels = model_params.pop("img_out_channels")
         unet = model_class(
-            in_channels=target_channels + conditional_channels + lead_time_channels,
+            in_channels=target_channels + conditional_channels + extra_channels,
             out_channels=out_channels,
             **model_params,
         )
         return wrap_diffusion_network(unet, preconditioner, time_scale)
 
     elif name == "regression":
+        model_params.setdefault("embedding_type", "zero")
         return StormCastUNet(
-            img_in_channels=conditional_channels + lead_time_channels,
-            embedding_type="zero",
+            img_in_channels=conditional_channels + extra_channels,
             **model_params,
         )
 
@@ -204,9 +212,9 @@ def get_preconditioned_natten_dit(
     patch_size: int = 4,
     attn_kernel_size: int = 31,
     lead_time_steps: int = 0,
-    attention_backend: Literal["natten2d", "natten2d_rope"] = "natten2d",
     layernorm_backend: Literal["torch", "apex"] = "torch",
     conditioning_embedder: Literal["dit", "edm", "zero"] = "dit",
+    attention_backend: Literal["natten2d", "natten2d_rope"] = "natten2d",
     attn_kwargs: dict[str, Any] = {},
     preconditioner: Literal["edm", "time_scaled"] = "edm",
     time_scale: float = 999.0,
@@ -226,10 +234,12 @@ def get_preconditioned_natten_dit(
         patch_size: the patch size used by the DiT embedder
         attn_kernel_size: the attention neighborhood size
         lead_time_steps: the number of possible lead time steps, if 0 lead time embedding will be disabled
-        attention_backend: neighborhood attention without ("natten2d") or with
-            2D rotary position embeddings ("natten2d_rope")
-        layernorm_backend: layer normalization implementation of the blocks
-        conditioning_embedder: the DiT conditioning embedder
+        layernorm_backend: "torch" for torch.nn.LayerNorm or "apex" for Apex FusedLayerNorm
+        conditioning_embedder: how the noise level and the scalar/lead time conditions are
+            embedded: "dit" embeds them separately, "edm" (SongUNet-style) combines them
+            before embedding, and "zero" uses no conditioning embedding
+        attention_backend: "natten2d" for neighborhood attention with an absolute positional
+            embedding, or "natten2d_rope" for 2D rotary position embeddings instead
         attn_kwargs: parameters to be passed to the DiT attention backend, for
             example {"qk_norm": True, "norm_layer": "apex"} to normalize the
             attention queries and keys
@@ -345,8 +355,8 @@ def unpack_batch(
             "batch['state'] must be a single tensor (the training target). "
             "The two-element [input, target] convention has been removed: "
             "concatenate any past state your model needs as input onto the "
-            "'background' tensor instead. See the 'Adding custom datasets' "
-            "section of the README for details."
+            "'background' tensor instead. See docs/CUSTOM_DATASET.md for "
+            "details."
         )
 
     (background, state, mask) = nested_to(
@@ -400,7 +410,7 @@ def diffusion_model_forward(
     formulation: Literal["edm", "flow"] = "edm",
     prediction_type: Literal["x0", "epsilon", "score", "flow"] = "x0",
 ) -> torch.Tensor:
-    """Run diffusion model sampling using the ``physicsnemo.diffusion`` API.
+    r"""Run diffusion model sampling using the ``physicsnemo.diffusion`` API.
 
     Uses the provided noise scheduler for timestep generation and
     :func:`~physicsnemo.diffusion.samplers.sample` for the reverse ODE

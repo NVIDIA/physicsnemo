@@ -2,4 +2,5 @@
 *.png
 *.pt
 *.tfevents*
-*wandb/*.nc
+*wandb/
+*.nc

@@ -20,9 +20,6 @@
 # x-prediction rectified flow matching (training.loss.type: flow_matching).
 # These settings match the released checkpoint.
 
-# Model name
-model_name: 'diffusion'
-
 architecture: dit
 
 # Preconditioner: the times are multiplied by time_scale before the DiT

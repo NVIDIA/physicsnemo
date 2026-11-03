@@ -78,6 +78,9 @@ To add your work, see `Add your paper`_ below.
    * - `Physics-Informed Neural Networks, an Instrument for Solving a 3D Wheel-Rail Interface, to Facilitate Prognostics Root Cause Analysis <https://doi.org/10.1007/978-3-032-18771-0_96>`__
      - A\. Serafini, U. Kumar
      - railway / structural
+   * - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI <https://arxiv.org/abs/2610.39072>`__
+     - P\. D. Sharpe, C. Adams, N. Sobhani, S. Choudhry
+     - SciML infrastructure / mesh processing
    * - `Predictive Uncertainty for Neural CAE Surrogates <https://arxiv.org/abs/2609.25430>`__
      - K\. Tangsali, M. A. Nabian, K. Lee et al.
      - uncertainty quantification / external aerodynamics and crash dynamics

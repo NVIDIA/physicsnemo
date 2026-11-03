@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Template for the generic xarray/Zarr reader in datasets/xarray.py; see the
+# XarrayDataset docstring for the file format and all options. Example files
+# in this format, filled with random data, can be generated with
+# datasets.xarray.write_example_files; the CorrDiff and StormCast examples
+# below match those files.
+
+name: xarray.XarrayDataset
+
+# How batches are produced; see LoaderConfig in utils/config.py.
+loader:
+  backend: "torch"
+
+# Files
+data_paths: # data files (local paths or URLs, e.g. s3://...), any format readable by xarray.open_dataset
+  - data/data_000.zarr
+  - data/data_001.zarr
+# open_dataset_kwargs: {engine: zarr} # extra arguments to xarray.open_dataset for the data files
+stats_path: data/stats.json # normalization stats: {array: {channel: {mean: ..., std: ...}}}
+invariants_path: null # time-independent data, e.g. data/invariants.zarr; null for none
+invariant_variables: null # invariants given to the model, e.g. [orography, land_sea_mask]
+lat_lon_variables: null # latitude and longitude variable names in invariants file; null for none
+mask_variable: null # static mask variable name in invariants file, nonzero where valid; null for none
+nan_mask: false # also mask out pixels that are NaN in any channel
+# Sample composition: access patterns determine which arrays the samples are
+# read from, which channels are used (null for all channels), and which time
+# steps are read. Step 0 is the reference time, e.g. the last past step.
+# The reserved array name solar_angles computes [sin_zenith, cos_zenith,
+# sin_azimuth, cos_azimuth] in the background from lat_lon_variables, e.g.
+#   solar_angles: {channels: [cos_zenith], time_steps: [1]}
+# Three examples are given below: CorrDiff, StormCast and StormScope. Uncomment
+# the one you want or override in another config file that includes this one.
+
+state_access_patterns: ??? # required: set in your config, see the examples above
+background_access_patterns: {} # none by default (unconditional diffusion model)
+
+# CorrDiff pattern: predict the current HRRR state from the current ERA5 conditioning
+#state_access_patterns: # the "state" (training target)
+#  hrrr: {channels: [t2m, u10, v10], time_steps: [0]}
+#background_access_patterns: # the "background" (conditioning); {} for none
+#  era5: {channels: null, time_steps: [0]}
+
+# StormCast pattern: predict the next HRRR step from the current HRRR state, and the
+# ERA5 conditioning and the cosine of the solar zenith angle at the target time
+#state_access_patterns: # the "state" (training target)
+#  hrrr: {channels: [t2m, u10, v10], time_steps: [1]}
+#background_access_patterns: # the "background" (conditioning); {} for none
+#  hrrr: {channels: [t2m, u10, v10], time_steps: [0]}
+#  era5: {channels: null, time_steps: [1]}
+#  solar_angles: {channels: [cos_zenith], time_steps: [1]} # requires lat_lon_variables
+
+# StormScope pattern: predict the next GOES step from the previous six steps, and the
+# cosine of the solar zenith angle at the input and target times
+#state_access_patterns: # the "state" (training target)
+#  radiance: {channels: null, time_steps: [1]}
+#background_access_patterns: # the "background" (conditioning); {} for none
+#  radiance: {channels: null, time_steps: [-5, -4, -3, -2, -1, 0]}
+#  solar_angles: {channels: [cos_zenith], time_steps: [-5, -4, -3, -2, -1, 0, 1]} # requires lat_lon_variables
+
+# Time selection
+time_step_seconds: 3600 # length of one time step; null to infer from the data
+time_range_train: null # [start, end), e.g. ["2020-01-01T00:00:00", "2020-01-02T00:00:00"]; null for all times
+time_range_valid: null # as time_range_train; null to use time_range_train
+exclude_times: [] # times to skip, e.g. ["2020-01-01T12:00:00"]
+
+# Domain
+crop_window: null # [[y_start, y_end], [x_start, x_end]] to crop the data; null for the full domain
+
+# Performance
+num_threads: 16 # threads reading and normalizing each sample
+
+# Caching
+# Experimental chunk cache for Zarr: a local directory, "memory" for RAM-based cache
+# or null for no caching.
+cache_location: null
