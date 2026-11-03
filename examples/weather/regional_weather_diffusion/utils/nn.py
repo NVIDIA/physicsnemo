@@ -121,6 +121,51 @@ def wrap_diffusion_network(
     raise ValueError("preconditioner must be 'edm' or 'time_scaled'")
 
 
+def resize_dit(net: torch.nn.Module, image_shape: tuple[int, int]) -> torch.nn.Module:
+    """Rebuild the DiT inside ``net`` for inputs of shape ``image_shape``, keeping
+    its weights.
+
+    The DiT fixes its token grid at construction (the attention neighborhoods,
+    the rotary position embedding tables and the output reshape), so a model
+    trained on patches cannot run on a larger domain as is. With rotary position
+    embeddings (``attention_backend: natten2d_rope``) none of the weights depend
+    on the grid size, so the DiT is rebuilt for ``image_shape`` with the same
+    weights. ``net`` is modified in place and returned. Nets without a DiT, or
+    whose DiT already has this input size, are returned unchanged.
+
+    Args:
+        net: the wrapped network, e.g. a ``TimeScaledModel`` or
+            ``EDMPreconditioner`` loaded from a checkpoint
+        image_shape: (height, width) of the inputs
+    Returns:
+        ``net``, with its DiT rebuilt for ``image_shape`` if needed
+    Raises:
+        ValueError: if the DiT has a learned absolute positional embedding, which
+            only exists for the training input size
+    """
+    image_shape = tuple(int(s) for s in image_shape)
+    for parent in list(net.modules()):
+        for name, child in parent.named_children():
+            if not isinstance(child, DiT) or tuple(child.input_size) == image_shape:
+                continue
+            if any(
+                isinstance(getattr(m, "pos_embed", None), torch.nn.Parameter)
+                for m in child.modules()
+            ):
+                raise ValueError(
+                    f"Cannot run a DiT trained with input size {tuple(child.input_size)} "
+                    f"on inputs of size {image_shape}: it has a learned absolute "
+                    "positional embedding. Use the training input size, or train with "
+                    'attention_backend: "natten2d_rope".'
+                )
+            args = {**child._args["__args__"], "input_size": image_shape}
+            resized = type(child)(**args)
+            resized.load_state_dict(child.state_dict())
+            param = next(child.parameters())
+            setattr(parent, name, resized.to(device=param.device, dtype=param.dtype))
+    return net
+
+
 def get_preconditioned_unet(
     name: str,
     target_channels: int,

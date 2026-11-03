@@ -361,6 +361,8 @@ python inference.py --config-name replication_corrdiff_conus +inference=default 
     inference.indices=[0] inference.ensemble_size=4 inference.plot_variables=[t2m]
 ```
 
+When the inference samples are larger than the training samples, as here, `inference.py` rebuilds the DiT for the larger size with the same weights. This requires rotary position embeddings (`attention_backend: "natten2d_rope"`); a DiT with a learned absolute positional embedding can only run at its training size.
+
 **This is not autoregressive rollout.** `inference.py` does not feed its predictions back into the model as input for a following step; each sample uses its own input from the dataset. (Prior versions of this recipe carried predictions forward through the two-element `state` convention; that convention has been removed -- see [Adding Custom Datasets](docs/CUSTOM_DATASET.md).) For autoregressive rollout or more complex inference workflows, `inference.py` can be used as a starting point, or you can bring your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations. Earth2Studio also provides model creation skills (for coding agents) that help with writing wrappers for new models.
 
 ## Troubleshooting / Frequently Asked Questions

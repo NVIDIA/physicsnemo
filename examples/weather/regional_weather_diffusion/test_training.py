@@ -29,12 +29,17 @@ import xarray as xr
 import zarr
 from datasets.xarray import SOLAR_ANGLE_CHANNELS, XarrayDataset, write_example_files
 from hydra import compose, initialize
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from tensordict import TensorDict
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from torch.distributed.tensor import DTensor
 from utils import parallel, trainer
-from utils.nn import TimeScaledModel, diffusion_model_forward
+from utils.nn import (
+    TimeScaledModel,
+    diffusion_model_forward,
+    get_preconditioned_natten_dit,
+    resize_dit,
+)
 
 from physicsnemo.core import Module
 from physicsnemo.diffusion.metrics.losses import MSEDSMLoss
@@ -992,6 +997,11 @@ def test_flow_matching_training(
     cfg.training.domain_parallel_size = domain_parallel_size
     cfg.training.perf.fp_optimizations = fp_optimizations
     cfg.training.loss.prediction_type = prediction_type
+    if prediction_type == "epsilon":
+        with open_dict(cfg):
+            cfg.training.loss.t_max = (
+                0.99  # the epsilon conversion is singular at t = 1
+            )
     cfg.model.architecture = net_architecture
     if net_architecture == "unet":
         cfg.dataset.num_scalar_cond_channels = 0  # scalar conditions need the DiT
@@ -1028,7 +1038,8 @@ def test_edm_time_scaled_training(
     cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
     cfg.training.batch_size = batch_size
     cfg.training.domain_parallel_size = domain_parallel_size
-    cfg.model.preconditioner = "time_scaled"  # with the default time_scale
+    with open_dict(cfg):
+        cfg.model.preconditioner = "time_scaled"  # with the default time_scale
     cfg.training.loss.prediction_type = prediction_type
     if "regression" in cfg.model.diffusion_conditions:
         cfg.model.diffusion_conditions.remove("regression")
@@ -1047,6 +1058,63 @@ def test_edm_preconditioner_requires_x0(cfg_diffusion: DictConfig):
     cfg.training.loss.prediction_type = "epsilon"
     with pytest.raises(ValueError, match="predicts x0"):
         trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+
+
+@pytest.mark.parametrize("prediction_type", ["epsilon", "score"])
+def test_flow_matching_singular_prediction_requires_t_max_below_one(
+    cfg_flow_matching: DictConfig, prediction_type: str
+):
+    """Test that flow matching rejects epsilon and score prediction up to t = 1,
+    where their conversion to the flow divides by zero, and accepts t_max < 1."""
+    cfg = cfg_flow_matching.copy()
+    cfg.training.loss.prediction_type = prediction_type
+    with pytest.raises(ValueError, match="singular at t = 1"):
+        trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+    with open_dict(cfg):
+        cfg.training.loss.t_max = 0.99
+    trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+
+
+@pytest.mark.parametrize("attention_backend", ["natten2d_rope", "natten2d"])
+def test_resize_dit(tmp_path: Path, attention_backend: str):
+    """Test that a DiT trained on patches runs on a larger domain after
+    resize_dit, as inference.py does for full-domain sampling, with unchanged
+    weights; and that resizing a DiT with a learned absolute positional
+    embedding raises."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: resize_dit is tested with 1 process.")
+    device = DistributedManager().device
+    net = get_preconditioned_natten_dit(
+        target_channels=2,
+        conditional_channels=1,
+        img_resolution=(32, 32),
+        hidden_size=32,
+        depth=1,
+        num_heads=1,
+        patch_size=2,
+        attn_kernel_size=7,
+        attention_backend=attention_backend,
+        preconditioner="time_scaled",
+    )
+    ckpt_path = str(tmp_path / "net.mdlus")
+    net.save(ckpt_path)
+    net = Module.from_checkpoint(ckpt_path).to(device)
+
+    if attention_backend == "natten2d":
+        with pytest.raises(ValueError, match="learned absolute positional embedding"):
+            resize_dit(net, (64, 96))
+        return
+
+    x = torch.randn(1, 2, 64, 96, device=device)
+    condition = torch.randn(1, 1, 64, 96, device=device)
+    t = torch.full((1,), 0.5, device=device)
+    weights = {k: v.clone() for (k, v) in net.state_dict().items()}
+    resize_dit(net, (64, 96))
+    assert net.model.model.input_size == (64, 96)
+    for k, v in net.state_dict().items():
+        torch.testing.assert_close(v, weights[k], rtol=0, atol=0)
+    with torch.no_grad():
+        assert net(x, t, condition=condition).shape == x.shape
 
 
 def test_flow_matching_x0_loss_equals_mse(

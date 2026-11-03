@@ -128,6 +128,18 @@ class LossConfig:
     def _check_sigmas(self):
         if self.t_min >= self.t_max:
             raise ValueError("t_min must be smaller than t_max")
+        # Converting an epsilon or score prediction to the flow divides by
+        # alpha(t) = 1 - t, which is zero at t = 1. Sampling starts at t_max, so
+        # this also keeps validation and inference finite.
+        if (
+            self.type == "flow_matching"
+            and self.prediction_type in ("epsilon", "score")
+            and self.t_max >= 1.0
+        ):
+            raise ValueError(
+                f"flow_matching with prediction_type '{self.prediction_type}' is "
+                "singular at t = 1; set training.loss.t_max below 1 (e.g. 0.99)"
+            )
         if self.sigma_min >= self.sigma_max:
             raise ValueError("sigma_min must be smaller than sigma_max")
         sigma_data = (

@@ -46,6 +46,7 @@ from utils.loss import build_sampling_scheduler, sampling_formulation
 from utils.nn import (
     build_network_condition_and_target,
     diffusion_model_forward,
+    resize_dit,
     unpack_batch,
 )
 from utils.plots import inference_plot
@@ -86,7 +87,9 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"Unknown plot_variables {unknown_vars}: not state channels")
 
     # Models
-    net = Module.from_checkpoint(inf_cfg.diffusion_checkpoint).eval().to(device)
+    net = Module.from_checkpoint(inf_cfg.diffusion_checkpoint)
+    # A DiT trained on patches is rebuilt for the dataset's (e.g. full-domain) size
+    net = resize_dit(net, dataset.image_shape()).eval().to(device)
     regression_net = None
     if "regression" in cfg.model.diffusion_conditions:
         regression_path = inf_cfg.regression_checkpoint or cfg.model.regression_weights
