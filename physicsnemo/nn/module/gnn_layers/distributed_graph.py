@@ -16,7 +16,8 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from functools import cached_property
+from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -28,6 +29,7 @@ from physicsnemo.distributed import (
     indexed_all_to_all_v,
     scatter_v,
 )
+from physicsnemo.nn.module.gnn_layers import graph_types
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +213,10 @@ def partition_graph_with_id_mapping(
     num_dst_nodes_in_each_partition = [None] * partition_size
     num_src_nodes_in_each_partition = [None] * partition_size
 
+    # the ID maps below take these dtypes and store int64 node IDs
+    global_indices = global_indices.long()
+    mapping_src_ids_to_ranks = mapping_src_ids_to_ranks.long()
+    mapping_dst_ids_to_ranks = mapping_dst_ids_to_ranks.long()
     dtype = global_indices.dtype
     input_device = global_indices.device
 
@@ -303,17 +309,13 @@ def partition_graph_with_id_mapping(
             ]
         )
 
-        partitioned_edge_ids = torch.cat(
-            [
-                torch.arange(
-                    start=offset_start[i],
-                    end=offset_end[i],
-                    dtype=dtype,
-                    device=input_device,
-                )
-                for i in range(len(offset_start))
-            ]
-        )
+        # local edge j belongs to the destination node i with
+        # local_offsets[i] <= j < local_offsets[i + 1], and is its global edge
+        # offset_start[i] + j - local_offsets[i]
+        num_edges = int(local_offsets[-1])
+        partitioned_edge_ids = torch.repeat_interleave(
+            offset_start - local_offsets[:-1], degree, output_size=num_edges
+        ) + torch.arange(num_edges, device=input_device)
 
         ids = partitioned_edge_ids
         mapped_ids = torch.arange(
@@ -326,46 +328,24 @@ def partition_graph_with_id_mapping(
         graph_partition.map_concatenated_local_edge_ids_to_global[mapped_ids] = ids
         _edge_id_offset += ids.numel()
 
-        partitioned_src_ids = torch.cat(
-            [
-                global_indices[offset_start[i] : offset_end[i]].clone()
-                for i in range(len(offset_start))
-            ]
-        )
+        partitioned_src_ids = global_indices[partitioned_edge_ids]
 
         global_src_ids_on_rank, inverse_mapping = partitioned_src_ids.unique(
             sorted=True, return_inverse=True
         )
-        remote_local_src_ids_on_rank = _map_global_src_ids_to_local[
-            global_src_ids_on_rank
+        src_ranks_on_rank = mapping_src_ids_to_ranks[global_src_ids_on_rank]
+        # local source IDs number the source nodes by owning rank, then by global ID
+        order = torch.argsort(src_ranks_on_rank, stable=True)
+        local_indices = torch.argsort(order)[inverse_mapping]
+        num_src_ids_from_each_rank = torch.bincount(
+            src_ranks_on_rank, minlength=partition_size
+        )
+        for rank_offset, size in enumerate(num_src_ids_from_each_rank.tolist()):
+            graph_partition.sizes[rank_offset][rank] = size
+        # indices to send to this rank from this rank
+        graph_partition.scatter_indices[rank] = _map_global_src_ids_to_local[
+            global_src_ids_on_rank[src_ranks_on_rank == partition_rank]
         ]
-
-        _map_global_src_ids_to_local_graph = torch.zeros_like(mapping_src_ids_to_ranks)
-        _num_local_indices = 0
-        for rank_offset in range(partition_size):
-            mask = mapping_src_ids_to_ranks[global_src_ids_on_rank] == rank_offset
-            if partition_rank == rank_offset:
-                # indices to send to this rank from this rank
-                graph_partition.scatter_indices[rank] = (
-                    remote_local_src_ids_on_rank[mask]
-                    .detach()
-                    .clone()
-                    .to(dtype=torch.int64)
-                )
-            numel_mask = mask.sum().item()
-            graph_partition.sizes[rank_offset][rank] = numel_mask
-
-            tmp_ids = torch.arange(
-                _num_local_indices,
-                _num_local_indices + numel_mask,
-                device=input_device,
-                dtype=dtype,
-            )
-            _num_local_indices += numel_mask
-            tmp_map = global_src_ids_on_rank[mask]
-            _map_global_src_ids_to_local_graph[tmp_map] = tmp_ids
-
-        local_indices = _map_global_src_ids_to_local_graph[partitioned_src_ids]
         graph_partition.num_indices_in_each_partition[rank] = local_indices.size(0)
 
         if rank == partition_rank:
@@ -569,6 +549,7 @@ def partition_graph_nodewise(
     partition_rank: int,
     device: torch.device,
     matrix_decomp: bool = False,
+    num_src_nodes: Optional[int] = None,
 ) -> GraphPartition:
     """
     Utility function which partitions a global graph given as CSC structure naively
@@ -600,8 +581,13 @@ def partition_graph_nodewise(
         on which the local graph and related buffers will live on
     matrix_decomp : bool
         flag to enable matrix decomposition for partitioning
+    num_src_nodes : int, optional
+        Number of source nodes. Defaults to the largest source ID plus one, which
+        misses source nodes with higher IDs that have no outgoing edges.
     """
-    num_global_src_nodes = global_indices.max().item() + 1
+    num_global_src_nodes = (
+        num_src_nodes if num_src_nodes is not None else global_indices.max().item() + 1
+    )
     num_global_dst_nodes = global_offsets.size(0) - 1
     num_dst_nodes_per_partition = (
         num_global_dst_nodes + partition_size - 1
@@ -842,17 +828,12 @@ def partition_graph_by_coordinate_bbox(
             error_msg = f"Expected len(coordinate_separators_max[{rank}]) == dim"
             error_msg += f", but got {a} and {b} respectively"
 
-    num_global_src_nodes = global_indices.max().item() + 1
+    num_global_src_nodes = src_coordinates.size(0)
     num_global_dst_nodes = global_offsets.size(0) - 1
 
-    mapping_dst_ids_to_ranks = torch.zeros(
-        num_global_dst_nodes, dtype=global_offsets.dtype, device=global_offsets.device
-    )
-    mapping_src_ids_to_ranks = torch.zeros(
-        num_global_src_nodes,
-        dtype=global_offsets.dtype,
-        device=global_offsets.device,
-    )
+    kwargs = {"dtype": global_offsets.dtype, "device": global_offsets.device}
+    mapping_dst_ids_to_ranks = torch.full((num_global_dst_nodes,), -1, **kwargs)
+    mapping_src_ids_to_ranks = torch.full((num_global_src_nodes,), -1, **kwargs)
 
     def _assign_ranks(mapping, coordinates):
         for p in range(partition_size):
@@ -867,6 +848,10 @@ def partition_graph_by_coordinate_bbox(
                 if max_val is not None:
                     mask = mask & (coordinates[:, d] < max_val)
             mapping[mask] = p
+        if (mapping < 0).any():
+            raise ValueError(
+                f"{int((mapping < 0).sum())} nodes lie outside every partition's box."
+            )
 
     _assign_ranks(mapping_src_ids_to_ranks, src_coordinates)
     _assign_ranks(mapping_dst_ids_to_ranks, dst_coordinates)
@@ -882,6 +867,39 @@ def partition_graph_by_coordinate_bbox(
     )
 
 
+def edge_index_to_csc(
+    edge_index: torch.Tensor, num_dst_nodes: int
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""
+    Convert a PyG ``edge_index`` to the CSC structure that the partitioning
+    functions and :class:`DistributedGraph` take.
+
+    Parameters
+    ----------
+    edge_index : torch.Tensor
+        Source and destination node IDs of each edge, of shape :math:`(2, E)`.
+    num_dst_nodes : int
+        Number of destination nodes, including any without incoming edges.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        CSC offsets and indices, and the permutation that puts edges in CSC order.
+        Apply it to edge features before partitioning them.
+
+    Examples
+    --------
+    >>> edge_index = torch.tensor([[0, 1, 2], [1, 0, 1]])
+    >>> edge_index_to_csc(edge_index, num_dst_nodes=2)
+    (tensor([0, 1, 3]), tensor([1, 0, 2]), tensor([1, 0, 2]))
+    """
+    src, dst = edge_index.long()
+    edge_perm = torch.argsort(dst, stable=True)
+    offsets = torch.zeros(num_dst_nodes + 1, dtype=torch.int64, device=dst.device)
+    offsets[1:] = torch.bincount(dst, minlength=num_dst_nodes).cumsum(dim=0)
+    return offsets, src[edge_perm], edge_perm
+
+
 class DistributedGraph:
     def __init__(
         self,
@@ -890,6 +908,8 @@ class DistributedGraph:
         partition_size: int,
         graph_partition_group_name: str = None,
         graph_partition: Optional[GraphPartition] = None,
+        process_group: Optional[dist.ProcessGroup] = None,
+        num_src_nodes: Optional[int] = None,
     ):  # pragma: no cover
         """
         Utility Class representing a distributed graph based on a given
@@ -915,16 +935,34 @@ class DistributedGraph:
             Optional graph_partition, if passed as None, the naive
             node-wise partitioning scheme will be applied to global_offsets and global_indices,
             otherwise, these will be ignored and the passed partition will be used instead.
+        process_group : torch.distributed.ProcessGroup, optional
+            Process group across which graphs are distributed, in place of
+            ``graph_partition_group_name`` for groups that ``DistributedManager``
+            does not know. The graph then lives on the current CUDA device, if any,
+            so call ``torch.cuda.set_device`` first.
+        num_src_nodes : int, optional
+            Number of source nodes, for the default partitioning. Defaults to the
+            largest source ID plus one; see ``partition_graph_nodewise``.
         """
 
-        dist_manager = DistributedManager()
-        self.device = dist_manager.device
-        self.partition_rank = dist_manager.group_rank(name=graph_partition_group_name)
-        self.partition_size = dist_manager.group_size(name=graph_partition_group_name)
+        if process_group is None:
+            dist_manager = DistributedManager()
+            self.device = dist_manager.device
+            process_group = dist_manager.group(name=graph_partition_group_name)
+        elif graph_partition_group_name is not None:
+            raise ValueError(
+                "Pass graph_partition_group_name or process_group, not both."
+            )
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda", torch.cuda.current_device())
+        else:
+            self.device = torch.device("cpu")
+        self.process_group = process_group
+        self.partition_rank = dist.get_rank(group=process_group)
+        self.partition_size = dist.get_world_size(group=process_group)
         error_msg = f"Passed partition_size does not correspond to size of process_group, got {partition_size} and {self.partition_size} respectively."
         if self.partition_size != partition_size:
             raise AssertionError(error_msg)
-        self.process_group = dist_manager.group(name=graph_partition_group_name)
 
         if graph_partition is None:
             # default partitioning scheme
@@ -934,6 +972,7 @@ class DistributedGraph:
                 self.partition_size,
                 self.partition_rank,
                 self.device,
+                num_src_nodes=num_src_nodes,
             )
 
         else:
@@ -958,6 +997,29 @@ class DistributedGraph:
         print(msg)
 
         dist.barrier(self.process_group)
+
+    @cached_property
+    def same_src_and_dst_partition(self) -> bool:
+        r"""Whether this rank holds the same nodes, in the same order, as source and
+        as destination nodes, as message passing with one node-feature tensor needs."""
+        partition = self.graph_partition
+        return partition.matrix_decomp or torch.equal(
+            partition.map_partitioned_src_ids_to_global,
+            partition.map_partitioned_dst_ids_to_global,
+        )
+
+    @cached_property
+    def local_graph(self) -> graph_types.GraphType:
+        r"""
+        This rank's part of the graph as a PyG ``Data`` object. Its source IDs index
+        the output of :meth:`get_src_node_features_in_local_graph`, and its
+        destination IDs index this rank's destination nodes.
+        """
+        if not graph_types.PYG_AVAILABLE:
+            graph_types.raise_missing_pyg_error()
+        dst = torch.repeat_interleave(self.graph_partition.local_offsets.diff())
+        src = self.graph_partition.local_indices.long()
+        return graph_types.PyGData(edge_index=torch.stack([src, dst]))
 
     def get_src_node_features_in_partition(
         self,

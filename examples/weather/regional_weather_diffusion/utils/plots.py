@@ -35,13 +35,12 @@ def _normalize_backgrounds(background):
     return {"background": background}
 
 
-def validation_plot(generated, truth, input_state, variable, background=None):
+def validation_plot(generated, truth, variable, background=None):
     """Produce validation plot created during training.
 
     Args:
         generated: Generated output array
         truth: Ground truth array
-        input_state: Input state array (t=0)
         variable: Variable name for title
         background: Optional background channel(s) - dict, list, or single array
 
@@ -60,11 +59,8 @@ def validation_plot(generated, truth, input_state, variable, background=None):
 
     yield ("generated", _make_fig(generated, f"Generated {variable}"))
     yield ("truth", _make_fig(truth, "Truth"))
-    if input_state is not None:
-        yield ("input", _make_fig(input_state, "Input"))
 
     backgrounds = _normalize_backgrounds(background)
-    num_panels = 3 + max(len(backgrounds), 1)
     for name, bg in backgrounds.items():
         gmin, gmax = float(np.nanmin(bg)), float(np.nanmax(bg))
         yield (
@@ -152,7 +148,7 @@ def inference_plot(
     return fig
 
 
-def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
+def save_validation_plots(trainer, plot_outputs, plot_target, plot_background):
     r"""
     Save validation plots to disk and wandb.
 
@@ -162,12 +158,12 @@ def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
         The trainer object used for plotting.
     plot_outputs : torch.Tensor or None
         Model outputs to visualize.
-    plot_state : tuple or None
-        Tuple of (input_state, target_state) for comparison plots.
+    plot_target : torch.Tensor or None
+        Target state tensor for comparison plots.
     plot_background : torch.Tensor or None
         Background conditioning for context panels.
     """
-    if trainer.dist.rank != 0 or plot_outputs is None or plot_state is None:
+    if trainer.dist.rank != 0 or plot_outputs is None or plot_target is None:
         return
 
     fields = trainer.cfg.training.validation_plot_variables
@@ -175,7 +171,7 @@ def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
     for i in range(plot_outputs.shape[0]):
         image = plot_outputs[i].cpu().numpy()
         figs, spec_ratios = ps1d_plots(
-            plot_outputs[i], plot_state[1][i], fields, trainer.state_channels
+            plot_outputs[i], plot_target[i], fields, trainer.state_channels
         )
 
         for f_ in fields:
@@ -186,10 +182,7 @@ def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
             bg_panels = _prepare_background_panels(trainer, plot_background, i)
             validation_figs = validation_plot(
                 image[f_idx],
-                plot_state[1][i, f_idx].cpu().numpy(),
-                plot_state[0][i, f_idx].cpu().numpy()
-                if plot_state[0] is not None
-                else None,
+                plot_target[i, f_idx].cpu().numpy(),
                 f_,
                 bg_panels,
             )

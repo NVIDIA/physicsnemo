@@ -35,7 +35,7 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 
 ## Prerequisites
 
-**Data:** LS-DYNA crash data preprocessed to VTP or Zarr format using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/crash). See [Data Preprocessing](#data-preprocessing) below for setup instructions.
+**Data:** LS-DYNA crash data preprocessed to VTP or Zarr format using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/cae/crashsim). See [Data Preprocessing](#data-preprocessing) below for setup instructions.
 
 **Code dependencies:**
 
@@ -468,7 +468,7 @@ If `global_features` is `null`, `sample.global_features` is `None` and the model
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
-The reader opens preprocessed simulation data and produces the arrays the datapipe consumes. Raw LS-DYNA d3plot files must be preprocessed to VTP or Zarr using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/crash) before use. The reader is swappable via Hydra so you can adapt the pipeline to different formats or add your own.
+The reader opens preprocessed simulation data and produces the arrays the datapipe consumes. Raw LS-DYNA d3plot files must be preprocessed to VTP or Zarr using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/cae/crashsim) before use. The reader is swappable via Hydra so you can adapt the pipeline to different formats or add your own.
 
 ### Built‑in VTP reader (PolyData)
 

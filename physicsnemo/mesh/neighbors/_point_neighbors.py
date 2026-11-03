@@ -67,30 +67,27 @@ def get_point_to_cells_adjacency(mesh: "Mesh") -> Adjacency:
                 mesh.n_points + 1, dtype=torch.int64, device=mesh.points.device
             ),
             indices=torch.zeros(0, dtype=torch.int64, device=mesh.points.device),
+            device=mesh.points.device,
         )
 
-    from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
+    ### Sort the flattened cells by point id
+    # The flattened cells list each cell's points in cell order, so a stable
+    # sort by point id alone keeps each point's cells ascending, and the cell of
+    # each sorted entry is its flat position // n_vertices_per_cell. No
+    # composite (point, cell) keys and no cell-id array are needed.
+    n_vertices_per_cell = mesh.cells.shape[1]
+    sorted_point_ids, order = torch.sort(mesh.cells.reshape(-1), stable=True)
 
-    ### Create (point_id, cell_id) pairs for all vertices in all cells
-    n_cells, n_vertices_per_cell = mesh.cells.shape
-
-    # Flatten cells to get all point indices
-    # Shape: (n_cells * n_vertices_per_cell,)
-    point_ids = mesh.cells.reshape(-1)
-
-    # Create corresponding cell indices for each point
-    # Shape: (n_cells * n_vertices_per_cell,)
-    cell_ids = torch.arange(
-        n_cells, dtype=torch.int64, device=mesh.cells.device
-    ).repeat_interleave(n_vertices_per_cell)
-
-    ### Build adjacency using shared utility
-    return build_adjacency_from_pairs(
-        source_indices=point_ids,
-        target_indices=cell_ids,
-        n_sources=mesh.n_points,
-        n_targets=mesh.n_cells,
+    ### offsets[i] is the number of entries whose point is below i
+    offsets = torch.searchsorted(
+        sorted_point_ids,
+        torch.arange(
+            mesh.n_points + 1, dtype=sorted_point_ids.dtype, device=mesh.points.device
+        ),
     )
+    del sorted_point_ids
+    indices = order // n_vertices_per_cell
+    return Adjacency(offsets=offsets, indices=indices, device=mesh.points.device)
 
 
 def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
@@ -123,37 +120,57 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     >>> adj.to_list()
     [[1, 2], [0, 2], [0, 1]]
     """
+    from physicsnemo.mesh.boundaries import extract_candidate_facets
     from physicsnemo.mesh.utilities._topology import extract_unique_edges
+    from physicsnemo.utils._index_tuple_ops import sort_index_tuples
 
-    ### Handle empty mesh
-    if mesh.n_cells == 0 or mesh.n_points == 0:
+    ### Handle empty mesh, and vertex cells, which join no two points
+    if mesh.n_cells == 0 or mesh.n_points == 0 or mesh.n_manifold_dims == 0:
         return Adjacency(
             offsets=torch.zeros(
                 mesh.n_points + 1, dtype=torch.int64, device=mesh.points.device
             ),
             indices=torch.zeros(0, dtype=torch.int64, device=mesh.points.device),
+            device=mesh.points.device,
         )
 
-    ### Extract all unique edges (handles 1D and n-D meshes uniformly)
-    unique_edges, _ = extract_unique_edges(mesh)
-
-    from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
-
-    ### Create bidirectional edges
-    # For each edge [a, b], create both [a, b] and [b, a]
-    # Shape: (2 * n_unique_edges, 2)
-    bidirectional_edges = torch.cat(
-        [
-            unique_edges,
-            unique_edges.flip(dims=[1]),  # Reverse the edge direction
-        ],
-        dim=0,
+    from physicsnemo.mesh.neighbors._adjacency import (
+        _PACKED_PAIR_KEY_LIMIT,
+        adjacency_from_sorted_keys,
+        build_adjacency_from_pairs,
     )
 
-    ### Build adjacency from bidirectional edge pairs
-    return build_adjacency_from_pairs(
-        source_indices=bidirectional_edges[:, 0],
-        target_indices=bidirectional_edges[:, 1],
-        n_sources=mesh.n_points,
-        n_targets=mesh.n_points,
+    n_points = mesh.n_points
+    if n_points * n_points >= _PACKED_PAIR_KEY_LIMIT:
+        ### The packed edge keys below could overflow: build from edge rows
+        unique_edges, _ = extract_unique_edges(mesh)
+        # For each edge [a, b], create both [a, b] and [b, a]
+        bidirectional_edges = torch.cat([unique_edges, unique_edges.flip(dims=[1])])
+        return build_adjacency_from_pairs(
+            source_indices=bidirectional_edges[:, 0],
+            target_indices=bidirectional_edges[:, 1],
+            n_sources=n_points,
+            n_targets=n_points,
+        )
+
+    ### Pack each canonical candidate edge (a <= b) into one key, a * n + b
+    if mesh.n_manifold_dims == 1:
+        candidate_edges = sort_index_tuples(mesh.cells)
+    else:
+        candidate_edges, parent_cell_indices = extract_candidate_facets(
+            mesh.cells, manifold_codimension=mesh.n_manifold_dims - 1
+        )
+        del parent_cell_indices
+    edge_keys = candidate_edges[:, 0].long() * n_points + candidate_edges[:, 1]
+    del candidate_edges
+
+    ### Deduplicate the edges, then add the reverse direction (b, a) of each
+    # A degenerate self-edge (a, a) is listed twice, as with the edge rows.
+    forward_keys = torch.unique(edge_keys)
+    del edge_keys
+    reverse_keys = (forward_keys % n_points) * n_points + forward_keys // n_points
+    sorted_keys = torch.sort(torch.cat([forward_keys, reverse_keys])).values
+    del forward_keys, reverse_keys
+    return adjacency_from_sorted_keys(
+        sorted_keys, n_points, n_points, dtype=mesh.cells.dtype
     )

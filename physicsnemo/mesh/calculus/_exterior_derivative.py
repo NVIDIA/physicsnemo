@@ -195,9 +195,9 @@ def exterior_derivative_1(
     # Shape: (n_faces, 3, 2) where 3 is the number of edges per triangle
     boundary_edges = torch.stack(
         [
-            faces[:, [0, 1]],  # edge from v₀ to v₁
-            faces[:, [1, 2]],  # edge from v₁ to v₂
-            faces[:, [2, 0]],  # edge from v₂ to v₀
+            faces[:, :2],  # edge from v₀ to v₁
+            faces[:, 1:],  # edge from v₁ to v₂
+            faces[:, ::2].flip(1),  # edge from v₂ to v₀
         ],
         dim=1,
     )  # (n_faces, 3, 2)

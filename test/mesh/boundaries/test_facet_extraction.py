@@ -419,6 +419,55 @@ class TestDataInheritance:
             rtol=1e-5,
         )
 
+    def test_explicit_measures_are_not_facet_data(self):
+        """Facets of a measured mesh integrate over their own geometric lengths."""
+        from physicsnemo.mesh.calculus.measure import (
+            EFFECTIVE_MEASURE_KEY,
+            set_cell_measures,
+            set_point_measures,
+        )
+
+        ### A 3-4-5 triangle whose explicit area measure equals its geometry
+        points = torch.tensor([[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+        set_cell_measures(mesh, torch.tensor([6.0]))
+        set_point_measures(mesh, torch.full((3,), 2.0), dimension=2)
+
+        perimeter = torch.tensor(12.0)  # 3 + 4 + 5
+        for facets in (
+            mesh.get_facet_mesh(),
+            mesh.get_facet_mesh(data_source="points"),
+            mesh.get_boundary_mesh(),
+            mesh.to_edge_graph(),
+        ):
+            assert EFFECTIVE_MEASURE_KEY not in facets.cell_data
+            torch.testing.assert_close(facets.integrate(torch.ones(3)), perimeter)
+
+    def test_codimension_zero_keeps_explicit_measures(self):
+        """Extraction that keeps the manifold dimension keeps explicit measures."""
+        from physicsnemo.mesh.calculus.measure import set_cell_measures
+
+        ### A 3-4-5 triangle (area 6) and a length-3 edge, measured as 18 and 9
+        triangle = Mesh(
+            points=torch.tensor([[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        set_cell_measures(triangle, torch.tensor([18.0]))
+        edge = Mesh(
+            points=torch.tensor([[0.0, 0.0], [3.0, 0.0]]),
+            cells=torch.tensor([[0, 1]]),
+        )
+        set_cell_measures(edge, torch.tensor([9.0]))
+
+        for extracted, expected in (
+            (triangle.get_facet_mesh(manifold_codimension=0), 18.0),
+            (edge.to_edge_graph(), 9.0),
+        ):
+            torch.testing.assert_close(
+                extracted.integrate(torch.ones(extracted.n_cells)),
+                torch.tensor(expected),
+            )
+
 
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""

@@ -28,7 +28,8 @@ from typing import Any, Sequence
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.nn.functional import knn, weighted_multinomial
+from physicsnemo.nn.functional import knn
+from physicsnemo.utils import weighted_multinomial
 
 
 def calculate_center_of_mass(

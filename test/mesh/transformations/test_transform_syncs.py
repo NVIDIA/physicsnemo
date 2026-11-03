@@ -80,6 +80,8 @@ def _assert_same_mesh(actual: Mesh, expected: Mesh) -> None:
         ([1.0, 2.0, 3.0], (True, False)),
         ([2.0, -2.0, 2.0], (True, True)),  # a reflection is still a similarity
         ([1.0, 0.0, 1.0], (False, False)),
+        ([1e-3, 1.5e-3, 1e-3], (True, False)),  # small, but 50% anisotropic
+        ([1e-200, 1.5e-200, 1e-200], (False, False)),  # its squares underflow to 0
         (1e160, (True, True)),  # |det| overflows to inf
         ([1e160, 1e-160, 1.0], (True, False)),  # 1e160 ** 2 overflows to inf
         (torch.tensor(2.0), (None, True)),
@@ -101,7 +103,13 @@ def test_scale_matches_runtime_tests(factor, device):
 
 
 @pytest.mark.parametrize(
-    "factor", [[1e160, 1e-160, 1.0], [1e200, 1e200, 1e-200], [1e-200, 1e-200, 1e-200]]
+    "factor",
+    [
+        [1e160, 1e-160, 1.0],
+        [1e200, 1e200, 1e-200],
+        [1e-200, 1e-200, 1e-200],
+        [1e-200, 1.5e-200, 1e-200],
+    ],
 )
 def test_extreme_scale_assumptions_match_runtime_tests(factor):
     """Factors whose products overflow or underflow in float64 decide alike."""
@@ -186,6 +194,32 @@ def test_assume_similarity_scales_point_measures(device):
     )
     with pytest.raises(ValueError, match="support geometry"):
         transform(surface, stretch, assume_similarity=False)
+
+
+def test_similarity_test_is_independent_of_overall_scale(device):
+    """Scaling a map by a constant never changes whether it is a similarity."""
+    mesh = _surface(device).to(dtype=torch.float64)
+    cloud = Mesh(points=mesh.points)
+    set_point_measures(
+        cloud, torch.ones(cloud.n_points, device=device).double(), dimension=2
+    )
+    stretch = torch.diag(mesh.points.new_tensor([1.0, 1.5, 1.0]))
+    rotation = rotation_matrix(0.4, "z", 3, mesh.points.device, mesh.points.dtype)
+
+    for k in (1.0, 1e-3):
+        assert _is_similarity_transform(k * rotation)
+        assert not _is_similarity_transform(k * stretch)
+        moved = transform(mesh, k * stretch)
+        fresh = Mesh(points=moved.points, cells=moved.cells)
+        torch.testing.assert_close(moved.point_normals, fresh.point_normals)
+        with pytest.raises(ValueError, match="support geometry"):
+            transform(cloud, k * stretch)
+    # Near the dtype's limits, where the Gram matrix itself underflows
+    for dtype, k in ((torch.float32, 1e-22), (torch.float64, 1e-200)):
+        assert _is_similarity_transform((k * rotation).to(dtype))
+        assert not _is_similarity_transform((k * stretch).to(dtype))
+    assert _is_similarity_transform(torch.zeros(3, 3, device=device))
+    assert not _is_similarity_transform(torch.full((3, 3), torch.inf, device=device))
 
 
 def test_rotation_axis_validation(device):

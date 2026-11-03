@@ -61,6 +61,38 @@ def test_fieldless_subclass_keeps_constructor_defaults():
     assert not list(domain.global_data.keys())
 
 
+def test_subclass_with_extra_field_needs_no_init(tmp_path):
+    """A subclass that adds a field constructs, clones, moves, indexes, rebuilds
+    and round-trips without an ``__init__`` of its own."""
+    interior = single_triangle_2d.load()
+    domain = DomainMeshWithExtra(
+        interior=interior,
+        boundaries={"wall": interior.clone()},
+        extra=torch.tensor(2.0),
+    )
+    assert type(domain) is DomainMeshWithExtra
+    assert torch.equal(domain.extra, torch.tensor(2.0))
+    assert domain.boundary_names == ["wall"]
+    assert DomainMeshWithExtra(interior=interior).extra is None
+
+    for result in (
+        domain.clone(),
+        domain.to(torch.float64),
+        domain.to("cpu"),
+        domain[...],
+        domain.apply_to_meshes(lambda m: m.clone()),  # rebuilds through __init__
+    ):
+        assert type(result) is DomainMeshWithExtra
+        assert torch.equal(result.extra.float(), domain.extra)
+        assert torch.equal(result.boundaries["wall"].points.float(), interior.points)
+
+    domain.save(tmp_path / "domain")
+    loaded = DomainMeshWithExtra.load(tmp_path / "domain")
+    assert type(loaded) is DomainMeshWithExtra
+    assert torch.equal(loaded.extra, domain.extra)
+    assert torch.equal(loaded.boundaries["wall"].cells, interior.cells)
+
+
 def test_domain_mesh_is_not_subscriptable():
     """Inheriting TensorClass must not expose its configuration subscript.
 
@@ -184,6 +216,16 @@ class TestApplyToMeshes:
     def test_returns_domain_mesh(self, tet_domain):
         dm2 = tet_domain.apply_to_meshes(lambda m: m)
         assert isinstance(dm2, DomainMesh)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_results_keep_the_device_fn_chose(self, tet_domain):
+        """Boundaries are not moved back to the device of the source domain."""
+        on_cuda = tet_domain.to("cuda")
+        dm2 = on_cuda.apply_to_meshes(lambda m: m.to("cpu"))
+        assert dm2.interior.points.device.type == "cpu"
+        for name in tet_domain.boundary_names:
+            assert dm2.boundaries[name].points.device.type == "cpu"
+            assert dm2.boundaries[name].cells.device.type == "cpu"
 
     def test_interior_only(self, tet_domain):
         """apply_to_meshes with boundaries=False should leave boundaries unchanged."""

@@ -17,6 +17,7 @@
 """Tests for text rendering primitives."""
 
 import pytest
+import torch
 
 # Skip this module if matplotlib is not available (text primitives require it)
 pytest.importorskip("matplotlib")
@@ -115,6 +116,81 @@ def test_text_max_segment_length():
     assert mesh_fine.n_points > mesh_coarse.n_points, (
         "Smaller max_segment_length should produce more points"
     )
+
+
+def test_text_1d_2d_closed_outlines():
+    """Each glyph contour is a closed loop without zero-length edges."""
+    mesh = text_1d_2d("IO")
+
+    degree = torch.bincount(mesh.cells.flatten(), minlength=mesh.n_points)
+    assert (degree == 2).all()
+    edge_vectors = mesh.points[mesh.cells[:, 1]] - mesh.points[mesh.cells[:, 0]]
+    assert (edge_vectors.norm(dim=1) > 0).all()
+
+
+def test_text_2d_2d_curved_glyph_area():
+    """A thin curved ring (U+25CB) is filled up to its Bezier outline."""
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.textpath import TextPath
+
+    ### Exact area of the quadratic Bezier glyph outline
+    fp = FontProperties(family="sans-serif", weight="bold")
+    path = TextPath((0, 0), "\u25cb", size=12.0, prop=fp)
+
+    def cross(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+
+    expected = 0.0
+    for verts, code in path.iter_segments(curves=True):
+        if code == path.MOVETO:
+            start = current = verts
+        elif code == path.LINETO:
+            expected += cross(current, verts) / 2
+            current = verts
+        elif code == path.CURVE3:
+            ctrl, end = verts[:2], verts[2:]
+            expected += (
+                2 * cross(current, ctrl) + 2 * cross(ctrl, end) + cross(current, end)
+            ) / 6
+            current = end
+        elif code == path.CLOSEPOLY:
+            expected += cross(current, start) / 2
+            current = start
+        else:
+            raise AssertionError(f"unexpected path code {code}")
+
+    mesh = text_2d_2d("\u25cb", font_size=12.0)
+    assert mesh.cell_areas.sum().item() == pytest.approx(abs(expected), rel=1e-3)
+
+
+def test_text_3d_from_curved_glyph():
+    """The 3D text primitives, built from ``text_2d_2d``, keep the filled ring."""
+    area = text_2d_2d("\u25cb").cell_areas.sum().item()
+    volume = text_3d_3d("\u25cb", extrusion_height=2.0).cell_areas.sum().item()
+    assert volume == pytest.approx(2.0 * area, rel=1e-6)
+    assert text_2d_3d("\u25cb", extrusion_height=2.0).is_watertight()
+
+
+def test_winding_number_chunked():
+    """Chunking bounds memory without changing the winding numbers."""
+    from physicsnemo.mesh.primitives.text import _winding_number
+
+    ### A counter-clockwise unit square, and a clockwise square inside it
+    def square(lo, hi, reverse=False):
+        corners = torch.tensor([[lo, lo], [hi, lo], [hi, hi], [lo, hi]])
+        if reverse:
+            corners = corners.flip(0)
+        return torch.stack([corners, corners.roll(-1, dims=0)], dim=1)
+
+    segments = torch.cat([square(0.0, 1.0), square(0.25, 0.75, reverse=True)])
+    points = torch.rand(1000, 2, generator=torch.Generator().manual_seed(0)) * 1.2
+    points = points - 0.1
+    in_outer = ((points > 0) & (points < 1)).all(dim=1)
+    in_hole = ((points > 0.25) & (points < 0.75)).all(dim=1)
+    expected = in_outer.float() - in_hole.float()
+
+    assert torch.equal(_winding_number(points, segments), expected)
+    assert torch.equal(_winding_number(points, segments, max_pairs=24), expected)
 
 
 if __name__ == "__main__":

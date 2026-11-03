@@ -88,8 +88,10 @@ def find_edges_in_reference(
         index_bound = (
             int(max(reference_edges.max().item(), query_edges.max().item())) + 1
         )
-    reference_hash = sorted_reference[:, 0] * index_bound + sorted_reference[:, 1]
-    query_hash = sorted_query[:, 0] * index_bound + sorted_query[:, 1]
+    reference_hash = (
+        sorted_reference[:, 0].long() * index_bound + sorted_reference[:, 1]
+    )
+    query_hash = sorted_query[:, 0].long() * index_bound + sorted_query[:, 1]
 
     ### Sort reference hashes to enable binary search via searchsorted
     reference_hash_sorted, sort_indices = torch.sort(reference_hash)

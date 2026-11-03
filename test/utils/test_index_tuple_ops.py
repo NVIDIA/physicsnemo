@@ -25,6 +25,7 @@ from physicsnemo.utils._index_tuple_ops import (
     _SORTING_NETWORKS,
     _sort_by_network,
     sort_index_tuples,
+    sort_index_tuples_,
     unique_index_tuples,
 )
 
@@ -210,6 +211,38 @@ def test_sort_index_tuples_matches_torch_sort(
         device
     )
     assert torch.equal(sort_index_tuples(rows), torch.sort(rows, dim=-1).values)
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("n_rows", [1_000, 300_000])
+@pytest.mark.parametrize("n_columns", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_sort_index_tuples_inplace_matches_torch_sort(
+    device: str, n_rows: int, n_columns: int, dtype: torch.dtype
+) -> None:
+    """The in-place variant sorts like torch.sort, in place for the network sizes."""
+    generator = torch.Generator().manual_seed(2468 + n_columns)
+    rows = torch.randint(0, 50, size=(n_rows, 3, n_columns), generator=generator)
+    rows = rows.to(device=device, dtype=dtype)
+    expected = torch.sort(rows, dim=-1).values
+
+    actual = sort_index_tuples_(rows)
+
+    assert actual.dtype == dtype
+    assert torch.equal(actual, expected)
+    in_place = n_columns <= 4 and (device == "cpu" or rows.numel() >= 1 << 19)
+    assert (actual.data_ptr() == rows.data_ptr()) == in_place
 
 
 def test_sort_index_tuples_handles_batched_noncontiguous_and_empty_rows() -> None:

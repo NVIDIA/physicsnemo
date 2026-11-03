@@ -60,8 +60,8 @@ model:
     channel_mult: [1, 2]
     num_blocks: 2
 
-  regression_conditions: ["state", "background", "invariant"]
-  diffusion_conditions: ["state", "background", "invariant"]
+  regression_conditions: ["background", "invariant"]
+  diffusion_conditions: ["background", "invariant"]
 
 sampler:
   args:

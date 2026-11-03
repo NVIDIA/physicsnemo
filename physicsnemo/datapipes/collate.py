@@ -64,6 +64,38 @@ def _collate_metadata(metadata_list: Sequence[dict[str, Any]]) -> list[dict[str,
     return list(metadata_list)
 
 
+def _stack_past_batch_dims(data_list: list[TensorDict], dim: int) -> TensorDict:
+    """
+    Stack TensorDicts along a dim past their batch dims.
+
+    ``torch.stack`` on TensorDicts deprecates such a dim (tensordict 0.15),
+    so each tensor is stacked with ``torch.stack`` instead. Non-tensor
+    values have no dims past the batch dims: they are stacked along a new
+    dim right after the batch dims, which keeps the value of every sample.
+
+    Parameters
+    ----------
+    data_list : list[TensorDict]
+        TensorDicts with the same keys and batch size.
+    dim : int
+        Dimension along which to stack each tensor.
+
+    Returns
+    -------
+    TensorDict
+        Stacked TensorDict, with the batch size of the inputs.
+    """
+    tensors = [data.filter_non_tensor_data() for data in data_list]
+    batched = tensors[0].apply(
+        lambda *leaves: torch.stack(leaves, dim=dim), *tensors[1:]
+    )
+    tensor_keys = list(tensors[0].keys(include_nested=True, leaves_only=True))
+    non_tensors = [data.exclude(*tensor_keys) for data in data_list]
+    if not non_tensors[0].is_empty():
+        batched.update(torch.stack(non_tensors, dim=data_list[0].batch_dims))
+    return batched
+
+
 class Collator(ABC):
     """
     Abstract base class for collators.
@@ -202,7 +234,12 @@ class DefaultCollator(Collator):
                 require_keys(data, self.keys, what="Key")
             data_list = [data.select(*self.keys) for data in data_list]
 
-        batched_data = torch.stack(data_list, dim=self.stack_dim)
+        dim = self.stack_dim
+        batch_dims = data_list[0].batch_dims
+        if -batch_dims - 1 <= dim <= batch_dims:
+            batched_data = torch.stack(data_list, dim=dim)
+        else:
+            batched_data = _stack_past_batch_dims(data_list, dim)
 
         # Collate metadata only if requested
         if self.collate_metadata:

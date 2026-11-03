@@ -25,7 +25,7 @@ hole detection (for letters like 'o', 'e', 'a') using the shoelace formula.
 This module requires matplotlib to be installed.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float
@@ -95,6 +95,15 @@ def _sample_curve_segment(p0, control_points, pn, num_samples: int):
         )
 
 
+def _close_contour(path_points: list[torch.Tensor], offset: int):
+    """Drop a repeated start point and connect a contour into a closed loop."""
+    if len(path_points) > 1 and torch.equal(path_points[-1], path_points[0]):
+        path_points = path_points[:-1]
+    idx = torch.arange(len(path_points), dtype=torch.int64)
+    edges = torch.stack([idx, (idx + 1) % len(path_points)], dim=1) + offset
+    return path_points, edges
+
+
 def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 10):
     """Convert text to sampled path with edges.
 
@@ -120,15 +129,7 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
 
         if code == mpl_path.Path.MOVETO:
             if path_points:
-                path_points.append(path_points[0])
-                n_edges = len(path_points) - 1
-                edges = torch.stack(
-                    [
-                        torch.arange(n_edges, dtype=torch.int64) + current_offset,
-                        torch.arange(n_edges, dtype=torch.int64) + current_offset + 1,
-                    ],
-                    dim=1,
-                )
+                path_points, edges = _close_contour(path_points, current_offset)
                 all_edges.extend(edges)
                 all_points.extend(path_points)
                 current_offset += len(path_points)
@@ -155,15 +156,7 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
             i += 3
         elif code == mpl_path.Path.CLOSEPOLY:
             if path_points:
-                path_points.append(path_points[0])
-                n_edges = len(path_points) - 1
-                edges = torch.stack(
-                    [
-                        torch.arange(n_edges, dtype=torch.int64) + current_offset,
-                        torch.arange(n_edges, dtype=torch.int64) + current_offset + 1,
-                    ],
-                    dim=1,
-                )
+                path_points, edges = _close_contour(path_points, current_offset)
                 all_edges.extend(edges)
                 all_points.extend(path_points)
                 current_offset += len(path_points)
@@ -173,15 +166,7 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
             i += 1
 
     if path_points:
-        path_points.append(path_points[0])
-        n_edges = len(path_points) - 1
-        edges = torch.stack(
-            [
-                torch.arange(n_edges, dtype=torch.int64) + current_offset,
-                torch.arange(n_edges, dtype=torch.int64) + current_offset + 1,
-            ],
-            dim=1,
-        )
+        path_points, edges = _close_contour(path_points, current_offset)
         all_edges.extend(edges)
         all_points.extend(path_points)
 
@@ -274,48 +259,37 @@ def _group_letters(text_path):
 
 
 def _winding_number(
-    points: Float[torch.Tensor, "n_points 2"], path: Any
+    points: Float[torch.Tensor, "n_points 2"],
+    segments: Float[torch.Tensor, "n_segments 2 2"],
+    max_pairs: int = 2**22,
 ) -> Float[torch.Tensor, " n_points"]:
-    """Compute winding number for path containment test."""
-    import numpy as np
+    """Compute the winding number of closed polyline contours around points.
 
-    path_codes = np.array(path.codes)
-    moveto_indices = np.where(path_codes == mpl_path.Path.MOVETO)[0]
-    total_winding = torch.zeros(len(points), dtype=torch.float32, device=points.device)
-
-    for i, start_idx in enumerate(moveto_indices):
-        end_idx = (
-            int(moveto_indices[i + 1])
-            if i < len(moveto_indices) - 1
-            else len(path_codes)
-        )
-        contour_verts = torch.tensor(
-            path.vertices[start_idx:end_idx], dtype=torch.float32
-        )
-        winding_contour = torch.zeros(
-            len(points), dtype=torch.float32, device=points.device
+    Points are processed in chunks of at most ``max_pairs`` point-segment
+    pairs, which bounds the memory use.
+    """
+    chunk = max(1, max_pairs // max(1, len(segments)))
+    if len(points) > chunk:
+        return torch.cat(
+            [
+                _winding_number(points[i : i + chunk], segments, max_pairs)
+                for i in range(0, len(points), chunk)
+            ]
         )
 
-        for j in range(len(contour_verts)):
-            v0 = contour_verts[j]
-            v1 = contour_verts[(j + 1) % len(contour_verts)]
+    v0, v1 = segments[:, 0], segments[:, 1]  # (n_segments, 2)
+    px, py = points[:, :1], points[:, 1:]  # (n_points, 1)
 
-            if v0[1] == v1[1]:
-                continue
+    y_low = torch.minimum(v0[:, 1], v1[:, 1])
+    y_high = torch.maximum(v0[:, 1], v1[:, 1])
+    y_in_range = (py >= y_low) & (py < y_high)  # (n_points, n_segments)
 
-            y_low = torch.minimum(v0[1], v1[1])
-            y_high = torch.maximum(v0[1], v1[1])
-            y_in_range = (points[:, 1] >= y_low) & (points[:, 1] < y_high)
-
-            t = (points[:, 1] - v0[1]) / (v1[1] - v0[1])
-            x_intersect = v0[0] + t * (v1[0] - v0[0])
-            crosses = y_in_range & (x_intersect > points[:, 0])
-            direction = torch.sign(v1[1] - v0[1])
-            winding_contour = winding_contour + crosses.float() * direction
-
-        total_winding = total_winding + winding_contour
-
-    return total_winding
+    # Horizontal segments are never in range, so their nan/inf t is masked out
+    t = (py - v0[:, 1]) / (v1[:, 1] - v0[:, 1])
+    x_intersect = v0[:, 0] + t * (v1[:, 0] - v0[:, 0])
+    crosses = y_in_range & (x_intersect > px)
+    direction = torch.sign(v1[:, 1] - v0[:, 1])
+    return (crosses.float() * direction).sum(dim=1)
 
 
 def _get_letter_points(points, edges, text_path, polygon_ranges):
@@ -367,22 +341,11 @@ def _triangulate(points, edges, text_path):
 
         tri = mpl_tri.Triangulation(letter_points_np[:, 0], letter_points_np[:, 1])
 
-        if text_path.vertices is None or text_path.codes is None:
-            continue
-
-        combined_verts = []
-        combined_codes = []
-        for start_idx, end_idx in all_polygon_ranges:
-            combined_verts.append(text_path.vertices[start_idx:end_idx])
-            combined_codes.append(text_path.codes[start_idx:end_idx])
-
-        combined_verts = np.vstack(combined_verts)
-        combined_codes = np.hstack(combined_codes)
-        letter_path = mpl_path.Path(combined_verts, combined_codes)
-
+        # Test triangle centroids against the sampled outline of this letter
+        letter_edges = edges[torch.isin(edges, letter_point_indices).all(dim=1)]
         centroids_np = letter_points_np[tri.triangles].mean(axis=1)
         centroids_torch = torch.tensor(centroids_np, dtype=torch.float32)
-        winding = _winding_number(centroids_torch, letter_path)
+        winding = _winding_number(centroids_torch, points[letter_edges])
         inside_mask = winding != 0
 
         letter_triangles = tri.triangles[inside_mask.cpu().numpy()]

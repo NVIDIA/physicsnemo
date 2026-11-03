@@ -23,9 +23,11 @@ regression_checkpoint: stormcast_checkpoints/regression/StormCastUNet.0.0.mdlus
 diffusion_checkpoint: stormcast_checkpoints/diffusion/EDMPreconditioner.0.0.mdlus
 
 # Initial and lead times
-initial_time: "2022-11-04T21:00:00" # datetime to intialize forecast with (YYYY-MM-DDTHH:MM:SS)
+initial_time: "2022-11-04T21:00:00" # datetime to start diagnostic evaluation at (YYYY-MM-DDTHH:MM:SS)
                                     # note minimum time resolution of HRRR data is 1hr
-n_steps: 12 # number of steps (in units of 1hr timesteps) to forecast
+n_steps: 12 # number of independent diagnostic samples (in units of 1hr timesteps) to evaluate.
+           # Each step is scored against its own dataset sample; this is not autoregressive
+           # rollout (see the README's "Running inference" section for that).
 
 # I/O
 plot_var_state: "refc" # state variable to plot

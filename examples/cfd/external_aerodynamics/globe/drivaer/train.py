@@ -109,7 +109,7 @@ def main(
     n_latent_scalars: int = 8,
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
-    theta: float = 1.0,
+    theta: float = 1.5,
     leaf_size: int = 1,
     tree_build_device: Literal["cpu", "cuda"] | None = None,
     n_faces_per_boundary: int = 80_000,
@@ -307,6 +307,11 @@ def main(
     # key, so the default limit of 8 is exhausted mid-forward and remaining
     # code falls back to eager.
     torch._dynamo.config.cache_size_limit = 64
+
+    # Dynamo in PyTorch 2.13 and 2.14 fails to compile the Padé networks inside
+    # GLOBE's checkpointed kernels unless floats are specialized
+    # (pytorch/pytorch#193194, fixed in 2.15).
+    torch._dynamo.config.specialize_float = True
 
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:

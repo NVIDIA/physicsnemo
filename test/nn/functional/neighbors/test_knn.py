@@ -83,6 +83,25 @@ def test_knn_cuml(device: str, k: int):
     _assert_knn_outputs(points, queries, indices, distances, k)
 
 
+# An empty query set gives empty outputs, like the torch backend.
+@pytest.mark.parametrize("k", [1, 5])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_knn_cuml_empty_queries(device: str, k: int, dtype: torch.dtype):
+    if "cuda" not in device:
+        pytest.skip("cuml backend is CUDA-only")
+    if not check_version_spec("cuml", "26.2.0", hard_fail=False):
+        pytest.skip("cuml not available")
+
+    points, _ = _build_problem(device, dtype)
+    queries = torch.empty(0, 3, device=device, dtype=dtype)
+    indices, distances = knn(points, queries, k=k, implementation="cuml")
+    ref_indices, ref_distances = knn(points, queries, k=k, implementation="torch")
+    for actual, expected in ((indices, ref_indices), (distances, ref_distances)):
+        assert actual.shape == expected.shape == (0, k)
+        assert actual.dtype == expected.dtype
+        assert actual.device == expected.device
+
+
 # Verify cuML kNN respects non-default CUDA stream synchronization.
 def test_knn_cuml_non_default_cuda_stream(device: str):
     if "cuda" not in device:
