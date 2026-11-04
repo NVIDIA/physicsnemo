@@ -111,6 +111,19 @@ def test_cell_measures_follow_anisotropic_deformation():
     torch.testing.assert_close(cell_measures(displaced), cell_measures(moved))
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_cell_measures_scale_on_reduced_precision(dtype):
+    """Regression: the area ratio 300**2 overflows float16; the measures do not."""
+    points = torch.tensor([[0.0, 0.0], [0.02, 0.0], [0.0, 0.01]], dtype=dtype)
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+    set_cell_measures(mesh, mesh.cell_areas.clone())
+    scaled = cell_measures(mesh.scale(300.0))
+    assert scaled.dtype == dtype
+    torch.testing.assert_close(
+        scaled, torch.tensor([9.0], dtype=dtype), rtol=1e-2, atol=0.0
+    )
+
+
 def test_point_support_is_required_for_anisotropic_surface_scaling():
     domain = MeshToDomainMesh()(simplex(2))
     before = point_measures(domain.interior).clone()
