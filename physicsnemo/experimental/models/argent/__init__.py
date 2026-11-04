@@ -17,6 +17,6 @@
 r"""ArGEnT: Arbitrary Geometry-encoded Transformer for operator learning
 (`Chen et al., 2026 <https://arxiv.org/abs/2602.11626>`_)."""
 
-from .argent import ArGEnT, ArGEnTDeepONet
+from .argent import ArGEnT, ArGEnTDeepONet, ArGEnTGeometry
 
-__all__ = ["ArGEnT", "ArGEnTDeepONet"]
+__all__ = ["ArGEnT", "ArGEnTDeepONet", "ArGEnTGeometry"]

@@ -1,6 +1,28 @@
 Operator Models
 ===============
 
+ArGEnT
+------
+
+ArGEnT (Arbitrary Geometry-encoded Transformer) predicts fields at query points
+from a geometry point cloud. Queries cross-attend to the geometry with linear
+attention and continuous-coordinate RoPE. ``ArGEnTDeepONet`` adds a DeepONet
+branch over non-geometric parameters such as the Reynolds number. For more
+information, refer to the `ArGEnT paper <https://arxiv.org/abs/2602.11626>`__.
+
+.. autoclass:: physicsnemo.experimental.models.argent.ArGEnT
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.experimental.models.argent.ArGEnTDeepONet
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+DoMINO
+------
+
 .. autoclass:: physicsnemo.models.domino.model.DoMINO
     :show-inheritance:
     :members:

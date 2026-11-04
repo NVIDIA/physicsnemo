@@ -78,11 +78,10 @@ def test_argent_deeponet_constructor(config):
         assert trunk.max_freq == 64.0
         assert trunk.axis_slices == [64, 64]
         assert not trunk.use_mfnn and not trunk.use_relu_mlp
-        assert trunk.attention_type == "cross"
         assert hasattr(model, "branch_net")
     else:
         model = ArGEnTDeepONet(
-            dim_op=0,
+            dim_op=2,
             dim_query=3,
             dim_kv=4,
             dim_pos=2,
@@ -97,9 +96,8 @@ def test_argent_deeponet_constructor(config):
             axis_slices=[8, 16],
         )
         trunk = model.argent
-        assert model.dim_op == 0
-        assert not hasattr(model, "branch_net")
-        assert trunk.dim_out == 3  # no branch: trunk predicts dim_out directly
+        assert model.dim_op == 2
+        assert trunk.dim_out == 3 * 32  # dim_out * dim_emb basis features
         assert (trunk.dim_query, trunk.dim_kv, trunk.dim_pos) == (3, 4, 2)
         assert trunk.num_heads == 2
         assert trunk.depth == 3
@@ -107,12 +105,40 @@ def test_argent_deeponet_constructor(config):
         assert trunk.axis_slices == [8, 16]
         assert trunk.use_mfnn and trunk.use_relu_mlp
 
-    with pytest.raises(NotImplementedError):
-        ArGEnT(attention_type="self")
-
     # Default axis split rounds each slice down to an even width.
     trunk = ArGEnT(dim_query=3, dim_kv=3, dim_pos=3, dim_emb=64)
     assert trunk.axis_slices == [20, 20, 20]
+
+
+@pytest.mark.parametrize(
+    "cls, kwargs, match",
+    [
+        (ArGEnT, dict(dim_pos=0), "dim_pos"),
+        (ArGEnT, dict(dim_query=3, dim_kv=3, dim_pos=3, dim_emb=4), "axis_slices"),
+        (ArGEnTDeepONet, dict(dim_op=0), "dim_op"),
+        (ArGEnTDeepONet, dict(dim_op=-3), "dim_op"),
+    ],
+    ids=["dim_pos_zero", "dim_emb_too_small", "dim_op_zero", "dim_op_negative"],
+)
+def test_argent_constructor_rejects_invalid_args(cls, kwargs, match):
+    """Invalid sizes raise ValueError instead of building a degenerate model."""
+    with pytest.raises(ValueError, match=match):
+        cls(**kwargs)
+
+
+def test_argent_rope_angle():
+    """Layer d rotates coordinate x by x * max_freq**2 / 2**d * 10000**(-2k/axis_dim)."""
+    max_freq, axis_dim = 200.0, 16
+    trunk = ArGEnT(dim_emb=32, depth=2, max_freq=max_freq)
+    x = torch.tensor([[1.0e-3, -2.5e-3]])
+    k = torch.arange(axis_dim // 2, dtype=torch.float64)
+    for d, (attn, _) in enumerate(trunk.transformer.layers):
+        cos, sin = attn._rope_tables(x, axis_dim)  # (1, 1, 2, axis_dim)
+        angle = (
+            x.double()[..., None] * max_freq**2 / 2**d * 10000.0 ** (-2 * k / axis_dim)
+        ).repeat_interleave(2, dim=-1)
+        torch.testing.assert_close(cos[:, 0].double(), angle.cos(), atol=1e-5, rtol=0)
+        torch.testing.assert_close(sin[:, 0].double(), angle.sin(), atol=1e-5, rtol=0)
 
 
 @pytest.mark.parametrize("name", ["lid_driven", "mfnn_relu", "trunk_only"])
@@ -156,7 +182,9 @@ def test_argent_deeponet_checkpoint(device):
 @pytest.mark.parametrize("junk", ["random", "nan", "inf"])
 def test_argent_padding_kv_ignores_padded_tokens(device, junk):
     """Padded key/value tokens, finite or not, do not affect the output."""
-    model = ArGEnTDeepONet(**_LID_DRIVEN).to(device)
+    # Seeded weights give a nonzero LayerNorm bias, so masking before the norm
+    # would change the output.
+    model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
     x_query, x_kv, op_params = _inputs(3, 3, 1, device)
     op_params = op_params.to(device)
 
@@ -186,7 +214,13 @@ def test_argent_padding_kv_ignores_padded_tokens(device, junk):
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_argent_padding_kv_reduced_precision(device, dtype):
-    """Padding works when the model and inputs are in reduced precision."""
+    """Padding works when the model and inputs are cast to reduced precision.
+
+    Casting the inputs rounds the coordinates before the RoPE scaling
+    (``max_freq**2 = 40000`` here), which costs a few percent of accuracy, so
+    only the dtype and finiteness are checked. Accuracy is checked under
+    autocast in :func:`test_argent_autocast_accuracy`.
+    """
     model = ArGEnTDeepONet(**_LID_DRIVEN).to(device=device, dtype=dtype)
     x_query, x_kv, op_params = _inputs(3, 3, 1, device)
     padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
@@ -200,6 +234,62 @@ def test_argent_padding_kv_reduced_precision(device, dtype):
     )
     assert out.dtype == dtype
     assert torch.isfinite(out).all()
+
+
+@pytest.mark.parametrize(
+    "dtype, rtol",
+    [(torch.bfloat16, 1e-2), (torch.float16, 2.5e-3)],
+    ids=["bf16", "fp16"],
+)
+def test_argent_autocast_accuracy(device, dtype, rtol):
+    """Under autocast the output stays close to fp32 (relative L2 error)."""
+    model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
+    x_query, x_kv, op_params = _inputs(3, 3, 1, device)
+    op_params = op_params.to(device)
+    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    padding_kv[1, NKV // 2 :] = False
+
+    ref = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+    with torch.autocast(device_type=torch.device(device).type, dtype=dtype):
+        out = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+    rel_err = (out.float() - ref).norm() / ref.norm()
+    assert rel_err < rtol, f"relative L2 error {rel_err:.2e} exceeds {rtol:.1e}"
+
+
+def test_argent_compile_matches_eager(device):
+    """torch.compile(fullgraph=True) matches eager, with padding."""
+    model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
+    x_query, x_kv, op_params = _inputs(3, 3, 1, device)
+    op_params = op_params.to(device)
+    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    padding_kv[1, NKV // 2 :] = False
+
+    eager = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+    compiled = torch.compile(model, fullgraph=True)(
+        x_query, x_kv, op_params, padding_kv=padding_kv
+    )
+    torch.testing.assert_close(compiled, eager, rtol=1e-5, atol=1e-5)
+
+
+def test_argent_geometry_reuse(device):
+    """Query chunks decoded against one encoded geometry match the full forward."""
+    model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
+    x_query, x_kv, op_params = _inputs(3, 3, 1, device)
+    op_params = op_params.to(device)
+    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    padding_kv[1, NKV // 2 :] = False
+
+    out = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+    geometry = model.encode_geometry(x_kv, padding_kv=padding_kv)
+    chunks = [
+        model.decode_queries(chunk, geometry, op_params)
+        for chunk in x_query.split(NQ // 4, dim=1)
+    ]
+    torch.testing.assert_close(torch.cat(chunks, dim=1), out, rtol=1e-5, atol=1e-5)
+
+    # op_params of shape (B, dim_op) is accepted as well as (B, 1, dim_op).
+    out_2d = model(x_query, x_kv, op_params[:, 0], padding_kv=padding_kv)
+    torch.testing.assert_close(out_2d, out)
 
 
 def test_argent_padding_kv_shape_validation(device):
