@@ -99,7 +99,8 @@ def reposition_original_vertices_2d(
     # Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
     # Shape: (n_points,)
 
-    # Weights are computed in the points' dtype, but at least float32
+    # Weights are computed in the points' dtype, but at least float32; the
+    # positions are cast back to the points' dtype
     weight_dtype = torch.promote_types(mesh.points.dtype, torch.float32)
     valences_float = valences.to(weight_dtype)
     cos_term = 3.0 / 8.0 + 0.25 * torch.cos(2.0 * torch.pi / valences_float)
@@ -147,8 +148,9 @@ def reposition_original_vertices_2d(
     beta_expanded = beta.unsqueeze(-1)  # (n_points, 1)
 
     interior_new_positions = (
-        1 - valences_expanded * beta_expanded
-    ) * mesh.points + beta_expanded * neighbor_sums
+        (1 - valences_expanded * beta_expanded) * mesh.points
+        + beta_expanded * neighbor_sums
+    ).to(mesh.points.dtype)
 
     ### Boundary vertices need the Loop boundary/crease mask, not the interior rule.
     # Applying the interior one-ring rule to boundary vertices pulls the open

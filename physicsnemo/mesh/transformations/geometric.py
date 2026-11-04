@@ -254,6 +254,7 @@ def _resolve_rotation_axis(
     | None,
     n_spatial_dims: int,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> Float[torch.Tensor, " n_spatial_dims"] | None:
     """Normalize an axis specification into a tensor or None.
 
@@ -267,12 +268,14 @@ def _resolve_rotation_axis(
         Target device for a tensor axis. An axis given as a string or as
         Python values is returned on the host, so that it can be validated
         there without a device synchronization.
+    dtype : torch.dtype
+        Dtype of the rotation matrix. A tensor or sequence axis is resolved in
+        this dtype, or in ``float32`` for reduced-precision dtypes.
 
     Returns
     -------
     Float[torch.Tensor, " n_spatial_dims"] or None
-        Normalized axis tensor with shape :math:`(3,)` and dtype
-        ``float32``, or ``None`` for 2D rotation.
+        Axis tensor with shape :math:`(3,)`, or ``None`` for 2D rotation.
     """
     if isinstance(axis, str):
         axis_map = {"x": 0, "y": 1, "z": 2}
@@ -290,7 +293,7 @@ def _resolve_rotation_axis(
         axis = torch.as_tensor(
             axis,
             device=device if isinstance(axis, torch.Tensor) else "cpu",
-            dtype=torch.float32,
+            dtype=torch.promote_types(dtype, torch.float32),
         )
 
     expected_dims = 2 if axis is None else 3
@@ -339,7 +342,7 @@ def rotation_matrix(
     Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]
         Rotation matrix, shape :math:`(S, S)`.
     """
-    resolved = _resolve_rotation_axis(axis, n_spatial_dims, device)
+    resolved = _resolve_rotation_axis(axis, n_spatial_dims, device, dtype)
     return _build_rotation_matrix(
         angle=angle,
         axis=resolved,
@@ -621,7 +624,9 @@ def transform(
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
-        det = matrix.det()
+        ### det and inv_ex need LU, which has no float16/bfloat16 kernels
+        solve_matrix = matrix.to(torch.promote_types(matrix.dtype, torch.float32))
+        det = solve_matrix.det()
 
         ### The runtime det test syncs (host readback of a cuda tensor).
         if assume_invertible is not None:
@@ -630,8 +635,8 @@ def transform(
             is_invertible = bool(det.abs() > 1e-10)
 
         if is_invertible:
-            det_sign = det.sign()
-            det_abs = det.abs()
+            det_sign = det.sign().to(matrix.dtype)
+            det_abs = det.abs().to(matrix.dtype)
 
             ### Full-dimensional meshes: global area scaling
             if mesh.n_manifold_dims == mesh.n_spatial_dims:
@@ -648,7 +653,9 @@ def transform(
                     mesh._cache.get((association, "normals"), None) is not None
                     for association in ("cell", "point")
                 ):
-                    inverse = torch.linalg.inv_ex(matrix, check_errors=False).inverse
+                    inverse = torch.linalg.inv_ex(
+                        solve_matrix, check_errors=False
+                    ).inverse.to(matrix.dtype)
 
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:

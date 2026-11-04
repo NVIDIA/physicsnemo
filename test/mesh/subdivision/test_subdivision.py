@@ -503,6 +503,24 @@ class TestLoopSubdivision:
             subdivided.points[: mesh.n_points], expected, rtol=0, atol=1e-14
         )
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_loop_keeps_reduced_precision_dtype(self, dtype, device):
+        """Regression: Loop returns float16/bfloat16 points, like linear does."""
+        from physicsnemo.mesh.primitives.surfaces import icosahedron_surface
+
+        # An open mesh (boundary vertex rule) and a closed one (interior rule only)
+        for mesh in (
+            create_triangle_mesh(device),
+            icosahedron_surface.load(device=device),
+        ):
+            expected = mesh.subdivide(levels=1, filter="loop").points
+            reduced = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
+            subdivided = reduced.subdivide(levels=1, filter="loop")
+            assert subdivided.points.dtype == dtype
+            torch.testing.assert_close(
+                subdivided.points.float(), expected, rtol=0, atol=2e-2
+            )
+
 
 ### Test Edge Cases and Validation
 
