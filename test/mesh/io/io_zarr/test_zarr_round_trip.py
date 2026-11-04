@@ -194,33 +194,35 @@ def test_mesh_without_cells_keeps_cell_shape(tmp_path, n_vertices_per_cell):
         assert back.n_manifold_dims == n_vertices_per_cell - 1
 
 
-def _with_slash_point_data_key(mesh: Mesh) -> Mesh:
-    mesh.point_data["U [m/s]"] = mesh.points
+def _with_point_data_key(mesh: Mesh, name: str) -> Mesh:
+    mesh.point_data[name] = mesh.points
     return mesh
 
 
-def _with_slash_group_key(mesh: Mesh) -> Mesh:
-    mesh.global_data["ref/L"] = {"x": torch.ones(1)}
+def _with_group_key(mesh: Mesh, name: str) -> Mesh:
+    mesh.global_data[name] = {"x": torch.ones(1)}
     return mesh
 
 
-def _with_slash_boundary_name(mesh: Mesh) -> DomainMesh:
-    return DomainMesh(interior=mesh, boundaries={"wing/upper": mesh})
+def _with_boundary_name(mesh: Mesh, name: str) -> DomainMesh:
+    return DomainMesh(interior=mesh, boundaries={name: mesh})
 
 
+@pytest.mark.parametrize("sep", ["/", "\\"])
 @pytest.mark.parametrize(
     "make,name",
     [
-        (_with_slash_point_data_key, "U [m/s]"),
-        (_with_slash_group_key, "ref/L"),
-        (_with_slash_boundary_name, "wing/upper"),
+        (_with_point_data_key, "U [m{sep}s]"),
+        (_with_group_key, "ref{sep}L"),
+        (_with_boundary_name, "wing{sep}upper"),
     ],
 )
-def test_slash_in_name_raises_before_writing(tmp_path, make, name):
-    """A key or boundary name with "/" (a zarr group separator) raises, writing
-    nothing."""
+def test_slash_in_name_raises_before_writing(tmp_path, make, name, sep):
+    """A key or boundary name with "/" or "\\" (zarr group separators) raises,
+    writing nothing."""
+    name = name.format(sep=sep)
     with pytest.raises(ValueError, match=re.escape(repr(name))):
-        to_zarr(make(make_mesh()), tmp_path / "x.zarr")
+        to_zarr(make(make_mesh(), name), tmp_path / "x.zarr")
     assert not (tmp_path / "x.zarr").exists()
 
 

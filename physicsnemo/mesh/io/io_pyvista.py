@@ -2343,8 +2343,9 @@ def _build_dual_graph_edges(
     the dimensions differ, a facet of one cell can lie in the other without
     the converse (a line's endpoint lies in a triangle, while no edge of the
     triangle lies in the line), so the pair gets one edge per facet of its
-    lower-dimensional cell that lies in the other cell. Either way, the edges
-    do not depend on the order of the cells.
+    lower-dimensional cell that lies in the other cell, whatever the order of
+    the two cells. Between overlapping or degenerate cells of the same
+    dimension, the edges can still depend on the order of the cells.
 
     Parameters
     ----------

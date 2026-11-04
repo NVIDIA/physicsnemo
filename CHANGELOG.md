@@ -583,19 +583,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bfloat16 field, before it writes anything. Before, it left a partial store
   that loaded without those fields.
 - `to_zarr` raises a `ValueError` before it writes anything when a field key
-  or boundary name contains "/". Before, such a field came back under a nested
-  key, and such a boundary made the store unreadable.
+  or boundary name contains `/` or `\`. Before, such a field came back under a
+  nested key, and such a boundary made the store unreadable.
 - `from_zarr` loads the stores that `to_zarr` writes for subclasses of `Mesh`
   and `DomainMesh`, as their base class, and `to_zarr` raises a `TypeError` on
   a subclass with fields of its own. Before, `from_zarr` refused these stores.
-- `from_zarr` keeps the cell shape of a mesh with zero cells. Before, such a
-  mesh came back as a point cloud.
+- `from_zarr`, `MeshReader` and `DomainMeshReader` keep the cell shape of a
+  zarr mesh with zero cells. Before, such a mesh came back as a point cloud.
 - `to_pyvista` exports empty meshes with vector or tensor fields, where it
   raised before, and `from_pyvista` reads complex arrays of one value with
   shape `(1,)`, where it raised or dropped a dimension before.
-- `from_pyvista` with `point_source="cell_centroids"` builds the same dual
-  graph of a grid that mixes cell dimensions whatever the order of its cells.
-  Before, the edges between cells of different dimensions depended on it.
+- `from_pyvista` with `point_source="cell_centroids"` joins two cells of
+  different dimensions by the same dual-graph edges whatever the order of the
+  cells. Before, these edges depended on it.
 - `from_zarr`, `MeshReader` and `DomainMeshReader` raise on a zarr store that
   `to_zarr` did not write or did not finish. Before, a store cut short by a
   full disk, for example, loaded without its missing fields.

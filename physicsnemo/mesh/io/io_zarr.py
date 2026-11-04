@@ -88,8 +88,9 @@ def to_zarr(
         represent (e.g. ``torch.bfloat16``). Nothing is written in that case;
         cast the field first (e.g. to ``torch.float32``).
     ValueError
-        If a field key or boundary name contains ``"/"``, which zarr reads as
-        a group separator. Nothing is written in that case; rename it first.
+        If a field key or boundary name contains ``"/"`` or ``"\\"``, which
+        zarr reads as group separators. Nothing is written in that case;
+        rename it first.
 
     Notes
     -----
@@ -123,14 +124,15 @@ def to_zarr(
     # which their __post_init__ validation rejects.
     td = obj.to_tensordict()
 
-    # zarr splits names on "/" into nested groups, so such a name would not
-    # read back. Reject it before writing anything.
+    # zarr splits names on "/" (and on "\", which it normalizes to "/") into
+    # nested groups, so such a name would not read back. Reject it before
+    # writing anything.
     for key in td.keys(include_nested=True):
         key = (key,) if isinstance(key, str) else key
-        if "/" in key[-1]:
+        if "/" in key[-1] or "\\" in key[-1]:
             raise ValueError(
-                f"Cannot write key {key} to zarr: {key[-1]!r} contains '/', "
-                "which zarr reads as a group separator. Rename it first."
+                f"Cannot write key {key} to zarr: {key[-1]!r} contains '/' or "
+                "'\\', which zarr reads as group separators. Rename it first."
             )
 
     # tensordict writes through NumPy, so a dtype NumPy lacks would fail midway
