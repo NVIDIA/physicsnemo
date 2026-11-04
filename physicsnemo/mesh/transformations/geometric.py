@@ -467,10 +467,10 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
     rounding alone moves the Gram matrix by up to about two epsilons, ``atol``
     is raised to four epsilons; float32 and float64 keep ``atol``.
     """
-    atol = max(atol, 4 * torch.finfo(matrix.dtype).eps)
     n = matrix.shape[-1]
     peak = matrix.abs().amax()
-    matrix = matrix / torch.where(peak > 0, peak, 1)
+    matrix = matrix / torch.where(peak > 0, peak, 1)  # floating point from here on
+    atol = max(atol, 4 * torch.finfo(matrix.dtype).eps)
     gram = matrix.T @ matrix
     scale = gram.diagonal(dim1=-2, dim2=-1).mean()
     nonzero = scale != 0
