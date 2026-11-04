@@ -14,22 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Defaults
-defaults:
 
-  # Dataset
-  - dataset/hrrr_era5
+# StormCast CONUS model config - corresponds to the model StormCastCONUS:
+# https://nvidia.github.io/earth2studio/main/modules/generated/models/px/StormCastCONUS/
+#
+# For new StormCast-type models, it is recommended to use the better-optimized config
+# of reference_dit.yaml instead of this one.
 
-  # Model
-  - model/stormcast
 
-  # Training
-  - training/default
+# Model conditions
+diffusion_conditions: ["background", "invariant"]
 
-  # Sampler
-  - sampler/edm_deterministic
-
-  # Hydra
-  - hydra/default
-
-  - _self_
+# Model hyperparameters
+architecture: "dit"
+hyperparameters:
+  depth: 16
+  hidden_size: 768
+  attn_kernel_size: 31
+  num_heads: 12
+  patch_size: 4
+  use_nan_mask_tokens: false

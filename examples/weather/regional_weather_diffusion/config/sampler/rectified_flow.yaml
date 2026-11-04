@@ -13,18 +13,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 # Defaults
-defaults:
-  - regression
 
-# Minimal training config with frequent printouts and checkpoint saving.
-# Can be used to test that training runs without errors.
-# Do not use for real training runs.
+# Sampler args for physicsnemo.diffusion.samplers.sample with a rectified-flow
+# model (training.loss.type: flow_matching): integrates the rectified-flow ODE
+# dx/dt = (x_t - x0_hat) / t from pure noise (t = 1) to t = 0.
 
-training:
-  print_progress_freq: 5 # How often to print progress, measured in number of training steps
-  checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
-  validation_freq: 5 # how often to record the validation loss, measured in number of training steps
-  batch_size: 2
-  total_train_steps: 20
+name: 'Rectified flow'
+args:
+  num_steps: 18 # Number of solver steps
+  solver: heun # "heun" (2nd order, 2 model evaluations per step) or "euler" (1st order)
+  time_shift: 1.0 # Time shift a, t -> a t / (1 + (a - 1) t); use a > 1 to sample a larger domain than the training patches
+  S_churn: 0. # Set > 0 for stochastic sampling (EDM-style churn, see the EDM paper); the churn of the solvers assumes alpha = 1 and is an approximation for rectified flow
+  S_min: 0.
+  S_max: .inf
+  S_noise: 1

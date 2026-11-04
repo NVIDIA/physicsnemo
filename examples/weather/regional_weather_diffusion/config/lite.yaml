@@ -16,7 +16,8 @@
 
 # Defaults
 defaults:
-  - diffusion
+  - reference_downscaling # set to whichever other config you want to test
+  - _self_
 
 # Minimal training config with frequent printouts and checkpoint saving.
 # Can be used to test that training runs without errors.
@@ -26,5 +27,6 @@ training:
   print_progress_freq: 5 # How often to print progress, measured in number of training steps
   checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 5 # how often to record the validation loss, measured in number of training steps
+  validation_steps: 1 # Number of batches to evaluate during validation
   batch_size: 2
   total_train_steps: 20
