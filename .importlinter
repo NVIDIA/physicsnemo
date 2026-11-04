@@ -15,8 +15,9 @@ containers=
    physicsnemo
 layers = 
    experimental
-   deploy | active_learning | diffusion | sym
-   models : datapipes : metrics : domain_parallel : optim
+   deploy | active_learning | metrics | sym
+   diffusion
+   models : datapipes : domain_parallel : optim
    mesh
    nn
    utils
@@ -136,3 +137,12 @@ layers =
 name = Prevent Non-listed external imports in physicsnemo
 type = forbidden_import
 container = physicsnemo
+
+[importlinter:contract:physicsnemo-diffusion-models]
+name = Keep Diffusion Independent of Model Implementations
+type = forbidden
+source_modules =
+    physicsnemo.diffusion
+forbidden_modules =
+    physicsnemo.models
+allow_indirect_imports = True
