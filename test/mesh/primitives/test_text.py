@@ -171,10 +171,12 @@ def test_text_3d_from_curved_glyph():
     assert text_2d_3d("\u25cb", extrusion_height=2.0).is_watertight()
 
 
-@pytest.mark.parametrize("glyph", ["A", "V", "4"])
-def test_text_2d_3d_slanted_glyph_watertight(glyph):
+@pytest.mark.parametrize(
+    "glyph, font_size", [("A", 12.0), ("V", 12.0), ("4", 12.0), ("A", 200.0)]
+)
+def test_text_2d_3d_slanted_glyph_watertight(glyph, font_size):
     """Glyphs with slanted straight edges fill without hanging vertices."""
-    assert text_2d_3d(glyph).is_watertight()
+    assert text_2d_3d(glyph, font_size=font_size).is_watertight()
 
 
 @pytest.mark.parametrize("glyph", ["\u00ae", "\u2117"])

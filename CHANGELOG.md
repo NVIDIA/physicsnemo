@@ -594,9 +594,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Mesh.draw` with matplotlib colors 2D curves by their scalars and honors
   `alpha_edges`. It also draws 1D meshes in view, vertex cells as colored
   markers, and integer vector scalars, where it failed before.
-- `Mesh.draw` with matplotlib fits the view to every mesh drawn on `ax` and
-  keeps limits the caller fixed; before, it showed only the last mesh. Meshes
-  far from the origin no longer shrink to a speck in the view.
+- `Mesh.draw` with matplotlib fits the view to every mesh drawn on `ax` and,
+  in 2D, keeps limits the caller fixed; before, it showed only the last mesh.
+  Meshes far from the origin no longer shrink to a speck in the view.
 - `Mesh.draw` with PyVista lets `backend_options` set the edge color, line
   width and scalar bar, where it raised before.
 - GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled

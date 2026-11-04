@@ -348,12 +348,15 @@ def _triangulate(points, edges, text_path):
 
         # Drop the flat triangles that Delaunay builds from collinear points
         # on straight outline edges: their centroid lies on the outline, so
-        # roundoff decides whether they are kept, leaving hanging vertices
+        # roundoff decides whether they are kept, leaving hanging vertices.
+        # Those points sit off the line by float32 roundoff of their
+        # coordinates, so the tolerance grows with the coordinate magnitude.
         corners = letter_points_np[tri.triangles].astype(np.float64)
         u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
         area = 0.5 * np.abs(u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0])
         longest_sq = ((corners[:, [1, 2, 0]] - corners) ** 2).sum(axis=2).max(axis=1)
-        not_flat = area > 1e-6 * longest_sq
+        roundoff = 64 * np.finfo(np.float32).eps * np.abs(letter_points_np).max()
+        not_flat = area > 1e-6 * longest_sq + roundoff * np.sqrt(longest_sq)
 
         letter_triangles = tri.triangles[inside_mask & not_flat]
         letter_triangles_global = letter_triangles + global_offset
