@@ -569,36 +569,6 @@ class TestLaplacian:
 class TestManifolds:
     """Test calculus on manifolds (surfaces in higher dimensions)."""
 
-    def test_intrinsic_gradient_orthogonal_to_normal(self):
-        """Intrinsic gradient should be perpendicular to surface normal."""
-        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=3)
-
-        # Any scalar field
-        phi = (mesh.points**2).sum(dim=-1)
-        mesh.point_data["test_field"] = phi
-
-        # Compute intrinsic and extrinsic gradients
-        mesh_grad = mesh.compute_point_derivatives(
-            keys="test_field", method="lsq", gradient_type="both"
-        )
-
-        grad_intrinsic = mesh_grad.point_data["test_field_gradient_intrinsic"]
-        grad_extrinsic = mesh_grad.point_data["test_field_gradient_extrinsic"]
-
-        # Get normals at points (use mesh's area-weighted normals)
-        point_normals = mesh.point_normals
-
-        # Intrinsic gradient should be orthogonal to normal
-        dot_products_intrinsic = (grad_intrinsic * point_normals).sum(dim=-1)
-
-        assert dot_products_intrinsic.abs().max() < 1e-2, (
-            f"Intrinsic gradient not orthogonal to normal: max dot product = {dot_products_intrinsic.abs().max():.6f}"
-        )
-
-        # Extrinsic gradient should be finite and have correct shape
-        assert torch.all(torch.isfinite(grad_extrinsic))
-        assert grad_extrinsic.shape == grad_intrinsic.shape
-
     @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
     @pytest.mark.parametrize("name", ["sphere", "torus", "cone", "wedge"])
     def test_intrinsic_gradient_on_consistently_wound_mesh(self, name, dtype):
@@ -713,6 +683,36 @@ class TestManifolds:
             offsets = mesh.points[neighbors] - mesh.points[i]
             normal = torch.linalg.svd(offsets)[2][-1]  # of the 1-ring's best plane
             assert (gradient[i] @ normal).abs() < 0.1 * g.norm()
+
+    def test_intrinsic_gradient_orthogonal_to_normal(self):
+        """Intrinsic gradient should be perpendicular to surface normal."""
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=3)
+
+        # Any scalar field
+        phi = (mesh.points**2).sum(dim=-1)
+        mesh.point_data["test_field"] = phi
+
+        # Compute intrinsic and extrinsic gradients
+        mesh_grad = mesh.compute_point_derivatives(
+            keys="test_field", method="lsq", gradient_type="both"
+        )
+
+        grad_intrinsic = mesh_grad.point_data["test_field_gradient_intrinsic"]
+        grad_extrinsic = mesh_grad.point_data["test_field_gradient_extrinsic"]
+
+        # Get normals at points (use mesh's area-weighted normals)
+        point_normals = mesh.point_normals
+
+        # Intrinsic gradient should be orthogonal to normal
+        dot_products_intrinsic = (grad_intrinsic * point_normals).sum(dim=-1)
+
+        assert dot_products_intrinsic.abs().max() < 1e-2, (
+            f"Intrinsic gradient not orthogonal to normal: max dot product = {dot_products_intrinsic.abs().max():.6f}"
+        )
+
+        # Extrinsic gradient should be finite and have correct shape
+        assert torch.all(torch.isfinite(grad_extrinsic))
+        assert grad_extrinsic.shape == grad_intrinsic.shape
 
 
 class TestCalculusIdentities:
