@@ -22,7 +22,7 @@ from physicsnemo.nn.functional.geometry import RayMeshIntersect
 from physicsnemo.nn.functional.geometry.ray_mesh_intersect._warp_impl import (
     op as ray_mesh_intersect_op,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _triangle_mesh(device: str) -> tuple[torch.Tensor, torch.Tensor]:

@@ -27,7 +27,7 @@ import torch.nn as nn
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @pytest.fixture(params=["./checkpoints", "msc://checkpoint-test/checkpoints"])

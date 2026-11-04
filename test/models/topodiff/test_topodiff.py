@@ -19,7 +19,7 @@ import random
 import numpy as np
 import torch
 
-from test import common
+from physicsnemo.testing import common
 
 # from pytest_utils import import_or_fail
 

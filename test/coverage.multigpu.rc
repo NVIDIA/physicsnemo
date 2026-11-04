@@ -32,6 +32,7 @@ patch =
     subprocess
 sigterm = True
 source = physicsnemo
+omit = */physicsnemo/testing/*
 
 [report]
 ignore_errors = True

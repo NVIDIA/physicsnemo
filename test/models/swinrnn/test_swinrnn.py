@@ -21,7 +21,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.models.swinvrnn import SwinRNN
-from test import common
+from physicsnemo.testing import common
 
 
 # Skip CPU tests because too slow

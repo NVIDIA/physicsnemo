@@ -27,8 +27,8 @@ import torch
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import get_installed_version
+from physicsnemo.testing.pytest_plugin import requires_module
 from physicsnemo.utils import load_checkpoint, save_checkpoint
-from test.conftest import requires_module
 
 LAYER_NORM_PATH = "physicsnemo.nn.module.layer_norm"
 

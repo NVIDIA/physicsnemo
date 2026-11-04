@@ -24,7 +24,7 @@ from physicsnemo.nn.functional.neighbors import RadiusSearch
 from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
     radius_search_impl as radius_search_warp,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 # Build a deterministic radius-search problem with known local neighbors.

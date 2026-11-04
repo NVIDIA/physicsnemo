@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import isosurface_render
 from physicsnemo.nn.functional.rendering import IsosurfaceRender
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _sphere_field(grid_n: int, device: str, radius: float = 0.5) -> torch.Tensor:

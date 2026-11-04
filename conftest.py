@@ -13,3 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Shared pytest setup (options, markers, fixtures, hooks) for the test suite.
+# It lives in physicsnemo.testing so it can move with physicsnemo core; pytest
+# only accepts pytest_plugins in the root conftest.py.
+pytest_plugins = ["physicsnemo.testing.pytest_plugin"]

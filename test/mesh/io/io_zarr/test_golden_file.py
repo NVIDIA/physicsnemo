@@ -26,8 +26,8 @@ store regenerates, forcing format changes to be deliberate and versioned
 
 import pytest
 import zarr
-from conftest import make_domain_mesh
 
+from conftest import make_domain_mesh
 from physicsnemo.mesh.io import to_zarr
 from physicsnemo.mesh.io.io_zarr import _TYPE_ATTR
 

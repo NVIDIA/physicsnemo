@@ -17,8 +17,8 @@
 import pytest
 import torch
 
-from test import common
-from test.conftest import requires_module
+from physicsnemo.testing import common
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @requires_module(["transformer_engine"])

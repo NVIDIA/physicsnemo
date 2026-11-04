@@ -22,7 +22,7 @@ import torch
 
 from physicsnemo.core.module import Module
 from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet, StormCastUNet
-from test import common
+from physicsnemo.testing import common
 
 
 @pytest.mark.parametrize(

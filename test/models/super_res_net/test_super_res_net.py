@@ -19,7 +19,7 @@ import random
 import torch
 
 from physicsnemo.models.srrn import SRResNet
-from test import common
+from physicsnemo.testing import common
 
 
 def test_super_res_net_forward(device):

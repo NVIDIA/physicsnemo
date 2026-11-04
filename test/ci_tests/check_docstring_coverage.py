@@ -71,7 +71,9 @@ INTERROGATE_ARGS = [
 ]
 
 # Must match the ``exclude`` pattern in .pre-commit-config.yaml.
-_EXCLUDE_RE = re.compile(r"^(docs/|physicsnemo/experimental/|test/)")
+_EXCLUDE_RE = re.compile(
+    r"^(docs/|physicsnemo/experimental/|physicsnemo/testing/|test/)"
+)
 
 
 def _parse_interrogate_output(output: str, repo_root: Path) -> list[str]:

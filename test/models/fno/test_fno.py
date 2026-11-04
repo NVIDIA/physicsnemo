@@ -21,7 +21,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.models.fno import FNO
-from test import common
+from physicsnemo.testing import common
 
 
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4])

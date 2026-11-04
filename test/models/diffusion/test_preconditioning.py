@@ -25,7 +25,7 @@ from physicsnemo.diffusion.preconditioners import (
     VEPrecond_dfsr,
     VEPrecond_dfsr_cond,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def test_EDMPrecondSuperResolution_forward():

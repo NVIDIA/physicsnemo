@@ -21,7 +21,7 @@ import pytest
 import torch
 
 from physicsnemo.models.dlwp import DLWP
-from test import common
+from physicsnemo.testing import common
 
 
 def test_dlwp_forward(device):

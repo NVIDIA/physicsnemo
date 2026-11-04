@@ -45,7 +45,7 @@ from physicsnemo.nn.functional.geometry import (
     TotalMeasureEnergy,
 )
 from physicsnemo.nn.functional.geometry.deform import energy as energy_module
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 LOCAL_ENERGY_FUNCTIONS = (
     simplex_strain_energy,

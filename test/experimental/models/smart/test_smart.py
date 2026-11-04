@@ -23,7 +23,7 @@ import torch
 
 from physicsnemo import Module
 from physicsnemo.experimental.models.smart import SMART
-from test.common import (
+from physicsnemo.testing.common import (
     validate_amp,
     validate_checkpoint,
     validate_combo_optims,

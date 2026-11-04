@@ -21,7 +21,7 @@ from physicsnemo.nn.module.conditioning_embedders import (
     EDMConditionEmbedder,
     ZeroConditioningEmbedder,
 )
-from test import common
+from physicsnemo.testing import common
 
 
 def test_dit_condition_embedder_forward(device):

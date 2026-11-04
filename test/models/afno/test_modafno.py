@@ -20,7 +20,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.models.afno import ModAFNO
-from test import common
+from physicsnemo.testing import common
 
 
 def test_modafno_forward(device):

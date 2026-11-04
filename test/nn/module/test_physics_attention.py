@@ -30,7 +30,7 @@ from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionStructuredMesh2D,
     PhysicsAttentionStructuredMesh3D,
 )
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 # =============================================================================
 # PhysicsAttentionIrregularMesh Tests

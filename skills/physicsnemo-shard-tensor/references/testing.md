@@ -8,12 +8,12 @@ over the domain mesh and must be reduced).
 
 ## How physicsnemo runs multi-GPU tests
 
-Two markers, gated by mutually-exclusive pytest flags (`test/conftest.py`):
+Two markers, gated by mutually-exclusive pytest flags (`physicsnemo/testing/pytest_plugin.py`):
 
 - `@pytest.mark.multigpu_static` — the whole pytest session runs *inside*
   torchrun with a fixed world; `DistributedManager` is initialized at pytest
   configure time and mesh fixtures come from
-  `test/plugins/distributed_fixtures` (`distributed_mesh` = 1-D over all
+  `physicsnemo/testing/plugins/distributed_fixtures` (`distributed_mesh` = 1-D over all
   ranks, `distributed_mesh_2d` = 2-D). This is the mode for ShardTensor tests.
 
 ```bash

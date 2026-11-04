@@ -28,7 +28,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import free_form_deform_points
 from physicsnemo.nn.functional.geometry import FreeFormDeformPoints
 from physicsnemo.nn.functional.geometry.deform import ffd as ffd_module
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 _INTERPOLATING_BASES = ("linear", "cubic_hermite", "quintic_hermite")

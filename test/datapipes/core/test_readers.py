@@ -22,7 +22,7 @@ import torch
 from tensordict import TensorDict
 
 import physicsnemo.datapipes as dp
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 # ============================================================================
 # NumpyReader - Directory mode

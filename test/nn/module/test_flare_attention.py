@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import FLARE, FLAREPlusPlus
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _load_or_create_output_reference(

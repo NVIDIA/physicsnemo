@@ -28,7 +28,7 @@ import pytest
 import torch  # noqa: E402
 
 from physicsnemo.datapipes.healpix.couplers import ConstantCoupler  # noqa: E402
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 _FACE, _HEIGHT, _WIDTH = 2, 3, 4
 

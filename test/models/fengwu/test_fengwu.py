@@ -20,7 +20,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.models.fengwu import Fengwu
-from test import common
+from physicsnemo.testing import common
 
 
 def test_fengwu_forward(device):

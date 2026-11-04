@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import line_integral_convolution
 from physicsnemo.nn.functional.rendering import LineIntegralConvolution
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @requires_module("warp")

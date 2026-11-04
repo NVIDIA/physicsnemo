@@ -22,7 +22,7 @@ import torch
 import physicsnemo
 from physicsnemo.models.rnn.rnn_one2many import One2ManyRNN
 from physicsnemo.models.rnn.rnn_seq2seq import Seq2SeqRNN
-from test import common
+from physicsnemo.testing import common
 
 
 @pytest.mark.parametrize("dimension", [2, 3])

@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from physicsnemo.models.diffusion_unets import DhariwalUNet as UNet
-from test import common
+from physicsnemo.testing import common
 
 
 def test_dhariwal_unet_forward(device):

@@ -22,7 +22,7 @@ from physicsnemo.nn import (
     ConvResidualBlock,
     TransposeConvLayer,
 )
-from test import common
+from physicsnemo.testing import common
 
 
 @pytest.mark.parametrize("activation_fn", [torch.nn.ReLU(), torch.nn.Identity()])

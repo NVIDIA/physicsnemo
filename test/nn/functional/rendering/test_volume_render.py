@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import volume_render
 from physicsnemo.nn.functional.rendering import VolumeRender
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _camera(device: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

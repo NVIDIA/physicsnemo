@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import scalar_field_to_rgba
 from physicsnemo.nn.functional.rendering import ScalarFieldToRGBA
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @requires_module("warp")

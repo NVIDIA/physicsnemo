@@ -3,6 +3,7 @@ branch = True
 data_file = .coverage.pytest
 concurrency = multiprocessing,thread
 source = physicsnemo
+omit = */physicsnemo/testing/*
 
 [report]
 exclude_lines =

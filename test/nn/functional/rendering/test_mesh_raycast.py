@@ -19,7 +19,7 @@ import torch
 
 from physicsnemo.nn.functional import mesh_raycast
 from physicsnemo.nn.functional.rendering import MeshRaycast
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def _triangle_mesh(device: str) -> tuple[torch.Tensor, torch.Tensor]:

@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import physicsnemo.datapipes as dp
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 # ============================================================================
 # ZarrReader Coordinated Subsampling Tests

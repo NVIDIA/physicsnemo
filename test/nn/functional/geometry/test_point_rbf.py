@@ -27,7 +27,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import radial_basis_function_deform_points
 from physicsnemo.nn.functional.geometry import RadialBasisFunctionDeformPoints
 from physicsnemo.nn.functional.geometry.deform import rbf as rbf_module
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 from test.nn.functional._parity_utils import clone_case
 
 

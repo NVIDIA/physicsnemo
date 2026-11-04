@@ -22,7 +22,7 @@ import pytest
 import torch
 
 from physicsnemo.models.diffusion_unets import SongUNetPosEmbd as UNet
-from test import common
+from physicsnemo.testing import common
 
 
 def test_song_unet_forward(device):

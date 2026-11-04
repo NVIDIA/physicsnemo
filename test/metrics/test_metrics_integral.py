@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 from physicsnemo.metrics.cae.integral import line_integral, surface_integral
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 pv = pytest.importorskip("pyvista")
 

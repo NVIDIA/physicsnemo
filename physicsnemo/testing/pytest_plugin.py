@@ -41,6 +41,8 @@ import torch
 from packaging.requirements import Requirement
 from packaging.version import Version
 
+from physicsnemo.testing.common import utils as common_utils
+
 NFS_DATA_PATH = "/data/nfs/physicsnemo-data"
 
 # Total time per file
@@ -106,6 +108,8 @@ def nfs_data_dir(request):
 
 
 def pytest_configure(config):
+    # Reference outputs (validate_*accuracy file_name=...) are relative to <rootdir>/test.
+    common_utils.REFERENCE_ROOT = config.rootpath / "test"
     config.addinivalue_line("markers", "multigpu_dynamic: mark test as multigpu to run")
     config.addinivalue_line(
         "markers", "multigpu_static: mark test to run only with --multigpu-static flag"
@@ -127,13 +131,15 @@ def pytest_configure(config):
         DistributedManager.initialize()
         # Only load the plugin when running distributed tests
         config.pluginmanager.register(
-            __import__("test.plugins.distributed_print", fromlist=[""]),
+            __import__("physicsnemo.testing.plugins.distributed_print", fromlist=[""]),
             name="distributed_print",
         )
 
         # And this one sets up distributed fixtures for static parallel tests.
         config.pluginmanager.register(
-            __import__("test.plugins.distributed_fixtures", fromlist=[""]),
+            __import__(
+                "physicsnemo.testing.plugins.distributed_fixtures", fromlist=[""]
+            ),
             name="distributed_fixtures",
         )
 

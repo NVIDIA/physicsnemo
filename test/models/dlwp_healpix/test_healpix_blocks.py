@@ -19,7 +19,7 @@ from functools import partial
 import pytest
 import torch
 
-from test import common
+from physicsnemo.testing import common
 
 
 @pytest.fixture

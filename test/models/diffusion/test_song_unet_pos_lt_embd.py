@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from physicsnemo.models.diffusion_unets import SongUNetPosLtEmbd as UNet
-from test import common
+from physicsnemo.testing import common
 
 
 def setup_model_learnable_embd(img_resolution, lt_steps, lt_channels, N_pos, seed=0):

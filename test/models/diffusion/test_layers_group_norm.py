@@ -21,7 +21,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.nn import get_group_norm
-from test import common  # noqa: E402
+from physicsnemo.testing import common  # noqa: E402
 
 
 def _instantiate_model(cls, seed: int = 0, **kwargs):

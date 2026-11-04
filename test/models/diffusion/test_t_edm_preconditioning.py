@@ -17,7 +17,7 @@
 import torch
 
 from physicsnemo.core.module import Module
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 def test_EDMPrecondSuperResolution_forward(device):

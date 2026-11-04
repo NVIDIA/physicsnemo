@@ -17,7 +17,7 @@
 import torch
 from utils import create_random_input, fix_random_seeds
 
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 @requires_module(["torch_geometric", "torch_sparse"])

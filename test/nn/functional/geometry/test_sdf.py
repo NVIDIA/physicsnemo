@@ -18,7 +18,7 @@ import torch
 
 from physicsnemo.nn.functional import signed_distance_field
 from physicsnemo.nn.functional.geometry import SignedDistanceField
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 
 # Build a simple tetrahedron surface mesh as four triangles.

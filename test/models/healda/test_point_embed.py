@@ -23,7 +23,7 @@ from physicsnemo.experimental.models.healda.point_embed import (
     SensorEmbedder,
     _split_by_sensor,
 )
-from test import common
+from physicsnemo.testing import common
 
 
 def check_all_params_have_gradients(model: torch.nn.Module) -> tuple[bool, list[str]]:

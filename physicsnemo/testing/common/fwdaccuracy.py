@@ -23,6 +23,7 @@ import torch
 
 import physicsnemo
 
+from . import utils
 from .utils import compare_output
 
 Tensor = torch.Tensor
@@ -134,7 +135,7 @@ def validate_forward_accuracy(
     # It should be relative to test/
     if file_name is None:
         file_name = model.meta.name + "_output.pth"
-    file_name = Path(__file__).parents[1].resolve() / Path(file_name.lower())
+    file_name = utils.REFERENCE_ROOT / Path(file_name.lower())
     # If file does not exist, we will create it then error
     # Model should then reproduce it on next pytest run
     if not file_name.exists():
@@ -192,7 +193,7 @@ def validate_tensor_accuracy(
     else:
         device = output[0].device
 
-    file_name = Path(__file__).parents[1].resolve() / Path(file_name.lower())
+    file_name = utils.REFERENCE_ROOT / Path(file_name.lower())
     # If file does not exist, we will create it then error
     # Model should then reproduce it on next pytest run
     if not file_name.exists():

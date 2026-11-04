@@ -19,7 +19,7 @@ from typing import Tuple
 import pytest
 import torch
 
-from test.conftest import requires_module
+from physicsnemo.testing.pytest_plugin import requires_module
 
 from . import common
 
