@@ -240,6 +240,19 @@ class TestMergeWithData:
         # Global data should be stacked - time should have shape [2]
         assert merged.global_data["time"].shape == torch.Size([2])
 
+    def test_merge_single_mesh_stacks_global_data(self):
+        """A batch of one mesh stacks global_data along a new dimension too."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0]]),
+            cells=torch.tensor([[0, 1]]),
+            global_data={"time": torch.tensor(1.0)},
+        )
+
+        merged = Mesh.merge([mesh])
+
+        torch.testing.assert_close(merged.global_data["time"], torch.tensor([1.0]))
+        assert mesh.global_data["time"].shape == torch.Size([])
+
     def test_merge_with_vector_data(self):
         """Test merging with vector-valued data fields."""
         points1 = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]])
@@ -340,6 +353,17 @@ class TestMergeErrors:
 
         with pytest.raises(ValueError, match="Invalid global_data_strategy"):
             Mesh.merge([mesh1, mesh2], global_data_strategy="invalid")
+
+    def test_merge_single_element_validates(self):
+        """A one-element list gets the same input validation as longer ones."""
+        mesh = create_simple_mesh(
+            n_points=5, n_cells=3, n_spatial_dims=2, n_manifold_dims=1
+        )
+
+        with pytest.raises(TypeError, match="All objects must be Mesh types"):
+            Mesh.merge(["not a mesh"])
+        with pytest.raises(ValueError, match="Invalid global_data_strategy"):
+            Mesh.merge([mesh], global_data_strategy="invalid")
 
 
 class TestMergeDeviceHandling:
