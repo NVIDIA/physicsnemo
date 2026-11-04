@@ -208,12 +208,12 @@ def _unoriented_point_normals(
             [cell_normals, cell_normals.new_zeros(1, mesh.n_spatial_dims)]
         )[reference]
 
-        ### Flip, at flagged points, the cell normals opposed to the reference
+        ### Flip, at flagged points, the cell normals opposed to the reference;
+        ### elsewhere the sum is exactly that of point_normals
         opposed = (cell_normals.unsqueeze(1) * reference_normals[cells]).sum(-1) < -0.5
-        aligned = mesh._compute_point_normals(
+        return mesh._compute_point_normals(
             mesh._point_normal_weighting, flip=opposed & flagged[cells]
         )
-        return torch.where(flagged.unsqueeze(-1), aligned, mesh.point_normals)
 
     return mesh._cached(("point", "unoriented_normals"), compute)
 
