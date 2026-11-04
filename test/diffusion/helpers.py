@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 import physicsnemo.core
@@ -63,6 +64,26 @@ class Conv2dX0Predictor(Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         t_bc = t.view(-1, 1, 1, 1)
         return self.net(x) / (1 + t_bc)
+
+
+class ConditionedConv2dPredictor(Module):
+    """Conditioned model whose optional noise_labels must not select legacy routing."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = torch.nn.Conv2d(4, 3, kernel_size=1)
+        self.projection = torch.nn.Linear(4, 3)
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "B C H W"],
+        t: Float[torch.Tensor, " B"],
+        condition: Float[torch.Tensor, "B D"],
+        noise_labels: Float[torch.Tensor, " B"] | None = None,
+    ) -> Float[torch.Tensor, "B C H W"]:
+        bias = self.projection(condition).reshape(-1, 3, 1, 1)  # (B, C, 1, 1)
+        time = t.reshape(-1, 1, 1, 1)  # (B, 1, 1, 1)
+        return self.conv(x) + bias + time
 
 
 class Conv3dX0Predictor(Module):

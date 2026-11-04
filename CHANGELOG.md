@@ -136,6 +136,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- &#9888;&#65039; **BC-impact (diffusion metric imports):** Removes general metric
+  re-exports from `physicsnemo.diffusion.metrics`. Import these metrics from
+  their defining modules under `physicsnemo.metrics.general` instead; removed
+  imports emit a warning and error with the exact replacement import.
+  `wasserstein_from_normal` now lives in
+  `physicsnemo.diffusion.metrics.wasserstein`; its existing diffusion and general
+  metrics import paths remain supported. `ConcatConditionWrapper` recognizes
+  legacy U-Nets and their subclasses without importing model implementations.
+
 - Partitioning a graph across GPUs (`partition_graph_with_id_mapping`, behind
   `DistributedGraph` and GraphCast's distributed mode) no longer loops over
   destination nodes in Python. A 1-million-node grid now takes well under a
