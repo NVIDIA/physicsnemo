@@ -599,6 +599,121 @@ class TestManifolds:
         assert torch.all(torch.isfinite(grad_extrinsic))
         assert grad_extrinsic.shape == grad_intrinsic.shape
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    @pytest.mark.parametrize("name", ["sphere", "torus", "cone", "wedge"])
+    def test_intrinsic_gradient_on_consistently_wound_mesh(self, name, dtype):
+        """Consistently wound meshes take their tangent planes from
+        point_normals, bit for bit, also at the cone's apex and at the fold of
+        a 10 degree wedge."""
+        import math
+
+        from physicsnemo.mesh.calculus.gradient import _unoriented_point_normals
+        from physicsnemo.mesh.primitives.surfaces import cone, sphere_icosahedral, torus
+
+        if name == "wedge":
+            # Two flaps of three triangles each on the hinge x = 0..2, 10 degrees apart
+            c, s = math.cos(math.radians(5)), math.sin(math.radians(5))
+            hinge = torch.tensor([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+            points = torch.cat(
+                [
+                    hinge,
+                    hinge + torch.tensor([0, c, s]),
+                    hinge + torch.tensor([0, c, -s]),
+                ]
+            )
+            cells = [[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]]
+            cells += [[1, 0, 6], [1, 6, 7], [2, 1, 7], [2, 7, 8]]
+            mesh = Mesh(points=points, cells=torch.tensor(cells))
+        else:
+            loaders = {"sphere": sphere_icosahedral, "torus": torus, "cone": cone}
+            mesh = loaders[name].load()
+        mesh = mesh.to(dtype=dtype)
+        p = mesh.points
+        phi = p @ torch.tensor([1.0, -2.0, 0.5], dtype=dtype) + p[:, 0] ** 2
+
+        # The LSQ tangent bases are built from these normals
+        assert torch.equal(_unoriented_point_normals(mesh), mesh.point_normals)
+        extrinsic = mesh.gradient(phi, method="dec", gradient_type="extrinsic")
+        normals = mesh.point_normals
+        projected = extrinsic - (extrinsic * normals).sum(-1, keepdim=True) * normals
+        assert torch.equal(mesh.gradient(phi, method="dec"), projected)
+
+    @pytest.mark.parametrize("sliver", [False, True])
+    @pytest.mark.parametrize("method", ["lsq", "dec"])
+    def test_intrinsic_gradient_does_not_depend_on_winding(self, method, sliver):
+        """Reversing a random half of the cells of a sphere leaves its
+        intrinsic gradients unchanged: tangent planes have no orientation.
+        Also in float32 with collinear slivers, whose normals are roundoff,
+        listed first at every vertex."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        dtype = torch.float32 if sliver else torch.float64
+        mesh = sphere_icosahedral.load(subdivisions=2).to(dtype=dtype)
+        n_points = mesh.n_points
+        torch.manual_seed(0)
+        flip = torch.rand(mesh.n_cells) < 0.5
+        cells = torch.where(flip[:, None], mesh.cells[:, [0, 2, 1]], mesh.cells)
+        if sliver:
+            # At each vertex, along an edge, listed first
+            p, v = mesh.points, torch.arange(n_points)
+            adjacency = mesh.get_point_to_points_adjacency()
+            w = adjacency.indices[adjacency.offsets[:-1]]
+            thirds = [p + (p[w] - p) / 3, p + (p[w] - p) * 2 / 3]
+            slivers = torch.stack([v, v + n_points, v + 2 * n_points], dim=1)
+            mesh = Mesh(
+                points=torch.cat([p, *thirds]),
+                cells=torch.cat([slivers, mesh.cells]),
+            )
+            cells = torch.cat([slivers, cells])
+            assert mesh.cell_normals[:n_points].norm(dim=-1).gt(0.5).all()
+        mixed = Mesh(points=mesh.points, cells=cells)
+        p = mesh.points
+        phi = p @ torch.tensor([1.0, -2.0, 0.5], dtype=dtype) + p[:, 0] ** 2
+
+        consistent = mesh.gradient(phi, method=method)[:n_points]
+        torch.testing.assert_close(
+            mixed.gradient(phi, method=method)[:n_points],
+            consistent,
+            **({"rtol": 0, "atol": 1e-12} if dtype == torch.float64 else {}),
+        )
+
+    def test_intrinsic_gradient_on_boundary_of_volume_mesh(self):
+        """The facets of get_boundary_mesh() carry no orientation; the intrinsic
+        gradient of a linear field is still exact inside the faces of a cube."""
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        volume = cube_volume.load(subdivisions=3).to(dtype=torch.float64)
+        surface = volume.get_boundary_mesh()
+        p = surface.points
+        on_face = (p - p.min(0).values).abs().lt(1e-9) | (p - p.max(0).values).abs().lt(
+            1e-9
+        )
+        face_interior = on_face.sum(1) == 1  # on one face, not on a cube edge
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=p.dtype)
+        expected = g.expand(int(face_interior.sum()), 3).clone()
+        expected[on_face[face_interior]] = 0.0  # projection onto the face
+
+        for method in ("lsq", "dec"):
+            gradient = surface.gradient(p @ g, method=method)
+            torch.testing.assert_close(
+                gradient[face_interior], expected, rtol=0, atol=1e-12
+            )
+
+    def test_intrinsic_gradient_on_mobius_strip_is_tangent(self):
+        """The Mobius strip has no consistent winding; its intrinsic gradients
+        are tangent to it, normal to the plane of each vertex's 1-ring."""
+        from physicsnemo.mesh.primitives.surfaces import mobius_strip
+
+        mesh = mobius_strip.load().to(dtype=torch.float64)
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=torch.float64)
+        gradient = mesh.gradient(mesh.points @ g)
+
+        adjacency = mesh.get_point_to_points_adjacency()
+        for i, neighbors in enumerate(adjacency.to_list()):
+            offsets = mesh.points[neighbors] - mesh.points[i]
+            normal = torch.linalg.svd(offsets)[2][-1]  # of the 1-ring's best plane
+            assert (gradient[i] @ normal).abs() < 0.1 * g.norm()
+
 
 class TestCalculusIdentities:
     """Test fundamental calculus identities."""

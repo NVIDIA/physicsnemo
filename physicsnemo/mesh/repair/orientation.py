@@ -76,6 +76,64 @@ def _induced_facet_orientations(
     return induced, is_degenerate
 
 
+def _inconsistently_wound_points(
+    cells: Int[torch.Tensor, "n_cells n_vertices"], n_points: int
+) -> Bool[torch.Tensor, " n_points"]:
+    """Points on a facet on which two cells induce the same orientation.
+
+    Such cells are wound inconsistently: two triangles traverse their shared
+    edge in the same direction, or two segments both start or both end at a
+    point. Cells with a repeated vertex are ignored. The pairs are found by
+    sorting, without a host-device synchronization.
+
+    Parameters
+    ----------
+    cells : torch.Tensor
+        Cell connectivity, shape ``(n_cells, n_vertices)``.
+    n_points : int
+        Number of points.
+
+    Returns
+    -------
+    torch.Tensor
+        ``True`` for the points on such a facet, shape ``(n_points,)``.
+    """
+    if cells.shape[1] < 2:  # points have no facets
+        return torch.zeros(n_points, dtype=torch.bool, device=cells.device)
+    induced, is_degenerate = _induced_facet_orientations(cells)
+    facets, _ = extract_candidate_facets(cells)
+    # Degenerate cells get the parity 2, which no other cell has
+    parities = induced.to(cells.dtype).masked_fill(is_degenerate[:, None], 2)
+    keys = torch.cat([facets, parities.reshape(-1, 1)], dim=1)
+
+    ### Sort the (facet, parity) keys: packed into integers where they fit,
+    ### otherwise lexicographically, by stable sorts
+    if 3 * n_points ** facets.shape[1] < 2**63:
+        packed = torch.zeros_like(parities.reshape(-1), dtype=torch.int64)
+        for column in facets.unbind(dim=1):
+            packed = packed * n_points + column
+        order = torch.argsort(packed * 3 + parities.reshape(-1))
+    else:
+        order = torch.arange(keys.shape[0], device=cells.device)
+        for column in range(keys.shape[1] - 1, -1, -1):
+            order = order[torch.argsort(keys[order, column], stable=True)]
+    keys = keys[order]
+
+    ### Equal neighbors are facets that two cells orient alike
+    alike = (keys[1:] == keys[:-1]).all(dim=1) & (keys[1:, -1] != 2)
+    on_alike = torch.zeros(keys.shape[0], dtype=torch.bool, device=cells.device)
+    on_alike[1:] |= alike
+    on_alike[:-1] |= alike
+    n_facet_vertices = facets.shape[1]
+    counts = torch.zeros(n_points, dtype=torch.int32, device=cells.device)
+    counts.index_add_(
+        0,
+        keys[:, :-1].reshape(-1),
+        on_alike.repeat_interleave(n_facet_vertices).to(torch.int32),
+    )
+    return counts > 0
+
+
 def _signed_volumes(
     points: Float[torch.Tensor, "n_points n_dims"],
     cells: Int[torch.Tensor, "n_cells n_vertices"],
