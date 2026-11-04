@@ -526,9 +526,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device.
 - `rotate` with a Python angle rotates float64 meshes at float64 precision.
   Before, it computed the rotation in float32.
-- `rotate` also uses a non-axis-aligned rotation axis at float64 precision on
-  float64 meshes. Before, it rounded the axis to float32, so points on the axis
-  moved.
+- `rotate` rotates float64 meshes about a vector axis at float64 precision.
+  Before, it rounded the axis to float32, so points on the axis moved.
 - `rotate`, `scale` and `transform` work on float16 and bfloat16 meshes, and
   keep their dtype. Before, they raised an error.
 - Loop subdivision keeps float16 and bfloat16 points in their dtype. Before, it
