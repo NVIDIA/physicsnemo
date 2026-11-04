@@ -644,6 +644,23 @@ class TestManifolds:
         expected = ((g @ u) * u + (g @ v) * v).expand(4, 4)
         torch.testing.assert_close(gradient, expected)
 
+    def test_dec_intrinsic_gradient_at_curve_endpoints(self):
+        """At the endpoints of a polyline in 3D, the intrinsic DEC gradient of a
+        linear field is its projection onto the end edge."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 2.0, 2.0], [2.0, 2.0, 4.0], [3.0, 4.0, 3.0]],
+            dtype=torch.float64,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1], [1, 2], [2, 3]]))
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=torch.float64)
+
+        gradient = mesh.gradient(points @ g, method="dec")
+
+        for end, neighbor in ((0, 1), (3, 2)):
+            edge = points[neighbor] - points[end]
+            expected = (g @ edge) * edge / (edge @ edge)
+            torch.testing.assert_close(gradient[end], expected)
+
 
 class TestCalculusIdentities:
     """Test fundamental calculus identities."""
@@ -1559,15 +1576,12 @@ class TestDECOperators:
 
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
         mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
-        padded = mesh.pad(target_n_points=6, target_n_cells=4)
-        phi = padded.points @ torch.tensor([1.0, 2.0])
+        padded = mesh.pad(target_n_cells=4)  # on a real point, with no new points
+        phi = points @ torch.tensor([1.0, 2.0])
 
         grad = compute_gradient_points_dec(padded, phi)
 
-        torch.testing.assert_close(
-            grad[: mesh.n_points],
-            compute_gradient_points_dec(mesh, phi[: mesh.n_points]),
-        )
+        torch.testing.assert_close(grad, compute_gradient_points_dec(mesh, phi))
 
     def test_dec_gradient_2d_with_collinear_triangle(self):
         """A zero-area triangle of distinct collinear vertices contributes

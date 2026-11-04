@@ -137,16 +137,14 @@ def estimate_tangent_space_pca(
     ):
         point_indices = batch.entity_indices
         # (n_group, n_neighbors, n_spatial_dims); 16-bit in float32, which eigh needs
-        centered = batch.relative_positions.to(
-            torch.promote_types(dtype, torch.float32)
-        )
+        offsets = batch.relative_positions.to(torch.promote_types(dtype, torch.float32))
         n_neighbors = batch.n_neighbors
 
         ### Covariance matrix: C = (1/k) X^T X
         cov_matrices = (
             torch.bmm(
-                centered.transpose(1, 2),  # (n_group, n_spatial_dims, n_neighbors)
-                centered,  # (n_group, n_neighbors, n_spatial_dims)
+                offsets.transpose(1, 2),  # (n_group, n_spatial_dims, n_neighbors)
+                offsets,  # (n_group, n_neighbors, n_spatial_dims)
             )
             / n_neighbors
         )

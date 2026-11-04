@@ -501,7 +501,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Intrinsic LSQ gradients no longer raise on float32 point clouds or on 16-bit
   curves, and raise a `TypeError` for integer fields instead of truncating the
   result. On surfaces in four or more dimensions they are now correct at points
-  with two neighbors.
+  with two neighbors, and DEC intrinsic gradients of curves in 3D are now
+  correct at their endpoints.
 - DEC gradients of planar triangle meshes are no longer NaN at the vertices of
   zero-area triangles, such as those `Mesh.pad` adds. DEC divergences are now
   correct on float32 meshes a few millimetres across in metres.
