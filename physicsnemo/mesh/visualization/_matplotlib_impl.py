@@ -300,9 +300,11 @@ def draw_mesh_matplotlib(
         # Use the maximum range to ensure all axes have equal scale
         plot_radius = 0.5 * max([x_range, y_range, z_range])
 
-        ax_3d.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
-        ax_3d.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
-        ax_3d.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+        # auto=None keeps autoscaling on, so meshes drawn later on this ax
+        # still grow the view
+        ax_3d.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius], auto=None)
+        ax_3d.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius], auto=None)
+        ax_3d.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius], auto=None)
 
     if show:
         plt.show()
@@ -498,11 +500,9 @@ def _draw_2d(
             zorder=2,
         )
 
-    ### Set axis limits based on data
-    if len(points_np) > 0:
-        margin = 0.05 * (points_np.max() - points_np.min())
-        ax.set_xlim(points_np[:, 0].min() - margin, points_np[:, 0].max() + margin)
-        ax.set_ylim(points_np[:, 1].min() - margin, points_np[:, 1].max() + margin)
+    ### add_collection does not rescale the view, so fit it to all the data
+    ### drawn on ax. A no-op on axes whose limits the caller fixed.
+    ax.autoscale_view()
 
 
 def _draw_3d(
@@ -611,9 +611,6 @@ def _draw_3d(
             zorder=2,
         )
 
-    ### Set axis limits based on data
-    if len(points_np) > 0:
-        margin = 0.01 * (points_np.max() - points_np.min())
-        ax.set_xlim(points_np[:, 0].min() - margin, points_np[:, 0].max() + margin)
-        ax.set_ylim(points_np[:, 1].min() - margin, points_np[:, 1].max() + margin)
-        ax.set_zlim(points_np[:, 2].min() - margin, points_np[:, 2].max() + margin)
+    ### Fit the view to all the data drawn on ax. A no-op on axes whose
+    ### limits the caller fixed.
+    ax.autoscale_view()
