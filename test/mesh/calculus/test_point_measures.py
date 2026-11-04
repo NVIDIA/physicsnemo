@@ -139,6 +139,20 @@ def test_counting_and_volume_point_measures_have_known_affine_scaling():
     )
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_volume_point_measures_scale_on_reduced_precision(dtype):
+    """Regression: the determinant of a 16-bit map (no LU kernels) still scales
+    full-dimensional point measures."""
+    cloud = Mesh(points=torch.randn(5, 3).to(dtype))
+    set_point_measures(cloud, torch.full((5,), 2.0, dtype=dtype), dimension=3)
+    scaled = point_measures(cloud.scale([2.0, 3.0, 4.0]))
+    assert scaled.dtype == dtype
+    torch.testing.assert_close(scaled, torch.full((5,), 48.0, dtype=dtype))
+    rotated = point_measures(cloud.rotate(0.5, axis="z"))
+    assert rotated.dtype == dtype
+    torch.testing.assert_close(rotated, torch.full((5,), 2.0, dtype=dtype))
+
+
 def test_rigid_transforms_and_dtype_preserve_point_measures():
     cloud = MeshToDomainMesh()(simplex(2)).interior
     moved = (

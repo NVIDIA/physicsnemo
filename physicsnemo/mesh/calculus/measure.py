@@ -245,7 +245,13 @@ def _transform_point_measures(
     if bool(dimension == 0):
         return
     if matrix.shape[0] == matrix.shape[1] and bool(dimension == source.n_spatial_dims):
-        factor = matrix.det().abs()
+        # LU has no float16/bfloat16 kernels: take the determinant in float32.
+        factor = (
+            matrix.to(torch.promote_types(matrix.dtype, torch.float32))
+            .det()
+            .abs()
+            .to(matrix.dtype)
+        )
     else:
         from physicsnemo.mesh.transformations.geometric import _is_similarity_transform
 
