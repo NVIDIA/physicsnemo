@@ -453,6 +453,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Mesh.pad` and `Mesh.pad_to_next_power` place padding cells on a padding
   point when they also pad points. Before, padding cells touched the last real
   point and changed results there, such as `cell_data_to_point_data`.
+- `DomainMesh.rotate`, `scale`, and `transform` work when the meshes of a
+  domain differ in float dtype, such as a float64 interior with float32
+  boundaries, where they raised before.
 - `fill_holes` works on meshes with point or cell data, where it raised before.
   The new points and faces hold NaN in floating-point fields and 0 in others.
 - `compute_mesh_statistics` reports the mean and standard deviation of the

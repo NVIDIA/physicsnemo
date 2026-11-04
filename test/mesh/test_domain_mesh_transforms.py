@@ -300,6 +300,26 @@ class TestRotate:
             dm3.interior.points, tet_domain.interior.points, atol=1e-6
         )
 
+    @pytest.mark.parametrize(
+        "op",
+        [
+            lambda m: m.rotate(0.3, axis="z", center=[0.5, 0.25, 0.0]),
+            lambda m: m.scale([2.0, 3.0, 4.0], center=[0.5, 0.25, 0.0]),
+        ],
+        ids=["rotate", "scale"],
+    )
+    @pytest.mark.parametrize(
+        "interior_dtype,boundary_dtype",
+        [(torch.float64, torch.float32), (torch.float32, torch.float64)],
+    )
+    def test_mixed_float_dtypes(self, op, interior_dtype, boundary_dtype):
+        """Each component is transformed in its own dtype, as on its own."""
+        interior = two_tetrahedra.load().to(interior_dtype)
+        wall = single_triangle_3d.load().to(boundary_dtype)
+        dm = op(DomainMesh(interior=interior, boundaries={"wall": wall}))
+        torch.testing.assert_close(dm.interior.points, op(interior).points)
+        torch.testing.assert_close(dm.boundaries["wall"].points, op(wall).points)
+
 
 class TestScale:
     """Tests for DomainMesh.scale passthrough."""
@@ -328,6 +348,21 @@ class TestTransform:
     def test_scale_via_matrix(self, tet_domain):
         dm2 = tet_domain.transform(2.0 * torch.eye(3))
         assert torch.allclose(dm2.interior.points, tet_domain.interior.points * 2.0)
+
+    @pytest.mark.parametrize(
+        "interior_dtype,boundary_dtype",
+        [(torch.float64, torch.float32), (torch.float32, torch.float64)],
+    )
+    def test_mixed_float_dtypes(self, interior_dtype, boundary_dtype):
+        """A user matrix is applied to each component in its own dtype."""
+        interior = two_tetrahedra.load().to(interior_dtype)
+        wall = single_triangle_3d.load().to(boundary_dtype)
+        dm = DomainMesh(interior=interior, boundaries={"wall": wall})
+
+        dm2 = dm.transform(2.0 * torch.eye(3))
+
+        for before, after in [(interior, dm2.interior), (wall, dm2.boundaries["wall"])]:
+            torch.testing.assert_close(after.points, 2.0 * before.points)
 
 
 ### Cleanup / Refinement
