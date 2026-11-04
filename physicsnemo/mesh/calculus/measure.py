@@ -215,10 +215,14 @@ def _transfer_cell_measures(
             "Cannot transform nonzero effective measure on a zero-measure cell; supply replacement measures"
         )
     denominator = torch.where(old_areas != 0, old_areas, torch.ones_like(old_areas))
-    # The area ratio can overflow float16: compute it in at least float32.
-    dtype = torch.promote_types(measures.dtype, torch.float32)
+    # The measures follow the widest dtype involved; the area ratio can overflow
+    # float16, so compute in at least float32.
+    out_dtype = torch.promote_types(
+        torch.promote_types(measures.dtype, result.cell_areas.dtype), old_areas.dtype
+    )
+    dtype = torch.promote_types(out_dtype, torch.float32)
     ratio = result.cell_areas.to(dtype) / denominator.to(dtype)
-    set_cell_measures(result, (measures.to(dtype) * ratio).to(measures.dtype))
+    set_cell_measures(result, (measures.to(dtype) * ratio).to(out_dtype))
 
 
 def _require_preserved_point_measures(mesh: "Mesh") -> None:
