@@ -450,6 +450,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Mesh.merge` treats a list of one mesh like a longer list: it checks its
   input and stacks `global_data` along a new dimension. Before, it returned a
   copy of the mesh.
+- `Mesh.pad` and `Mesh.pad_to_next_power` place padding cells on a padding
+  point when they also pad points. Before, padding cells touched the last real
+  point and changed results there, such as `cell_data_to_point_data`.
 - `fill_holes` works on meshes with point or cell data, where it raised before.
   The new points and faces hold NaN in floating-point fields and 0 in others.
 - `compute_mesh_statistics` reports the mean and standard deviation of the
