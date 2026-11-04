@@ -627,16 +627,24 @@ class TestManifolds:
         assert torch.all(torch.isfinite(grad_extrinsic))
         assert grad_extrinsic.shape == grad_intrinsic.shape
 
+    @pytest.mark.parametrize("degenerate_first_cell", [False, True])
     @pytest.mark.parametrize("method", ["lsq", "dec"])
-    def test_intrinsic_gradient_does_not_depend_on_winding(self, method):
+    def test_intrinsic_gradient_does_not_depend_on_winding(
+        self, method, degenerate_first_cell
+    ):
         """Reversing a random half of the cells of a sphere leaves its
-        intrinsic gradients unchanged: tangent planes have no orientation."""
+        intrinsic gradients unchanged: tangent planes have no orientation.
+        Also with a zero-area cell listed first at a vertex."""
         from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
         mesh = sphere_icosahedral.load(subdivisions=2).to(dtype=torch.float64)
         torch.manual_seed(0)
         flip = torch.rand(mesh.n_cells) < 0.5
         cells = torch.where(flip[:, None], mesh.cells[:, [0, 2, 1]], mesh.cells)
+        if degenerate_first_cell:
+            v0 = mesh.cells[:1, :1].expand(1, 3)
+            mesh = Mesh(points=mesh.points, cells=torch.cat([v0, mesh.cells]))
+            cells = torch.cat([v0, cells])
         mixed = Mesh(points=mesh.points, cells=cells)
         p = mesh.points
         phi = p @ torch.tensor([1.0, -2.0, 0.5], dtype=p.dtype) + p[:, 0] ** 2

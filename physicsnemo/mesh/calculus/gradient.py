@@ -174,7 +174,9 @@ def _unoriented_point_normals(
     Those of :attr:`~physicsnemo.mesh.Mesh.point_normals`, but robust to
     neighboring cells wound oppositely (as the facets of ``get_boundary_mesh``
     and the cells of a Mobius strip can be), which would cancel in their sum:
-    tangent planes do not depend on the winding. Cached, as point normals are.
+    on smooth surfaces and inside the faces of ``get_boundary_mesh`` output,
+    tangent planes do not depend on the winding. Normals at sharp creases (near
+    90 degrees) still follow it. Cached, as point normals are.
     """
     weighting = "area" if mesh.n_manifold_dims < 2 else "angle_area"
     return mesh._cached(
