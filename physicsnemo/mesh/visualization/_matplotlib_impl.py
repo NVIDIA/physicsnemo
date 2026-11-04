@@ -300,11 +300,9 @@ def draw_mesh_matplotlib(
         # Use the maximum range to ensure all axes have equal scale
         plot_radius = 0.5 * max([x_range, y_range, z_range])
 
-        # auto=None keeps autoscaling on, so meshes drawn later on this ax
-        # still grow the view
-        ax_3d.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius], auto=None)
-        ax_3d.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius], auto=None)
-        ax_3d.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius], auto=None)
+        ax_3d.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+        ax_3d.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+        ax_3d.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
     if show:
         plt.show()
@@ -611,6 +609,7 @@ def _draw_3d(
             zorder=2,
         )
 
-    ### Fit the view to all the data drawn on ax. A no-op on axes whose
-    ### limits the caller fixed.
+    ### Fit the view to all the data drawn on ax; draw_mesh_matplotlib then
+    ### makes it an equal-aspect cube and fixes the limits.
+    ax.set_autoscale_on(True)
     ax.autoscale_view()

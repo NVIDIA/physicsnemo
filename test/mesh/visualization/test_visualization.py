@@ -810,6 +810,20 @@ def test_draw_2d_keeps_fixed_limits():
     plt.close("all")
 
 
+def test_draw_3d_equal_aspect_survives_later_artists():
+    """An artist added after draw keeps the 3D view an equal-aspect cube."""
+    from physicsnemo.mesh.primitives.surfaces import torus
+
+    mesh = torus.load()
+    ax = mesh.draw(show=False, backend="matplotlib")
+    points = mesh.points.numpy()
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2])
+    ax.figure.canvas.draw()
+    spans = [hi - lo for lo, hi in (ax.get_xlim(), ax.get_ylim(), ax.get_zlim())]
+    assert spans == pytest.approx([spans[0]] * 3)
+    plt.close("all")
+
+
 @pytest.mark.parametrize("n_spatial_dims", [0, 1, 2, 3])
 def test_draw_vertex_cells_with_cell_scalars(n_spatial_dims):
     """Vertex cells draw as markers colored by their cell scalars."""
