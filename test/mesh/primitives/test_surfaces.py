@@ -157,6 +157,7 @@ class TestSurfacePrimitives:
             mesh = load(**kwargs)
         finally:
             torch.set_default_dtype(default_dtype)
+        assert mesh.points.dtype == expected.points.dtype
         assert torch.equal(mesh.points, expected.points)
         assert torch.equal(mesh.cells, expected.cells)
 
