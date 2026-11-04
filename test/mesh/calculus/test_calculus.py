@@ -376,6 +376,22 @@ class TestDivergence:
         # Quadratic components have O(h) LSQ error; lumpy_ball is moderate resolution.
         assert divergence.abs().mean() < 0.15
 
+    def test_dec_divergence_millimetre_tet_float32(self):
+        """div(x) = 3 is scale-free, so a float32 tet mesh a few mm across in
+        metres gives 3 at its interior points, as at unit scale."""
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        cube = cube_volume.load(subdivisions=4)
+        mesh = Mesh(points=2e-3 * cube.points, cells=cube.cells)
+        p = mesh.points
+        inner = ((p > p.min(0).values + 1e-9) & (p < p.max(0).values - 1e-9)).all(1)
+
+        divergence = mesh.divergence(mesh.points, method="dec")
+
+        torch.testing.assert_close(
+            divergence[inner], torch.full((int(inner.sum()),), 3.0), rtol=1e-4, atol=0
+        )
+
 
 class TestCurl:
     """Test curl computation with analytical fields."""
@@ -1506,6 +1522,42 @@ class TestDECOperators:
         # Just verify it runs and returns correct shape
         assert grad.shape == (mesh.n_points, mesh.n_spatial_dims)
         assert torch.isfinite(grad).all()
+
+    def test_dec_gradient_2d_ignores_padding(self):
+        """The zero-area cells of Mesh.pad do not change the DEC gradient of
+        a planar mesh at its real points."""
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+        padded = mesh.pad(target_n_points=6, target_n_cells=4)
+        phi = padded.points @ torch.tensor([1.0, 2.0])
+
+        grad = compute_gradient_points_dec(padded, phi)
+
+        torch.testing.assert_close(
+            grad[: mesh.n_points],
+            compute_gradient_points_dec(mesh, phi[: mesh.n_points]),
+        )
+
+    def test_dec_gradient_2d_with_collinear_triangle(self):
+        """A zero-area triangle of distinct collinear vertices contributes
+        nothing to the DEC gradient, as for the same mesh embedded in 3D."""
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 2.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2], [0, 3, 4]])
+        phi = points @ torch.tensor([1.0, 2.0], dtype=torch.float64)
+        embedded = Mesh(points=torch.nn.functional.pad(points, (0, 1)), cells=cells)
+
+        grad = compute_gradient_points_dec(Mesh(points=points, cells=cells), phi)
+
+        torch.testing.assert_close(
+            grad, compute_gradient_points_dec(embedded, phi)[:, :2]
+        )
 
     @pytest.mark.parametrize("n_cells", [1, 3])
     def test_flat_operator_matches_per_component(self, n_cells):
