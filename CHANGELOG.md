@@ -498,10 +498,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mesh now return float64 results instead of raising. DEC gradients and
   Laplacians of tensor fields, and LSQ cell gradients, no longer fail on meshes
   without cells, and `flat` handles fields with several trailing dimensions.
-- Intrinsic point gradients on smooth surfaces, on the Möbius strip, and inside
-  the faces of surfaces from `get_boundary_mesh` no longer depend on the winding
-  of the cells (at sharp creases they still do). Before, neighboring cells wound
-  oppositely tilted the tangent planes.
 - Intrinsic LSQ gradients no longer raise on float32 point clouds or on 16-bit
   curves, and raise a `TypeError` for integer fields instead of truncating the
   result. On surfaces in four or more dimensions they are now correct at points

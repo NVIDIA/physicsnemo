@@ -1235,23 +1235,7 @@ class Mesh(
                 f"(cells must have interior angles).\n"
                 f"Got {self.n_manifold_dims=}. Use 'area' or 'unweighted' instead."
             )
-        return self._compute_point_normals(weighting)
 
-    def _compute_point_normals(
-        self,
-        weighting: Literal["area", "unweighted", "angle", "angle_area"],
-        align_orientation: bool = False,
-    ) -> torch.Tensor:
-        """:meth:`compute_point_normals`, without its validation.
-
-        With ``align_orientation``, each cell normal more than 120 degrees from
-        that of the vertex's lowest-index incident cell with a nonzero normal is
-        flipped before it is accumulated there. Away from sharp creases the
-        normals then do not depend on the winding of the cells (they flip with
-        that of the reference cell); at creases near 90 degrees they still
-        follow it. On consistently wound meshes they are those of
-        :meth:`compute_point_normals`, except at folds sharper than 60 degrees.
-        """
         ### Get cell normals (triggers computation if not cached)
         cell_normals = self.cell_normals  # (n_cells, n_spatial_dims)
 
@@ -1287,31 +1271,6 @@ class Mesh(
                 f"Invalid {weighting=!r}. Must be one of: "
                 f"'unweighted', 'area', 'angle', 'angle_area'."
             )
-
-        if align_orientation:
-            ### Flip the cell normals opposed to that of each vertex's first
-            ### cell with a nonzero normal
-            cell_indices = torch.arange(self.n_cells, device=self.cells.device)
-            cell_indices = torch.where(
-                (cell_normals != 0).any(-1), cell_indices, self.n_cells
-            )
-            first_cells = torch.full(
-                (self.n_points,), self.n_cells, device=self.cells.device
-            ).scatter_reduce_(
-                0,
-                self.cells.reshape(-1),
-                cell_indices.repeat_interleave(n_vertices_per_cell),
-                "amin",
-            )
-            # Vertices with no such cell get a zero reference and flip nothing
-            reference_normals = torch.cat(
-                [cell_normals, cell_normals.new_zeros(1, self.n_spatial_dims)]
-            )[first_cells[self.cells]]
-            opposed = (cell_normals.unsqueeze(1) * reference_normals).sum(-1) < -0.5
-            normals_to_accumulate = torch.where(
-                opposed.unsqueeze(-1), -normals_to_accumulate, normals_to_accumulate
-            )
-            del reference_normals, opposed
 
         ### Accumulate at each point
         accumulated_normals = torch.zeros(
