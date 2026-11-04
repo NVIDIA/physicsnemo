@@ -1235,7 +1235,22 @@ class Mesh(
                 f"(cells must have interior angles).\n"
                 f"Got {self.n_manifold_dims=}. Use 'area' or 'unweighted' instead."
             )
+        return self._compute_point_normals(weighting)
 
+    def _compute_point_normals(
+        self,
+        weighting: Literal["area", "unweighted", "angle", "angle_area"],
+        align_orientation: bool = False,
+    ) -> torch.Tensor:
+        """:meth:`compute_point_normals`, without its validation.
+
+        With ``align_orientation``, each cell normal more than 120 degrees from
+        that of the vertex's lowest-index incident cell is flipped before it is
+        accumulated there. The normals then do not depend on the winding of
+        the cells (they flip with that of the reference cell), and are those of
+        :meth:`compute_point_normals` on consistently wound meshes, except at
+        folds sharper than 60 degrees.
+        """
         ### Get cell normals (triggers computation if not cached)
         cell_normals = self.cell_normals  # (n_cells, n_spatial_dims)
 
@@ -1271,6 +1286,24 @@ class Mesh(
                 f"Invalid {weighting=!r}. Must be one of: "
                 f"'unweighted', 'area', 'angle', 'angle_area'."
             )
+
+        if align_orientation:
+            ### Flip the cell normals opposed to that of each vertex's first cell
+            cell_indices = torch.arange(self.n_cells, device=self.cells.device)
+            first_cells = torch.full(
+                (self.n_points,), self.n_cells, device=self.cells.device
+            ).scatter_reduce_(
+                0,
+                self.cells.reshape(-1),
+                cell_indices.repeat_interleave(n_vertices_per_cell),
+                "amin",
+            )
+            reference_normals = cell_normals[first_cells[self.cells]]
+            opposed = (cell_normals.unsqueeze(1) * reference_normals).sum(-1) < -0.5
+            normals_to_accumulate = torch.where(
+                opposed.unsqueeze(-1), -normals_to_accumulate, normals_to_accumulate
+            )
+            del reference_normals, opposed
 
         ### Accumulate at each point
         accumulated_normals = torch.zeros(

@@ -307,6 +307,18 @@ class TestGradient:
         # Laplacian should be positive (correct sign)
         assert mean_lap > 0, "Laplacian should be positive for convex function"
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    @pytest.mark.parametrize("gradient_type", ["intrinsic", "extrinsic"])
+    def test_integer_field_raises(self, dtype, gradient_type):
+        """LSQ gradients of integer fields raise, rather than truncate."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        mesh = sphere_icosahedral.load(subdivisions=1).to(dtype=dtype)
+        labels = (10 * mesh.points[:, 0]).round().long()
+
+        with pytest.raises(TypeError, match="floating-point"):
+            mesh.gradient(labels, gradient_type=gradient_type)
+
 
 class TestDivergence:
     """Test divergence computation with analytical fields."""
@@ -614,6 +626,87 @@ class TestManifolds:
         # Extrinsic gradient should be finite and have correct shape
         assert torch.all(torch.isfinite(grad_extrinsic))
         assert grad_extrinsic.shape == grad_intrinsic.shape
+
+    @pytest.mark.parametrize("method", ["lsq", "dec"])
+    def test_intrinsic_gradient_does_not_depend_on_winding(self, method):
+        """Reversing a random half of the cells of a sphere leaves its
+        intrinsic gradients unchanged: tangent planes have no orientation."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        mesh = sphere_icosahedral.load(subdivisions=2).to(dtype=torch.float64)
+        torch.manual_seed(0)
+        flip = torch.rand(mesh.n_cells) < 0.5
+        cells = torch.where(flip[:, None], mesh.cells[:, [0, 2, 1]], mesh.cells)
+        mixed = Mesh(points=mesh.points, cells=cells)
+        p = mesh.points
+        phi = p @ torch.tensor([1.0, -2.0, 0.5], dtype=p.dtype) + p[:, 0] ** 2
+
+        consistent = mesh.gradient(phi, method=method)
+        torch.testing.assert_close(
+            mixed.gradient(phi, method=method), consistent, rtol=0, atol=1e-12
+        )
+        if method == "dec":
+            # Consistently wound meshes keep the projection onto point normals
+            extrinsic = mesh.gradient(phi, method=method, gradient_type="extrinsic")
+            normals = mesh.point_normals
+            projected = (
+                extrinsic - (extrinsic * normals).sum(-1, keepdim=True) * normals
+            )
+            assert torch.equal(consistent, projected)
+
+    def test_intrinsic_gradient_on_boundary_of_volume_mesh(self):
+        """The facets of get_boundary_mesh() carry no orientation; the intrinsic
+        gradient of a linear field is still exact inside the faces of a cube."""
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        volume = cube_volume.load(subdivisions=3).to(dtype=torch.float64)
+        surface = volume.get_boundary_mesh()
+        p = surface.points
+        on_face = (p - p.min(0).values).abs().lt(1e-9) | (p - p.max(0).values).abs().lt(
+            1e-9
+        )
+        face_interior = on_face.sum(1) == 1  # on one face, not on a cube edge
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=p.dtype)
+        expected = g.expand(int(face_interior.sum()), 3).clone()
+        expected[on_face[face_interior]] = 0.0  # projection onto the face
+
+        for method in ("lsq", "dec"):
+            gradient = surface.gradient(p @ g, method=method)
+            torch.testing.assert_close(
+                gradient[face_interior], expected, rtol=0, atol=1e-12
+            )
+
+    def test_intrinsic_gradient_on_mobius_strip_is_tangent(self):
+        """The Mobius strip has no consistent winding; its intrinsic gradients
+        are tangent to it, normal to the plane of each vertex's 1-ring."""
+        from physicsnemo.mesh.primitives.surfaces import mobius_strip
+
+        mesh = mobius_strip.load().to(dtype=torch.float64)
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=torch.float64)
+        gradient = mesh.gradient(mesh.points @ g)
+
+        adjacency = mesh.get_point_to_points_adjacency()
+        for i, neighbors in enumerate(adjacency.to_list()):
+            offsets = mesh.points[neighbors] - mesh.points[i]
+            normal = torch.linalg.svd(offsets)[2][-1]  # of the 1-ring's best plane
+            assert (gradient[i] @ normal).abs() < 0.1 * g.norm()
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    def test_intrinsic_gradient_of_surface_in_4d(self, dtype):
+        """A flat quad of two triangles in R^4: the intrinsic gradient of a
+        linear field is its projection onto the plane at all four vertices,
+        two of which have only two neighbors."""
+        u = torch.tensor([0.0, 0.6, 0.0, 0.8], dtype=dtype)
+        v = torch.tensor([0.0, 0.0, 1.0, 0.0], dtype=dtype)
+        uv = torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=dtype)
+        points = uv[:, :1] * u + uv[:, 1:] * v + torch.tensor([1.0, 2, 3, 4])
+        mesh = Mesh(points=points.to(dtype), cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+        g = torch.tensor([1.0, 2.0, -3.0, 0.5], dtype=dtype)
+
+        gradient = mesh.gradient(mesh.points @ g)
+
+        expected = ((g @ u) * u + (g @ v) * v).expand(4, 4)
+        torch.testing.assert_close(gradient, expected)
 
 
 class TestCalculusIdentities:
