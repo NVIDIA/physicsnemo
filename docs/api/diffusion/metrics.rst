@@ -58,24 +58,7 @@ The framework provides evaluation metrics for assessing the quality of
 generated samples. The Fréchet Inception Distance (FID) is
 available using
 :func:`~physicsnemo.diffusion.metrics.fid.calculate_fid_from_inception_stats`,
-which computes the FID from precomputed Inception-v3 statistics. Its Gaussian
-Wasserstein calculation is also available directly as
-:func:`~physicsnemo.diffusion.metrics.wasserstein.wasserstein_from_normal`.
-The existing import from ``physicsnemo.metrics.general.wasserstein`` remains
-supported.
-
-General-purpose metrics are no longer re-exported from
-``physicsnemo.diffusion.metrics``. Import them from their defining modules
-under ``physicsnemo.metrics.general``, for example:
-
-.. code-block:: python
-
-    from physicsnemo.metrics.general.crps import crps
-    from physicsnemo.metrics.general.ensemble_metrics import Mean, Variance
-    from physicsnemo.metrics.general.histogram import Histogram
-
-Attempting a removed import emits a warning and raises an ``ImportError``
-containing its exact replacement import.
+which computes the FID from precomputed Inception-v3 statistics.
 
 
 API Reference

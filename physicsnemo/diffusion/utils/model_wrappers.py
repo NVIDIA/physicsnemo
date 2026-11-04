@@ -64,10 +64,7 @@ class ConcatConditionWrapper(Module):
     The wrapper will route arguments appropriately depending on the backbone
     type. The default behavior for unknown backbones is to concatenate the value
     of ``cond_concat`` (if provided) and pass the value of ``cond_vec`` as the
-    ``condition`` keyword argument. Legacy U-Nets and their subclasses are
-    recognized by their fully qualified base-class names and PhysicsNeMo
-    ``Module`` inheritance, without importing the model package or inferring
-    semantics from parameter names.
+    ``condition`` keyword argument.
 
     Parameters
     ----------

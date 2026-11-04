@@ -136,14 +136,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- &#9888;&#65039; **BC-impact (diffusion metric imports):** Removes general metric
-  re-exports from `physicsnemo.diffusion.metrics`. Import these metrics from
-  their defining modules under `physicsnemo.metrics.general` instead; removed
-  imports emit a warning and error with the exact replacement import.
-  `wasserstein_from_normal` now lives in
-  `physicsnemo.diffusion.metrics.wasserstein`; its existing diffusion and general
-  metrics import paths remain supported. `ConcatConditionWrapper` recognizes
-  legacy U-Nets and their subclasses without importing model implementations.
+- &#9888;&#65039; **BC-impact (diffusion metric imports):** Cleans up
+  `physicsnemo.diffusion` dependencies and imports. General-purpose metrics can
+  no longer be imported from `physicsnemo.diffusion.metrics`. Use the following
+  modules instead:
+  - `rank_probability_score`: `physicsnemo.metrics.general.calibration`
+  - `crps`, `kcrps`: `physicsnemo.metrics.general.crps`
+  - `EnsembleMetrics`, `Mean`, `Variance`:
+    `physicsnemo.metrics.general.ensemble_metrics`
+  - `entropy_from_counts`, `relative_entropy_from_counts`:
+    `physicsnemo.metrics.general.entropy`
+  - `Histogram`, `cdf`, `histogram`, `normal_cdf`, `normal_pdf`:
+    `physicsnemo.metrics.general.histogram`
+  - `power_spectrum`: `physicsnemo.metrics.general.power_spectrum`
+  - `wasserstein_from_cdf`, `wasserstein_from_samples`:
+    `physicsnemo.metrics.general.wasserstein`
+
+  For example, use `from physicsnemo.metrics.general.crps import crps`.
+  Removed imports emit a warning and an error with the replacement import.
+  `wasserstein_from_normal` remains available through both existing import paths.
 
 - Partitioning a graph across GPUs (`partition_graph_with_id_mapping`, behind
   `DistributedGraph` and GraphCast's distributed mode) no longer loops over
