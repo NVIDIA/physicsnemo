@@ -514,7 +514,8 @@ def _scale_assumptions(
     squares = [(v / peak) * (v / peak) if peak > 0 else v * v for v in values]
     mean = sum(squares) / len(squares)
     # _is_similarity_transform's torch.allclose(..., I, atol=1e-6, rtol=1e-5)
-    # bounds each diagonal entry by atol + rtol * 1.
+    # bounds each diagonal entry by atol + rtol * 1: its float32/float64
+    # tolerance, stricter than the one it uses at runtime for 16-bit dtypes.
     is_similarity = mean == 0 or all(abs(s / mean - 1) <= 1e-6 + 1e-5 for s in squares)
     return abs(math.prod(values)) > 1e-10, is_similarity
 
@@ -627,8 +628,10 @@ def transform(
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
-        ### det and inv_ex need LU, which has no float16/bfloat16 kernels
-        solve_matrix = matrix.to(torch.promote_types(matrix.dtype, torch.float32))
+        ### det and inv_ex need LU, which has no float16/bfloat16 kernels, and
+        # |det| can overflow float16: work in at least float32, cast each result
+        solve_dtype = torch.promote_types(matrix.dtype, torch.float32)
+        solve_matrix = matrix.to(solve_dtype)
         det = solve_matrix.det()
 
         ### The runtime det test syncs (host readback of a cuda tensor).
@@ -638,13 +641,15 @@ def transform(
             is_invertible = bool(det.abs() > 1e-10)
 
         if is_invertible:
-            det_sign = det.sign().to(matrix.dtype)
-            det_abs = det.abs().to(matrix.dtype)
+            det_sign = det.sign()
+            det_abs = det.abs()
 
             ### Full-dimensional meshes: global area scaling
             if mesh.n_manifold_dims == mesh.n_spatial_dims:
                 if (v := mesh._cache.get(("cell", "areas"), None)) is not None:
-                    new_cache["cell", "areas"] = v * det_abs
+                    new_cache["cell", "areas"] = (v.to(solve_dtype) * det_abs).to(
+                        v.dtype
+                    )
 
             ### Codimension-1 manifolds: per-element area scaling via normals
             # Formula: area' = area * |det(M)| * ||M^{-T} n||
@@ -658,17 +663,19 @@ def transform(
                 ):
                     inverse = torch.linalg.inv_ex(
                         solve_matrix, check_errors=False
-                    ).inverse.to(matrix.dtype)
+                    ).inverse
 
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = v @ inverse
+                    transformed = v.to(solve_dtype) @ inverse
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
-                        new_cache["cell", "areas"] = areas * det_abs * norm_scale
-                    new_cache["cell", "normals"] = det_sign * safe_normalize(
-                        transformed, dim=-1
-                    )
+                        new_cache["cell", "areas"] = (
+                            areas.to(solve_dtype) * det_abs * norm_scale
+                        ).to(areas.dtype)
+                    new_cache["cell", "normals"] = (
+                        det_sign * safe_normalize(transformed, dim=-1)
+                    ).to(v.dtype)
 
                 ### Vertex (point) normals are a *weighted average* of incident
                 # cell normals, so the inverse-transpose law applies to the average
@@ -689,10 +696,10 @@ def transform(
                         else (not is_tracing() and _is_similarity_transform(matrix))
                     )
                 ):
-                    transformed = v @ inverse
-                    new_cache["point", "normals"] = det_sign * safe_normalize(
-                        transformed, dim=-1
-                    )
+                    transformed = v.to(solve_dtype) @ inverse
+                    new_cache["point", "normals"] = (
+                        det_sign * safe_normalize(transformed, dim=-1)
+                    ).to(v.dtype)
 
     ### Opt-in: centroids
     if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:

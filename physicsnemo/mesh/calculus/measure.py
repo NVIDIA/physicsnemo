@@ -244,14 +244,11 @@ def _transform_point_measures(
     dimension = point_measure_dimension(source)
     if bool(dimension == 0):
         return
+    # LU has no float16/bfloat16 kernels, and the factor can overflow float16:
+    # compute it in at least float32.
+    promoted = matrix.to(torch.promote_types(matrix.dtype, torch.float32))
     if matrix.shape[0] == matrix.shape[1] and bool(dimension == source.n_spatial_dims):
-        # LU has no float16/bfloat16 kernels: take the determinant in float32.
-        factor = (
-            matrix.to(torch.promote_types(matrix.dtype, torch.float32))
-            .det()
-            .abs()
-            .to(matrix.dtype)
-        )
+        factor = promoted.det().abs()
     else:
         from physicsnemo.mesh.transformations.geometric import _is_similarity_transform
 
@@ -261,6 +258,10 @@ def _transform_point_measures(
             raise ValueError(
                 "Anisotropic transformation of point measures requires support geometry; transform the source cells before constructing quadrature, or explicitly preserve reference measures"
             )
-        length_scale = (matrix.T @ matrix).diagonal().mean().clamp_min(0).sqrt()
+        length_scale = (promoted.T @ promoted).diagonal().mean().clamp_min(0).sqrt()
         factor = length_scale**dimension
-    result.point_data[EFFECTIVE_MEASURE_KEY] = point_measures(source) * factor
+    measures = point_measures(source)
+    dtype = torch.promote_types(measures.dtype, factor.dtype)
+    result.point_data[EFFECTIVE_MEASURE_KEY] = (
+        measures.to(dtype) * factor.to(dtype)
+    ).to(measures.dtype)

@@ -839,14 +839,17 @@ class TestTransform:
 
     @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
     @pytest.mark.parametrize("n_spatial_dims", [2, 3])
-    @pytest.mark.parametrize("op", ["rotate", "scale", "shear"])
+    @pytest.mark.parametrize("op", ["rotate", "scale", "large_scale", "shear"])
     def test_square_transforms_reduced_precision(self, dtype, n_spatial_dims, op):
         """Regression: square maps of float16/bfloat16 meshes (whose determinant
         and inverse have no reduced-precision kernels) keep the mesh dtype, and
-        their transformed caches match a recomputation."""
+        their transformed caches match a recomputation, also when the
+        determinant overflows float16."""
         points = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.5], [0.0, 1.0, 1.0]])[
             :, :n_spatial_dims
         ]
+        if op == "large_scale":  # small cells, whose area stays finite at 300x
+            points = points * 0.01
         mesh = Mesh(points=points.to(dtype), cells=torch.tensor([[0, 1, 2]]))
         _ = mesh.cell_areas
         if n_spatial_dims == 3:  # codimension 1: per-cell area scaling
@@ -856,6 +859,8 @@ class TestTransform:
             out = rotate(mesh, 0.5, None if n_spatial_dims == 2 else "z")
         elif op == "scale":
             out = scale(mesh, [2.0, 3.0, 0.5][:n_spatial_dims])
+        elif op == "large_scale":  # det 9e4 (2D) or 2.7e7 (3D)
+            out = scale(mesh, 300.0)
         else:
             shear = torch.eye(n_spatial_dims, dtype=dtype)
             shear[0, 1] = 0.5

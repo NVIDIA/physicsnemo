@@ -152,6 +152,13 @@ def test_volume_point_measures_scale_on_reduced_precision(dtype):
     rotated = point_measures(cloud.rotate(0.5, axis="z"))
     assert rotated.dtype == dtype
     torch.testing.assert_close(rotated, torch.full((5,), 2.0, dtype=dtype))
+    # The determinant 50**3 overflows float16; the scaled measures do not.
+    set_point_measures(cloud, torch.full((5,), 2.0**-9, dtype=dtype), dimension=3)
+    enlarged = point_measures(cloud.scale(50.0))
+    assert enlarged.dtype == dtype
+    torch.testing.assert_close(
+        enlarged, torch.full((5,), 2.0**-9 * 50.0**3, dtype=dtype)
+    )
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -165,6 +172,13 @@ def test_surface_point_measures_transform_on_reduced_precision(dtype):
         moved = point_measures(cloud.transform(k * rotation))
         assert moved.dtype == dtype
         torch.testing.assert_close(moved, torch.full((5,), expected, dtype=dtype))
+    # The length scale squared, 300**2, overflows float16; the measures do not.
+    set_point_measures(cloud, torch.full((5,), 2.0**-10, dtype=dtype), dimension=2)
+    enlarged = point_measures(cloud.transform(300.0 * rotation))
+    assert enlarged.dtype == dtype
+    torch.testing.assert_close(
+        enlarged, torch.full((5,), 2.0**-10 * 300.0**2, dtype=dtype)
+    )
     stretch = torch.diag(torch.tensor([1.0, 1.1, 1.0], dtype=dtype))
     with pytest.raises(ValueError, match="support geometry"):
         cloud.transform(stretch)
