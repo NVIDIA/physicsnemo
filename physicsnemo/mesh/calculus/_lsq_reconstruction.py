@@ -25,6 +25,7 @@ to neighboring points/cells, weighted by inverse distance.
 Reference: Standard in CFD literature (Barth & Jespersen, AIAA 1989)
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import torch
@@ -94,26 +95,40 @@ def compute_point_gradient_lsq(
             \quad (k \times k).
 
     Here ``k`` is the number of neighbors of the point and ``d`` equals
-    ``n_spatial_dims``. Fully vectorized using batched operations. Points are
-    grouped by neighbor count and processed in parallel to handle the ragged
-    neighbor structure.
+    ``n_spatial_dims``. Fully vectorized using batched operations. The
+    systems of all points are assembled and solved at once where the normal
+    equations solve them (float32 and 16-bit); otherwise points are grouped by
+    neighbor count and processed in parallel to handle the ragged neighbor
+    structure.
     """
+    return _compute_point_gradients_lsq(
+        mesh, [point_values], weight_power, min_neighbors
+    )[0]
+
+
+def _compute_point_gradients_lsq(
+    mesh: "Mesh",
+    point_values: Sequence[Float[torch.Tensor, "n_points ..."]],
+    weight_power: float = 2.0,
+    min_neighbors: int = 0,
+) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
+    """Gradients of several fields of one dtype at vertices, by
+    :func:`compute_point_gradient_lsq`, sharing their LSQ systems."""
     ### Get point-to-point adjacency
     adjacency = mesh.get_point_to_points_adjacency()
 
-    ### Delegate LSQ solve to the functional API using the torch backend.
-    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import (
-        mesh_lsq_gradient,
+    ### Delegate LSQ solve to the torch backend of the functional API.
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl import (
+        _mesh_lsq_gradients_torch,
     )
 
-    return mesh_lsq_gradient(
+    return _mesh_lsq_gradients_torch(
         points=mesh.points,
         values=point_values,
         neighbor_offsets=adjacency.offsets,
         neighbor_indices=adjacency.indices,
         weight_power=weight_power,
         min_neighbors=min_neighbors,
-        implementation="torch",
     )
 
 
@@ -144,26 +159,37 @@ def compute_cell_gradient_lsq(
 
     Notes
     -----
-    Fully vectorized using batched operations. Cells are grouped by neighbor
-    count and processed in parallel.
+    Fully vectorized using batched operations. The systems of all cells are
+    assembled and solved at once where the normal equations solve them
+    (float32 and 16-bit); otherwise cells are grouped by neighbor count and
+    processed in parallel.
     """
+    return _compute_cell_gradients_lsq(mesh, [cell_values], weight_power)[0]
+
+
+def _compute_cell_gradients_lsq(
+    mesh: "Mesh",
+    cell_values: Sequence[Float[torch.Tensor, "n_cells ..."]],
+    weight_power: float = 2.0,
+) -> list[Float[torch.Tensor, "n_cells n_spatial_dims ..."]]:
+    """Gradients of several fields of one dtype at cells, by
+    :func:`compute_cell_gradient_lsq`, sharing their LSQ systems."""
     ### Get cell-to-cell adjacency
     adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
 
     ### Get cell centroids
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
 
-    ### Delegate LSQ solve to the functional API using the torch backend.
-    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import (
-        mesh_lsq_gradient,
+    ### Delegate LSQ solve to the torch backend of the functional API.
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl import (
+        _mesh_lsq_gradients_torch,
     )
 
-    return mesh_lsq_gradient(
+    return _mesh_lsq_gradients_torch(
         points=cell_centroids,
         values=cell_values,
         neighbor_offsets=adjacency.offsets,
         neighbor_indices=adjacency.indices,
         weight_power=weight_power,
         min_neighbors=0,  # Cells may have fewer neighbors than points.
-        implementation="torch",
     )

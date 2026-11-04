@@ -155,3 +155,48 @@ def test_codimension_zero_containment_is_the_barycentric_test(scale):
     assert torch.equal(actual, expected)
     assert expected[: len(on_cells)].any(dim=1).all()
     assert not expected[-len(outside) :].any()
+
+
+@pytest.mark.parametrize(
+    "points, query_bary",
+    [
+        ### Greptile's example: just past a vertex of a centered triangle
+        ([[-0.5, -0.5], [0.5, -0.5], [0.0, 0.5]], [-7.5e-7, 1.0 + 7.5e-7, 0.0]),
+        ### Vertex of the tolerance-scaled triangle, the farthest accepted point
+        ([[-1.0, -1.0], [1.0, -1.0], [0.0, 1.0]], [-9.9e-7, 1.0 + 1.98e-6, -9.9e-7]),
+        ### Just outside an edge, away from the vertices
+        ([[-0.5, -0.5], [0.5, -0.5], [0.0, 0.5]], [0.5 + 4.5e-7, 0.5 + 4.5e-7, -9e-7]),
+        ### Thin sliver, just past its apex along the long axis
+        ([[-5e-4, -0.5], [5e-4, -0.5], [0.0, 0.5]], [-7.5e-7, -7.5e-7, 1.0 + 1.5e-6]),
+        ### Surface triangle in 3D, past a vertex in-plane
+        (
+            [[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.5, 0.0]],
+            [-9.9e-7, 1.0 + 1.98e-6, -9.9e-7],
+        ),
+    ],
+)
+def test_centered_mesh_finds_points_accepted_by_barycentric_test(points, query_bary):
+    """Points just outside a centered cell but within ``tolerance`` are found.
+
+    For a single cell centered at the origin the largest absolute coordinate
+    is about half the cell's extent, while the barycentric test accepts points up to
+    ``n_manifold_dims * tolerance * extent`` beyond the cell's box. The BVH
+    padding must cover that, or these points get no candidate cells.
+    """
+    mesh = Mesh(
+        points=torch.tensor(points, dtype=torch.float64),
+        cells=torch.tensor([[0, 1, 2]]),
+    )
+    query = torch.tensor([query_bary], dtype=torch.float64) @ mesh.points
+
+    ### Guard against a vacuous test: the point is outside the cell's box and
+    ### passes the barycentric test that ``find_containing_cells`` applies.
+    cell_vertices = mesh.points[mesh.cells]
+    assert (
+        (query < cell_vertices.amin(dim=1)) | (query > cell_vertices.amax(dim=1))
+    ).any()
+    bary, _ = compute_barycentric_coordinates_pairwise(query, cell_vertices)
+    assert (bary >= -1e-6).all()
+
+    cell_idx, _ = find_containing_cells(mesh, query)
+    assert cell_idx.tolist() == [0]

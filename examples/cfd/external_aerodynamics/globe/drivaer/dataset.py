@@ -100,7 +100,9 @@ def create_domain_boundaries(
     """
 
     def _ground_patch(x_min: float, x_max: float) -> Mesh[2, 3]:
-        mesh = embed(
+        # The grid is wound counterclockwise, so its normals point upward (+z,
+        # into the fluid domain)
+        return embed(
             structured_grid.load(
                 x_min=x_min,
                 x_max=x_max,
@@ -111,8 +113,6 @@ def create_domain_boundaries(
             ),
             target_n_spatial_dims=3,
         ).translate([0.0, 0.0, ground_z])
-        # Flip cell winding so normals point upward (+z, into the fluid domain)
-        return mesh.with_cells(mesh.cells[:, [0, 2, 1]])
 
     return {
         "slip_floor": _ground_patch(x_upstream, x_bl),

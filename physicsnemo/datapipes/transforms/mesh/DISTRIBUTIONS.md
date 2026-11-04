@@ -178,15 +178,25 @@ syntax:
     scale: 0.1
 ```
 
-For per-axis batched distributions in YAML, pass list parameters:
+For per-axis batched distributions in YAML, build each parameter with
+`torch.tensor`.  Hydra passes a YAML list as an OmegaConf
+`ListConfig`, which `torch.distributions` rejects:
 
 ```yaml
 - _target_: ${dp:RandomTranslateMesh}
   distribution:
     _target_: torch.distributions.Uniform
-    low: [-0.1, -0.2, -0.3]
-    high: [0.1, 0.2, 0.3]
+    low:
+      _target_: torch.tensor
+      data: [-0.1, -0.2, -0.3]
+    high:
+      _target_: torch.tensor
+      data: [0.1, 0.2, 0.3]
 ```
+
+To pin an axis at a constant, give it a zero-width range
+(`low == high`) and pass `validate_args: false`, since `Uniform`
+otherwise requires `low < high`.
 
 ## Supported Distributions
 

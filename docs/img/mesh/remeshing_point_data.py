@@ -28,6 +28,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.tri as mtri  # noqa: E402
+from _style import clean_axis, mesh_label, save  # noqa: E402
 from matplotlib.colors import Normalize  # noqa: E402
 
 from physicsnemo.mesh import Mesh
@@ -181,15 +182,7 @@ def _draw_field(
         linewidth=edge_linewidth,
         alpha=edge_alpha,
     )
-    axis.set_xlim(PLOT_X_LIMITS)
-    axis.set_ylim(PLOT_Y_LIMITS)
-    axis.set_aspect("equal")
-    axis.set_xticks([])
-    axis.set_yticks([])
-    axis.set_facecolor(BACKGROUND_COLOR)
-    for spine in axis.spines.values():
-        spine.set_color("#cbd3d8")
-        spine.set_linewidth(0.7)
+    clean_axis(axis, (PLOT_X_LIMITS, PLOT_Y_LIMITS))
 
 
 def main() -> None:
@@ -226,19 +219,7 @@ def main() -> None:
     upper = float(source_values.amax().detach().cpu())
     normalization = Normalize(vmin=lower, vmax=upper)
 
-    figure = plt.figure(figsize=(14.4, 4.25), dpi=180)
-    grid = figure.add_gridspec(
-        1,
-        4,
-        width_ratios=(1.0, 1.0, 1.0, 0.035),
-        left=0.018,
-        right=0.975,
-        bottom=0.055,
-        top=0.80,
-        wspace=0.055,
-    )
-    axes = [figure.add_subplot(grid[0, index]) for index in range(3)]
-    colorbar_axis = figure.add_subplot(grid[0, 3])
+    figure, axes = plt.subplots(1, 3, figsize=(14.0, 4.4))
 
     _draw_field(
         axes[0],
@@ -262,65 +243,31 @@ def main() -> None:
     )
 
     axes[0].set_title(
-        f"Original input mesh\n{source.n_points:,} vertices",
-        color=TEXT_COLOR,
-        fontsize=11.5,
-        pad=8,
+        f"source sheet\npoint_data[{FIELD_KEY!r}]\n"
+        f"{mesh_label(source)}, {source.n_points:,} points"
     )
     axes[1].set_title(
-        "Uniform mesh reduction\n"
-        f"{uniform.n_points:,} vertices  |  preservation RMSE {uniform_rmse:.4f}",
-        color=TEXT_COLOR,
-        fontsize=11.5,
-        pad=8,
+        f"remesh({TARGET_VERTICES},\ntransfer_point_data=[{FIELD_KEY!r}])\n"
+        f"{uniform.n_points:,} points, field RMSE {uniform_rmse:.4f}"
     )
     axes[2].set_title(
-        "Field-aware mesh reduction\n"
-        f"{adaptive.n_points:,} vertices  |  preservation RMSE {adaptive_rmse:.4f}",
-        color=TEXT_COLOR,
-        fontsize=11.5,
-        pad=8,
+        f"remesh({TARGET_VERTICES}, transfer_point_data=[...],\n"
+        f"resolution_field={RESOLUTION_KEY!r})\n"
+        f"{adaptive.n_points:,} points, field RMSE {adaptive_rmse:.4f}"
     )
 
     colorbar = figure.colorbar(
         plt.cm.ScalarMappable(norm=normalization, cmap=FIELD_CMAP),
-        cax=colorbar_axis,
+        ax=axes,
+        orientation="horizontal",
+        fraction=0.07,
+        pad=0.05,
+        shrink=0.4,
     )
-    colorbar.set_label("Attached scalar point field", color=TEXT_COLOR, fontsize=10)
-    colorbar.ax.tick_params(labelsize=8.5, colors=TEXT_COLOR)
-    colorbar.outline.set_linewidth(0.6)
-    colorbar.outline.set_edgecolor("#9daab2")
+    colorbar.set_label("attached scalar point field")
 
-    figure.suptitle(
-        "Field-aware mesh reduction preserves attached point data",
-        x=0.49,
-        y=0.965,
-        color=TEXT_COLOR,
-        fontsize=15,
-        fontweight="bold",
-    )
-    figure.text(
-        0.49,
-        0.875,
-        f"One {source.n_points:,}-vertex input is reduced twice to the same "
-        f"{TARGET_VERTICES}-vertex budget",
-        ha="center",
-        va="center",
-        color="#52636d",
-        fontsize=9.3,
-    )
-
-    figure.patch.set_facecolor("white")
-    figure.savefig(
-        OUTPUT,
-        dpi=180,
-        facecolor="white",
-        bbox_inches="tight",
-        pad_inches=0.04,
-    )
-    plt.close(figure)
-
-    print(f"Saved {OUTPUT}")
+    figure.subplots_adjust(left=0.005, right=0.995, bottom=0.2, top=0.86, wspace=0.04)
+    save(figure, OUTPUT, tight=True)
     print(
         "Field preservation RMSE: "
         f"uniform={uniform_rmse:.3e}, adaptive={adaptive_rmse:.3e}"

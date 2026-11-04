@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.utilities._gather import gather_rows
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -70,7 +71,7 @@ def compute_barycentric_gradients(
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh (2D or 3D).
+        Simplicial mesh of segments, triangles, or tetrahedra.
 
     Returns
     -------
@@ -135,11 +136,21 @@ def compute_barycentric_gradients(
         return gradients
 
     ### Get cell vertices
-    cell_vertices = mesh.points[
-        mesh.cells
-    ]  # (n_cells, n_vertices_per_cell, n_spatial_dims)
+    # (n_cells, n_vertices_per_cell, n_spatial_dims)
+    cell_vertices = gather_rows(mesh.points, mesh.cells)
 
-    if n_manifold_dims == 2:
+    if n_manifold_dims == 1:
+        ### Segments: ∇φ₁ = e / |e|² along the edge e = v₁ - v₀, and ∇φ₀ = -∇φ₁
+        # (in any number of spatial dimensions). Dividing twice by the clamped
+        # length, rather than once by |e|², keeps the clamp off short segments.
+        edge = cell_vertices[:, 1, :] - cell_vertices[:, 0, :]
+        edge_length = torch.linalg.vector_norm(edge, dim=-1, keepdim=True).clamp(
+            min=safe_eps(dtype)
+        )
+        gradients[:, 1, :] = edge / edge_length / edge_length
+        gradients[:, 0, :] = -gradients[:, 1, :]
+
+    elif n_manifold_dims == 2:
         ### 2D triangles: Efficient closed-form solution
         # For triangle with vertices v₀, v₁, v₂:
         # ∇φ₀ is perpendicular to edge [v₁, v₂] and points toward v₀
@@ -208,12 +219,10 @@ def compute_barycentric_gradients(
             edge_v0_v2 = v0 - v2
             edge_v1_v0 = v1 - v0
 
-            # |cross|² = (2A)²; clamp for degenerate triangles (zero area)
-            cross_norm_sq = (
-                (cross * cross)
-                .sum(dim=-1, keepdim=True)
-                .clamp(min=safe_eps(cross.dtype))
-            )
+            # |cross|² = (2A)², a length⁴ that is tiny for small triangles, so
+            # only degenerate triangles (cross = 0, zero gradients) divide by 1
+            cross_norm_sq = (cross * cross).sum(dim=-1, keepdim=True)
+            cross_norm_sq = torch.where(cross_norm_sq > 0, cross_norm_sq, 1.0)
 
             gradients[:, 0, :] = torch.linalg.cross(cross, edge_v2_v1) / cross_norm_sq
             gradients[:, 1, :] = torch.linalg.cross(cross, edge_v0_v2) / cross_norm_sq
@@ -270,7 +279,7 @@ def compute_barycentric_gradients(
     else:
         raise NotImplementedError(
             f"Barycentric gradients not implemented for {n_manifold_dims=}D. "
-            f"Currently supported: 2D (triangles), 3D (tetrahedra)."
+            f"Currently supported: 1D (segments), 2D (triangles), 3D (tetrahedra)."
         )
 
     return gradients

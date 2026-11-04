@@ -36,6 +36,7 @@ from physicsnemo.mesh.subdivision._topology import (
     get_subdivision_pattern,
 )
 from physicsnemo.mesh.utilities._topology import extract_unique_edges
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -75,8 +76,8 @@ def _build_edge_to_triangle_pairs(
         the second slot.
     """
     ### Hash candidate edges (canonicalized) and map to unique edge indices
-    sorted_cands, _ = torch.sort(candidate_edges, dim=1)
-    cand_hash = sorted_cands[:, 0] * index_bound + sorted_cands[:, 1]
+    sorted_cands = sort_index_tuples(candidate_edges)
+    cand_hash = sorted_cands[:, 0].long() * index_bound + sorted_cands[:, 1]
 
     sorted_unique_hash, unique_sort_perm = torch.sort(unique_edge_hashes)
     positions = torch.searchsorted(sorted_unique_hash, cand_hash)
@@ -133,7 +134,6 @@ def compute_butterfly_weights_2d(
     """
     n_edges = len(unique_edges)
     device = mesh.points.device
-    dtype = mesh.points.dtype
 
     ### Step 1: Build edge → parent-triangle mapping
     from physicsnemo.mesh.boundaries import extract_candidate_facets
@@ -144,9 +144,9 @@ def compute_butterfly_weights_2d(
     )
 
     # Canonical (sorted) hashes for the unique edges
-    sorted_unique, _ = torch.sort(unique_edges, dim=1)
+    sorted_unique = sort_index_tuples(unique_edges)
     index_bound = mesh.n_points
-    unique_hash = sorted_unique[:, 0] * index_bound + sorted_unique[:, 1]
+    unique_hash = sorted_unique[:, 0].long() * index_bound + sorted_unique[:, 1]
 
     # Pair table: (n_edges, 2), with -1 for missing second triangle
     edge_tri_pairs = _build_edge_to_triangle_pairs(
@@ -160,41 +160,28 @@ def compute_butterfly_weights_2d(
 
     ### Step 2: Classify edges
     is_interior = edge_tri_pairs[:, 1] >= 0
-    is_boundary = ~is_interior
 
-    ### Step 3: Initialize midpoints
-    edge_midpoints = torch.zeros(
-        (n_edges, mesh.n_spatial_dims), dtype=dtype, device=device
-    )
+    ### Step 3: Boundary edges → simple average, computed for every edge
+    v0 = unique_edges[:, 0]  # (n_edges,)
+    v1 = unique_edges[:, 1]  # (n_edges,)
+    boundary_midpoints = (mesh.points[v0] + mesh.points[v1]) / 2
 
-    ### Step 4: Boundary edges → simple average
-    boundary_idx = torch.where(is_boundary)[0]
-    if len(boundary_idx) > 0:
-        bv0 = mesh.points[unique_edges[boundary_idx, 0]]
-        bv1 = mesh.points[unique_edges[boundary_idx, 1]]
-        edge_midpoints[boundary_idx] = (bv0 + bv1) / 2
-
-    ### Step 5: Interior edges → 8-point butterfly stencil
-    interior_idx = torch.where(is_interior)[0]
-    n_interior = len(interior_idx)
-
-    if n_interior == 0:
-        return edge_midpoints
-
-    int_edges = unique_edges[interior_idx]  # (n_int, 2)
-    int_tris = edge_tri_pairs[interior_idx]  # (n_int, 2)  [T0, T1]
+    ### Step 4: Interior edges → 8-point butterfly stencil, also for every edge
+    # torch.where keeps it for the interior edges at the end; selecting them by
+    # boolean masks instead would synchronize the device for each selection. A
+    # boundary edge has no second triangle (-1); its first stands in for it.
+    tris = torch.where(
+        is_interior.unsqueeze(1), edge_tri_pairs, edge_tri_pairs[:, :1]
+    )  # (n_edges, 2)  [T0, T1]
 
     ### Find opposite vertices a (in T0) and b (in T1)
-    v0 = int_edges[:, 0]  # (n_int,)
-    v1 = int_edges[:, 1]  # (n_int,)
-
-    T0_verts = mesh.cells[int_tris[:, 0]]  # (n_int, 3)
+    T0_verts = mesh.cells[tris[:, 0]]  # (n_edges, 3)
     T0_opp_mask = ~((T0_verts == v0.unsqueeze(1)) | (T0_verts == v1.unsqueeze(1)))
     a = torch.gather(
         T0_verts, 1, torch.argmax(T0_opp_mask.int(), dim=1, keepdim=True)
     ).squeeze(1)
 
-    T1_verts = mesh.cells[int_tris[:, 1]]  # (n_int, 3)
+    T1_verts = mesh.cells[tris[:, 1]]  # (n_edges, 3)
     T1_opp_mask = ~((T1_verts == v0.unsqueeze(1)) | (T1_verts == v1.unsqueeze(1)))
     b = torch.gather(
         T1_verts, 1, torch.argmax(T1_opp_mask.int(), dim=1, keepdim=True)
@@ -206,9 +193,9 @@ def compute_butterfly_weights_2d(
         + 0.5 * mesh.points[v1]
         + 0.125 * mesh.points[a]
         + 0.125 * mesh.points[b]
-    )  # (n_int, n_spatial_dims)
+    )  # (n_edges, n_spatial_dims)
 
-    ### Step 6: Wing vertices (−1/16 each)
+    ### Step 5: Wing vertices (−1/16 each)
     #
     # For edge (v0, v1) with opposite vertices a (in T0) and b (in T1):
     #   wing_c: opposite vertex in the OTHER tri sharing edge (v0, a)  [not T0]
@@ -221,16 +208,16 @@ def compute_butterfly_weights_2d(
     n_uhash = len(sorted_uhash)
 
     wing_edges_and_known_tris = [
-        (torch.stack([v0, a], dim=1), int_tris[:, 0]),  # wing_c
-        (torch.stack([v1, a], dim=1), int_tris[:, 0]),  # wing_d
-        (torch.stack([v0, b], dim=1), int_tris[:, 1]),  # wing_e
-        (torch.stack([v1, b], dim=1), int_tris[:, 1]),  # wing_f
+        (torch.stack([v0, a], dim=1), tris[:, 0]),  # wing_c
+        (torch.stack([v1, a], dim=1), tris[:, 0]),  # wing_d
+        (torch.stack([v0, b], dim=1), tris[:, 1]),  # wing_e
+        (torch.stack([v1, b], dim=1), tris[:, 1]),  # wing_f
     ]
 
     for wing_edge, known_tri in wing_edges_and_known_tris:
         # Hash the wing edges and look them up in the unique edge set
-        ws, _ = torch.sort(wing_edge, dim=1)
-        whash = ws[:, 0] * index_bound + ws[:, 1]
+        ws = sort_index_tuples(wing_edge)
+        whash = ws[:, 0].long() * index_bound + ws[:, 1]
 
         pos = torch.searchsorted(sorted_uhash, whash).clamp(max=n_uhash - 1)
         matched = sorted_uhash[pos] == whash
@@ -248,25 +235,22 @@ def compute_butterfly_weights_2d(
 
         # A wing vertex exists iff the edge was found AND the other tri is valid
         has_wing = matched & (other_tri >= 0)
-
-        if not has_wing.any():
-            continue
-
-        valid = torch.where(has_wing)[0]
-        other_verts = mesh.cells[other_tri[valid]]  # (n_valid, 3)
+        other_verts = mesh.cells[other_tri.clamp(min=0)]  # (n_edges, 3)
 
         # The wing vertex is the one in other_tri that is NOT in wing_edge
-        we0 = wing_edge[valid, 0].unsqueeze(1)
-        we1 = wing_edge[valid, 1].unsqueeze(1)
+        we0 = wing_edge[:, 0].unsqueeze(1)
+        we1 = wing_edge[:, 1].unsqueeze(1)
         opp_mask = ~((other_verts == we0) | (other_verts == we1))
         wing_vert = torch.gather(
             other_verts, 1, torch.argmax(opp_mask.int(), dim=1, keepdim=True)
         ).squeeze(1)
 
-        midpoint[valid] -= (1.0 / 16.0) * mesh.points[wing_vert]
+        # Edges without this wing vertex subtract zero, which leaves them as they are
+        midpoint -= torch.where(
+            has_wing.unsqueeze(-1), (1.0 / 16.0) * mesh.points[wing_vert], 0.0
+        )
 
-    edge_midpoints[interior_idx] = midpoint
-    return edge_midpoints
+    return torch.where(is_interior.unsqueeze(-1), midpoint, boundary_midpoints)
 
 
 def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
@@ -346,10 +330,11 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
 
     ### Get subdivision pattern (same as linear)
     subdivision_pattern = get_subdivision_pattern(mesh.n_manifold_dims)
-    subdivision_pattern = subdivision_pattern.to(mesh.cells.device)
+    # non_blocking: a small pageable host table, staged by CUDA before returning
+    subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
 
     ### Generate child cells (same topology as linear)
-    child_cells, parent_indices = generate_child_cells(
+    child_cells = generate_child_cells(
         parent_cells=mesh.cells,
         edge_inverse=edge_inverse,
         n_original_points=n_original_points,
@@ -359,8 +344,8 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     ### Propagate cell_data
     new_cell_data = propagate_cell_data_to_children(
         cell_data=mesh.cell_data,
-        parent_indices=parent_indices,
-        n_total_children=len(child_cells),
+        n_children_per_parent=subdivision_pattern.shape[0],
+        device=mesh.cells.device,
     )
 
     ### Create and return subdivided mesh
@@ -369,10 +354,18 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
         cells=child_cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
-        global_data=mesh.global_data,
+        global_data=mesh.global_data.copy(),  # Shared tensors, own container
     )
 
-    from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+    from physicsnemo.mesh.calculus.measure import (
+        EFFECTIVE_MEASURE_KEY,
+        _transfer_cell_measures,
+    )
 
-    _transfer_cell_measures(mesh, result, parent_indices)
+    if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+        # Only explicit measures need each child's parent index
+        parent_indices = torch.arange(
+            mesh.n_cells, device=mesh.cells.device
+        ).repeat_interleave(subdivision_pattern.shape[0])
+        _transfer_cell_measures(mesh, result, parent_indices)
     return result

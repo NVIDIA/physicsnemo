@@ -21,6 +21,7 @@ to exact results, gradient correctness, equivariance preservation, and
 MultiscaleKernel integration.
 """
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 import pytest
@@ -800,6 +801,17 @@ def test_multiscale_bh_convergence(n_dims: int):
     )
 
 
+def test_multiscale_kernel_rejects_empty_reference_length_names():
+    """A MultiscaleKernel without reference lengths raises at construction."""
+    with pytest.raises(ValueError, match="reference_length_names is empty"):
+        MultiscaleKernel(
+            n_spatial_dims=2,
+            output_schema={"p": {"rank": 0}},
+            reference_length_names=[],
+            hidden_layer_sizes=[8],
+        )
+
+
 # ---------------------------------------------------------------------------
 # Source permutation equivariance
 # ---------------------------------------------------------------------------
@@ -890,8 +902,8 @@ def test_bh_nested_source_data_keys(n_dims: int):
         {"physical": {"velocity": ...}, "latent": {"scalars": {"0": ...},
          "vectors": {"0": ...}}, "normals": ...}
 
-    The aggregation, split_by_leaf_rank, and TensorDict.cat operations must
-    handle this nesting correctly.
+    The packing of the nested fields into one feature tensor, and the
+    aggregation of the packed features, must handle this nesting correctly.
     """
     torch.manual_seed(DEFAULT_SEED)
     n_src, n_tgt = 30, 15
@@ -1036,8 +1048,8 @@ def test_all_four_categories_active_and_correct(
     exact_result = exact_kernel(**data)
 
     ### Sweep theta to find one where all four categories are active.
-    # With balanced geometry (source and target at same scale) and
-    # theta=1.0, the diagnostic shows near=751, nf=200, fn=131, far=2.
+    # With balanced geometry (source and target at same scale), all four
+    # are usually active at theta=1.0 already.
     for theta in [1.0, 1.5, 2.0]:
         source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
         target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
@@ -1653,6 +1665,214 @@ def test_bh_forward_under_bf16_autocast(
         )
 
 
+@dims_params
+@pytest.mark.parametrize("use_gradient_checkpointing", [True, False])
+def test_bh_chunked_forward_and_gradients_match_single_chunk(
+    n_dims: int,
+    use_gradient_checkpointing: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Splitting the near and (near,far) phases into chunks changes nothing.
+
+    With ``expand_far_targets=True`` the (near,far) phase carries the
+    far field, and it is chunked by :meth:`BarnesHutKernel._auto_chunk_count`.
+    On CPU that budget fits these test sizes in one chunk, so this test
+    forces chunks of a size that does not divide the pair counts (a ragged
+    last chunk) and compares outputs and gradients against one chunk.
+    """
+    chunk_size = 16
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 60, 30
+    bh_kernel = BarnesHutKernel(
+        n_spatial_dims=n_dims,
+        output_schema={"p": {"rank": 0}, "v": {"rank": 1}},
+        source_schema={"source_scalar_0": {"rank": 0}, "source_vector_0": {"rank": 1}},
+        hidden_layer_sizes=[16, 16],
+        leaf_size=4,
+        use_gradient_checkpointing=use_gradient_checkpointing,
+    )
+    bh_kernel.train()
+
+    torch.manual_seed(DEFAULT_SEED + 1)
+    source_pts = torch.randn(n_src, n_dims)
+    target_pts = torch.randn(n_tgt, n_dims)
+    source_data = TensorDict(
+        {
+            "source_scalar_0": torch.randn(n_src),
+            "source_vector_0": F.normalize(torch.randn(n_src, n_dims), dim=-1),
+        },
+        batch_size=[n_src],
+    )
+    source_strengths = torch.randn(n_src).abs() + 0.1
+
+    plan = ClusterTree.from_points(source_pts, leaf_size=4).find_dual_interaction_pairs(
+        target_tree=ClusterTree.from_points(target_pts, leaf_size=4),
+        theta=1.0,
+        expand_far_targets=True,
+    )
+    for n_pairs in (plan.n_near, plan.n_nf):
+        assert n_pairs > 3 * chunk_size and n_pairs % chunk_size != 0, (
+            f"plan must span several ragged chunks: {n_pairs=}, {chunk_size=}"
+        )
+
+    def run(
+        chunk_count_for: Callable[[int], int],
+    ) -> tuple[TensorDict, list[torch.Tensor]]:
+        monkeypatch.setattr(
+            BarnesHutKernel,
+            "_auto_chunk_count",
+            lambda self, n_total_pairs, device: chunk_count_for(n_total_pairs),
+        )
+        inputs = [
+            source_pts.clone().requires_grad_(True),
+            target_pts.clone().requires_grad_(True),
+            source_strengths.clone().requires_grad_(True),
+        ]
+        bh_kernel.zero_grad()
+        result = bh_kernel(
+            source_points=inputs[0],
+            target_points=inputs[1],
+            source_strengths=inputs[2],
+            reference_length=torch.ones(()),
+            source_data=source_data,
+            global_data=TensorDict({}, batch_size=[]),
+            theta=1.0,
+            expand_far_targets=True,
+        )
+        (result["p"].sum() + result["v"].square().sum()).backward()
+        grads = [t.grad for t in inputs] + [
+            param.grad for param in bh_kernel.parameters() if param.grad is not None
+        ]
+        return result.detach(), grads
+
+    single_result, single_grads = run(lambda n_total_pairs: 1)
+    chunked_result, chunked_grads = run(
+        lambda n_total_pairs: -(-n_total_pairs // chunk_size)
+    )
+
+    for key in ("p", "v"):
+        torch.testing.assert_close(
+            chunked_result[key], single_result[key], atol=1e-6, rtol=1e-5
+        )
+    assert len(chunked_grads) == len(single_grads)
+    for chunked_grad, single_grad in zip(chunked_grads, single_grads):
+        torch.testing.assert_close(chunked_grad, single_grad, atol=1e-6, rtol=1e-5)
+
+
+@pytest.mark.parametrize("label", ["source_data", "global_data"])
+def test_bh_wrong_fields_raise_labelled_key_error(label: str) -> None:
+    """Wrong input fields raise a KeyError that names the input and lists the
+    missing and extra fields, with a hint for flat keys of nested fields."""
+    n_src = 12
+    bh_kernel = BarnesHutKernel(
+        n_spatial_dims=2,
+        output_schema={"p": {"rank": 0}},
+        source_schema={"a": {"rank": 0}, "grp.v": {"rank": 1}},
+        global_schema={"g": {"rank": 0}, "grp.w": {"rank": 0}},
+        hidden_layer_sizes=[8],
+        leaf_size=DEFAULT_LEAF_SIZE,
+    ).eval()
+    data = {
+        "source_data": TensorDict(
+            {"a": torch.rand(n_src), "grp": {"v": torch.rand(n_src, 2)}},
+            batch_size=[n_src],
+        ),
+        "global_data": TensorDict(
+            {"g": torch.rand(()), "grp": {"w": torch.rand(())}}, batch_size=[]
+        ),
+    }
+    leaf = "v" if label == "source_data" else "w"
+    wrong = data[label].clone()
+    del wrong["grp"]
+    wrong[f"grp.{leaf}"] = data[label]["grp", leaf]
+    wrong["zzz"] = data[label]["a" if label == "source_data" else "g"]
+    data[label] = wrong
+
+    with pytest.raises(KeyError) as excinfo:
+        bh_kernel(
+            reference_length=torch.ones(()),
+            source_points=torch.rand(n_src, 2),
+            target_points=torch.rand(5, 2),
+            **data,
+        )
+    message = str(excinfo.value)
+    for part in (
+        label,
+        f"missing: [('grp', '{leaf}')]",
+        f"extra: ['grp.{leaf}', 'zzz']",
+        f"Flat keys such as 'grp.{leaf}' must be nested",
+    ):
+        assert part in message, f"{part!r} not in {message!r}"
+
+
+@pytest.mark.parametrize("near_chunk_count", [0, -1])
+def test_bh_rejects_near_chunk_count_below_one(near_chunk_count: int) -> None:
+    """``near_chunk_count`` below 1 raises instead of dividing by zero or
+    silently dropping the near field."""
+    bh_kernel, _, data = _make_bh_kernel_and_data(output_fields={"p": "scalar"})
+    with pytest.raises(ValueError, match=rf"near_chunk_count.*{near_chunk_count}"):
+        bh_kernel(**data, theta=1.0, near_chunk_count=near_chunk_count)
+
+
+def test_bh_compiled_forward_reuses_graph_for_new_pair_counts() -> None:
+    """Under ``torch.compile(dynamic=True)``, a new geometry reuses the graph.
+
+    Every geometry has its own pair counts. The near and (near,far) phases
+    loop over the number of chunks: written as ``range(0, n_pairs,
+    chunk_size)``, the loops made Dynamo specialize the pair counts, so each
+    new geometry recompiled the kernel.
+    """
+    from torch._dynamo.testing import CompileCounter
+
+    torch.manual_seed(DEFAULT_SEED)
+    bh_kernel = BarnesHutKernel(
+        n_spatial_dims=3,
+        output_schema={"p": {"rank": 0}},
+        hidden_layer_sizes=[8],
+        leaf_size=DEFAULT_LEAF_SIZE,
+    )
+    bh_kernel.eval()
+
+    def evaluate(source_pts, target_pts, cluster_tree, target_tree, plan):
+        return bh_kernel(
+            source_points=source_pts,
+            target_points=target_pts,
+            reference_length=torch.ones(()),
+            cluster_tree=cluster_tree,
+            target_tree=target_tree,
+            dual_plan=plan,
+            expand_far_targets=True,
+        )
+
+    cases = []
+    for seed in range(2):
+        g = torch.Generator().manual_seed(seed)
+        source_pts = torch.randn(60, 3, generator=g)
+        target_pts = torch.randn(30, 3, generator=g)
+        cluster_tree = ClusterTree.from_points(source_pts, leaf_size=DEFAULT_LEAF_SIZE)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=DEFAULT_LEAF_SIZE)
+        plan = cluster_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=1.0, expand_far_targets=True
+        )
+        ### Distinct sizes of at least 2, so that Dynamo gives each its own
+        ### symbol and the second geometry can only recompile by specializing.
+        sizes = [plan.n_near, plan.n_nf, cluster_tree.n_nodes, target_tree.n_nodes]
+        assert min(sizes) >= 2 and len(set(sizes + [60, 30, 3])) == 7, sizes
+        cases.append((source_pts, target_pts, cluster_tree, target_tree, plan))
+    assert cases[0][4].n_near != cases[1][4].n_near
+    assert cases[0][4].n_nf != cases[1][4].n_nf
+
+    counter = CompileCounter()
+    compiled = torch.compile(evaluate, backend=counter, dynamic=True)
+    with torch.no_grad():
+        evaluate(*cases[0])  # fills the kernel's cached properties
+        compiled(*cases[0])
+        n_frames = counter.frame_count
+        compiled(*cases[1])
+    assert n_frames >= 1
+    assert counter.frame_count == n_frames, "the second geometry recompiled"
+
+
 def test_compute_node_strengths_precision_at_scale() -> None:
     """Precision regression guard for ``BarnesHutKernel._compute_node_strengths``.
 
@@ -1686,3 +1906,183 @@ def test_compute_node_strengths_precision_at_scale() -> None:
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_bh_compiled_second_call_reuses_graph() -> None:
+    """The first compiled call leaves nothing that fails the next call's guards.
+
+    A ``cached_property`` read for the first time inside a compiled forward
+    adds itself to the module's ``__dict__``, and Dynamo guards on that
+    ``__dict__``: the second call of a training run recompiled every caller.
+    """
+    from torch._dynamo.testing import CompileCounter
+
+    torch.manual_seed(DEFAULT_SEED)
+    bh_kernel = BarnesHutKernel(
+        n_spatial_dims=3,
+        output_schema={"p": {"rank": 0}},
+        hidden_layer_sizes=[8],
+        leaf_size=DEFAULT_LEAF_SIZE,
+    ).eval()
+    g = torch.Generator().manual_seed(0)
+    source_pts = torch.randn(40, 3, generator=g)
+    target_pts = torch.randn(20, 3, generator=g)
+    cluster_tree = ClusterTree.from_points(source_pts, leaf_size=DEFAULT_LEAF_SIZE)
+    target_tree = ClusterTree.from_points(target_pts, leaf_size=DEFAULT_LEAF_SIZE)
+    plan = cluster_tree.find_dual_interaction_pairs(
+        target_tree=target_tree, theta=1.0, expand_far_targets=True
+    )
+    assert plan.n_near > 0
+
+    def evaluate(source_pts, target_pts, cluster_tree, target_tree, plan):
+        return bh_kernel(
+            source_points=source_pts,
+            target_points=target_pts,
+            reference_length=torch.ones(()),
+            cluster_tree=cluster_tree,
+            target_tree=target_tree,
+            dual_plan=plan,
+        )
+
+    counter = CompileCounter()
+    compiled = torch.compile(evaluate, backend=counter, dynamic=True)
+    args = (source_pts, target_pts, cluster_tree, target_tree, plan)
+    with torch.no_grad():
+        compiled(*args)
+        n_frames = counter.frame_count
+        compiled(*args)
+    assert n_frames >= 1
+    assert counter.frame_count == n_frames, "the second call recompiled"
+
+
+def test_bh_compiled_forward_reuses_graph_for_similar_chunk_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Geometries that need a few more or fewer chunks reuse the compiled graph.
+
+    The chunk loops are unrolled under ``torch.compile``, so the number of
+    chunks is part of the graph.  It is a power of two: a plan that needs
+    three chunks' worth of memory and one that needs four share a graph,
+    where exact counts made every such geometry recompile (about ten minutes
+    for a DrivAerML sample at 80k faces).
+    """
+    from torch._dynamo.testing import CompileCounter
+
+    import physicsnemo.experimental.models.globe.field_kernel as field_kernel
+
+    torch.manual_seed(DEFAULT_SEED)
+    bh_kernel = BarnesHutKernel(
+        n_spatial_dims=3,
+        output_schema={"p": {"rank": 0}},
+        hidden_layer_sizes=[8],
+        leaf_size=DEFAULT_LEAF_SIZE,
+    ).eval()
+
+    def make_case(n_sources: int, seed: int):
+        """``theta=0``: the plan is every pair, ``30 * n_sources`` near pairs."""
+        g = torch.Generator().manual_seed(seed)
+        source_pts = torch.randn(n_sources, 3, generator=g)
+        target_pts = torch.randn(30, 3, generator=g)
+        cluster_tree = ClusterTree.from_points(source_pts, leaf_size=DEFAULT_LEAF_SIZE)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=DEFAULT_LEAF_SIZE)
+        plan = cluster_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=0.0
+        )
+        return source_pts, target_pts, cluster_tree, target_tree, plan
+
+    cases = [make_case(21, 0), make_case(28, 1)]
+    n_near = [case[4].n_near for case in cases]
+    assert n_near == [630, 840]
+
+    ### A budget of 210 pairs: exact chunk counts 3 and 4, both rounded to 4.
+    bytes_per_pair = bh_kernel._floats_per_interaction * 4
+    budget = 210 * bytes_per_pair
+    assert [-(-n * bytes_per_pair // budget) for n in n_near] == [3, 4]
+    monkeypatch.setattr(
+        field_kernel, "_device_chunk_budget_bytes", lambda device: budget
+    )
+    with torch.no_grad():
+        assert [
+            bh_kernel._auto_chunk_count(n, torch.device("cpu")) for n in n_near
+        ] == [
+            4,
+            4,
+        ]
+
+    def evaluate(source_pts, target_pts, cluster_tree, target_tree, plan):
+        return bh_kernel(
+            source_points=source_pts,
+            target_points=target_pts,
+            reference_length=torch.ones(()),
+            cluster_tree=cluster_tree,
+            target_tree=target_tree,
+            dual_plan=plan,
+        )
+
+    counter = CompileCounter()
+    compiled = torch.compile(evaluate, backend=counter, dynamic=True)
+    with torch.no_grad():
+        for case in cases:
+            torch.testing.assert_close(compiled(*case)["p"], evaluate(*case)["p"])
+            if case is cases[0]:
+                n_frames = counter.frame_count
+    assert counter.frame_count == n_frames, "the second geometry recompiled"
+
+
+def test_bh_compiled_forward_reuses_graph_for_ragged_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pair counts that split evenly or unevenly into chunks share a graph.
+
+    With a fixed number of chunks, whether the last chunk is full depends on
+    the pair count modulo the chunk count.  Each chunk loop ends its last
+    chunk at the pair count itself: a slice that ran past the end made
+    torch.compile guard on that remainder, so a new geometry often recompiled
+    the (near,far) phase.
+    """
+    from torch._dynamo.testing import CompileCounter
+
+    monkeypatch.setattr(
+        BarnesHutKernel, "_auto_chunk_count", lambda self, n_total_pairs, device: 4
+    )
+    torch.manual_seed(DEFAULT_SEED)
+    bh_kernel = BarnesHutKernel(
+        n_spatial_dims=3,
+        output_schema={"p": {"rank": 0}},
+        hidden_layer_sizes=[8],
+        leaf_size=DEFAULT_LEAF_SIZE,
+    ).eval()
+
+    def make_case(n_sources: int, seed: int):
+        g = torch.Generator().manual_seed(seed)
+        source_pts = torch.randn(n_sources, 3, generator=g)
+        target_pts = torch.randn(30, 3, generator=g)
+        cluster_tree = ClusterTree.from_points(source_pts, leaf_size=DEFAULT_LEAF_SIZE)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=DEFAULT_LEAF_SIZE)
+        plan = cluster_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=1.0, expand_far_targets=True
+        )
+        return source_pts, target_pts, cluster_tree, target_tree, plan
+
+    cases = [make_case(90, 4), make_case(60, 0)]
+    ### The first geometry's pairs fill four chunks evenly, the second's do not.
+    assert [case[4].n_nf % 4 == 0 for case in cases] == [True, False]
+
+    def evaluate(source_pts, target_pts, cluster_tree, target_tree, plan):
+        return bh_kernel(
+            source_points=source_pts,
+            target_points=target_pts,
+            reference_length=torch.ones(()),
+            cluster_tree=cluster_tree,
+            target_tree=target_tree,
+            dual_plan=plan,
+        )
+
+    counter = CompileCounter()
+    compiled = torch.compile(evaluate, backend=counter, dynamic=True)
+    with torch.no_grad():
+        for case in cases:
+            torch.testing.assert_close(compiled(*case)["p"], evaluate(*case)["p"])
+            if case is cases[0]:
+                n_frames = counter.frame_count
+    assert counter.frame_count == n_frames, "the second geometry recompiled"

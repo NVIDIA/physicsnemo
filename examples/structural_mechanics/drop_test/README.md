@@ -15,7 +15,7 @@ The implementation uses a GeoTransolver backbone with one-shot training and is c
 
 ## Prerequisites
 
-**Data:** OpenRadioss drop-test data preprocessed into VTU format using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/drop_test). See [Data Preprocessing](#data-preprocessing) below.
+**Data:** OpenRadioss drop-test data preprocessed into VTU format using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/cae/drop). See [Data Preprocessing](#data-preprocessing) below.
 
 **Code dependencies:**
 

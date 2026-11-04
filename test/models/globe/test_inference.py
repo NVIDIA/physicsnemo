@@ -49,11 +49,10 @@ def test_communication_meshes_have_independent_cache_containers(monkeypatch) -> 
     )
     cached_centroids = mesh.cell_centroids
 
-    def _fake_evaluate_hyperlayer(**kwargs) -> TensorDict:
-        target_points = kwargs["target_points"]
-        return TensorDict(
-            {"latent": torch.ones(target_points.shape[0])},
-            batch_size=[target_points.shape[0]],
+    def _fake_evaluate_hyperlayer(**kwargs) -> torch.Tensor:
+        ### Packed kernel outputs: one row per target, one column per feature.
+        return torch.ones(
+            kwargs["target_points"].shape[0], model._intermediate_layout.numel
         )
 
     monkeypatch.setattr(model, "_evaluate_hyperlayer", _fake_evaluate_hyperlayer)
@@ -63,14 +62,16 @@ def test_communication_meshes_have_independent_cache_containers(monkeypatch) -> 
         reference_lengths={},
         global_data=None,
         cluster_trees={"no_slip": None},
-        comm_plans={"no_slip": {}},
+        comm_plans={"no_slip": None},
+        comm_target_centroids={"no_slip": None},
         source_areas={},
     )["no_slip"]
 
     # The historical reconstruction intentionally retained only cell data.
     assert not list(result.point_data.keys())
     assert not list(result.global_data.keys())
-    assert set(result.cell_data.keys()) == {"physical", "latent"}
+    assert set(result.cell_data.keys()) == {"physical", "latent", "strengths"}
+    assert result.cell_data["latent", "vectors", "0"].shape == (mesh.n_cells, 3)
 
     # Geometry caches remain reusable, while structural mutations on the
     # communication result cannot leak back into its input mesh.
@@ -186,3 +187,31 @@ def test_globe_inference_multi_bc(device: str) -> None:
     assert fields["velocity"].shape == (N_PREDICTION_POINTS, 3)
     assert torch.all(torch.isfinite(fields["pressure"]))
     assert torch.all(torch.isfinite(fields["velocity"]))
+
+
+def test_globe_accepts_boundary_meshes_as_tensordict() -> None:
+    """The DrivAerML dataset passes ``boundary_meshes`` as a TensorDict, which
+    has no truth value; the output matches that of a plain dict."""
+    torch.manual_seed(0)
+    model = GLOBE(
+        n_spatial_dims=3,
+        output_schema={"pressure": {"rank": 0}},
+        boundary_source_schemas={"no_slip": {}},
+        reference_length_names=["test_length"],
+        reference_area=1.0,
+        hidden_layer_sizes=[8],
+    ).eval()
+    mesh = lumpy_sphere.load(subdivisions=1)
+    generator = torch.Generator().manual_seed(0)
+    kwargs = {
+        "prediction_points": torch.randn(N_PREDICTION_POINTS, 3, generator=generator),
+        "reference_lengths": {"test_length": torch.tensor(1.0)},
+    }
+    with torch.no_grad():
+        from_dict = model(boundary_meshes={"no_slip": mesh}, **kwargs)
+        from_tensordict = model(
+            boundary_meshes=TensorDict({"no_slip": mesh}, batch_size=[]), **kwargs
+        )
+    torch.testing.assert_close(
+        from_tensordict.point_data["pressure"], from_dict.point_data["pressure"]
+    )

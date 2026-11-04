@@ -126,6 +126,11 @@ def signed_distance_field_impl(
         device-side assert so the op stays free of host synchronization; an
         out-of-range index surfaces as a CUDA assert at the next
         synchronization point rather than an immediate ``ValueError``.
+
+        The signed distance is differentiable with respect to
+        ``mesh_vertices`` and ``input_points`` (see
+        :func:`_backward_signed_distance_field`). The hit points and hit faces
+        are returned without gradients.
     """
 
     if input_points.shape[-1] != 3:
@@ -193,12 +198,20 @@ def signed_distance_field_impl(
     with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp.init()
 
-        # zero copy the vertices, indices, and input points to warp:
-        wp_vertices = wp.from_torch(mesh_vertices.to(torch.float32), dtype=wp.vec3)
+        # zero copy the vertices, indices, and input points to warp. Detach
+        # the float inputs: from_torch would otherwise allocate a .grad buffer
+        # on any input that requires grad. Gradients come from the registered
+        # backward instead. Warp's vec3 needs contiguous rows, which a strided
+        # view (e.g. a transpose) does not have.
+        wp_vertices = wp.from_torch(
+            mesh_vertices.detach().to(torch.float32).contiguous(), dtype=wp.vec3
+        )
         wp_indices = wp.from_torch(
             mesh_indices.to(torch.int32).contiguous(), dtype=wp.int32
         )
-        wp_input_points = wp.from_torch(input_points.to(torch.float32), dtype=wp.vec3)
+        wp_input_points = wp.from_torch(
+            input_points.detach().to(torch.float32).contiguous(), dtype=wp.vec3
+        )
 
         # Convert output points:
         wp_sdf = wp.from_torch(sdf, dtype=wp.float32)
@@ -262,6 +275,171 @@ def signed_distance_field_impl_fake(
     return sdf_output, sdf_hit_point_output, sdf_hit_face_output
 
 
+def _setup_signed_distance_field_context(
+    ctx: torch.autograd.function.FunctionCtx, inputs: tuple, output: tuple
+) -> None:
+    """Save the tensors the backward pass needs.
+
+    The hit points and hit faces are marked non-differentiable: only the
+    signed distance carries gradients. The backward pass recomputes the
+    closest point from the hit face, so the hit points are not saved.
+    """
+    mesh_vertices, mesh_indices, input_points, _max_dist, _use_winding = inputs
+    sdf, hit_points, hit_faces = output
+    ctx.mark_non_differentiable(hit_points, hit_faces)
+    ctx.save_for_backward(mesh_vertices, mesh_indices, input_points, sdf, hit_faces)
+
+
+def _closest_point_weights(
+    query: Float[torch.Tensor, "n_queries 3"],
+    tri: Float[torch.Tensor, "n_queries 3 3"],
+) -> Float[torch.Tensor, "n_queries 3"]:
+    """Barycentric weights of the point of each triangle closest to its query.
+
+    Follows Ericson, *Real-Time Collision Detection* (2005), Sec. 5.1.5: the
+    Voronoi region of the query (a corner, an edge, or the face) sets which
+    weights are zero, so a query nearest a corner or an edge gets exact
+    zeros. The face-region weights are ratios of Gram determinants, which
+    cancel on thin faces, so call this in float64.
+    """
+    a, b, c = tri.unbind(dim=1)
+    ab = b - a
+    ac = c - a
+    d1 = (ab * (query - a)).sum(-1)
+    d2 = (ac * (query - a)).sum(-1)
+    d3 = (ab * (query - b)).sum(-1)
+    d4 = (ac * (query - b)).sum(-1)
+    d5 = (ab * (query - c)).sum(-1)
+    d6 = (ac * (query - c)).sum(-1)
+    va = d3 * d6 - d5 * d4
+    vb = d5 * d2 - d1 * d6
+    vc = d1 * d4 - d3 * d2
+    tiny = torch.finfo(query.dtype).tiny
+    zero = torch.zeros_like(d1)
+    one = torch.ones_like(d1)
+
+    # Every denominator is a squared length or area, so it is >= 0.
+    denom = (va + vb + vc).clamp(min=tiny)
+    t_bc = (d4 - d3) / ((d4 - d3) + (d5 - d6)).clamp(min=tiny)
+    t_ac = d2 / (d2 - d6).clamp(min=tiny)
+    t_ab = d1 / (d1 - d3).clamp(min=tiny)
+
+    # The face interior is the default. Ericson tests corner A, corner B,
+    # edge AB, corner C, edge AC, then edge BC, and returns at the first
+    # match, so the regions are applied here in reverse and the first test
+    # wins.
+    weights = torch.stack([va / denom, vb / denom, vc / denom], dim=-1)
+    regions = (
+        ((va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0), (zero, 1.0 - t_bc, t_bc)),
+        ((vb <= 0) & (d2 >= 0) & (d6 <= 0), (1.0 - t_ac, zero, t_ac)),
+        ((d6 >= 0) & (d5 <= d6), (zero, zero, one)),
+        ((vc <= 0) & (d1 >= 0) & (d3 <= 0), (1.0 - t_ab, t_ab, zero)),
+        ((d3 >= 0) & (d4 <= d3), (zero, one, zero)),
+        ((d1 <= 0) & (d2 <= 0), (one, zero, zero)),
+    )
+    for in_region, region_weights in regions:
+        weights = torch.where(
+            in_region.unsqueeze(-1), torch.stack(region_weights, dim=-1), weights
+        )
+    return weights
+
+
+def _backward_signed_distance_field(
+    ctx: torch.autograd.function.FunctionCtx,
+    grad_sdf: torch.Tensor | None,
+    grad_hit_points: torch.Tensor | None,
+    grad_hit_faces: torch.Tensor | None,
+) -> tuple[torch.Tensor | None, None, torch.Tensor | None, None, None]:
+    r"""Backward pass of :func:`signed_distance_field_impl`.
+
+    Let :math:`c = \sum_k \lambda_k p_k` be the closest point to a query
+    :math:`q` on its nearest face, with vertices :math:`p_k` and barycentric
+    weights :math:`\lambda_k`, and let :math:`s = \pm 1` be the sign. The
+    closest point minimizes the distance, so by the envelope theorem it can
+    be held fixed when differentiating:
+
+    .. math::
+
+        \frac{\partial\,\mathrm{sdf}}{\partial q} = s\,\frac{q - c}{\lVert q - c \rVert},
+        \qquad
+        \frac{\partial\,\mathrm{sdf}}{\partial p_k}
+            = -\lambda_k\,\frac{\partial\,\mathrm{sdf}}{\partial q}.
+
+    The closest point and its weights are recomputed in float64 on the hit
+    face, from the query and the vertices. The ``hit_points`` output is
+    rounded to the query dtype, and for float16 queries that rounding alone
+    can turn :math:`q - c` by 45 degrees.
+
+    The forward pass computes the sign in float32, so the sign is unreliable
+    for a query within a few float32 ulps of the surface. Such a query uses
+    the unit normal of its face, oriented by the face's winding, which is the
+    gradient of the signed distance on a face of an outward-oriented
+    surface. Queries beyond ``max_dist``, which have no hit face, contribute
+    no gradient.
+
+    The hit points and hit faces are non-differentiable outputs, so
+    ``grad_hit_points`` and ``grad_hit_faces`` are ignored.
+    """
+    mesh_vertices, mesh_indices, input_points, sdf, hit_faces = ctx.saved_tensors
+    need_vertices = ctx.needs_input_grad[0]
+    need_points = ctx.needs_input_grad[2]
+    if grad_sdf is None or not (need_vertices or need_points):
+        return None, None, None, None, None
+
+    dtype = torch.float64
+    tiny = torch.finfo(dtype).tiny
+
+    query = input_points.reshape(-1, 3).to(dtype)
+    face = hit_faces.reshape(-1)
+    hit = face >= 0
+    # A miss carries a NaN distance, so its upstream gradient is zeroed.
+    grad = torch.where(hit, grad_sdf.reshape(-1).to(dtype), 0.0)
+
+    corners = mesh_indices.reshape(-1, 3).to(torch.long)[face.clamp(min=0)]
+    tri = mesh_vertices.to(dtype)[corners]  # (n_queries, 3, 3)
+    weights = _closest_point_weights(query, tri)
+    closest = (weights.unsqueeze(-1) * tri).sum(dim=1)
+
+    # The face's winding normal.
+    normal = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1)
+    normal = normal / normal.norm(dim=-1, keepdim=True).clamp(min=tiny)
+
+    offset = query - closest
+    distance = offset.norm(dim=-1)
+    scale = torch.maximum(query.abs().amax(dim=-1), closest.abs().amax(dim=-1))
+    near_surface = distance <= 8.0 * torch.finfo(torch.float32).eps * scale
+    sign = torch.where(torch.signbit(sdf.reshape(-1)), -1.0, 1.0).to(dtype)
+    direction = torch.where(
+        near_surface.unsqueeze(-1),
+        normal,
+        (sign / distance.clamp(min=tiny)).unsqueeze(-1) * offset,
+    )
+    grad_query = torch.where(hit.unsqueeze(-1), grad.unsqueeze(-1) * direction, 0.0)
+
+    grad_points = None
+    if need_points:
+        grad_points = grad_query.reshape(input_points.shape).to(input_points.dtype)
+
+    grad_vertices = None
+    if need_vertices:
+        contributions = -weights.unsqueeze(-1) * grad_query.unsqueeze(1)
+        # A miss's weights come from an arbitrary face; zero its contribution.
+        contributions = torch.where(hit.view(-1, 1, 1), contributions, 0.0)
+        grad_vertices = torch.zeros(
+            mesh_vertices.shape, dtype=dtype, device=mesh_vertices.device
+        )
+        grad_vertices.index_add_(0, corners.reshape(-1), contributions.reshape(-1, 3))
+        grad_vertices = grad_vertices.to(mesh_vertices.dtype)
+
+    return grad_vertices, None, grad_points, None, None
+
+
+signed_distance_field_impl.register_autograd(
+    _backward_signed_distance_field,
+    setup_context=_setup_signed_distance_field_context,
+)
+
+
 class SignedDistanceField(FunctionSpec):
     """Compute the signed distance field (SDF) for a mesh and query points.
 
@@ -299,6 +477,15 @@ class SignedDistanceField(FunctionSpec):
 
         Queries with no triangle within ``max_dist`` return ``NaN`` for the
         distance and hit point and ``-1`` for the hit face.
+
+    Notes
+    -----
+    ``sdf`` is differentiable with respect to ``mesh_vertices`` and
+    ``input_points``. The closest point is held fixed (envelope theorem), so
+    the gradient with respect to a query is the unit vector from its hit
+    point, times the sign, and a vertex receives that gradient times minus
+    its barycentric weight in the hit point. ``hit_points`` and ``hit_faces``
+    carry no gradients. Queries beyond ``max_dist`` contribute no gradient.
 
     Examples
     --------
@@ -398,6 +585,21 @@ class SignedDistanceField(FunctionSpec):
                 f"{label}-uv-sphere-tris{2 * n_rings * n_segments}-query-points{num_points}",
                 (mesh_vertices, mesh_indices, input_points),
                 {"max_dist": 10.0, "use_sign_winding_number": False},
+            )
+
+    @classmethod
+    def make_inputs_backward(cls, device: torch.device | str = "cpu"):
+        """Yield the forward cases with vertices and queries requiring grad."""
+        for label, args, kwargs in cls.make_inputs_forward(device=device):
+            mesh_vertices, mesh_indices, input_points = args
+            yield (
+                label,
+                (
+                    mesh_vertices.requires_grad_(True),
+                    mesh_indices,
+                    input_points.requires_grad_(True),
+                ),
+                kwargs,
             )
 
 

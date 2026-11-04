@@ -16,11 +16,13 @@
 
 """Tests for Mesh serialization round-trips (memmap and pickle).
 
-The tensordict memmap format does not serialize tensors with 0 elements. This means
-that point clouds (where cells has shape (0, 1)) lose their cells tensor on save/load,
-causing downstream failures in n_manifold_dims, repr, and any method that accesses cells.
-These tests verify that __post_init__ correctly restores empty cells tensors.
+Point clouds keep their cells as an empty tensor of shape (0, 1). These tests check
+that it survives a save and a load, so that n_manifold_dims, repr and every method
+that reads cells keep working.
 """
+
+import subprocess
+import sys
 
 import torch
 from tensordict import TensorClass, TensorDict
@@ -195,6 +197,30 @@ class TestMemmapRoundTrip:
 
         assert loaded.n_cells == 0
 
+    def test_cached_adjacency_loads_in_a_fresh_process(self, tmp_path):
+        """A mesh saved with a cached adjacency loads in a new interpreter.
+
+        Loading rebuilds the cache, so TensorDict must find the ``Adjacency``
+        class even when nothing has imported ``physicsnemo.mesh.neighbors``.
+        """
+        mesh = two_triangles_2d.load()
+        adjacency = mesh.get_point_to_points_adjacency()
+        path = tmp_path / "mesh.pmsh"
+        mesh.save(path)
+        script = (
+            "from physicsnemo.mesh import Mesh\n"
+            f"adjacency = Mesh.load({str(path)!r}).get_point_to_points_adjacency()\n"
+            f"assert adjacency.offsets.tolist() == {adjacency.offsets.tolist()}\n"
+            f"assert adjacency.indices.tolist() == {adjacency.indices.tolist()}\n"
+        )
+        result = subprocess.run(  # noqa: S603 - interpreter/script are test constants
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def test_repr_after_load(self, tmp_path):
         """repr does not raise for a point cloud after memmap round-trip."""
         pc = two_triangles_2d.load().to_point_cloud()
@@ -274,11 +300,7 @@ class TestMemmapRoundTrip:
 
 
 class TestTorchSaveLoadRoundTrip:
-    """Tests for torch.save() / torch.load() (pickle) round-trip.
-
-    These should already work without the Mesh.load() fix, since pickle
-    preserves empty tensors. Included as regression tests.
-    """
+    """Tests for torch.save() / torch.load() (pickle) round-trip."""
 
     def test_regular_mesh(self, tmp_path):
         """Regular mesh survives torch.save/load round-trip."""

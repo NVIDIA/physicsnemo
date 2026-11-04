@@ -27,6 +27,9 @@ from physicsnemo.mesh.mesh import Mesh
 def load(subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh[2, 2]:
     """Create a triangulated unit square in 2D space.
 
+    Every triangle is wound counterclockwise, with a positive signed area, as
+    described in :ref:`mesh-orientation-conventions`.
+
     Parameters
     ----------
     subdivisions : int
@@ -58,8 +61,8 @@ def load(subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh[2, 2
         for j in range(n - 1):
             idx = i * n + j
             # Two triangles per quad
-            cells.append([idx, idx + 1, idx + n])
-            cells.append([idx + 1, idx + n + 1, idx + n])
+            cells.append([idx, idx + n, idx + 1])
+            cells.append([idx + 1, idx + n, idx + n + 1])
 
     cells = torch.tensor(cells, dtype=torch.int64, device=device)
     return Mesh(points=points, cells=cells)
