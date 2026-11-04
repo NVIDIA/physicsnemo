@@ -35,10 +35,7 @@ from jaxtyping import Float
 
 from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
 from physicsnemo.mesh.curvature._utils import compute_full_angle_n_sphere
-from physicsnemo.mesh.geometry.dual_meshes import (
-    compute_dual_volumes_0,
-    get_or_compute_dual_volumes_0,
-)
+from physicsnemo.mesh.geometry.dual_meshes import get_or_compute_dual_volumes_0
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -124,12 +121,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"
     angle_defect = full_angle - angle_sums  # (n_points,)
 
     ### Compute dual volumes (Voronoi areas)
-    # The cache does not track gradients: an entry made under torch.no_grad()
-    # has none. So points that require gradients neither read nor fill it.
-    if mesh.points.requires_grad:
-        dual_volumes = compute_dual_volumes_0(mesh)  # (n_points,)
-    else:
-        dual_volumes = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
+    dual_volumes = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
 
     ### Compute Gaussian curvature
     # K = angle_defect / dual_volume
