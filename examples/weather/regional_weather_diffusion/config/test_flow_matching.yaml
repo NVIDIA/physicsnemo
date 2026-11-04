@@ -76,3 +76,6 @@ model:
     hidden_size: 32
     num_heads: 1
     attn_kernel_size: 7
+    attn_kwargs:
+      qk_norm: true
+      norm_layer: torch  # the reference config uses apex, which may not be installed for testing
