@@ -456,6 +456,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DomainMesh.rotate`, `scale`, and `transform` work when the meshes of a
   domain differ in float dtype, such as a float64 interior with float32
   boundaries, where they raised before.
+- `repair_mesh` also removes the degenerate cells that its merge of duplicate
+  points creates. Before, its output could fail `validate()`.
 - `fill_holes` works on meshes with point or cell data, where it raised before.
   The new points and faces hold NaN in floating-point fields and 0 in others.
 - `compute_mesh_statistics` reports the mean and standard deviation of the
