@@ -90,7 +90,9 @@ install_pyg_lib() {
 
     echo "No custom pyg_lib wheel present; building from source"
     uv pip install ninja wheel
-    uv pip install --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.9.0"
+    # uv caches git builds by commit, not by the PyTorch they were built
+    # against, so a cached wheel from an older base image fails to load.
+    uv pip install --no-cache --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.9.0"
 }
 
 install_torch_cluster() {
