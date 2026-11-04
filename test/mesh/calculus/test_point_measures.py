@@ -37,6 +37,7 @@ from physicsnemo.mesh.calculus.measure import (
     set_point_measures,
 )
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
+from physicsnemo.mesh.transformations.geometric import rotation_matrix
 
 
 def simplex(dimension, *, spatial_dimension=3):
@@ -151,6 +152,22 @@ def test_volume_point_measures_scale_on_reduced_precision(dtype):
     rotated = point_measures(cloud.rotate(0.5, axis="z"))
     assert rotated.dtype == dtype
     torch.testing.assert_close(rotated, torch.full((5,), 2.0, dtype=dtype))
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_surface_point_measures_transform_on_reduced_precision(dtype):
+    """Regression: a rotation matrix rounded to 16 bits is still a similarity,
+    so it maps lower-dimensional point measures; a stretch still raises."""
+    cloud = Mesh(points=torch.randn(5, 3).to(dtype))
+    set_point_measures(cloud, torch.ones(5, dtype=dtype), dimension=2)
+    rotation = rotation_matrix(0.5, [0.2, -0.5, 0.9], 3, torch.device("cpu"), dtype)
+    for k, expected in ((1.0, 1.0), (2.0, 4.0)):
+        moved = point_measures(cloud.transform(k * rotation))
+        assert moved.dtype == dtype
+        torch.testing.assert_close(moved, torch.full((5,), expected, dtype=dtype))
+    stretch = torch.diag(torch.tensor([1.0, 1.1, 1.0], dtype=dtype))
+    with pytest.raises(ValueError, match="support geometry"):
+        cloud.transform(stretch)
 
 
 def test_rigid_transforms_and_dtype_preserve_point_measures():

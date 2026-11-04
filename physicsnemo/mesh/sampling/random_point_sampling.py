@@ -115,8 +115,9 @@ def sample_random_points_on_cells(
     # When alpha=1, Gamma(1,1) is equivalent to Exponential(1), which is more efficient.
     # Build the distribution parameters in the mesh's dtype (at least float32)
     # so the barycentric weights match the mesh precision (otherwise a float64
-    # mesh silently samples weights in float32, halving precision). Gamma has no float16/bfloat16 CPU
-    # kernels, so reduced precision samples in float32 and casts back.
+    # mesh silently samples weights in float32, halving precision). Gamma has no
+    # float16/bfloat16 CPU kernels, so reduced precision samples in float32 and
+    # casts back.
     dtype = torch.promote_types(mesh.points.dtype, torch.float32)
     if alpha == 1.0:
         distribution = torch.distributions.Exponential(
