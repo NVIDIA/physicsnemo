@@ -30,6 +30,7 @@ Other config overrides, e.g. ``sampler.args.num_steps=32``, can be added as usua
 """
 
 import os
+import warnings
 
 import hydra
 import numpy as np
@@ -38,13 +39,14 @@ import xarray as xr
 from matplotlib import pyplot as plt
 from omegaconf import DictConfig, OmegaConf
 from physicsnemo.core import Module
-from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
 
 from datasets import dataset_classes
 from utils.config import MainConfig
+from utils.loss import build_sampling_scheduler, sampling_formulation
 from utils.nn import (
     build_network_condition_and_target,
     diffusion_model_forward,
+    resize_dit,
     unpack_batch,
 )
 from utils.plots import inference_plot
@@ -53,6 +55,11 @@ from utils.plots import inference_plot
 @hydra.main(version_base=None, config_path="config", config_name=None)
 def main(cfg: DictConfig) -> None:
     """Generate and save samples as configured by ``cfg``; see the module docstring."""
+    # Flow matching samples from t = 1 (pure noise), which is safe: the flow
+    # used for sampling stays finite there
+    warnings.filterwarnings(
+        "ignore", message="^RectifiedFlowNoiseScheduler was constructed with t_max=1.0"
+    )
     if "inference" not in cfg:
         raise ValueError(
             "Add the inference options with +inference=default, see "
@@ -80,7 +87,9 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"Unknown plot_variables {unknown_vars}: not state channels")
 
     # Models
-    net = Module.from_checkpoint(inf_cfg.diffusion_checkpoint).eval().to(device)
+    net = Module.from_checkpoint(inf_cfg.diffusion_checkpoint)
+    # A DiT trained on patches is rebuilt for the dataset's (e.g. full-domain) size
+    net = resize_dit(net, dataset.image_shape()).eval().to(device)
     regression_net = None
     if "regression" in cfg.model.diffusion_conditions:
         regression_path = inf_cfg.regression_checkpoint or cfg.model.regression_weights
@@ -92,11 +101,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     sampler_args = cfg.sampler.args.__dict__
-    scheduler = EDMNoiseScheduler(
-        sigma_min=sampler_args.get("sigma_min", 0.002),
-        sigma_max=sampler_args.get("sigma_max", 80.0),
-        rho=sampler_args.get("rho", 7.0),
-    )
+    scheduler = build_sampling_scheduler(cfg.training.loss, sampler_args)
     amp_dtype = {"amp-bf16": torch.bfloat16, "amp-fp16": torch.float16}.get(
         cfg.training.perf.fp_optimizations
     )
@@ -142,6 +147,8 @@ def main(cfg: DictConfig) -> None:
                         sampler_args=sampler_args,
                         lead_time_label=lead_time_label,
                         invalid_mask=invalid_mask,
+                        formulation=sampling_formulation(cfg.training.loss.type),
+                        prediction_type=cfg.training.loss.prediction_type,
                     ).float()
                     if reg_out is not None:
                         pred += reg_out.float()
