@@ -172,10 +172,14 @@ def test_text_3d_from_curved_glyph():
 
 
 @pytest.mark.parametrize(
-    "glyph, font_size", [("A", 12.0), ("V", 12.0), ("4", 12.0), ("A", 200.0)]
+    "glyph, font_size",
+    [("A", 12.0), ("V", 12.0), ("4", 12.0), ("A", 200.0), ("sh", 300.0)],
 )
 def test_text_2d_3d_slanted_glyph_watertight(glyph, font_size):
-    """Glyphs with slanted straight edges fill without hanging vertices."""
+    """Glyphs with slanted straight edges fill without hanging vertices.
+
+    Large curved glyphs far from the origin keep their thin curve triangles.
+    """
     assert text_2d_3d(glyph, font_size=font_size).is_watertight()
 
 
