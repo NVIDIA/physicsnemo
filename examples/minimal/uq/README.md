@@ -101,3 +101,9 @@ add collectives; this example demonstrates reuse and correctness, not improved
 performance. The generic accumulator does not make arbitrary statistical rules
 distributable automatically: each rule must have a valid merge operation for
 independent observations and use completed reductions before nonlinear arithmetic.
+
+Run the weighted-mean example tests with:
+
+```bash
+python -m pytest -o addopts="" examples/minimal/uq/test_weighted_mean.py
+```

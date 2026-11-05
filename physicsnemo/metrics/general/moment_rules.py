@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import torch
 
+from physicsnemo.metrics.general.tensor_accumulator import SumReduction, TensorState
+
 
 def _check_correction(correction):
     if (
@@ -34,7 +36,9 @@ def _check_correction(correction):
 class MeanRule:
     """Mean represented by a count and mean, with stable pairwise merging."""
 
-    def summarize(self, values, *, dim, reduce_sum):
+    def summarize(
+        self, values: torch.Tensor, *, dim: int | None, reduce_sum: SumReduction
+    ) -> TensorState:
         """Produce a batch's count and mean; an empty batch has a zero mean."""
         n = 1 if dim is None else values.shape[dim]
         total = reduce_sum(values, dim)
@@ -46,7 +50,7 @@ class MeanRule:
         mean = left["mean"] + (right["mean"] - left["mean"]) * (right["n"] / n)
         return {"n": n, "mean": mean}
 
-    def result(self, state, *, reduce_sum):
+    def result(self, state, *, reduce_sum: SumReduction) -> torch.Tensor:
         """Return the stored mean; the accumulator gives callers an owned copy."""
         return state["mean"]
 
@@ -55,7 +59,9 @@ class MeanRule:
 class VarianceRule:
     """Count, mean and centered squared deviations using Chan's merge formula."""
 
-    def summarize(self, values, *, dim, reduce_sum):
+    def summarize(
+        self, values: torch.Tensor, *, dim: int | None, reduce_sum: SumReduction
+    ) -> TensorState:
         """Compute centered deviations only after completing the batch mean."""
         n = 1 if dim is None else values.shape[dim]
         if dim is None:
@@ -72,15 +78,19 @@ class VarianceRule:
         """Merge nonempty moment states with a stable between-batch correction."""
         n = left["n"] + right["n"]
         delta = right["mean"] - left["mean"]
-        return {
-            "n": n,
-            "mean": left["mean"] + delta * (right["n"] / n),
-            "m2": left["m2"]
-            + right["m2"]
-            + delta.square() * (left["n"] * right["n"] / n),
-        }
+        mean = torch.add(left["mean"], delta, alpha=right["n"] / n)
+        # Only fresh scratch storage is mutated. Both input states remain intact
+        # if subsequent validation fails, without allocating correction temporaries.
+        delta.square_().mul_(left["n"] * right["n"] / n)
+        # The mean and m2 can have different distributed placements. Start the
+        # result from m2 so the in-place addition preserves that field's layout.
+        m2 = left["m2"] + right["m2"]
+        m2.add_(delta)
+        return {"n": n, "mean": mean, "m2": m2}
 
-    def result(self, state, *, reduce_sum, correction=1, statistic="variance"):
+    def result(
+        self, state, *, reduce_sum: SumReduction, correction=1, statistic="variance"
+    ) -> torch.Tensor:
         """Read variance with a correction, or the mean of the same observations."""
         if statistic == "mean":
             return state["mean"]

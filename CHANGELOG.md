@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state combination, and ShardTensor reductions over declared observation axes.
   Existing metric constructors retain their behavior. Public `TensorAccumulator`
   and `StatisticRule` support custom statistics through `summarize`, `merge`, and
-  `result` hooks, with built-in `MeanRule` and `VarianceRule`. Includes examples
+  `result` hooks, with built-in `MeanRule` and `VarianceRule`. `SumReduction` types
+  the completed-reduction callback, including `keepdim`. Fresh summaries transfer
+  ownership to the accumulator; variance merging reuses scratch storage while
+  preserving both input states and failed-update rollback. Includes examples
   for weighted means, GP mixtures, Concrete Dropout, observables, and conformal
   calibration.
 - Groups experimental scalar and field GP heads under `experimental.uq.gp`.

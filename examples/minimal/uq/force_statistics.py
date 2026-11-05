@@ -24,20 +24,60 @@ checkable. Applications supply their own energy models and training workflow.
 import argparse
 
 import torch
+from jaxtyping import Float
 from torch import nn
+
+from physicsnemo import Module
 
 from physicsnemo.metrics.general.ensemble_metrics import Variance
 
 
-class HarmonicEnergy(nn.Module):
-    """Small energy model with one trainable stiffness, used only in this example."""
+class HarmonicEnergy(Module):
+    r"""Harmonic energy with one trainable stiffness.
 
-    def __init__(self, stiffness, device):
+    Parameters
+    ----------
+    stiffness : float
+        Initial spring stiffness.
+    device : str
+        Device on which to allocate the stiffness.
+
+    Forward
+    -------
+    positions : torch.Tensor
+        Particle coordinates of shape :math:`(N, 3)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Scalar energy :math:`E = k \sum_i \|x_i\|^2 / 2`.
+
+    Examples
+    --------
+    >>> model = HarmonicEnergy(2.0, "cpu")
+    >>> model(torch.ones(4, 3)).item()
+    12.0
+    """
+
+    def __init__(self, stiffness: float, device: str):
         super().__init__()
         self.stiffness = nn.Parameter(torch.tensor(stiffness, device=device))
 
-    def forward(self, positions):
-        """Return a scalar energy for the complete configuration."""
+    def forward(self, positions: Float[torch.Tensor, "n 3"]) -> Float[torch.Tensor, ""]:
+        r"""Return the configuration's harmonic energy.
+
+        Parameters
+        ----------
+        positions : torch.Tensor
+            Particle coordinates of shape :math:`(N, 3)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar energy with gradients for coordinates and stiffness.
+        """
+        if positions.ndim != 2 or positions.shape[-1] != 3:
+            raise ValueError("positions must have shape (N, 3)")
         return 0.5 * self.stiffness * positions.square().sum()
 
 
