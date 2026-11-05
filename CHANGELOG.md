@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
+- Adds `EnsembleMSE` and `EnsembleRMSE` streaming metrics to
+  `physicsnemo.metrics.general.ensemble_metrics`. Like `Mean` and `Variance`,
+  they accumulate over ensemble batches via `__call__` / `update` /
+  `finalize` and all-reduce across ranks when distributed is initialized.
 - Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
