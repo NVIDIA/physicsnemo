@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Unified external aero recipe: adds AB-UPT surface, volume, and joint
+  configurations with independent anchor/query sampling and mapped targets
+  for unequal surface/volume point counts.
+
 - Adds an experimental, independently implemented AB-UPT operator with
   interacting surface/volume anchors, reusable query contexts, and a
   physically scaled finite-difference vorticity helper.

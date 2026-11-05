@@ -83,6 +83,7 @@ import hydra
 import torch
 from datasets import build_dataloaders, find_normalizer, load_dataset_config
 from forces import ForceAccumulator, ForceContext
+from forward_kwargs import walk_path
 from metrics import MetricCalculator, resolve_metrics
 from nondim import NonDimensionalizeByMetadata, NondimFieldType, freestream_scales
 from omegaconf import DictConfig, OmegaConf
@@ -222,8 +223,8 @@ def _norm_stats_match(a: dict[str, dict], b: dict[str, dict]) -> bool:
         if sa["type"] != sb["type"]:
             return False
         for stat in ("mean", "std"):
-            va = torch.as_tensor(sa[stat], dtype=torch.float32)
-            vb = torch.as_tensor(sb[stat], dtype=torch.float32)
+            va = torch.as_tensor(sa[stat], dtype=torch.float32, device="cpu")
+            vb = torch.as_tensor(sb[stat], dtype=torch.float32, device="cpu")
             if va.shape != vb.shape or not torch.allclose(va, vb):
                 return False
     return True
@@ -241,7 +242,7 @@ def _to_pointwise(td: TensorDict, output_type: IOType) -> TensorDict:
     (batch_size ``[1, N]``); mesh-output models produce per-point leaves
     already (batch_size ``[N]``).
     """
-    return td[0] if output_type == "tensors" else td
+    return td[0] if output_type in ("tensors", "tensordict") else td
 
 
 def _sample_id(metadata: dict[str, Any], idx: int) -> str:
@@ -275,6 +276,7 @@ def attach_and_save(
     out_path: Path,
     *,
     rescale_geometry: bool,
+    target_sources: dict[str, str] | None = None,
 ) -> None:
     """Attach physical predictions/targets to the DomainMesh and save it.
 
@@ -294,6 +296,34 @@ def attach_and_save(
     if rescale_geometry and "L_ref" in domain.global_data:
         L_ref = domain.global_data["L_ref"]
         domain = domain.apply_to_meshes(lambda m: m.scale(L_ref))
+
+    if target_sources is not None:
+        if set(target_sources) != set(target_config):
+            raise ValueError("target_sources must exactly match targets")
+        # Clone only data containers; points/topology are not modified here.
+        domain = domain.apply_to_meshes(
+            lambda m: m.with_data(
+                point_data=m.point_data.clone(), cell_data=m.cell_data.clone()
+            )
+        )
+        for name, path in target_sources.items():
+            association = next(
+                (a for a in ("point_data", "cell_data") if f".{a}." in path), None
+            )
+            if association is None:
+                raise ValueError(
+                    f"Target source must address mesh point/cell data: {path}"
+                )
+            mesh_path, leaf = path.split(f".{association}.", 1)
+            data = getattr(walk_path(domain, mesh_path), association)
+            key, source_key = as_nested_key(name), as_nested_key(leaf)
+            if source_key in data:
+                del data[source_key]
+            data[with_leaf_name(source_key, lambda n: f"pred_{n}")] = pred_phys[key]
+            data[with_leaf_name(source_key, lambda n: f"true_{n}")] = true_phys[key]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        domain.to("cpu").save(str(out_path))
+        return
 
     interior = domain.interior
     ### Drop training-space targets (replaced by physical true_<name>);
@@ -469,7 +499,7 @@ def main(cfg: DictConfig) -> None:
     ### training-space metrics, and the inverses consistent with training.
     norm_stats_path = Path(ckpt_path) / "norm_stats.pt"
     if normalizer is not None and norm_stats_path.exists():
-        saved_stats = torch.load(norm_stats_path, weights_only=True)
+        saved_stats = torch.load(norm_stats_path, map_location="cpu", weights_only=True)
         if not _norm_stats_match(normalizer.stats, saved_stats):
             logger.warning(
                 f"Dataset-YAML normalization stats differ from the "
@@ -596,7 +626,11 @@ def main(cfg: DictConfig) -> None:
         sample_forces = None
         if force_ctx is not None:
             sample_forces = force_ctx.coefficients(
-                domain, pred_pts, true_pts, normalizer
+                domain,
+                pred_pts,
+                true_pts,
+                normalizer,
+                target_sources=dataset_info.get("target_sources"),
             )
             if sample_forces is not None:
                 force_acc.update(*sample_forces)
@@ -651,6 +685,7 @@ def main(cfg: DictConfig) -> None:
             target_config,
             pred_dir / f"{sample_id}.pdmsh",
             rescale_geometry=bool(cfg.get("rescale_geometry", False)),
+            target_sources=dataset_info.get("target_sources"),
         )
 
         ### One JSONL row per sample -- the documented metrics.jsonl

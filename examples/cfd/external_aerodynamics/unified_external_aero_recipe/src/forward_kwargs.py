@@ -44,7 +44,8 @@ Spec value semantics:
   per-element kwarg.
 
 Targets are extracted separately by :func:`extract_targets` from the
-DomainMesh's ``interior.point_data``, by convention.
+DomainMesh's ``interior.point_data`` by default, or from explicit
+``target_sources`` paths for fields on independently sized meshes.
 """
 
 from __future__ import annotations
@@ -289,6 +290,7 @@ def resolve_forward_kwargs(
 def extract_targets(
     domain: DomainMesh | Mesh,
     target_config: dict[str, FieldType],
+    target_sources: dict[str, str] | None = None,
 ) -> TensorDict:
     """Pull target tensors from a DomainMesh's ``interior.point_data`` by name.
 
@@ -308,12 +310,23 @@ def extract_targets(
     Returns:
         TensorDict with exactly the keys in ``target_config`` and the same
         ``batch_size`` / device as the source ``point_data``. Iteration order
-        matches the order of ``target_config``.
+        matches the order of ``target_config``. With explicit sources, the
+        root batch_size is empty and each leaf retains its own spatial size.
 
     Raises:
         KeyError: If a name in ``target_config`` is not present in
             ``interior.point_data``.
     """
+    if target_sources is not None:
+        if set(target_sources) != set(target_config):
+            raise ValueError("target_sources keys must exactly match targets")
+        result = TensorDict({}, batch_size=[])
+        for name, path in target_sources.items():
+            value = walk_path(domain, path)
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"Target {name!r} at {path!r} must be a tensor")
+            result.set(as_nested_key(name), value)
+        return result
     if isinstance(domain, DomainMesh):
         source_td: TensorDict = domain.interior.point_data
         location = "interior.point_data"

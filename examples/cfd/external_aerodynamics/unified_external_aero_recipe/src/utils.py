@@ -24,8 +24,10 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MethodType
 from typing import Any, Literal, TypeAlias
 
+import hydra.utils
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -83,6 +85,32 @@ def set_seed(seed: int | None, rank: int = 0) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def build_optimizer(
+    model: torch.nn.Module, cfg: DictConfig, *, compile_optimizer: bool = False
+) -> torch.optim.Optimizer:
+    """Build an explicit Hydra optimizer, or retain the existing Muon default.
+
+    Explicit optimizers receive all model parameters. Their configuration must
+    contain only arguments accepted by that optimizer, including any parameter
+    group choices; the recipe does not silently reinterpret optimizer options.
+    """
+    if "_target_" not in cfg.training.optimizer:
+        return build_muon_optimizer(model, cfg, compile_optimizer=compile_optimizer)
+    optimizer = hydra.utils.instantiate(
+        cfg.training.optimizer, params=model.parameters()
+    )
+    if not isinstance(optimizer, torch.optim.Optimizer):
+        raise TypeError("training.optimizer must instantiate a torch optimizer")
+    if compile_optimizer:
+        _compile_optimizer_step(optimizer)
+    return optimizer
+
+
+def _compile_optimizer_step(optimizer: torch.optim.Optimizer) -> None:
+    """Keep the compiled step bound so learning-rate schedulers can wrap it."""
+    optimizer.step = MethodType(torch.compile(optimizer.step.__func__), optimizer)
+
+
 def build_muon_optimizer(
     model: torch.nn.Module, cfg: DictConfig, *, compile_optimizer: bool = False
 ) -> torch.optim.Optimizer:
@@ -137,14 +165,14 @@ def build_muon_optimizer(
             adjust_lr_fn="match_rms_adamw",
         )
         if compile_optimizer:
-            opt.step = torch.compile(opt.step)
+            _compile_optimizer_step(opt)
         return opt
     else:
         opt = torch.optim.AdamW(
             other_params, lr=lr, weight_decay=weight_decay, betas=betas, eps=eps
         )
         if compile_optimizer:
-            opt.step = torch.compile(opt.step)
+            _compile_optimizer_step(opt)
         return opt
 
 

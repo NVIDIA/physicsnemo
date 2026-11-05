@@ -47,21 +47,21 @@ from physicsnemo.mesh import Mesh
 ### `forward()` consumes / returns Mesh-like objects or plain `(B, N, C)`
 ### tensors. The collate, output normalizer, and forward-pass dispatch
 ### all key off this same enum.
-IOType: TypeAlias = Literal["mesh", "tensors"]
+IOType: TypeAlias = Literal["mesh", "tensors", "tensordict"]
 
 
 def require_output_type(cfg: DictConfig) -> IOType:
     """Return the model's declared ``output_type``, or raise if missing/invalid.
 
     Both entry points (``train.py`` / ``infer.py``) require the model YAML
-    to declare ``output_type`` (``"mesh"`` or ``"tensors"``) so the forward
+    to declare ``output_type`` (``"mesh"``, ``"tensors"``, or ``"tensordict"``) so the forward
     output can be unpacked; this is the shared validation.
     """
     output_type = cfg.get("output_type", None)
-    if output_type not in ("mesh", "tensors"):
+    if output_type not in ("mesh", "tensors", "tensordict"):
         raise ValueError(
             f"Model YAML must declare `output_type` as one of 'mesh', "
-            f"'tensors'; got {output_type!r}."
+            f"'tensors', 'tensordict'; got {output_type!r}."
         )
     return output_type
 
@@ -137,6 +137,10 @@ def normalize_output_to_tensordict(
     returns a ``(vol, surf)`` tuple; we take the non-None element
     automatically.
 
+    ``output_type == "tensordict"`` accepts named batched fields whose
+    surface/volume point counts may differ. Field coverage and scalar/vector
+    ranks are validated; the loss checks prediction/target shape agreement.
+
     Args:
         output: Raw model output. ``Mesh`` for ``output_type='mesh'``;
             ``Tensor`` (or DoMINO ``(vol, surf)`` tuple) for
@@ -148,6 +152,23 @@ def normalize_output_to_tensordict(
     Returns:
         Per-field TensorDict ready to feed into the loss / metric calculators.
     """
+    if output_type == "tensordict":
+        if not isinstance(output, TensorDict):
+            raise TypeError("output_type='tensordict' requires a TensorDict")
+        keys = [as_nested_key(name) for name in target_config]
+        if set(output.keys(include_nested=True, leaves_only=True)) != set(keys):
+            raise ValueError("TensorDict output fields must exactly match targets")
+        for name, ftype in target_config.items():
+            value = output[as_nested_key(name)]
+            expected_ndim = 2 if ftype == "scalar" else 3
+            if value.ndim != expected_ndim or (
+                ftype == "vector" and value.shape[-1] != n_spatial_dims
+            ):
+                raise ValueError(
+                    f"Invalid batched {ftype} shape for {name}: {value.shape}"
+                )
+        return output
+
     if output_type == "mesh":
         if not isinstance(output, Mesh):
             raise TypeError(

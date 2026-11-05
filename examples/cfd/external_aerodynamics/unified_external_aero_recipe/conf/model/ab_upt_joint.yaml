@@ -1,0 +1,58 @@
+# @package _global_
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Joint AB-UPT retains both interacting anchor streams.
+input_type: tensors
+output_type: tensordict
+compile: false
+sampling_resolution: 16384
+
+dataset_reader_overrides:
+  geometry_points: 65536
+  num_supernodes: 16384
+  num_surface_anchors: 16384
+  num_volume_anchors: 16384
+  surface_queries: ${sampling_resolution}
+  volume_queries: ${sampling_resolution}
+
+forward_kwargs:
+  geometry: boundaries.abupt_geometry.points
+  supernodes: boundaries.abupt_supernodes.points
+  surface_anchors: boundaries.abupt_surface_anchors.points
+  volume_anchors: boundaries.abupt_volume_anchors.points
+  parameters: global_data.U_inf
+  surface_queries: boundaries.abupt_surface.points
+  volume_queries: interior.points
+
+model:
+  _target_: ab_upt.ABUPTRecipe
+  mode: joint
+  hidden_dim: 192
+  num_heads: 3
+  num_interaction_blocks: 2
+  num_shared_layers: 1
+  num_decoder_layers: 6
+  pooling_radius: 0.25
+  pooling_chunk_size: 4096
+  pooling_message_fp32: false
+  query_chunk_size: 4096
+  coordinate_scale: 1000.0
+  radius_search_backend: null
+
+training:
+  optimizer:
+    lr: 1.0e-4
