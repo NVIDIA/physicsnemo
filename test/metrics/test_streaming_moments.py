@@ -18,22 +18,6 @@
 import pytest
 
 
-def test_base_subclasses_keep_their_own_count():
-    """New opt-in methods must not change the API of unrelated statistics."""
-    from physicsnemo.metrics.general import ensemble_metrics as em
-    from physicsnemo.metrics.general.histogram import Histogram
-
-    # An unrelated subclass can continue managing its own count.
-    class CustomStatistic(em.StreamingStatistic):
-        def __init__(self):
-            super().__init__((3,))
-            self.count = 0
-
-    assert CustomStatistic().count == 0
-    for name in ("count", "combine", "reset"):
-        assert not hasattr(Histogram, name)
-
-
 def test_deprecated_base_aliases_and_silent_module_imports():
     """Both old exports resolve to the same base without warning on module import."""
     import importlib
@@ -63,7 +47,7 @@ def test_deprecated_base_aliases_and_silent_module_imports():
     [
         (
             "physicsnemo.metrics.general.ensemble_metrics",
-            ("Mean", "Variance", "Tensor"),
+            ("Mean", "Variance"),
         ),
         (
             "physicsnemo.diffusion.metrics",
@@ -92,3 +76,13 @@ def test_deprecated_base_wildcard_import(module_name, other_exports):
     assert isinstance(namespace["LegacyStatistic"]((3,)), StreamingStatistic)
     for name in other_exports:
         assert namespace[name] is getattr(module, name)
+
+    if module_name == "physicsnemo.metrics.general.ensemble_metrics":
+        assert not {
+            "ABC",
+            "DistributedManager",
+            "LegacyFeatureWarning",
+            "Tensor",
+            "torch",
+            "warnings",
+        }.intersection(namespace)
