@@ -447,7 +447,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Mesh.clean()`, `clean_mesh`, `merge_duplicate_points`, and `validate()` find
   every duplicate point in clusters of more than 100 coincident points. Before,
   some duplicates were missed and stayed in the cleaned mesh.
-- `Mesh.merge` treats a list of one mesh like a longer list: it checks its
+- `Mesh.merge` treats a list of one mesh like a longer list. It checks its
   input and stacks `global_data` along a new dimension. Before, it returned a
   copy of the mesh.
 - `Mesh.pad` and `Mesh.pad_to_next_power` place padding cells on a padding
