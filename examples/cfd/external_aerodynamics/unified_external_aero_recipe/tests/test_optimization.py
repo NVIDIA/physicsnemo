@@ -92,25 +92,27 @@ def test_optimizer_factory_explicit_and_legacy():
 
 
 @pytest.mark.parametrize(
-    "target,shape,with_bias",
+    "target,shape,with_bias,backend",
     [
-        ("optimization.Lion", (2,), False),
-        ("torch.optim.AdamW", (2,), False),
-        (None, (2,), False),
-        (None, (2, 2), False),
-        (None, (2, 2), True),
+        ("optimization.Lion", (2,), False, "eager"),
+        ("torch.optim.AdamW", (2,), False, "eager"),
+        (None, (2,), False, "eager"),
+        (None, (2, 2), False, "eager"),
+        (None, (2, 2), True, "eager"),
+        ("optimization.Lion", (2,), False, "inductor"),
     ],
 )
 def test_compiled_optimizer_scheduler_updates_match_eager(
-    monkeypatch, target, shape, with_bias
+    monkeypatch, target, shape, with_bias, backend
 ):
     """Construct a real scheduler around compiled steps and preserve its updates."""
     from omegaconf import OmegaConf
     from utils import build_optimizer
 
-    # Exercise Dynamo's real function wrapper without paying for kernel compilation.
-    monkeypatch.setattr(torch, "compile", partial(torch.compile, backend="eager"))
-    config = {"lr": 0.1, "weight_decay": 0.0}
+    # Eager covers scheduler wrapping cheaply; real Inductor catches stale
+    # scalar learning rates that Dynamo's eager backend cannot expose.
+    monkeypatch.setattr(torch, "compile", partial(torch.compile, backend=backend))
+    config = {"lr": 0.1, "weight_decay": 0.01}
     if target is not None:
         config["_target_"] = target
     cfg = OmegaConf.create({"training": {"optimizer": config}})
@@ -121,11 +123,11 @@ def test_compiled_optimizer_scheduler_updates_match_eager(
     reference = copy.deepcopy(model)
     optimizer = build_optimizer(model, cfg, compile_optimizer=True)
     reference_optimizer = build_optimizer(reference, cfg)
-    scheduler = WarmupCosine(optimizer, total_steps=4, warmup_steps=2)
+    scheduler = WarmupCosine(optimizer, total_steps=10, warmup_steps=2)
     reference_scheduler = WarmupCosine(
-        reference_optimizer, total_steps=4, warmup_steps=2
+        reference_optimizer, total_steps=10, warmup_steps=2
     )
-    for _ in range(3):
+    for _ in range(4):
         for current, opt, schedule in (
             (model, optimizer, scheduler),
             (reference, reference_optimizer, reference_scheduler),
@@ -137,5 +139,5 @@ def test_compiled_optimizer_scheduler_updates_match_eager(
         for actual, expected in zip(model.parameters(), reference.parameters()):
             torch.testing.assert_close(actual, expected)
         assert scheduler.get_last_lr() == reference_scheduler.get_last_lr()
-    assert scheduler.last_epoch == 3
+    assert scheduler.last_epoch == 4
     assert not torch.equal(model.weight, torch.ones_like(model.weight))

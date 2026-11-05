@@ -69,7 +69,9 @@ class Lion(torch.optim.Optimizer):
                     .sign_()
                 )
                 parameter.mul_(1 - group["lr"] * group["weight_decay"])
-                parameter.add_(direction, alpha=-group["lr"])
+                # Keep scheduled LR in tensor arithmetic: Inductor can capture
+                # a stale scalar when a changing float is passed as add_'s alpha.
+                parameter.add_(direction * -group["lr"])
                 momentum.mul_(beta_momentum).add_(gradient, alpha=1 - beta_momentum)
         return loss
 
