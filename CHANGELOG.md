@@ -573,6 +573,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `text_1d_2d` outlines are closed loops; before, each ended in a zero-length
   edge. `text_2d_2d` fills curved glyphs fully: thin rings such as U+25CB lost
   part of their area.
+- `text_2d_2d` fills glyphs with slanted edges, such as 'A' and 'V', without
+  flat triangles or hanging vertices, so `text_2d_3d` of ordinary text is
+  watertight. It also leaves the counter of a nested glyph empty: '®' was 3%
+  too large.
+- `cone`, `disk` and `plane` work when torch's default dtype is float64, where
+  they raised before.
 - Unified external aero recipe: GLOBE-volume trains on all the requested
   vehicle surface cells, not about 4% of them.
 - Seeded `DomainMeshReader` subsamples select the same rows from Zarr stores
@@ -594,6 +600,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Mesh.draw` with matplotlib colors 2D curves by their scalars and honors
   `alpha_edges`. It also draws 1D meshes in view, vertex cells as colored
   markers, and integer vector scalars, where it failed before.
+- `Mesh.draw` with matplotlib fits the view to every mesh drawn on `ax` and,
+  in 2D, keeps limits the caller fixed; before, it showed only the last mesh.
+  Meshes far from the origin no longer shrink to a speck in the view.
 - `Mesh.draw` with PyVista lets `backend_options` set the edge color, line
   width and scalar bar, where it raised before.
 - GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled
