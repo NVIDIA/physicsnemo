@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fixed batch-dimension slicing in `physicsnemo_fdm_swe_nonlin` PDE residuals in the shallow water example, which caused `loss_pde` to be `NaN` for `batchsize=1`.
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
