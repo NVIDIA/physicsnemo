@@ -69,9 +69,7 @@ from field_gp_utils import probe_feature_dim
 from inference_on_vtk import build_data_dict, create_datapipe
 
 if TYPE_CHECKING:
-    # Annotation only: the head is built by hydra from cfg.gp_head, and importing
-    # it eagerly would trade its own "install gpytorch" message for an
-    # ImportError on the name.
+    # Used only for annotations; Hydra constructs the head from cfg.gp_head.
     from physicsnemo.experimental.uq.gp import FieldVariationalGPHead
 
 # physicsnemo's ``.mdlus`` checkpoints store the model's instantiation arguments

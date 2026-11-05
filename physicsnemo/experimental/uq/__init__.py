@@ -45,15 +45,13 @@ quantitatively.
 
 Both heads require ``gpytorch``: ``pip install gpytorch``, or the ``uq-extras``
 optional dependency group (``pip install nvidia-physicsnemo[uq-extras]``).
+Both import paths remain available without ``gpytorch``; constructing a head
+raises an installation error when the dependency is missing.
 """
 
-from physicsnemo.core.version_check import check_version_spec
-
-_GPYTORCH_AVAILABLE = check_version_spec("gpytorch", hard_fail=False)
-
-if _GPYTORCH_AVAILABLE:
-    from .gp.field_variational_gp_head import (
-        FieldVariationalGPHead,
-        FieldVariationalGPPrediction,
-    )
-    from .gp.variational_gp_head import GPPrediction, VariationalGPHead
+from .gp import (
+    FieldVariationalGPHead,
+    FieldVariationalGPPrediction,
+    GPPrediction,
+    VariationalGPHead,
+)

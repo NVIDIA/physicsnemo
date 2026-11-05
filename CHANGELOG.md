@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
 - Groups experimental scalar and field GP heads under `experimental.uq.gp`.
+  Both this namespace and `experimental.uq` expose the heads without `gpytorch`;
+  constructing a head raises an installation error if it is missing.
 - Adds `GeoTransolver.forward_with_geometry_features` for predictions and detached
   geometry tokens in one pass, preserving the existing `forward` API.
 - Strata depthwise conditioning convolutions automatically size vmap chunks

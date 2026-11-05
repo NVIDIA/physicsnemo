@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Scalar and field variational Gaussian-process heads (requires gpytorch)."""
+"""Scalar and field variational Gaussian-process heads.
+
+Importing the heads does not require ``gpytorch``. Constructing a head without
+it raises an ``ImportError`` with installation instructions.
+"""
 
 from .field_variational_gp_head import (
     FieldVariationalGPHead,
