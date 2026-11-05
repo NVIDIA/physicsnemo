@@ -874,9 +874,10 @@ python src/train.py model=ab_upt_joint dataset=drivaer_ml_ab_upt_joint \
     dataset_reader_overrides.volume_queries=16384
 ```
 
-The joint loss uses the existing per-field reductions and sums them across
-both branches; a larger query count does not increase a field's weight.
-Vector losses retain the recipe's sum over vector components. Joint names
+The joint loss uses the existing per-field reductions, sums them across both
+branches, and divides by the total scalar-channel count. A larger query count
+does not increase a field's weight. Vector losses retain the recipe's sum over
+vector components. Joint names
 are `surface.pressure`, `surface.wss`, `volume.velocity`, `volume.pressure`,
 and `volume.nut`. Each dataset declares `target_sources` so collation and
 export locate fields on the appropriate mesh without requiring a shared
@@ -922,9 +923,10 @@ Replay any architecture, `coordinate_scale`, or `pooling_radius` overrides from
 settings even when tensor shapes match. Query counts, query/pooling chunk sizes,
 message precision, and radius-search backend can be tuned independently. Record
 these execution settings when continuing a run: changes in precision and pooling
-chunk size can change floating-point rounding. This checkpoint contract
-adds extra state; checkpoints from earlier drafts of this AB-UPT integration
-must be regenerated.
+chunk size can change floating-point rounding. Checkpoints must include the
+adapter's numerical extra state. Version 1 extra state remains loadable with
+independent-query training and `parameter_scale=1.0`; checkpoints without this
+extra state are incompatible.
 
 For a run using the default model settings:
 
@@ -959,8 +961,9 @@ python src/train.py model=ab_upt_surface dataset=drivaer_ml_ab_upt_surface \
 ```
 
 The same options apply to volume and joint modes. `pooling_message_fp32=true`
-keeps only the geometry message MLP outside autocast, using FP32 model weights;
-the remaining operations follow `precision`. Use AMP with FP32 model weights,
+also keeps the geometry message MLP outside autocast, using FP32 model weights.
+Attention and other AMP-eligible operations continue under `precision`; positional
+embeddings and RoPE retain their FP32 arithmetic. Use AMP with FP32 model weights,
 not an explicitly half-cast model. Float64 models retain float64 execution.
 The flag defaults to `false`, so existing configurations keep their behavior.
 
@@ -984,10 +987,12 @@ Set `+model.train_on_anchors=true` together with
 `+dataset_reader_overrides.queries_at_anchors=true` to supervise predictions at
 anchor locations, as in the paper's baseline experiment. The reader gathers
 labels at those exact anchors; separate query counts are ignored in this mode.
-The adapter rejects mismatched training coordinates or ordering. Validation and
-inference still use query decoding. Set the reader flag to `false` for
-independent-query or full-surface evaluation; retain the model flag when loading
-that checkpoint.
+The adapter rejects mismatched training coordinates or ordering. The AB-UPT
+datasets set `validation_reader_overrides.queries_at_anchors=false`, so validation
+and inference automatically use independent query sampling and honor the
+configured surface/volume query counts, including `null` for all locations.
+Retain `model.train_on_anchors` when loading an anchor-trained checkpoint;
+evaluation uses query decoding regardless of this model flag.
 
 `+model.parameter_scale=40.0` divides freestream conditioning by 40 before the
 operator consumes it. The default is 1.0. This is an optional scaling experiment,

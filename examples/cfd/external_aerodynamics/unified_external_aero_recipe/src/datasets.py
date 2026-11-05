@@ -105,6 +105,18 @@ def _apply_dataset_reader_overrides(
     return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
 
 
+def _validation_dataset_config(dataset_cfg: DictConfig) -> DictConfig:
+    """Apply split-specific reader settings after shared recipe overrides.
+
+    Only the named settings change; query counts and other reader options
+    supplied by the recipe retain their configured values.
+    """
+    reader_overrides = dataset_cfg.get("validation_reader_overrides", None)
+    if not reader_overrides:
+        return dataset_cfg
+    return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
+
+
 ### Transform-config kwargs whose values are file paths and should be
 ### resolved against the recipe root before Hydra instantiates the
 ### transform. Add new entries here when introducing transforms with
@@ -625,26 +637,22 @@ def _build_manifest_val_dataset(
 ) -> MeshDataset | None:
     """Build a dedicated un-augmented validation dataset for manifest mode.
 
-    Manifest mode shares a single reader across the train / val splits
-    (the :class:`ManifestSampler` pair carves out per-split indices). That
-    means validation would otherwise run through the *augmented* transform
-    chain whenever ``augment`` is enabled -- unlike directory mode, which
-    always builds its val dataset with ``augment=False``.
-
-    To restore parity, when *augment* is ``True`` this returns a separate
-    dataset built with ``augment=False`` over the same ``train_datadir``.
-    Its reader globs the same sorted paths, so manifest indices resolved
-    against the train reader address the same samples here. When *augment*
-    is ``False`` the train and val transform chains are identical, so this
-    returns ``None`` and the caller lets validation share the train dataset
-    (avoiding a redundant second reader).
+    A separate reader is required for training augmentation, independent
+    sampling state, or validation-specific reader settings. It globs the
+    same sorted paths, so indices resolved against the training reader
+    address the same samples here. Otherwise validation can share the
+    training dataset and this returns ``None``.
     """
     # Stochastic anchor readers require separate epoch state even without
     # augmentation; their validation reader stays at epoch zero.
-    if not augment and not ds_yaml.get("independent_validation", False):
+    if (
+        not augment
+        and not ds_yaml.get("independent_validation", False)
+        and not ds_yaml.get("validation_reader_overrides", None)
+    ):
         return None
     return build_dataset(
-        ds_yaml,
+        _validation_dataset_config(ds_yaml),
         augment=False,
         device=device,
         num_workers=num_workers,
@@ -771,8 +779,9 @@ def build_dataloaders(
     :class:`ManifestSampler` restricts each loader to the matching
     indices. Augmentations are training-only: when ``cfg.augment`` is set,
     validation uses a separate un-augmented dataset over the same
-    directory (mirroring directory mode); otherwise it shares the train
-    dataset.
+    directory (mirroring directory mode). Independent validation sampling
+    or ``validation_reader_overrides`` also creates a separate reader;
+    otherwise validation shares the train dataset.
 
     Multiple datasets may use either split strategy. Each dataset's local
     train and validation indices are shifted by its cumulative offset in
@@ -939,11 +948,8 @@ def build_dataloaders(
                 )
                 local_val_indices = local_train_indices
 
-            ### Augmentations are training-only: when enabled, give
-            ### validation its own un-augmented dataset over the same
-            ### directory so eval is never augmented. Otherwise this entry
-            ### shares its training dataset, preserving the same local index
-            ### space without constructing another reader.
+            ### Preserve the same local index space while isolating validation
+            ### transforms, sampling state, and reader overrides when needed.
             manifest_val_dataset = _build_manifest_val_dataset(
                 ds_yaml,
                 augment=augment,
@@ -968,13 +974,15 @@ def build_dataloaders(
         val_yaml = None
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
-        elif ds_yaml.get("independent_validation", False):
+        elif ds_yaml.get("independent_validation", False) or ds_yaml.get(
+            "validation_reader_overrides", None
+        ):
             # The no-holdout fallback may reuse training cases, but stochastic
             # readers still need separate epoch state for fixed validation.
             val_yaml = ds_yaml
         if val_yaml is not None:
             val_dataset = build_dataset(
-                val_yaml,
+                _validation_dataset_config(val_yaml),
                 augment=False,
                 device=device,
                 num_workers=num_workers,

@@ -17,6 +17,7 @@
 """Hand-derived updates and interrupted training checks for optimization."""
 
 import copy
+from functools import partial
 
 import pytest
 import torch
@@ -88,3 +89,53 @@ def test_optimizer_factory_explicit_and_legacy():
     cfg.training.optimizer = {"lr": 1e-4}
     legacy = build_optimizer(model, cfg)
     assert not isinstance(legacy, Lion)
+
+
+@pytest.mark.parametrize(
+    "target,shape,with_bias",
+    [
+        ("optimization.Lion", (2,), False),
+        ("torch.optim.AdamW", (2,), False),
+        (None, (2,), False),
+        (None, (2, 2), False),
+        (None, (2, 2), True),
+    ],
+)
+def test_compiled_optimizer_scheduler_updates_match_eager(
+    monkeypatch, target, shape, with_bias
+):
+    """Construct a real scheduler around compiled steps and preserve its updates."""
+    from omegaconf import OmegaConf
+    from utils import build_optimizer
+
+    # Exercise Dynamo's real function wrapper without paying for kernel compilation.
+    monkeypatch.setattr(torch, "compile", partial(torch.compile, backend="eager"))
+    config = {"lr": 0.1, "weight_decay": 0.0}
+    if target is not None:
+        config["_target_"] = target
+    cfg = OmegaConf.create({"training": {"optimizer": config}})
+    model = torch.nn.Module()
+    model.register_parameter("weight", torch.nn.Parameter(torch.ones(shape)))
+    if with_bias:
+        model.register_parameter("bias", torch.nn.Parameter(torch.ones(2)))
+    reference = copy.deepcopy(model)
+    optimizer = build_optimizer(model, cfg, compile_optimizer=True)
+    reference_optimizer = build_optimizer(reference, cfg)
+    scheduler = WarmupCosine(optimizer, total_steps=4, warmup_steps=2)
+    reference_scheduler = WarmupCosine(
+        reference_optimizer, total_steps=4, warmup_steps=2
+    )
+    for _ in range(3):
+        for current, opt, schedule in (
+            (model, optimizer, scheduler),
+            (reference, reference_optimizer, reference_scheduler),
+        ):
+            opt.zero_grad()
+            sum(p.square().sum() for p in current.parameters()).backward()
+            opt.step()
+            schedule.step()
+        for actual, expected in zip(model.parameters(), reference.parameters()):
+            torch.testing.assert_close(actual, expected)
+        assert scheduler.get_last_lr() == reference_scheduler.get_last_lr()
+    assert scheduler.last_epoch == 3
+    assert not torch.equal(model.weight, torch.ones_like(model.weight))

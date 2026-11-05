@@ -24,6 +24,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MethodType
 from typing import Any, Literal, TypeAlias
 
 import hydra.utils
@@ -101,8 +102,13 @@ def build_optimizer(
     if not isinstance(optimizer, torch.optim.Optimizer):
         raise TypeError("training.optimizer must instantiate a torch optimizer")
     if compile_optimizer:
-        optimizer.step = torch.compile(optimizer.step)
+        _compile_optimizer_step(optimizer)
     return optimizer
+
+
+def _compile_optimizer_step(optimizer: torch.optim.Optimizer) -> None:
+    """Keep the compiled step bound so learning-rate schedulers can wrap it."""
+    optimizer.step = MethodType(torch.compile(optimizer.step.__func__), optimizer)
 
 
 def build_muon_optimizer(
@@ -159,14 +165,14 @@ def build_muon_optimizer(
             adjust_lr_fn="match_rms_adamw",
         )
         if compile_optimizer:
-            opt.step = torch.compile(opt.step)
+            _compile_optimizer_step(opt)
         return opt
     else:
         opt = torch.optim.AdamW(
             other_params, lr=lr, weight_decay=weight_decay, betas=betas, eps=eps
         )
         if compile_optimizer:
-            opt.step = torch.compile(opt.step)
+            _compile_optimizer_step(opt)
         return opt
 
 

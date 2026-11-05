@@ -17,6 +17,9 @@
 # Joint training uses both interacting surface and volume anchor streams.
 train_datadir: ${dataset_paths.drivaer_ml}
 independent_validation: true
+validation_reader_overrides:
+  # Anchor supervision applies only to training; evaluate independent queries.
+  queries_at_anchors: false
 
 pipeline:
   reader:

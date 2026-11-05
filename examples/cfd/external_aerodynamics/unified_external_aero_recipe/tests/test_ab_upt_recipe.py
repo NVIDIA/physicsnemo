@@ -16,8 +16,11 @@
 
 """Native-domain, training, independent-query, and physical-export contracts."""
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import datasets as datasets_module
 import hydra
 import pytest
 import torch
@@ -26,6 +29,7 @@ from collate import build_collate_fn
 from datasets import (
     _apply_dataset_reader_overrides,
     _build_manifest_val_dataset,
+    build_dataloaders,
     build_dataset,
 )
 from forces import ForceContext
@@ -271,6 +275,66 @@ def test_sampling_streams_and_fixed_validation(native_case):
     )
     train.close()
     val.close()
+
+
+@pytest.mark.parametrize("mode", ["surface", "volume", "joint"])
+@pytest.mark.parametrize("split", ["manifest", "directory", "fallback"])
+def test_anchor_training_loaders_keep_independent_validation_queries(
+    native_case, mode, split, monkeypatch
+):
+    """Production train/inference loaders honor query counts during evaluation."""
+    root, original = native_case
+    cfg, ds, initial_dataset = pipeline(root, mode)
+    initial_dataset.close()
+    cfg.dataset = f"drivaer_ml_ab_upt_{mode}"
+    OmegaConf.update(
+        cfg, "dataset_reader_overrides.queries_at_anchors", True, force_add=True
+    )
+    cfg.dataloader.prefetch_factor = 0
+    cfg.dataloader.num_workers = 1
+    cfg.dataloader.use_streams = False
+    cfg.dataloader.pin_memory = False
+    if split == "manifest":
+        path = root / "run_2" / "domain_2.pdmsh"
+        path.parent.mkdir()
+        original.save(str(path))
+        (root / "manifest.json").write_text(
+            json.dumps({"train": ["run_1"], "val": ["run_2"]})
+        )
+    else:
+        cfg.train_split = cfg.val_split = None
+        if split == "directory":
+            val_root = root / "validation"
+            path = val_root / "run_2" / "domain_2.pdmsh"
+            path.parent.mkdir(parents=True)
+            original.save(str(path))
+            ds.val_datadir = str(val_root)
+    monkeypatch.setattr(datasets_module, "load_dataset_config", lambda _: ds)
+    monkeypatch.setattr(
+        datasets_module,
+        "DistributedManager",
+        lambda: SimpleNamespace(world_size=1, rank=0),
+    )
+    train_loader, val_loader, _, _ = build_dataloaders(cfg)
+    try:
+        assert train_loader.dataset.reader.queries_at_anchors
+        assert not val_loader.dataset.reader.queries_at_anchors
+        train = next(iter(train_loader))["forward_kwargs"]
+        val = next(iter(val_loader))["forward_kwargs"]
+        branches = ["surface", "volume"] if mode == "joint" else [mode]
+        for branch in branches:
+            anchors, queries = f"{branch}_anchors", f"{branch}_queries"
+            torch.testing.assert_close(train[queries], train[anchors])
+            assert val[queries].shape[1] == COUNTS[queries]
+            assert val[anchors].shape[1] == COUNTS[f"num_{branch}_anchors"]
+            assert val[queries].shape[1] != val[anchors].shape[1]
+        train_loader.set_epoch(4)
+        later_val = next(iter(val_loader))["forward_kwargs"]
+        for key in val:
+            torch.testing.assert_close(later_val[key], val[key])
+    finally:
+        train_loader.dataset.close()
+        val_loader.dataset.close()
 
 
 def test_query_chunk_values_and_gradients(native_case):

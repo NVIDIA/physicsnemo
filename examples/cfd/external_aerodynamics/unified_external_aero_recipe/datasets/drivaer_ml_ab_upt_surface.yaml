@@ -17,6 +17,9 @@
 # Single-branch ablation: only the selected field and anchor stream are loaded.
 train_datadir: ${dataset_paths.drivaer_ml}
 independent_validation: true
+validation_reader_overrides:
+  # Anchor supervision applies only to training; evaluate independent queries.
+  queries_at_anchors: false
 
 pipeline:
   reader:
