@@ -690,20 +690,6 @@ def test_parameter_scaling_matches_explicit_unit_conversion(tmp_path):
         torch.testing.assert_close(result[key], value)
 
 
-def test_legacy_adapter_state_preserves_raw_conditioning_and_query_training():
-    """Version-one checkpoints load only under their original numerical settings."""
-    original = ABUPTRecipe(**SMALL)
-    state = original.state_dict()
-    legacy = dict(state["_extra_state"])
-    legacy["version"] = 1
-    del legacy["parameter_scale"], legacy["train_on_anchors"]
-    state["_extra_state"] = legacy
-    ABUPTRecipe(**SMALL).load_state_dict(state)
-    for options in ({"parameter_scale": 40.0}, {"train_on_anchors": True}):
-        with pytest.raises(ValueError, match="checkpoint settings"):
-            ABUPTRecipe(**SMALL, **options).load_state_dict(state)
-
-
 @pytest.mark.parametrize("scale", [0, -1, float("nan"), float("inf"), True])
 def test_parameter_scale_validation(scale):
     """Reject nonpositive, nonfinite, and boolean conditioning scales."""

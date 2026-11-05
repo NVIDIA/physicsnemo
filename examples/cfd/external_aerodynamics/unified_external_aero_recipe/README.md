@@ -923,10 +923,7 @@ Replay any architecture, `coordinate_scale`, or `pooling_radius` overrides from
 settings even when tensor shapes match. Query counts, query/pooling chunk sizes,
 message precision, and radius-search backend can be tuned independently. Record
 these execution settings when continuing a run: changes in precision and pooling
-chunk size can change floating-point rounding. Checkpoints must include the
-adapter's numerical extra state. Version 1 extra state remains loadable with
-independent-query training and `parameter_scale=1.0`; checkpoints without this
-extra state are incompatible.
+chunk size can change floating-point rounding.
 
 For a run using the default model settings:
 
@@ -974,12 +971,6 @@ explicit experiment choice. Larger chunks and FP32 messages can alter rounding,
 so check full-recipe throughput, memory, and physical validation metrics before
 adopting them. An isolated model benchmark does not establish an end-to-end
 training speedup or equivalent accuracy.
-
-The message precision flag and chunk size are serialized in the model
-constructor. Existing checkpoints remain loadable into a model with these
-explicit execution overrides; the optimizer and EMA parameter shapes are
-unchanged. Save the resolved configuration and retain the source checkpoint
-when starting such a continuation.
 
 ### Anchor supervision and accuracy experiments
 

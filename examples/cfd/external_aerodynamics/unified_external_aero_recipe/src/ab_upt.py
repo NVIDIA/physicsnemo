@@ -143,11 +143,6 @@ class ABUPTRecipe(Module):
     def set_extra_state(self, state):
         """Reject numerically incompatible resume/inference configurations."""
         expected = self.get_extra_state()
-        if isinstance(state, dict) and state.get("version") == 1:
-            # Older checkpoints used only independent-query training and raw
-            # freestream velocity. Retain those semantics when loading them.
-            state = dict(state)
-            state.update(version=2, train_on_anchors=False, parameter_scale=1.0)
         if not isinstance(state, dict) or state != expected:
             raise ValueError(
                 "AB-UPT checkpoint settings do not match the current model: "
