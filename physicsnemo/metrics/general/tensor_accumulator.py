@@ -43,20 +43,36 @@ class StatisticRule(Protocol):
     Keep that configuration unchanged throughout an accumulator's lifetime.
     """
 
-    def summarize(
-        self, values: torch.Tensor, *, dim: int | None, reduce_sum: Callable, **inputs
-    ) -> TensorState:
-        """Summarize detached observations and optional detached tensor inputs."""
+    @property
+    def summarize(self) -> Callable[..., TensorState]:
+        """Batch hook: ``(values, *, dim, reduce_sum, <rule-specific inputs>)``.
+
+        Auxiliary keywords belong to the rule; a rule need not accept arbitrary
+        keywords. Return an owned state without retaining references to it.
+        """
         ...
 
     def merge(self, left: TensorState, right: TensorState) -> TensorState:
         """Return a state for disjoint observations without modifying either input."""
         ...
 
-    def result(
-        self, state: TensorState, *, reduce_sum: Callable, **options
+    @property
+    def result(self) -> Callable[..., torch.Tensor]:
+        """Read hook: ``(state, *, reduce_sum, <rule-specific options>)``.
+
+        The signature is intentionally extensible. Unsupported inputs/options
+        raise ``TypeError`` through the concrete rule's method signature.
+        """
+        ...
+
+
+class SumReduction(Protocol):
+    """Completed sum supplied to rule hooks, preserving unreduced shards."""
+
+    def __call__(
+        self, values: torch.Tensor, dim: int | None, *, keepdim: bool = False
     ) -> torch.Tensor:
-        """Read a result without modifying statistical state."""
+        """Sum an observation axis, or copy one observation when dim is None."""
         ...
 
 
@@ -273,18 +289,24 @@ class TensorAccumulator:
             dim %= values.ndim
         n = 1 if dim is None else values.shape[dim]
         batch = self.rule.summarize(values, dim=dim, reduce_sum=self._sum, **inputs)
+        self._merge_and_commit(batch, n, dtype, owned=True)
+
+    def _merge_and_commit(self, incoming, count, dtype, *, owned=False):
+        """Validate a candidate fully before publishing its state, count or dtype."""
         reference = self._state if self._state is not None else self._template
-        self._validate(batch, reference, dtype)
-        if n:
-            candidate = (
-                self.rule.merge(self._state, batch) if self.count else self._copy(batch)
-            )
-            self._validate(candidate, batch, dtype)
+        self._validate(incoming, reference, dtype)
+        if count:
+            if self.count:
+                candidate = self.rule.merge(self._state, incoming)
+            else:
+                # summarize transfers ownership; combine must isolate the donor.
+                candidate = incoming if owned else self._copy(incoming)
+            self._validate(candidate, incoming, dtype)
             self._state = candidate
             self._template = None
-            self.count += n
+            self.count += count
         elif reference is None:
-            self._template = self._copy(batch, zero=True)
+            self._template = self._copy(incoming, zero=True)
         self.dtype = dtype
 
     def combine(self, other: "TensorAccumulator") -> "TensorAccumulator":
@@ -335,22 +357,7 @@ class TensorAccumulator:
         if incoming is None:
             self.dtype = self.dtype or other.dtype
             return self
-        reference = self._state if self._state is not None else self._template
-        dtype = self.dtype or other.dtype
-        self._validate(incoming, reference, dtype)
-        if other.count:
-            candidate = (
-                self.rule.merge(self._state, incoming)
-                if self.count
-                else self._copy(incoming)
-            )
-            self._validate(candidate, incoming, dtype)
-            self._state = candidate
-            self._template = None
-            self.count += other.count
-        elif reference is None:
-            self._template = self._copy(incoming, zero=True)
-        self.dtype = dtype
+        self._merge_and_commit(incoming, other.count, self.dtype or other.dtype)
         return self
 
     def finalize(self, **options) -> torch.Tensor:

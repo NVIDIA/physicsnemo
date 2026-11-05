@@ -106,6 +106,8 @@ class StreamingStatistic(ABC):
 class _TensorModeMixin:
     """Opt-in operations shared only by Mean and Variance."""
 
+    # Explicit composition preserves concrete types, subclass construction and
+    # legacy pickle loading; no constructor dispatch to hidden subclasses.
     # Pickles written before tensor mode have no instance-level _moments.
     _moments = None
 
@@ -124,6 +126,7 @@ class _TensorModeMixin:
             In legacy mode, where callers use ``n`` instead.
         """
         if self._moments is None:
+            # AttributeError preserves hasattr(..., "count") for legacy callers.
             raise AttributeError(
                 "count is available in mode='tensor'; legacy callers use n"
             )
@@ -180,6 +183,17 @@ class _TensorModeMixin:
             raise ValueError("reset is available in mode='tensor'")
         self._moments.reset()
         return self
+
+    def _update_tensor(self, inputs: Tensor, dim: int | None) -> None:
+        """Keep facade precision in sync only after a successful update."""
+        self._moments.update(inputs, dim)
+        self.dtype = self._moments.dtype
+
+    def _call_tensor(self, inputs: Tensor, dim: int | None, minimum_count: int):
+        """Replace observations and read only when the statistic is defined."""
+        self.reset()
+        self.update(inputs, dim=dim)
+        return self.finalize() if self.count > minimum_count else None
 
     def _init_tensor_mode(
         self, *, rule: StatisticRule, like: Tensor | None, kwargs: dict
@@ -321,9 +335,7 @@ class Mean(_TensorModeMixin, StreamingStatistic):
             Mean value, or None for an empty tensor-mode batch.
         """
         if self._moments is not None:
-            self.reset()
-            self.update(inputs, dim=dim)
-            return self.finalize() if self.count else None
+            return self._call_tensor(inputs, dim, minimum_count=0)
         if inputs.device != self.device:
             raise AssertionError(
                 f"Input device, {inputs.device}, and Module device, {self.device}, must be the same."
@@ -365,9 +377,7 @@ class Mean(_TensorModeMixin, StreamingStatistic):
             Tensor-mode observation axis is out of range.
         """
         if self._moments is not None:
-            self._moments.update(inputs, dim)
-            self.dtype = self._moments.dtype
-            return None
+            return self._update_tensor(inputs, dim)
         self._check_shape(inputs)
         if inputs.device != self.device:
             raise AssertionError(
@@ -574,9 +584,7 @@ class Variance(_TensorModeMixin, StreamingStatistic):
         """
 
         if self._moments is not None:
-            self.reset()
-            self.update(inputs, dim=dim)
-            return self.finalize() if self.count > self.correction else None
+            return self._call_tensor(inputs, dim, minimum_count=self.correction)
         if inputs.device != self.device:
             raise AssertionError(
                 f"Input device, {inputs.device}, and Module device, {self.device}, must be the same."
@@ -629,9 +637,7 @@ class Variance(_TensorModeMixin, StreamingStatistic):
         """
 
         if self._moments is not None:
-            self._moments.update(inputs, dim)
-            self.dtype = self._moments.dtype
-            return None
+            return self._update_tensor(inputs, dim)
         if dim != 0:
             raise ValueError("Legacy Variance.update only supports dim=0")
         self._check_shape(inputs)

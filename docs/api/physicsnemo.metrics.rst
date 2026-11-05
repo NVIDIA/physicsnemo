@@ -249,10 +249,19 @@ The tensor-mode implementation composes a ``TensorAccumulator`` with a
 
 A rule implements three pure operations: ``summarize`` produces sufficient
 statistics, ``merge`` combines independent states, and ``result`` reads a result.
+``summarize`` transfers ownership of its returned state to the accumulator; it
+must not retain references to that state or alias caller inputs. ``merge`` must
+leave both input states unchanged. Built-in rules may reuse fresh scratch buffers
+without mutating stored state. ``combine`` copies a donor's state when needed to
+keep the accumulators independent.
 State is a dictionary of floating-point tensors and Python integers. Tensor fields
 may have different shapes, but each field retains its own shape and layout.
 The supplied ``reduce_sum`` helper completes distributed reductions before the
-rule performs nonlinear arithmetic. Rules compare equal only when their
+rule performs nonlinear arithmetic. Its ``SumReduction`` signature accepts
+``(values, dim, *, keepdim=False)``. ``StatisticRule`` exposes extensible callable
+hooks for ``summarize`` and ``result``: each concrete rule declares its accepted
+auxiliary inputs and result options; unsupported keywords raise ``TypeError``.
+Rules compare equal only when their
 statistical configuration matches; frozen dataclasses suit the built-in rules.
 
 The accumulator handles detachment, precision, layout validation, ownership and

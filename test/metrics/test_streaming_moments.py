@@ -375,3 +375,18 @@ def test_combine_empty_accumulator_retains_explicit_precision(device, statistic)
     assert state.dtype == torch.float64
     state.update(torch.ones(3, 2, device=device, dtype=torch.float32))
     assert state.finalize().dtype == torch.float64
+
+
+@pytest.mark.parametrize("statistic", [Mean, Variance])
+def test_tensor_mode_keeps_public_type_and_pickle(statistic):
+    """Tensor mode uses the public class and survives a partially filled pickle."""
+    values = torch.arange(12, dtype=torch.float64).reshape(4, 3)
+    state = statistic(mode="tensor")
+    state.update(values[:2])
+    restored = pickle.loads(pickle.dumps(state))  # noqa: S301 - locally constructed state
+    assert type(restored) is statistic
+    restored.update(values[2:])
+    expected = values.mean(0) if statistic is Mean else values.var(0)
+    torch.testing.assert_close(restored.finalize(), expected)
+    assert restored.count == 4
+    assert restored.dtype == torch.float64

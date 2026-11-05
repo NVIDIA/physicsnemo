@@ -278,3 +278,55 @@ def test_self_combine_is_rejected_without_mutation(device, populated, kind):
     assert state.count == count and state.dtype == dtype
     if populated:
         torch.testing.assert_close(state.finalize(), before)
+
+
+@pytest.mark.parametrize("rule", [MeanRule(), VarianceRule()])
+@pytest.mark.parametrize("reset", [False, True])
+def test_first_update_and_combine_own_their_state(device, rule, reset):
+    """Taking a fresh summary must not alias caller inputs or a combined donor."""
+    values = torch.arange(4, dtype=torch.float64, device=device)
+    state = TensorAccumulator(rule)
+    if reset:
+        state.update(values + 10, dim=None)
+        state.reset()
+    state.update(values, dim=None)
+    state.update(values + 2, dim=None)
+    expected = values + 1 if isinstance(rule, MeanRule) else torch.full_like(values, 2)
+    values.zero_()
+    torch.testing.assert_close(state.finalize(), expected)
+    receiver = TensorAccumulator(rule)
+    receiver.combine(state)
+    state.reset()
+    state.update(torch.zeros_like(values), dim=None)
+    state.update(torch.zeros_like(values), dim=None)
+    torch.testing.assert_close(receiver.finalize(), expected)
+    assert receiver.count == 2
+
+
+@dataclass(frozen=True)
+class InvalidVarianceMergeRule(VarianceRule):
+    """Reject a candidate after the built-in merge has used its scratch buffers."""
+
+    def merge(self, left, right):
+        candidate = super().merge(left, right)
+        candidate["m2"] = candidate["m2"][:1]
+        return candidate
+
+
+@pytest.mark.parametrize("operation", ["update", "combine"])
+def test_variance_merge_failure_preserves_both_inputs(device, operation):
+    """Scratch reuse must not break rollback or mutate a donor accumulator."""
+    x = torch.arange(12, dtype=torch.float64, device=device).reshape(3, 4)
+    state = TensorAccumulator(InvalidVarianceMergeRule())
+    donor = TensorAccumulator(InvalidVarianceMergeRule())
+    state.update(x)
+    donor.update(x + 10)
+    before, other_before = state.finalize(), donor.finalize()
+    with pytest.raises(ValueError, match="shape"):
+        if operation == "update":
+            state.update(x + 10)
+        else:
+            state.combine(donor)
+    torch.testing.assert_close(state.finalize(), before)
+    torch.testing.assert_close(donor.finalize(), other_before)
+    assert state.count == donor.count == 3
