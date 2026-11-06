@@ -127,7 +127,9 @@ Example
     print(mesh.point_data["T_gradient"].shape)  # torch.Size([3, 2])
 
 ``Mesh`` computes geometric quantities, such as centroids, areas, normals,
-and curvature, on first access and caches them. Most operations are both a
+and curvature, on first access and caches them, except under
+``torch.compile`` and when the points require gradients, where it computes
+them on every access. Most operations are both a
 ``Mesh`` method and a function in a submodule, so ``mesh.rotate(...)`` is
 ``rotate(mesh, ...)`` from :doc:`transformations`. To build a triangle mesh
 from a surface whose cells are arbitrary polygons, use

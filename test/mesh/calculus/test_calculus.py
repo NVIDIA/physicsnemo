@@ -565,6 +565,25 @@ class TestLaplacian:
         mean_error = (lap - expected).abs().mean()
         assert mean_error < 0.05, f"Mean error: {mean_error:.4f}"
 
+    def test_dec_laplacian_gradient_after_no_grad_call(self):
+        """A DEC Laplacian call under no_grad leaves a later gradient unchanged."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        sphere = sphere_icosahedral.load(subdivisions=1)
+        phi = sphere.points[:, 0].double() ** 2
+
+        def points_gradient(call_under_no_grad_first: bool) -> torch.Tensor:
+            points = sphere.points.double().clone().requires_grad_()
+            mesh = Mesh(points=points, cells=sphere.cells)
+            if call_under_no_grad_first:
+                with torch.no_grad():
+                    compute_laplacian_points_dec(mesh, phi)
+            compute_laplacian_points_dec(mesh, phi).sum().backward()
+            return points.grad
+
+        torch.testing.assert_close(points_gradient(True), points_gradient(False))
+
 
 class TestManifolds:
     """Test calculus on manifolds (surfaces in higher dimensions)."""
