@@ -408,6 +408,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
+  instead of the file store that current MLflow rejects.
+- `docs/test_scripts` run again on current PhysicsNeMo.
 - `physicsnemo.metrics.cae.cfd.compute_tke_spectrum` no longer raises
   `UnboundLocalError` when `length` is passed; the domain length now sets the
   grid spacing used for the wavenumbers.
