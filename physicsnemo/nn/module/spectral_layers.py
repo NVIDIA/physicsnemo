@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Tuple
+import functools
+from typing import Callable, List, Tuple
 
 import numpy as np
 import torch
@@ -22,6 +23,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 from jaxtyping import Complex, Float
 from torch import Tensor
+
+
+def _fp32_under_autocast(forward: Callable) -> Callable:
+    r"""Run a spectral convolution ``forward`` in float32 when autocast is active.
+
+    A float16 input yields a complex-half spectrum, which cuFFT supports only
+    for power-of-two signal sizes and which the mode multiplication does not
+    support at all. A bfloat16 input is not accepted by every FFT backend, and
+    where it is, the transform is not guaranteed to be computed in float32. So
+    when autocast is active for the input's device, float16 and bfloat16
+    inputs are upcast to float32 and the FFT, mode multiplication and inverse
+    FFT run with autocast disabled. Layers around the spectral convolution
+    keep running under autocast. Without autocast, the wrapped ``forward`` is
+    called unchanged.
+
+    .. code-block:: python
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            ...
+
+    Parameters
+    ----------
+    forward : Callable[[torch.nn.Module, torch.Tensor], torch.Tensor]
+        ``forward`` method of a spectral convolution. See code block above.
+
+    Returns
+    -------
+    Callable[[torch.nn.Module, torch.Tensor], torch.Tensor]
+        Wrapped ``forward`` with the same signature.
+    """
+
+    @functools.wraps(forward)
+    def wrapper(self, x: Tensor) -> Tensor:
+        device_type = x.device.type
+        if torch.amp.is_autocast_available(device_type) and torch.is_autocast_enabled(
+            device_type
+        ):
+            if x.dtype in (torch.float16, torch.bfloat16):
+                x = x.float()
+            with torch.autocast(device_type=device_type, enabled=False):
+                return forward(self, x)
+        return forward(self, x)
+
+    return wrapper
 
 
 class SpectralConv1d(nn.Module):
@@ -75,6 +120,7 @@ class SpectralConv1d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bix,iox->box", input, cweights)
 
+    @_fp32_under_autocast
     def forward(
         self, x: Float[Tensor, "batch in_channels x"]
     ) -> Float[Tensor, "batch out_channels x"]:
@@ -87,7 +133,7 @@ class SpectralConv1d(nn.Module):
             self.out_channels,
             x.size(-1) // 2 + 1,
             device=x.device,
-            dtype=torch.cfloat,
+            dtype=x_ft.dtype,
         )  # (batch, out_channels, x//2+1) complex
         out_ft[:, :, : self.modes1] = self.compl_mul1d(
             x_ft[:, :, : self.modes1],
@@ -100,7 +146,7 @@ class SpectralConv1d(nn.Module):
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
-        self.weights1.data = self.scale * torch.rand(self.weights1.data.shape)
+        self.weights1.data = self.scale * torch.rand_like(self.weights1)
 
 
 class SpectralConv2d(nn.Module):
@@ -161,6 +207,7 @@ class SpectralConv2d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixy,ioxy->boxy", input, cweights)
 
+    @_fp32_under_autocast
     def forward(
         self, x: Float[Tensor, "batch in_channels h w"]
     ) -> Float[Tensor, "batch out_channels h w"]:
@@ -169,7 +216,7 @@ class SpectralConv2d(nn.Module):
 
         # Initialize output in frequency space
         out_ft = torch.zeros(
-            x.size(0), self.out_channels, h, w, dtype=torch.cfloat, device=x.device
+            x.size(0), self.out_channels, h, w, dtype=x_ft.dtype, device=x.device
         )  # (batch, out_channels, h, w) complex
 
         # Accumulate Fourier modes. Use .contiguous() on sliced complex tensors and
@@ -196,8 +243,8 @@ class SpectralConv2d(nn.Module):
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
-        self.weights1.data = self.scale * torch.rand(self.weights1.data.shape)
-        self.weights2.data = self.scale * torch.rand(self.weights2.data.shape)
+        self.weights1.data = self.scale * torch.rand_like(self.weights1)
+        self.weights2.data = self.scale * torch.rand_like(self.weights2)
 
 
 class SpectralConv3d(nn.Module):
@@ -278,6 +325,7 @@ class SpectralConv3d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixyz,ioxyz->boxyz", input, cweights)
 
+    @_fp32_under_autocast
     def forward(
         self, x: Float[Tensor, "batch in_channels d1 d2 d3"]
     ) -> Float[Tensor, "batch out_channels d1 d2 d3"]:
@@ -293,7 +341,7 @@ class SpectralConv3d(nn.Module):
             d1,
             d2,
             d3,
-            dtype=torch.cfloat,
+            dtype=x_ft.dtype,
             device=x.device,
         )  # (batch, out_channels, d1, d2, d3) complex
 
@@ -340,10 +388,10 @@ class SpectralConv3d(nn.Module):
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
-        self.weights1.data = self.scale * torch.rand(self.weights1.data.shape)
-        self.weights2.data = self.scale * torch.rand(self.weights2.data.shape)
-        self.weights3.data = self.scale * torch.rand(self.weights3.data.shape)
-        self.weights4.data = self.scale * torch.rand(self.weights4.data.shape)
+        self.weights1.data = self.scale * torch.rand_like(self.weights1)
+        self.weights2.data = self.scale * torch.rand_like(self.weights2)
+        self.weights3.data = self.scale * torch.rand_like(self.weights3)
+        self.weights4.data = self.scale * torch.rand_like(self.weights4)
 
 
 class SpectralConv4d(nn.Module):
@@ -501,6 +549,7 @@ class SpectralConv4d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixyzt,ioxyzt->boxyzt", input, cweights)
 
+    @_fp32_under_autocast
     def forward(
         self, x: Float[Tensor, "batch in_channels d1 d2 d3 d4"]
     ) -> Float[Tensor, "batch out_channels d1 d2 d3 d4"]:
@@ -522,7 +571,7 @@ class SpectralConv4d(nn.Module):
             d2,
             d3,
             d4,
-            dtype=torch.cfloat,
+            dtype=x_ft.dtype,
             device=x.device,
         )  # (batch, out_channels, d1, d2, d3, d4) complex
 
@@ -622,14 +671,14 @@ class SpectralConv4d(nn.Module):
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
-        self.weights1.data = self.scale * torch.rand(self.weights1.data.shape)
-        self.weights2.data = self.scale * torch.rand(self.weights2.data.shape)
-        self.weights3.data = self.scale * torch.rand(self.weights3.data.shape)
-        self.weights4.data = self.scale * torch.rand(self.weights4.data.shape)
-        self.weights5.data = self.scale * torch.rand(self.weights5.data.shape)
-        self.weights6.data = self.scale * torch.rand(self.weights6.data.shape)
-        self.weights7.data = self.scale * torch.rand(self.weights7.data.shape)
-        self.weights8.data = self.scale * torch.rand(self.weights8.data.shape)
+        self.weights1.data = self.scale * torch.rand_like(self.weights1)
+        self.weights2.data = self.scale * torch.rand_like(self.weights2)
+        self.weights3.data = self.scale * torch.rand_like(self.weights3)
+        self.weights4.data = self.scale * torch.rand_like(self.weights4)
+        self.weights5.data = self.scale * torch.rand_like(self.weights5)
+        self.weights6.data = self.scale * torch.rand_like(self.weights6)
+        self.weights7.data = self.scale * torch.rand_like(self.weights7)
+        self.weights8.data = self.scale * torch.rand_like(self.weights8)
 
 
 # ==========================================
