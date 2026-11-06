@@ -20,8 +20,11 @@ import warnings
 
 import pytest
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.core import Module
+from physicsnemo.diffusion import DiffusionExtraTimes
 from physicsnemo.diffusion.multi_diffusion import MultiDiffusionModel2D
 from physicsnemo.diffusion.multi_diffusion.predictor import MultiDiffusionPredictor
 from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
@@ -36,6 +39,7 @@ from .helpers import (
 from .test_multi_diffusion_models import (
     BATCH,
     CHANNELS,
+    EXTRA_TIME_FIELDS,
     GRID_CONFIGS,
     IMG_H,
     IMG_W,
@@ -46,6 +50,29 @@ from .test_multi_diffusion_models import (
     _create_md_model_edm_precond,
     _make_condition,
 )
+
+
+class CustomExtraTimes(DiffusionExtraTimes):
+    r"""Additional time fields that callers can supply independently."""
+
+    test_t: Float[torch.Tensor, " B"] | None = None
+
+
+class BoundExtraTimeModel(Module):
+    r"""Bind named times to a single-time call for predictor tests."""
+
+    def __init__(self, model: Module, fields: tuple[str, ...]):
+        super().__init__()
+        self.model = model
+        self.fields = fields
+
+    def forward(self, x, t, condition=None, **kwargs):
+        extras = CustomExtraTimes(
+            **{name: t / (index + 2) for index, name in enumerate(self.fields)},
+            batch_size=t.shape,
+        )
+        return self.model(x, (t, extras), condition=condition, **kwargs)
+
 
 REF_PREFIX = "test_multi_diffusion_predictor_"
 
@@ -58,11 +85,18 @@ EXEC_MODES = [
     ("plain", None, False),
     ("chunked", 3, False),
     ("checkpointed", None, True),
+    ("chunked_checkpointed", 3, True),
 ]
 
 PREDICTION_TYPES = ["score", "epsilon", "flow"]
 
-COMPILE_CONFIGS = ["uncond", "cond_patch", "cond_interp", "cond_vec_img"]
+COMPILE_CONFIGS = [
+    "uncond",
+    "cond_patch",
+    "cond_interp",
+    "cond_vec_img",
+    *EXTRA_TIME_FIELDS,
+]
 
 
 # =============================================================================
@@ -78,7 +112,13 @@ def _create_md_for_config(config_name, img_shape=(IMG_H, IMG_W), seed=0):
     """
     if config_name == "edm_precond":
         return _create_md_model_edm_precond(img_shape=img_shape, seed=seed)
-    return _create_md_model(config_name, img_shape=img_shape, seed=seed)
+    md = _create_md_model(config_name, img_shape=img_shape, seed=seed)
+    fields = EXTRA_TIME_FIELDS.get(config_name)
+    if fields is not None:
+        md = MultiDiffusionModel2D(
+            BoundExtraTimeModel(md.model, fields), global_spatial_shape=img_shape
+        )
+    return md
 
 
 def _create_predictor(
@@ -453,10 +493,13 @@ class TestGradientFlow:
         EXEC_MODES,
         ids=[m[0] for m in EXEC_MODES],
     )
-    def test_gradient_flow_fuse(self, device, mode_id, chunk_size, use_checkpointing):
+    @pytest.mark.parametrize("config_name", ["uncond", *EXTRA_TIME_FIELDS])
+    def test_gradient_flow_fuse(
+        self, device, mode_id, chunk_size, use_checkpointing, config_name
+    ):
         """Gradient flows through forward (fuse) for every execution mode."""
         pred = _create_predictor(
-            "uncond",
+            config_name,
             device=device,
             fuse=True,
             chunk_size=chunk_size,
@@ -465,8 +508,15 @@ class TestGradientFlow:
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
             True
         )
-        t = torch.rand(BATCH, device=device)
+        t = torch.rand(BATCH, device=device).requires_grad_(True)
         pred(x, t).sum().backward()
+        assert t.grad is not None
+        reference = _create_predictor(config_name, device=device, fuse=True)
+        x_ref = x.detach().requires_grad_(True)
+        t_ref = t.detach().requires_grad_(True)
+        reference(x_ref, t_ref).sum().backward()
+        torch.testing.assert_close(x.grad, x_ref.grad)
+        torch.testing.assert_close(t.grad, t_ref.grad)
         assert x.grad is not None and not torch.isnan(x.grad).any()
 
     def test_gradient_flow_no_fuse(self, device):
@@ -539,19 +589,39 @@ class TestGradientFlow:
 class TestCompile:
     """torch.compile compatibility tests for MultiDiffusionPredictor."""
 
-    def test_compiled_forward_fuse(self, device, config_name):
+    @pytest.mark.parametrize(
+        "mode_id,chunk_size,use_checkpointing",
+        EXEC_MODES,
+        ids=[m[0] for m in EXEC_MODES],
+    )
+    def test_compiled_forward_fuse(
+        self, device, config_name, mode_id, chunk_size, use_checkpointing
+    ):
         """Compiled predictor (fuse=True) matches eager; no recompile on second call."""
         torch._dynamo.config.error_on_recompile = True
 
-        pred = _create_predictor(config_name, device=device, fuse=True)
-        compiled_pred = torch.compile(pred, fullgraph=True)
+        pred = _create_predictor(
+            config_name,
+            device=device,
+            fuse=True,
+            chunk_size=chunk_size,
+            use_checkpointing=use_checkpointing,
+        )
+        compiled_pred = torch.compile(pred, backend="aot_eager", fullgraph=True)
 
-        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
-        t = torch.rand(BATCH, device=device)
+        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
+            True
+        )
+        t = torch.rand(BATCH, device=device, requires_grad=True)
 
         out_eager = pred(x, t)
         out_compiled = compiled_pred(x, t)
         torch.testing.assert_close(out_eager, out_compiled)
+        inputs = (x, t, *pred.model.parameters())
+        torch.testing.assert_close(
+            torch.autograd.grad(out_compiled.sum(), inputs),
+            torch.autograd.grad(out_eager.sum(), inputs),
+        )
 
         out_compiled_2 = compiled_pred(x, t)
         torch.testing.assert_close(out_eager, out_compiled_2)

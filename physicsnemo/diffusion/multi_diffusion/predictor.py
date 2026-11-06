@@ -123,6 +123,15 @@ class MultiDiffusionPredictor(Predictor):
         Additional keyword arguments bound once at construction and
         forwarded to the wrapped model at every call.
 
+    .. note::
+
+        This :class:`~physicsnemo.diffusion.Predictor` takes one time tensor
+        and returns one prediction tensor. If a backbone needs
+        :class:`~physicsnemo.diffusion.DiffusionExtraTimes`, bind its extra
+        times in a sampling adapter. If it returns
+        :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`, the adapter can
+        handle those outputs before returning the prediction.
+
     See Also
     --------
     :class:`~physicsnemo.diffusion.multi_diffusion.MultiDiffusionModel2D` :
@@ -293,6 +302,41 @@ class MultiDiffusionPredictor(Predictor):
     >>> grad = torch.autograd.grad(x0_global.sum(), x)[0]
     >>> grad.shape
     torch.Size([3, 3, 16, 16])
+
+    **Example 5:** Adapt a conditional backbone that takes an extra
+    destination time and returns an auxiliary log-scale. The adapter binds
+    ``r=0`` and selects the prediction before the tensor-only predictor sees
+    it. This illustrates the interface, not a MeanFlow sampling algorithm.
+
+    >>> from physicsnemo.diffusion import DiffusionExtraTimes, DiffusionExtraOutputs
+    >>> class ExtendedMultiCondBackbone(MultiCondBackbone):
+    ...     def forward(self, x, t, condition=None):
+    ...         t, extra_times = t
+    ...         prediction = super().forward(x, t, condition)
+    ...         # The auxiliary head depends only on the primary time.
+    ...         outputs = DiffusionExtraOutputs(logvar=t, batch_size=t.shape)
+    ...         return prediction / (1 + t - extra_times.r)[:, None, None, None], outputs
+    >>> class SamplingAdapter(Module):
+    ...     def __init__(self, model):
+    ...         super().__init__()
+    ...         self.model = model
+    ...     def forward(self, x, t, condition=None):
+    ...         # Bind the destination time required by this backbone.
+    ...         extras = DiffusionExtraTimes(r=torch.zeros_like(t), batch_size=t.shape)
+    ...         prediction, outputs = self.model(x, (t, extras), condition=condition)
+    ...         # Consume auxiliary outputs here; Predictor returns only a tensor.
+    ...         return prediction
+    >>> md = MultiDiffusionModel2D(
+    ...     SamplingAdapter(ExtendedMultiCondBackbone()),
+    ...     global_spatial_shape=(16, 16),
+    ...     condition_patch={"image": True},
+    ... )
+    >>> md.set_random_patching(patch_shape=(8, 8), patch_num=4)
+    >>> _ = md.eval()
+    >>> predictor = MultiDiffusionPredictor(md, condition=condition)
+    >>> predictor.set_patching(overlap_pix=0, boundary_pix=0)
+    >>> predictor(torch.ones(2, 3, 16, 16), torch.ones(2)).shape
+    torch.Size([2, 3, 16, 16])
     """
 
     def __init__(
@@ -705,7 +749,7 @@ class MultiDiffusionPredictor(Predictor):
         cond: Any,
     ) -> Tensor:
         """Call the wrapped model on the patched inputs, no checkpointing."""
-        return self._md_model(
+        output = self._md_model(
             x_p,
             t_p,
             condition=cond,
@@ -714,6 +758,7 @@ class MultiDiffusionPredictor(Predictor):
             condition_is_patched=True,
             **self._model_kwargs,
         )
+        return output[0] if isinstance(output, tuple) else output
 
     def _call_model_with_checkpoint(
         self,
@@ -729,15 +774,7 @@ class MultiDiffusionPredictor(Predictor):
         """
 
         def _inner(xc: Tensor, tc: Tensor, _cond=cond) -> Tensor:  # noqa: ANN001
-            return self._md_model(
-                xc,
-                tc,
-                condition=_cond,
-                x_is_patched=True,
-                t_is_patched=True,
-                condition_is_patched=True,
-                **self._model_kwargs,
-            )
+            return self._call_model_direct(xc, tc, _cond)
 
         return checkpoint(_inner, x_p, t_p, use_reentrant=False)
 
