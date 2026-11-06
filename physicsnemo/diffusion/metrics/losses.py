@@ -165,6 +165,14 @@ class MSEDSMLoss:
     :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.score_to_x0`
     method provides a ready-made ``score_to_x0_fn``.
 
+    Notes
+    -----
+    This loss passes one diffusion time tensor to the model and expects one
+    prediction tensor in return. It does not support ``(t, extra_times)``
+    tuples with :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    ``(prediction, extra_outputs)`` tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`.
+
     Parameters
     ----------
     model : DiffusionModel
@@ -503,6 +511,14 @@ class WeightedMSEDSMLoss:
     For more details on prediction types, expected signatures, and
     additional examples, see :class:`MSEDSMLoss`.
 
+    Notes
+    -----
+    This loss passes one diffusion time tensor to the model and expects one
+    prediction tensor in return. It does not support ``(t, extra_times)``
+    tuples with :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    ``(prediction, extra_outputs)`` tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`.
+
     Parameters
     ----------
     model : DiffusionModel
@@ -709,6 +725,14 @@ class FlowMatchingLoss:
         you **must** wrap the scheduler with
         :class:`~physicsnemo.diffusion.noise_schedulers.DomainParallelNoiseScheduler`;
         a plain scheduler with sharded data raises a ``ValueError``.
+
+    Notes
+    -----
+    This loss passes one diffusion time tensor to the model and expects one
+    prediction tensor in return. It does not support ``(t, extra_times)``
+    tuples with :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    ``(prediction, extra_outputs)`` tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`.
 
     Parameters
     ----------
@@ -940,6 +964,14 @@ class WeightedFlowMatchingLoss:
         (e.g., a :class:`~physicsnemo.domain_parallel.ShardTensor`),
         ``weight`` must be a ``DTensor`` on the same device mesh; a plain
         tensor ``weight`` raises a ``ValueError``.
+
+    Notes
+    -----
+    This loss passes one diffusion time tensor to the model and expects one
+    prediction tensor in return. It does not support ``(t, extra_times)``
+    tuples with :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    ``(prediction, extra_outputs)`` tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`.
 
     Parameters
     ----------

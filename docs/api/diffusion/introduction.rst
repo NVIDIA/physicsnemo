@@ -290,6 +290,16 @@ API Reference
     :members:
     :exclude-members: __init__
 
+:code:`DiffusionExtraTimes`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.diffusion.DiffusionExtraTimes
+
+:code:`DiffusionExtraOutputs`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.diffusion.DiffusionExtraOutputs
+
 :code:`Predictor`
 ~~~~~~~~~~~~~~~~~
 
