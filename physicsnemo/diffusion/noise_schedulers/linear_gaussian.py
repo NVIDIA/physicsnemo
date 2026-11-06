@@ -130,6 +130,7 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     ...         smin_rho = self.sigma_min**(1/self.rho)
     ...         frac = i/(num_steps-1)
     ...         t = (smax_rho + frac * (smin_rho - smax_rho))**self.rho
+    ...         # Include the clean endpoint after the reverse-time grid.
     ...         return torch.cat([t, torch.zeros(1, device=device)])
     ...
     ...     def sample_time(self, N, *, device=None, dtype=None):
@@ -456,6 +457,50 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         """
         return self.alpha(t) / self.sigma(t)
 
+    def snr_inv(
+        self,
+        q: Float[Tensor, " *shape"],
+    ) -> Float[Tensor, " *shape"]:
+        r"""Find the diffusion time for a signal-to-noise amplitude ratio.
+
+        Use this to match noise levels between diffusion schedules. The
+        ratio compares signal and noise amplitudes. The usual power
+        signal-to-noise ratio is its square.
+
+        .. math::
+
+            q = \alpha(t) / \sigma(t), \qquad t = \mathrm{snr\_inv}(q).
+
+        Parameters
+        ----------
+        q : Tensor
+            Amplitude ratio, not its square. Built-in continuous inverses
+            support finite positive ratios without clipping to training bounds.
+
+        Returns
+        -------
+        Tensor
+            Diffusion times with the shape of ``q``.
+
+        Notes
+        -----
+        Override this method if your custom scheduler needs an inverse.
+        Keep the calculation differentiable for training losses such as sCM.
+        Schedulers without an inverse raise ``NotImplementedError`` here.
+
+        Examples
+        --------
+        For EDM, the signal coefficient is one and the noise coefficient equals time.
+        Inverting a signal-to-noise ratio of two gives time one half.
+
+        >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+        >>> EDMNoiseScheduler().snr_inv(torch.tensor([2.0]))
+        tensor([0.5000])
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement snr_inv()."
+        )
+
     def x0_to_score(
         self,
         x0: Float[Tensor, " B *dims"],
@@ -491,6 +536,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A caller can convert a clean-data predictor into a score predictor when it needs
+        score parameterization. The conversion uses the noisy state and time to recover
+        the implied Gaussian score.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have an x0-predictor, wrap it for manual conversion
@@ -562,6 +611,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A caller can convert a score predictor into a clean-data predictor for a loss or
+        denoiser that expects that parameterization. The conversion combines the score
+        with the noisy state at the same time.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have a score-predictor, wrap it for manual conversion
@@ -620,6 +673,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A caller can convert a noise predictor into a score predictor without changing
+        its backbone. The scheduler applies its time-dependent noise coefficient to the
+        predicted noise.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have an epsilon-predictor, wrap it for manual conversion
@@ -677,6 +734,9 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A score predictor can also supply a noise prediction for a noise-based consumer.
+        The scheduler scales the score by its time-dependent noise coefficient.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have a score-predictor, wrap it for manual conversion:
@@ -740,6 +800,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A noise predictor can supply a clean-data estimate for losses that train on
+        clean targets. The conversion subtracts predicted noise from the noisy state
+        using the schedule coefficients.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have an epsilon-predictor, wrap it for manual conversion
@@ -801,6 +865,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A clean-data predictor can supply a noise estimate without retraining the
+        backbone. The conversion subtracts the predicted clean signal from the noisy
+        state.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have an x0-predictor, wrap it for manual conversion:
@@ -867,6 +935,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A clean-data predictor can supply a velocity target for a flow-matching loss.
+        The conversion differentiates the schedule coefficients at the same diffusion
+        time.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have an x0-predictor, wrap it for manual conversion
@@ -934,6 +1006,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A caller can convert a velocity predictor to a clean-data predictor when it
+        needs the original sample. The scheduler solves the linear-Gaussian velocity
+        relation using the noisy state.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have a flow-predictor, wrap it for manual conversion:
@@ -1003,6 +1079,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A score predictor can supply the velocity expected by a flow-matching loss. The
+        scheduler first relates the score to the clean signal, then applies the schedule
+        derivatives.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have a score-predictor, wrap it for manual conversion
@@ -1073,6 +1153,9 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
+        A velocity predictor can supply the score needed by a denoiser. The scheduler
+        uses the noisy state and schedule derivatives to perform the conversion.
+
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
         >>> scheduler = EDMNoiseScheduler()
         >>> # If you have a flow-predictor, wrap it for manual conversion
@@ -1190,7 +1273,9 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         Examples
         --------
-        Generate ODE RHS from a score-predictor:
+        A denoiser returns the reverse-process right-hand side used by a solver. This
+        first example starts from a score predictor and requests the probability-flow
+        ODE.
 
         >>> import torch
         >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
@@ -1204,7 +1289,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         >>> dx_dt.shape
         torch.Size([2, 3, 8, 8])
 
-        Generate ODE RHS from an x0-predictor (score conversion is done internally):
+        A clean-data predictor can use the same ODE interface without producing a
+        score explicitly. The scheduler converts its output to the required score.
 
         >>> x0_pred = lambda x, t: x / (1 + t.view(-1, 1, 1, 1)**2)  # Toy x0-predictor
         >>> denoiser = scheduler.get_denoiser(
@@ -1213,7 +1299,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         >>> dx_dt.shape
         torch.Size([2, 3, 8, 8])
 
-        Generate ODE RHS from an epsilon-predictor:
+        A noise predictor can also drive the ODE through the same factory.
+        The scheduler converts its output before evaluating the right-hand side.
 
         >>> eps_pred = lambda x, t: x * 0.1  # Toy epsilon-predictor
         >>> denoiser = scheduler.get_denoiser(

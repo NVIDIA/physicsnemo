@@ -28,6 +28,7 @@ from .preconditioners import (  # noqa: F401
     BaseAffinePreconditioner,
     EDMPreconditioner,
     IDDPMPreconditioner,
+    TrigFlowPreconditioner,
     VEPreconditioner,
     VPPreconditioner,
 )

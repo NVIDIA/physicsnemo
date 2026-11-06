@@ -23,6 +23,46 @@ the coupling between noise schedule and reverse process in one place and avoids
 the need for schedule-specific sampler code.
 
 
+Amplitude ratio and inverse
+---------------------------
+
+The amplitude ratio :math:`\alpha(t)/\sigma(t)` measures signal strength
+relative to noise strength. The method ``scheduler.snr(t)`` returns this
+ratio. The usual power signal-to-noise ratio is its square.
+
+Use ``scheduler.snr_inv(q)`` to recover a diffusion time from an amplitude
+ratio or to match noise levels between schedules. EDM, VE, VP, rectified-flow,
+continuous iDDPM, and TrigFlow provide differentiable inverses. Use finite
+positive ratios on the schedule's invertible domain. Inverses do not clip
+to training bounds. Add ``snr_inv`` for custom schedulers that need this
+conversion, and keep it differentiable for training losses such as sCM.
+
+.. code-block:: python
+
+    import torch
+    from physicsnemo.diffusion.noise_schedulers import TrigFlowNoiseScheduler
+
+    scheduler = TrigFlowNoiseScheduler(sigma_data=0.5)
+    t = torch.tensor([0.2, 0.7])
+    recovered = scheduler.snr_inv(scheduler.snr(t))
+    torch.testing.assert_close(recovered, t)
+
+TrigFlow interpolates between data and Gaussian noise with trigonometric
+coefficients. Its diffusion time is an angle in radians, whereas EDM uses
+the noise standard deviation.
+
+Pair ``TrigFlowNoiseScheduler`` with ``TrigFlowPreconditioner`` and the same
+``sigma_data``. Training samples diffusion times uniformly. Inference uses
+an evenly spaced grid ending at zero. The denoising weight
+:math:`1/(\sigma_d\sin(t))^2` gives unit weight to the normalized-velocity
+residual with this preconditioner. Keep training diffusion times above zero
+for denoising losses and below :math:`\pi/2` for reverse-process sampling.
+
+.. autoclass:: TrigFlowNoiseScheduler
+    :show-inheritance:
+    :members:
+
+
 Role in Training
 ----------------
 
