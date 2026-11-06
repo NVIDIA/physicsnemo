@@ -208,6 +208,9 @@ def _zarr_mesh_subsampled(
         runs = _indices_to_runs(indices)
         mesh = Mesh(
             points=_ioz._read_rows(group["points"], runs),
+            cells=None
+            if drop_cells or "cells" not in group
+            else _ioz._read_full(group["cells"]),
             point_data=_ioz._read_tree(
                 group, "point_data", leaf_reader=lambda a: _ioz._read_rows(a, runs)
             ),

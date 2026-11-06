@@ -177,6 +177,21 @@ def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, o
         assert_meshes_equal(from_memmap.boundaries[name], from_store.boundaries[name])
 
 
+def test_point_subsample_keeps_zero_cell_shape(tmp_path):
+    """A point subsample of a mesh with zero cells keeps its cell shape in both
+    formats."""
+    mesh = Mesh(points=torch.rand(6, 3), cells=torch.empty(0, 3, dtype=torch.long))
+    mesh.save(tmp_path / "case.pmsh")
+    to_zarr(mesh, tmp_path / "case.zarr")
+    for pattern in ("*.pmsh", "*.zarr"):
+        reader = MeshReader(
+            tmp_path, pattern=pattern, pin_memory=False, subsample_n_points=2
+        )
+        loaded = reader[0][0]
+        assert loaded.n_points == 2
+        assert loaded.cells.shape == (0, 3), pattern
+
+
 @pytest.mark.parametrize("pattern", ["*.pdmsh", "*.zarr"])
 def test_unseeded_interior_count_is_drawn_once(tmp_path, pattern):
     """Without a seed, the zarr read and the reader share one count draw."""

@@ -31,6 +31,7 @@ need ``zarr >= 3``). This module adds only the two things tensordict cannot know
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -81,9 +82,20 @@ def to_zarr(
     Raises
     ------
     TypeError
-        If ``obj`` is not a Mesh or DomainMesh, or if a field has a dtype
-        that NumPy cannot represent (e.g. ``torch.bfloat16``). Nothing is
-        written in that case; cast the field first (e.g. to ``torch.float32``).
+        If ``obj`` is not a Mesh or DomainMesh, if it or one of its meshes is
+        a subclass that declares fields of its own (:func:`from_zarr` could
+        not restore them), or if a field has a dtype that NumPy cannot
+        represent (e.g. ``torch.bfloat16``). Nothing is written in that case;
+        cast the field first (e.g. to ``torch.float32``).
+    ValueError
+        If a field key or boundary name contains ``"/"`` or ``"\\"``, which
+        zarr reads as group separators. Nothing is written in that case;
+        rename it first.
+
+    Notes
+    -----
+    A subclass of Mesh or DomainMesh without fields of its own is written as
+    its base class, so :func:`from_zarr` loads it as a Mesh or DomainMesh.
 
     Examples
     --------
@@ -93,11 +105,35 @@ def to_zarr(
     """
     if not isinstance(obj, (Mesh, DomainMesh)):
         raise TypeError(f"Expected Mesh or DomainMesh, got {type(obj).__name__}")
+    base = DomainMesh if isinstance(obj, DomainMesh) else Mesh
+    parts = [(obj, base)]
+    if base is DomainMesh:
+        parts += [(mesh, Mesh) for mesh in (obj.interior, *obj.boundaries.values())]
+    for part, part_base in parts:
+        extra_fields = {f.name for f in dataclasses.fields(part)} - {
+            f.name for f in dataclasses.fields(part_base)
+        }
+        if extra_fields:
+            raise TypeError(
+                f"Cannot write {type(part).__name__} to zarr: from_zarr could "
+                f"not restore its fields {sorted(extra_fields)}."
+            )
 
     # Serialize the underlying TensorDict: the tensorclass `to_zarr` proxy
     # tries to re-wrap the returned PersistentTensorDict as a Mesh/DomainMesh,
     # which their __post_init__ validation rejects.
     td = obj.to_tensordict()
+
+    # zarr splits names on "/" (and on "\", which it normalizes to "/") into
+    # nested groups, so such a name would not read back. Reject it before
+    # writing anything.
+    for key in td.keys(include_nested=True):
+        key = (key,) if isinstance(key, str) else key
+        if "/" in key[-1] or "\\" in key[-1]:
+            raise ValueError(
+                f"Cannot write key {key} to zarr: {key[-1]!r} contains '/' or "
+                "'\\', which zarr reads as group separators. Rename it first."
+            )
 
     # tensordict writes through NumPy, so a dtype NumPy lacks would fail midway
     # and leave a partial store behind. Reject it before writing anything.
@@ -117,7 +153,7 @@ def to_zarr(
     td.to_zarr(str(store), **kwargs)
 
     root = zarr.open_group(str(store), mode="a")
-    root.attrs[_TYPE_ATTR] = type(obj).__name__
+    root.attrs[_TYPE_ATTR] = base.__name__
     # Consolidate metadata: opening the store then costs one metadata read
     # instead of one per group -- on networked filesystems (Lustre) each
     # uncached lookup is a metadata-server round-trip.
@@ -203,11 +239,7 @@ def _read_tree(group: "zarr.Group", name: str, device=None, leaf_reader=None):
 
 def _mesh_from_group(group: "zarr.Group", device) -> Mesh:
     """Materialize one mesh group as an in-memory Mesh."""
-    # An empty cells array loads as "no cells", so that Mesh builds the
-    # empty-cells sentinel of a point cloud.
-    cells = None
-    if "cells" in group and group["cells"].shape[0] > 0:
-        cells = _read_full(group["cells"], device)
+    cells = _read_full(group["cells"], device) if "cells" in group else None
     return Mesh(
         points=_read_full(group["points"], device),
         cells=cells,
@@ -233,6 +265,12 @@ def from_zarr(
         DomainMesh store (e.g. ``<store>.zarr/boundaries/<name>``).
     device : torch.device, str, or None
         Device for the returned tensors (default CPU).
+
+    Returns
+    -------
+    Mesh or DomainMesh
+        The loaded mesh. A store written from a subclass loads as its base
+        class (see :func:`to_zarr`).
 
     Raises
     ------
