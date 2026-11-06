@@ -20,10 +20,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 import physicsnemo.core
 from physicsnemo.core import Module
+from physicsnemo.diffusion.noise_schedulers import LinearGaussianNoiseScheduler
 
 # Directory for test reference data
 DATA_DIR = Path(__file__).parent / "data"
@@ -75,6 +77,87 @@ class Conv3dX0Predictor(Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         t_bc = t.view(-1, 1, 1, 1, 1)
         return self.net(x) / (1 + t_bc)
+
+
+class GaussianDenoiser(Module):
+    r"""Predict the posterior mean for unit-variance Gaussian clean data."""
+
+    def __init__(self, scheduler: LinearGaussianNoiseScheduler) -> None:
+        super().__init__()
+        self.scheduler = scheduler
+        self.gain = torch.nn.Parameter(torch.tensor(1.0))
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"],
+        condition: TensorDict | None = None,
+        **kwargs: Any,
+    ) -> Float[torch.Tensor, " B *dims"]:
+        time = t.reshape(-1, *([1] * (x.ndim - 1)))  # (B, 1, ...)
+        alpha, sigma = self.scheduler.alpha(time), self.scheduler.sigma(time)
+        return self.gain * alpha * x / (alpha.square() + sigma.square())
+
+
+class FeatureDiscriminator(Module):
+    r"""Map named spatial features to one logit per sample."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gain = torch.nn.Parameter(torch.tensor(0.4))
+
+    def forward(self, features: TensorDict) -> Float[torch.Tensor, " B logits"]:
+        r"""Keep a differentiable input path for generator-gradient checks."""
+        return self.gain * features["spatial"].flatten(1).mean(1, keepdim=True)
+
+
+class CustomGaussianScheduler(LinearGaussianNoiseScheduler):
+    r"""A log-noise path with no training bounds or usable inference grid."""
+
+    def alpha(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return torch.ones_like(t)
+
+    def alpha_dot(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return torch.zeros_like(t)
+
+    def sigma(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return t.exp()
+
+    def sigma_dot(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return t.exp()
+
+    def sigma_inv(
+        self, sigma: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return sigma.log()
+
+    def snr_inv(
+        self, snr: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return -snr.log()
+
+    def loss_weight(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return torch.ones_like(t)
+
+    def sample_time(
+        self, N: int, *, device=None, dtype=None
+    ) -> Float[torch.Tensor, " N"]:
+        return torch.randn(N, device=device, dtype=dtype)
+
+    def timesteps(
+        self, num_steps: int, *, device=None, dtype=None
+    ) -> Float[torch.Tensor, " N"]:
+        raise AssertionError("Training must not request an inference grid.")
 
 
 def make_input(
