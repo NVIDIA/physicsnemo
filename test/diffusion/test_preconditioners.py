@@ -20,13 +20,16 @@ from typing import Any, Tuple
 
 import pytest
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
+from physicsnemo.diffusion import DiffusionExtraOutputs, DiffusionExtraTimes
 from physicsnemo.diffusion.preconditioners import (
     BaseAffinePreconditioner,
     EDMPreconditioner,
     IDDPMPreconditioner,
+    TrigFlowPreconditioner,
     VEPreconditioner,
     VPPreconditioner,
 )
@@ -73,6 +76,34 @@ class ConvModel(Module):
         return out + t_scale
 
 
+class CustomExtraTimes(DiffusionExtraTimes):
+    test_t: Float[torch.Tensor, " B"] | None = None
+
+
+class CustomExtraOutputs(DiffusionExtraOutputs):
+    test_pred: Float[torch.Tensor, " B C H W"] | None = None
+
+
+class ExtendedConvModel(ConvModel):
+    """Exercise named times and outputs through the convolutional backbone."""
+
+    def forward(self, x, t, condition=None, **kwargs):
+        t, extra_times = t if isinstance(t, tuple) else (t, None)
+        prediction = super().forward(x, t, condition, **kwargs)
+        if extra_times is None:
+            return prediction
+        custom = extra_times.test_t is not None
+        extra_t = extra_times.test_t if custom else extra_times.r
+        prediction = prediction + extra_t[:, None, None, None]
+        if custom:
+            return prediction, CustomExtraOutputs(
+                test_pred=prediction.square(), batch_size=[x.shape[0]]
+            )
+        return prediction, DiffusionExtraOutputs(
+            logvar=prediction.mean(dim=(1, 2, 3)), batch_size=[x.shape[0]]
+        )
+
+
 class LinearModel(Module):
     """Linear model for testing preconditioners with 2D input."""
 
@@ -105,14 +136,17 @@ CONV_SHAPE: Tuple[int, ...] = (4, 3, 8, 6)
 # 2D shape for LinearModel: (batch_size, features)
 LINEAR_SHAPE: Tuple[int, ...] = (4, 16)
 
-# Model configurations for parameterized tests: (model_class, shape, arch_name)
+# Model, input shape, reference name, extra time fields, and output format.
 MODEL_CONFIGS = [
-    (ConvModel, CONV_SHAPE, "conv"),
-    (LinearModel, LINEAR_SHAPE, "linear"),
+    (ConvModel, CONV_SHAPE, "conv", None, "tensor"),
+    (LinearModel, LINEAR_SHAPE, "linear", None, "tensor"),
+    (ExtendedConvModel, CONV_SHAPE, "extra_reserved", ("r",), "tuple"),
+    (ExtendedConvModel, CONV_SHAPE, "extra_custom", ("test_t",), "tuple"),
 ]
 
 # Preconditioner configurations for parameterized tests
 PRECOND_CONFIGS = [
+    (TrigFlowPreconditioner, {"sigma_data": 1.4}, "trigflow_precond"),
     (
         VPPreconditioner,
         {"beta_d": 19.9, "beta_min": 0.1, "M": 2000},
@@ -141,56 +175,70 @@ PRECOND_CONFIGS = [
 # =============================================================================
 
 
-@pytest.fixture(params=MODEL_CONFIGS, ids=["ConvModel", "LinearModel"])
+@pytest.fixture(params=MODEL_CONFIGS, ids=[config[2] for config in MODEL_CONFIGS])
 def model_config(request):
-    """Parameterized fixture returning (model_class, shape, arch_name)."""
+    """Return a model and its time and output formats."""
     return request.param
 
 
 @pytest.fixture
 def test_shape(model_config):
     """Return the test shape for the current model class."""
-    _, shape, _ = model_config
+    _, shape, *_ = model_config
     return shape
 
 
 @pytest.fixture
 def arch_name(model_config):
     """Return the architecture name for reference file naming."""
-    _, _, name = model_config
+    _, _, name, *_ = model_config
     return name
 
 
 @pytest.fixture
 def simple_model(model_config):
     """Create a model with deterministic parameters."""
-    cls, shape, _ = model_config
-    if cls == LinearModel:
-        return instantiate_model_deterministic(cls, seed=0, in_features=shape[1])
-    return instantiate_model_deterministic(cls, seed=0, channels=shape[1])
+    cls, shape, _, _, output = model_config
+    return create_model_deterministic(cls, shape, output)
 
 
 @pytest.fixture
 def batch_data(model_config, device):
-    """Create deterministic batch data matching the model's expected shape."""
-    model_cls, shape, _ = model_config
-    # ConvModel uses condition, LinearModel does not
-    use_condition = model_cls == ConvModel
-    return generate_batch_data(
-        shape=shape, seed=42, device=device, use_condition=use_condition
+    """Create deterministic inputs, including independently supplied extra times."""
+    model_cls, shape, _, fields, _ = model_config
+    data = generate_batch_data(
+        shape=shape,
+        seed=42,
+        device=device,
+        use_condition=issubclass(model_cls, ConvModel),
     )
+    t = data["t"]
+    data["time"] = (
+        t
+        if fields is None
+        else (
+            t,
+            CustomExtraTimes(
+                **{name: t / (index + 2) for index, name in enumerate(fields)},
+                batch_size=[shape[0]],
+            ),
+        )
+    )
+    return data
 
 
-def create_model_deterministic(model_cls, shape):
+def create_model_deterministic(model_cls, shape, output="tensor"):
     """Create a model with deterministic parameters for the given shape."""
     if model_cls == LinearModel:
         return instantiate_model_deterministic(model_cls, seed=0, in_features=shape[1])
     return instantiate_model_deterministic(model_cls, seed=0, channels=shape[1])
 
 
-def create_preconditioner(precond_cls, precond_kwargs, model_cls, shape):
+def create_preconditioner(
+    precond_cls, precond_kwargs, model_cls, shape, output="tensor"
+):
     """Create a preconditioner with deterministic model."""
-    model = create_model_deterministic(model_cls, shape)
+    model = create_model_deterministic(model_cls, shape, output)
     return precond_cls(model, **precond_kwargs)
 
 
@@ -332,7 +380,7 @@ class TestEDMPreconditioner:
 
     def test_per_channel_coefficients_shape(self, model_config, device):
         """Test compute_coefficients returns correct shapes for per-channel."""
-        model_cls, shape, _ = model_config
+        model_cls, shape, *_ = model_config
         C = shape[1]
         model = create_model_deterministic(model_cls, shape)
         sigma_data = [0.5 + 0.1 * i for i in range(C)]
@@ -352,7 +400,7 @@ class TestEDMPreconditioner:
 
     def test_per_channel_forward(self, model_config, device):
         """Test forward pass works with per-channel sigma_data."""
-        model_cls, shape, _ = model_config
+        model_cls, shape, *_ = model_config
         C = shape[1]
         model = create_model_deterministic(model_cls, shape)
         sigma_data = [0.5 + 0.1 * i for i in range(C)]
@@ -362,12 +410,16 @@ class TestEDMPreconditioner:
         data = generate_batch_data(
             shape=shape, seed=42, device=device, use_condition=use_condition
         )
-        out = precond(data["x"], data["t"], condition=data["condition"])
+        out = precond(
+            data["x"],
+            data["t"],
+            condition=data["condition"] if model_cls == ConvModel else None,
+        )
         assert out.shape == shape
 
     def test_per_channel_matches_scalar_when_uniform(self, model_config, device):
         """Per-channel sigma_data with identical values must match scalar."""
-        model_cls, shape, _ = model_config
+        model_cls, shape, *_ = model_config
         C = shape[1]
         sd_value = 0.7
 
@@ -384,8 +436,16 @@ class TestEDMPreconditioner:
             shape=shape, seed=42, device=device, use_condition=use_condition
         )
 
-        out_scalar = precond_scalar(data["x"], data["t"], condition=data["condition"])
-        out_perchan = precond_perchan(data["x"], data["t"], condition=data["condition"])
+        out_scalar = precond_scalar(
+            data["x"],
+            data["t"],
+            condition=data["condition"] if model_cls == ConvModel else None,
+        )
+        out_perchan = precond_perchan(
+            data["x"],
+            data["t"],
+            condition=data["condition"] if model_cls == ConvModel else None,
+        )
         assert torch.allclose(out_scalar, out_perchan, atol=1e-6)
 
     def test_single_element_sequence_stored_as_scalar(self, simple_model):
@@ -403,7 +463,7 @@ class TestEDMPreconditioner:
 @pytest.mark.parametrize(
     "precond_cls,precond_kwargs,precond_name",
     PRECOND_CONFIGS,
-    ids=["VP", "VE", "iDDPM", "EDM"],
+    ids=["TrigFlow", "VP", "VE", "iDDPM", "EDM"],
 )
 class TestNonRegression:
     """Non-regression tests parameterized across all preconditioner types."""
@@ -420,9 +480,9 @@ class TestNonRegression:
         precond_name,
     ):
         """Test sigma(t) against reference data."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, _, output = model_config
         precond = create_preconditioner(
-            precond_cls, precond_kwargs, model_cls, shape
+            precond_cls, precond_kwargs, model_cls, shape, output
         ).to(device)
 
         t = batch_data["t"]
@@ -445,10 +505,12 @@ class TestNonRegression:
         precond_name,
     ):
         """Test sigma(t) from loaded checkpoint matches reference."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, _, output = model_config
 
         def create_fn():
-            return create_preconditioner(precond_cls, precond_kwargs, model_cls, shape)
+            return create_preconditioner(
+                precond_cls, precond_kwargs, model_cls, shape, output
+            )
 
         ckpt_file = f"{precond_name}_{arch_name}.mdlus"
         precond = load_or_create_checkpoint(ckpt_file, create_fn).to(device)
@@ -473,9 +535,9 @@ class TestNonRegression:
         precond_name,
     ):
         """Test compute_coefficients against reference data."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, _, output = model_config
         precond = create_preconditioner(
-            precond_cls, precond_kwargs, model_cls, shape
+            precond_cls, precond_kwargs, model_cls, shape, output
         ).to(device)
 
         # Reshape t to sigma shape: (B, 1, ..., 1)
@@ -514,10 +576,12 @@ class TestNonRegression:
         precond_name,
     ):
         """Test compute_coefficients from checkpoint matches reference."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, _, output = model_config
 
         def create_fn():
-            return create_preconditioner(precond_cls, precond_kwargs, model_cls, shape)
+            return create_preconditioner(
+                precond_cls, precond_kwargs, model_cls, shape, output
+            )
 
         ckpt_file = f"{precond_name}_{arch_name}.mdlus"
         precond = load_or_create_checkpoint(ckpt_file, create_fn).to(device)
@@ -557,20 +621,27 @@ class TestNonRegression:
         precond_name,
     ):
         """Test forward pass against reference data."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, _, output = model_config
         precond = create_preconditioner(
-            precond_cls, precond_kwargs, model_cls, shape
+            precond_cls, precond_kwargs, model_cls, shape, output
         ).to(device)
 
         x = batch_data["x"]
-        t = batch_data["t"]
+        t = batch_data["time"]
         condition = batch_data["condition"]
         out = precond(x, t, condition=condition)
 
         ref_file = f"{precond_name}_{arch_name}_forward.pth"
-        ref_data = load_or_create_reference(ref_file, lambda: {"out": out.cpu()})
+        prediction, extras = out if isinstance(out, tuple) else (out, None)
+        result = {"out": prediction.cpu()}
+        if extras is not None:
+            result.update(
+                {name: value.cpu() for name, value in extras.to_tensordict().items()}
+            )
+        ref_data = load_or_create_reference(ref_file, lambda: result)
 
-        compare_outputs(out, ref_data["out"], **tolerances)
+        for name, actual in result.items():
+            compare_outputs(actual, ref_data[name], **tolerances)
 
     def test_forward_from_checkpoint(
         self,
@@ -584,23 +655,32 @@ class TestNonRegression:
         precond_name,
     ):
         """Test forward pass from loaded checkpoint matches reference."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, _, output = model_config
 
         def create_fn():
-            return create_preconditioner(precond_cls, precond_kwargs, model_cls, shape)
+            return create_preconditioner(
+                precond_cls, precond_kwargs, model_cls, shape, output
+            )
 
         ckpt_file = f"{precond_name}_{arch_name}.mdlus"
         precond = load_or_create_checkpoint(ckpt_file, create_fn).to(device)
 
         x = batch_data["x"]
-        t = batch_data["t"]
+        t = batch_data["time"]
         condition = batch_data["condition"]
         out = precond(x, t, condition=condition)
 
         ref_file = f"{precond_name}_{arch_name}_forward.pth"
-        ref_data = load_or_create_reference(ref_file, lambda: {"out": out.cpu()})
+        prediction, extras = out if isinstance(out, tuple) else (out, None)
+        result = {"out": prediction.cpu()}
+        if extras is not None:
+            result.update(
+                {name: value.cpu() for name, value in extras.to_tensordict().items()}
+            )
+        ref_data = load_or_create_reference(ref_file, lambda: result)
 
-        compare_outputs(out, ref_data["out"], **tolerances)
+        for name, actual in result.items():
+            compare_outputs(actual, ref_data[name], **tolerances)
 
 
 # =============================================================================
@@ -611,7 +691,7 @@ class TestNonRegression:
 @pytest.mark.parametrize(
     "precond_cls,precond_kwargs,precond_name",
     PRECOND_CONFIGS,
-    ids=["VP", "VE", "iDDPM", "EDM"],
+    ids=["TrigFlow", "VP", "VE", "iDDPM", "EDM"],
 )
 class TestAllPreconditioners:
     """Tests that apply to all preconditioner types."""
@@ -628,11 +708,23 @@ class TestAllPreconditioners:
         """Test forward validates input shapes."""
         precond = precond_cls(simple_model, **precond_kwargs).to(device)
         x = batch_data["x"]
-        t_wrong = torch.rand(2, device=device)  # Wrong batch size
+        t_wrong = torch.rand(x.shape[0] + 1, device=device)  # Wrong batch size
         condition = batch_data["condition"]
 
         with pytest.raises(ValueError, match="Expected t to have shape"):
             precond(x, t_wrong, condition=condition)
+        with pytest.raises(ValueError, match="batch"):
+            precond(x, (batch_data["t"], DiffusionExtraTimes(batch_size=[])))
+
+    @pytest.mark.parametrize("sigma_data", (0, -1, float("nan")))
+    def test_trigflow_invalid_scale(
+        self, precond_cls, precond_kwargs, precond_name, sigma_data
+    ):
+        """TrigFlow rejects nonpositive or nonfinite data scales."""
+        if precond_cls is not TrigFlowPreconditioner:
+            pytest.skip("Only TrigFlow uses this scale validation")
+        with pytest.raises(ValueError):
+            precond_cls(ConvModel(), sigma_data=sigma_data)
 
     def test_forward_dtype_preservation(
         self,
@@ -646,12 +738,13 @@ class TestAllPreconditioners:
         """Test forward preserves input dtype."""
         precond = precond_cls(simple_model, **precond_kwargs).to(device)
         x = batch_data["x"]
-        t = batch_data["t"]
+        t = batch_data["time"]
         condition = batch_data["condition"]
 
         output = precond(x, t, condition=condition)
 
-        assert output.dtype == x.dtype
+        prediction = output[0] if isinstance(output, tuple) else output
+        assert prediction.dtype == x.dtype
 
     def test_condition_batch_validation(
         self,
@@ -668,8 +761,8 @@ class TestAllPreconditioners:
         t = torch.rand(test_shape[0], device=device)
         # Wrong batch size in condition TensorDict
         condition = TensorDict(
-            {"cond": torch.randn(2, 10, device=device)},
-            batch_size=[2],
+            {"cond": torch.randn(test_shape[0] + 1, 10, device=device)},
+            batch_size=[test_shape[0] + 1],
         )
 
         with pytest.raises(ValueError, match="batch size"):
@@ -687,17 +780,19 @@ class TestAllPreconditioners:
         """Test gradients flow through the preconditioner."""
         precond = precond_cls(simple_model, **precond_kwargs).to(device)
         x = batch_data["x"].clone().requires_grad_(True)
-        t = batch_data["t"]
+        t = batch_data["time"]
         condition = batch_data["condition"]
 
         output = precond(x, t, condition=condition)
-        loss = output.sum()
+        prediction, extras = output if isinstance(output, tuple) else (output, None)
+        loss = prediction.sum()
+        if extras is not None:
+            loss = loss + sum(value.sum() for value in extras.to_tensordict().values())
         loss.backward()
 
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
 
-    @pytest.mark.usefixtures("nop_compile")
     def test_compile(
         self,
         simple_model,
@@ -707,25 +802,75 @@ class TestAllPreconditioners:
         precond_kwargs,
         precond_name,
     ):
-        """Compiled forward matches eager and graph is reused on second call."""
-        torch._dynamo.config.error_on_recompile = True
-
+        """Compiled predictions, auxiliary outputs, and gradients match eager execution."""
         precond = precond_cls(simple_model, **precond_kwargs).to(device)
-        x = batch_data["x"]
-        t = batch_data["t"]
+        x = batch_data["x"].requires_grad_(True)
+        t, extra_times = (
+            batch_data["time"]
+            if isinstance(batch_data["time"], tuple)
+            else (batch_data["time"], None)
+        )
+        t = t.detach().requires_grad_(True)
+        inputs = [x, t]
+        if extra_times is not None:
+            extra_times = extra_times.apply(
+                lambda value: value.detach().requires_grad_(True)
+            )
+            inputs.extend(
+                getattr(extra_times, name)
+                for name in extra_times.to_tensordict().keys()
+            )
+        time = t if extra_times is None else (t, extra_times)
+        inputs.extend(precond.model.parameters())
         condition = batch_data["condition"]
+        eager = precond(x, time, condition=condition)
+        prediction, extras = eager if isinstance(eager, tuple) else (eager, None)
+        eager_values = (
+            (prediction,)
+            if extras is None
+            else (prediction, *extras.to_tensordict().values())
+        )
+        eager_grads = torch.autograd.grad(
+            sum(value.sum() for value in eager_values), inputs, allow_unused=True
+        )
+        for index, gradient in enumerate(eager_grads):
+            if gradient is None:
+                # Discrete iDDPM noise labels disconnect extra-time derivatives.
+                assert precond_cls is IDDPMPreconditioner
+                assert 2 <= index < len(inputs) - len(list(precond.model.parameters()))
+        eager_grads = tuple(
+            torch.zeros_like(value) if gradient is None else gradient
+            for value, gradient in zip(inputs, eager_grads)
+        )
 
-        compiled_precond = torch.compile(precond, fullgraph=True)
-
-        with torch.no_grad():
-            out_eager = precond(x, t, condition=condition)
-            out_compiled = compiled_precond(x, t, condition=condition)
-        torch.testing.assert_close(out_eager, out_compiled)
-
-        # Second call — must reuse compiled graph
-        with torch.no_grad():
-            out_compiled_2 = compiled_precond(x, t, condition=condition)
-        torch.testing.assert_close(out_compiled, out_compiled_2)
+        compiled = torch.compile(precond, backend="aot_eager", fullgraph=True)
+        actual = compiled(x, time, condition=condition)
+        prediction, extras = actual if isinstance(actual, tuple) else (actual, None)
+        values = (
+            (prediction,)
+            if extras is None
+            else (prediction, *extras.to_tensordict().values())
+        )
+        torch.testing.assert_close(values, eager_values)
+        gradients = torch.autograd.grad(
+            sum(value.sum() for value in values), inputs, allow_unused=True
+        )
+        gradients = tuple(
+            torch.zeros_like(value) if gradient is None else gradient
+            for value, gradient in zip(inputs, gradients)
+        )
+        torch.testing.assert_close(gradients, eager_grads)
+        with torch._dynamo.config.patch(error_on_recompile=True):
+            repeated = compiled(x, time, condition=condition)
+        prediction, extras = (
+            repeated if isinstance(repeated, tuple) else (repeated, None)
+        )
+        repeated_values = (
+            (prediction,)
+            if extras is None
+            else (prediction, *extras.to_tensordict().values())
+        )
+        torch.testing.assert_close(repeated_values, values)
 
     def test_model_kwargs_passthrough(
         self,
@@ -737,7 +882,7 @@ class TestAllPreconditioners:
         precond_name,
     ):
         """model_kwargs are forwarded to the underlying model."""
-        model_cls, shape, _ = model_config
+        model_cls, shape, *_ = model_config
 
         class KwargsCapture(Module):
             """Model that records extra kwargs it receives."""
@@ -756,7 +901,7 @@ class TestAllPreconditioners:
         precond = precond_cls(wrapper, **precond_kwargs).to(device)
 
         x = batch_data["x"]
-        t = batch_data["t"]
+        t = batch_data["time"]
         condition = batch_data["condition"]
 
         precond(x, t, condition=condition, my_flag=True, scale=0.5)
@@ -772,7 +917,7 @@ class TestAllPreconditioners:
         precond_name,
     ):
         """Gradients flow when model_kwargs are passed."""
-        model_cls, shape, _ = model_config
+        model_cls, shape, *_ = model_config
 
         class IgnoreKwargsModel(Module):
             """Accepts but ignores extra kwargs."""
@@ -789,11 +934,12 @@ class TestAllPreconditioners:
         precond = precond_cls(wrapper, **precond_kwargs).to(device)
 
         x = batch_data["x"].clone().requires_grad_(True)
-        t = batch_data["t"]
+        t = batch_data["time"]
         condition = batch_data["condition"]
 
         out = precond(x, t, condition=condition, extra_kwarg=42)
-        out.sum().backward()
+        prediction = out[0] if isinstance(out, tuple) else out
+        prediction.sum().backward()
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
 
@@ -833,10 +979,10 @@ class TestEDMPerChannelNonRegression:
         sd_name,
     ):
         """Per-channel compute_coefficients against reference data."""
-        model_cls, shape, arch_name = model_config
+        model_cls, shape, arch_name, *_ = model_config
         # Skip LinearModel — per-channel sigma_data is for spatial models
-        if model_cls == LinearModel:
-            pytest.skip("Per-channel sigma_data only applies to ConvModel")
+        if model_cls != ConvModel:
+            pytest.skip("This reference uses ConvModel")
         precond = _make_per_channel_preconditioner(sigma_data, model_cls, shape).to(
             device
         )
@@ -878,9 +1024,9 @@ class TestEDMPerChannelNonRegression:
         sd_name,
     ):
         """Per-channel forward pass against reference data."""
-        model_cls, shape, arch_name = model_config
-        if model_cls == LinearModel:
-            pytest.skip("Per-channel sigma_data only applies to ConvModel")
+        model_cls, shape, arch_name, *_ = model_config
+        if model_cls != ConvModel:
+            pytest.skip("This reference uses ConvModel")
         precond = _make_per_channel_preconditioner(sigma_data, model_cls, shape).to(
             device
         )
@@ -910,9 +1056,9 @@ class TestEDMPerChannelNonRegression:
         sd_name,
     ):
         """Per-channel sigma_data survives save -> load -> forward."""
-        model_cls, shape, arch_name = model_config
-        if model_cls == LinearModel:
-            pytest.skip("Per-channel sigma_data only applies to ConvModel")
+        model_cls, shape, arch_name, *_ = model_config
+        if model_cls != ConvModel:
+            pytest.skip("This reference uses ConvModel")
 
         def create_fn():
             return _make_per_channel_preconditioner(sigma_data, model_cls, shape)
@@ -953,9 +1099,9 @@ class TestEDMPerChannelNonRegression:
         sd_name,
     ):
         """Gradients flow through per-channel EDMPreconditioner."""
-        model_cls, shape, _ = model_config
-        if model_cls == LinearModel:
-            pytest.skip("Per-channel sigma_data only applies to ConvModel")
+        model_cls, shape, *_ = model_config
+        if model_cls != ConvModel:
+            pytest.skip("This reference uses ConvModel")
         precond = _make_per_channel_preconditioner(sigma_data, model_cls, shape).to(
             device
         )

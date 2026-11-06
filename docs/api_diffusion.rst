@@ -13,6 +13,7 @@ PhysicsNeMo Diffusion
    api/diffusion/noise_schedulers.rst
    api/diffusion/preconditioners.rst
    api/diffusion/metrics.rst
+   api/diffusion/distillation.rst
    api/diffusion/samplers.rst
    api/diffusion/multi_diffusion.rst
    api/diffusion/utils.rst
