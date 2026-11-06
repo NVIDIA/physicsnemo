@@ -436,7 +436,7 @@ examples/reservoir_simulation/
 # ==============================================================================
 
 examples/structural_mechanics/ @mnabian
-examples/structural_mechanics/crash/ 
+examples/structural_mechanics/crash/ @mnabian
 examples/structural_mechanics/deforming_plate/
 
 # ==============================================================================
