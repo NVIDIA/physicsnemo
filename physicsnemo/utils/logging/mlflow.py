@@ -78,8 +78,8 @@ if MLFLOW_AVAILABLE:
         run_desc: str = None,
         user_name: str = None,
         mode: Literal["offline", "online", "ngc"] = "offline",
-        tracking_location: str = None,
-        artifact_location: str = None,
+        tracking_location: str | Path = None,
+        artifact_location: str | Path = None,
     ) -> Tuple[MlflowClient, Run]:
         """Initializes MLFlow logging client and run.
 
@@ -99,13 +99,13 @@ if MLFLOW_AVAILABLE:
             MLFlow mode. Supports "offline", "online" and "ngc". Offline mode records logs to
             a local SQLite database. Online mode is for remote tracking servers. NGC is specific
             standardized setup for NGC runs, default "offline"
-        tracking_location : str, optional
+        tracking_location : str | Path, optional
             Tracking location for MLFlow. For offline this is a folder that holds the
             ``mlflow.db`` SQLite database and an ``artifacts`` folder, or an explicit
             ``sqlite:`` or ``file://`` URI, which is used as given. For online mode this
             would be a http URI or databricks. For NGC, this option is ignored, by default
             "/<run directory>/mlruns"
-        artifact_location : str, optional
+        artifact_location : str | Path, optional
             Optional separate artifact location, by default None. For an offline folder
             location this defaults to ``<tracking_location>/artifacts``.
 
@@ -134,7 +134,10 @@ if MLFLOW_AVAILABLE:
 
         # Set default value here for Hydra
         if tracking_location is None:
-            tracking_location = str(Path("./mlruns").absolute())
+            tracking_location = Path("./mlruns").absolute()
+        tracking_location = str(tracking_location)
+        if artifact_location is not None:
+            artifact_location = str(artifact_location)
 
         # Set up URI (remote or local)
         if mode == "online":

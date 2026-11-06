@@ -25,6 +25,8 @@ from test.conftest import requires_module
 def offline_mlflow(tmp_path, monkeypatch):
     """Run in an empty directory with no file-store opt-out, and reset the
     launch logger's MLflow state afterwards."""
+    import mlflow
+
     from physicsnemo.distributed import DistributedManager
     from physicsnemo.utils.logging import LaunchLogger
 
@@ -32,7 +34,9 @@ def offline_mlflow(tmp_path, monkeypatch):
     monkeypatch.delenv("MLFLOW_ALLOW_FILE_STORE", raising=False)
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     DistributedManager.initialize()
+    previous_uri = mlflow.get_tracking_uri()
     yield tmp_path
+    mlflow.set_tracking_uri(previous_uri)
     LaunchLogger.mlflow_run = None
     LaunchLogger.mlflow_client = None
     LaunchLogger.mlflow_backend = False
@@ -78,16 +82,17 @@ def test_offline_reuses_existing_experiment(offline_mlflow):
 
 
 @requires_module("mlflow")
-def test_offline_custom_directory(offline_mlflow):
-    """A plain directory as ``tracking_location`` holds the database and
-    artifacts, and is created if missing."""
+@pytest.mark.parametrize("as_type", [str, Path])
+def test_offline_custom_directory(offline_mlflow, as_type):
+    """A plain directory (``str`` or ``Path``) as ``tracking_location`` holds
+    the database and artifacts, and is created if missing."""
     import mlflow
 
     from physicsnemo.utils.logging.mlflow import initialize_mlflow
 
     location = offline_mlflow / "nested" / "tracking"
     initialize_mlflow(
-        experiment_name="test", mode="offline", tracking_location=str(location)
+        experiment_name="test", mode="offline", tracking_location=as_type(location)
     )
 
     assert mlflow.get_tracking_uri() == f"sqlite:///{location}/mlflow.db"
