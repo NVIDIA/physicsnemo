@@ -435,8 +435,8 @@ examples/reservoir_simulation/
 # EXAMPLES - Structural Mechanics
 # ==============================================================================
 
-examples/structural_mechanics/
-examples/structural_mechanics/crash/ @coreyjadams
+examples/structural_mechanics/ @mnabian
+examples/structural_mechanics/crash/ @mnabian
 examples/structural_mechanics/deforming_plate/
 
 # ==============================================================================
