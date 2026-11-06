@@ -133,6 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unified external aero recipe trains with optional domain parallelism
   (`domain_parallelism.domain_size`), reading samples sharded and running the
   model on ShardTensors over a domain x data-parallel device mesh.
+- Adds the experimental `ArGEnT` and `ArGEnTDeepONet` models.
 
 ### Changed
 
