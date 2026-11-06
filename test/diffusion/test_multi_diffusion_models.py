@@ -16,13 +16,16 @@
 
 """Tests for MultiDiffusionModel2D."""
 
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
 import torch
+from jaxtyping import Float, Shaped
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
+from physicsnemo.diffusion import DiffusionExtraOutputs, DiffusionExtraTimes
 from physicsnemo.diffusion.multi_diffusion import MultiDiffusionModel2D
 from physicsnemo.diffusion.multi_diffusion.patching import (
     GridPatching2D,
@@ -39,6 +42,57 @@ from .helpers import (
     load_or_create_reference,
     make_input,
 )
+
+
+class CustomExtraTimes(DiffusionExtraTimes):
+    r"""Additional time fields that callers can supply independently."""
+
+    test_t: Float[torch.Tensor, " B"] | None = None
+
+
+class CustomExtraOutputs(DiffusionExtraOutputs):
+    test_pred: Float[torch.Tensor, " B C H W"] | None = None
+
+
+class StructuredDiffusionModel(Module):
+    r"""Linear model with optional destination times and learned loss weights."""
+
+    def __init__(self, output: str = "tuple"):
+        super().__init__()
+        self.output = output
+        self.gain = torch.nn.Parameter(torch.tensor(0.75))
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+        condition: TensorDict | None = None,
+        *,
+        offset: float = 0.0,
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
+        r"""Return a prediction, optionally paired with its loss weight."""
+        t, extra_times = t if isinstance(t, tuple) else (t, None)
+        t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))  # (B, 1, ...)
+        prediction = self.gain * x + t_bc + offset
+        if extra_times is not None:
+            for time in extra_times.to_tensordict().values():
+                prediction = prediction + time.reshape(-1, *([1] * (x.ndim - 1)))
+        if condition is not None:
+            prediction = prediction + condition["shift"]
+        if self.output == "tensor":
+            return prediction
+        if self.output == "custom":
+            return prediction, CustomExtraOutputs(
+                test_pred=prediction.square(), batch_size=[x.shape[0]]
+            )
+        return prediction, DiffusionExtraOutputs(
+            logvar=self.gain * t, batch_size=[x.shape[0]]
+        )
+
 
 REF_PREFIX = "test_multi_diffusion_models_"
 
@@ -176,6 +230,31 @@ MD_CONFIGS = [
     ),
 ]
 
+EXTRA_TIME_FIELDS = {"extra_r": ("r",), "extra_custom": ("test_t",)}
+MD_CONFIGS.extend(
+    [
+        ("extra_r", StructuredDiffusionModel, {}, {}, False),
+        (
+            "extra_custom",
+            StructuredDiffusionModel,
+            {"output": "custom"},
+            {"extra_outputs_fuse": {"test_pred": True}},
+            False,
+        ),
+    ]
+)
+
+
+def _make_model_time(config_name, t):
+    fields = EXTRA_TIME_FIELDS.get(config_name)
+    if fields is None:
+        return t
+    return t, CustomExtraTimes(
+        **{name: t / (index + 2) for index, name in enumerate(fields)},
+        batch_size=t.shape,
+    )
+
+
 # Grid patching configs: (img_shape, patch_shape, overlap, boundary, name)
 GRID_CONFIGS = [
     ((IMG_H, IMG_W), PATCH_SHAPE, 0, 0, "sq_nooverlap"),
@@ -208,7 +287,7 @@ def _create_md_model(config_name, img_shape=(IMG_H, IMG_W), seed=0):
 
 def _make_condition(config_name, img_shape=(IMG_H, IMG_W), device="cpu"):
     """Create a condition matching the config, or None for unconditional."""
-    if config_name == "uncond":
+    if config_name == "uncond" or config_name in EXTRA_TIME_FIELDS:
         return None
     H, W = img_shape
     td = {"image": make_input((BATCH, CHANNELS, H, W), seed=99, device=device)}
@@ -279,11 +358,32 @@ class TestConstructor:
         assert isinstance(md._patching, RandomPatching2D)
         assert md._patching.patch_num == PATCH_NUM
 
-    def test_set_grid_patching(self):
-        md = _create_md_model("uncond")
+    @pytest.mark.parametrize("config_name", ["uncond", *EXTRA_TIME_FIELDS])
+    def test_set_grid_patching(self, config_name):
+        md = _create_md_model(config_name)
         md.set_grid_patching(patch_shape=PATCH_SHAPE, overlap_pix=2, fuse=True)
         assert isinstance(md._patching, GridPatching2D)
         assert md._fuse is True
+        result = md(
+            torch.ones(INPUT_SHAPE), _make_model_time(config_name, torch.ones(BATCH))
+        )
+        prediction, extra_outputs = (
+            result if isinstance(result, tuple) else (result, None)
+        )
+        assert prediction.shape == INPUT_SHAPE
+        if extra_outputs is not None:
+            assert extra_outputs.batch_size == torch.Size([BATCH])
+        if config_name == "extra_custom":
+            patches = md.patch_x(torch.ones(INPUT_SHAPE))
+            wrong = CustomExtraOutputs(
+                test_pred=patches[:, :, :-1, :], batch_size=[patches.shape[0]]
+            )
+            with pytest.raises(ValueError, match="patch dimensions"):
+                md.fuse((patches, wrong), batch_size=BATCH)
+        with pytest.raises(ValueError, match="logvar"):
+            MultiDiffusionModel2D(
+                md.model, (IMG_H, IMG_W), extra_outputs_fuse={"logvar": True}
+            )
 
 
 # =============================================================================
@@ -299,32 +399,103 @@ class TestConstructor:
 class TestNonRegression:
     """Non-regression tests for public methods and forward pass."""
 
+    @pytest.mark.parametrize(
+        "patch_num", [None, PATCH_NUM], ids=["unpatched", "random"]
+    )
     def test_forward_random_non_regression(
-        self, deterministic_settings, device, tolerances, config_name
+        self, deterministic_settings, device, tolerances, config_name, patch_num
     ):
         """Training-like forward with random patching (not pre-patched)."""
         md = _create_md_model(config_name).to(device)
-        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        if patch_num is not None:
+            md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=patch_num)
 
         x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, device=device)
 
         # First call
-        out1 = md(x0, t, condition=condition)
-        assert out1.shape == (PATCH_NUM * BATCH, CHANNELS, *PATCH_SHAPE)
+        with (
+            pytest.warns(UserWarning, match="No patching")
+            if patch_num is None
+            else nullcontext()
+        ):
+            out1 = md(x0, t, condition=condition)
+        out1_values = (
+            {"prediction": out1[0], **out1[1].to_tensordict().to_dict()}
+            if isinstance(out1, tuple)
+            else {"prediction": out1}
+        )
+        assert out1_values["prediction"].shape == (
+            INPUT_SHAPE
+            if patch_num is None
+            else (patch_num * BATCH, CHANNELS, *PATCH_SHAPE)
+        )
 
         # Re-draw positions, second call
-        md.reset_patch_indices()
-        out2 = md(x0, t, condition=condition)
-        assert out2.shape == out1.shape
-
-        ref_file = f"{REF_PREFIX}{config_name}_fwd_rand.pth"
-        ref = load_or_create_reference(
-            ref_file, lambda: {"out1": out1.cpu(), "out2": out2.cpu()}
+        if patch_num is not None:
+            md.reset_patch_indices()
+        with (
+            pytest.warns(UserWarning, match="No patching")
+            if patch_num is None
+            else nullcontext()
+        ):
+            out2 = md(x0, t, condition=condition)
+        out2_values = (
+            {"prediction": out2[0], **out2[1].to_tensordict().to_dict()}
+            if isinstance(out2, tuple)
+            else {"prediction": out2}
         )
-        compare_outputs(out1, ref["out1"], **tolerances)
-        compare_outputs(out2, ref["out2"], **tolerances)
+        assert out2_values["prediction"].shape == out1_values["prediction"].shape
+
+        mode = "unpatched" if patch_num is None else "rand"
+        ref_file = f"{REF_PREFIX}{config_name}_fwd_{mode}.pth"
+        out1_cpu = (
+            {"prediction": out1[0], **out1[1].to_tensordict().to_dict()}
+            if isinstance(out1, tuple)
+            else {"prediction": out1}
+        )
+        out1_cpu = {name: value.to(device="cpu") for name, value in out1_cpu.items()}
+        out2_cpu = (
+            {"prediction": out2[0], **out2[1].to_tensordict().to_dict()}
+            if isinstance(out2, tuple)
+            else {"prediction": out2}
+        )
+        out2_cpu = {name: value.to(device="cpu") for name, value in out2_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {
+                "out1": out1_cpu,
+                "out2": out2_cpu,
+            },
+        )
+        ref_out1_cpu = (
+            ref["out1"]
+            if isinstance(ref["out1"], dict)
+            else {"prediction": ref["out1"]}
+        )
+        ref_out1_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out1_cpu.items()
+        }
+        torch.testing.assert_close(
+            out1_cpu,
+            ref_out1_cpu,
+            **tolerances,
+        )
+        ref_out2_cpu = (
+            ref["out2"]
+            if isinstance(ref["out2"], dict)
+            else {"prediction": ref["out2"]}
+        )
+        ref_out2_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out2_cpu.items()
+        }
+        torch.testing.assert_close(
+            out2_cpu,
+            ref_out2_cpu,
+            **tolerances,
+        )
 
     def test_forward_random_prepatched_non_regression(
         self, deterministic_settings, device, tolerances, config_name
@@ -335,11 +506,24 @@ class TestNonRegression:
 
         x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, device=device)
 
         # First call with pre-patched x and t
         x0_patched = md.patch_x(x0)
         t_patched = md.patch_t(t)
+        primary, extras = t if isinstance(t, tuple) else (t, None)
+        patched_primary, patched_extras = (
+            t_patched if isinstance(t_patched, tuple) else (t_patched, None)
+        )
+        torch.testing.assert_close(patched_primary, primary.repeat(PATCH_NUM))
+        if extras is not None:
+            assert type(patched_extras) is type(extras)
+            assert patched_extras.batch_size == torch.Size([PATCH_NUM * BATCH])
+            for name, value in extras.to_tensordict().items():
+                torch.testing.assert_close(
+                    getattr(patched_extras, name), value.repeat(PATCH_NUM)
+                )
         out1 = md(
             x0_patched,
             t_patched,
@@ -347,7 +531,16 @@ class TestNonRegression:
             x_is_patched=True,
             t_is_patched=True,
         )
-        assert out1.shape == (PATCH_NUM * BATCH, CHANNELS, *PATCH_SHAPE)
+        out1_values = (
+            {"prediction": out1[0], **out1[1].to_tensordict().to_dict()}
+            if isinstance(out1, tuple)
+            else {"prediction": out1}
+        )
+        assert out1_values["prediction"].shape == (
+            PATCH_NUM * BATCH,
+            CHANNELS,
+            *PATCH_SHAPE,
+        )
 
         # Re-draw positions, second call
         md.reset_patch_indices()
@@ -362,11 +555,51 @@ class TestNonRegression:
         )
 
         ref_file = f"{REF_PREFIX}{config_name}_fwd_rand_prepatched.pth"
-        ref = load_or_create_reference(
-            ref_file, lambda: {"out1": out1.cpu(), "out2": out2.cpu()}
+        out1_cpu = (
+            {"prediction": out1[0], **out1[1].to_tensordict().to_dict()}
+            if isinstance(out1, tuple)
+            else {"prediction": out1}
         )
-        compare_outputs(out1, ref["out1"], **tolerances)
-        compare_outputs(out2, ref["out2"], **tolerances)
+        out1_cpu = {name: value.to(device="cpu") for name, value in out1_cpu.items()}
+        out2_cpu = (
+            {"prediction": out2[0], **out2[1].to_tensordict().to_dict()}
+            if isinstance(out2, tuple)
+            else {"prediction": out2}
+        )
+        out2_cpu = {name: value.to(device="cpu") for name, value in out2_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {
+                "out1": out1_cpu,
+                "out2": out2_cpu,
+            },
+        )
+        ref_out1_cpu = (
+            ref["out1"]
+            if isinstance(ref["out1"], dict)
+            else {"prediction": ref["out1"]}
+        )
+        ref_out1_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out1_cpu.items()
+        }
+        torch.testing.assert_close(
+            out1_cpu,
+            ref_out1_cpu,
+            **tolerances,
+        )
+        ref_out2_cpu = (
+            ref["out2"]
+            if isinstance(ref["out2"], dict)
+            else {"prediction": ref["out2"]}
+        )
+        ref_out2_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out2_cpu.items()
+        }
+        torch.testing.assert_close(
+            out2_cpu,
+            ref_out2_cpu,
+            **tolerances,
+        )
 
     def test_patch_x_non_regression(
         self, deterministic_settings, device, tolerances, config_name
@@ -381,11 +614,51 @@ class TestNonRegression:
         out2 = md.patch_x(x)
 
         ref_file = f"{REF_PREFIX}{config_name}_patch_x.pth"
-        ref = load_or_create_reference(
-            ref_file, lambda: {"out1": out1.cpu(), "out2": out2.cpu()}
+        out1_cpu = (
+            {"prediction": out1[0], **out1[1].to_tensordict().to_dict()}
+            if isinstance(out1, tuple)
+            else {"prediction": out1}
         )
-        compare_outputs(out1, ref["out1"], **tolerances)
-        compare_outputs(out2, ref["out2"], **tolerances)
+        out1_cpu = {name: value.to(device="cpu") for name, value in out1_cpu.items()}
+        out2_cpu = (
+            {"prediction": out2[0], **out2[1].to_tensordict().to_dict()}
+            if isinstance(out2, tuple)
+            else {"prediction": out2}
+        )
+        out2_cpu = {name: value.to(device="cpu") for name, value in out2_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {
+                "out1": out1_cpu,
+                "out2": out2_cpu,
+            },
+        )
+        ref_out1_cpu = (
+            ref["out1"]
+            if isinstance(ref["out1"], dict)
+            else {"prediction": ref["out1"]}
+        )
+        ref_out1_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out1_cpu.items()
+        }
+        torch.testing.assert_close(
+            out1_cpu,
+            ref_out1_cpu,
+            **tolerances,
+        )
+        ref_out2_cpu = (
+            ref["out2"]
+            if isinstance(ref["out2"], dict)
+            else {"prediction": ref["out2"]}
+        )
+        ref_out2_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out2_cpu.items()
+        }
+        torch.testing.assert_close(
+            out2_cpu,
+            ref_out2_cpu,
+            **tolerances,
+        )
 
     @pytest.mark.parametrize(
         "img_shape,patch_shape,overlap_pix,boundary_pix,grid_name",
@@ -416,14 +689,44 @@ class TestNonRegression:
         H, W = img_shape
         x = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, img_shape=img_shape, device=device)
         out = md(x, t, condition=condition)
 
-        assert out.shape == (BATCH, CHANNELS, H, W)
+        out_values = (
+            {"prediction": out[0], **out[1].to_tensordict().to_dict()}
+            if isinstance(out, tuple)
+            else {"prediction": out}
+        )
+        assert out_values["prediction"].shape == (
+            BATCH,
+            CHANNELS,
+            H,
+            W,
+        )
 
         ref_file = f"{REF_PREFIX}{config_name}_{grid_name}_fwd.pth"
-        ref = load_or_create_reference(ref_file, lambda: {"out": out.cpu()})
-        compare_outputs(out, ref["out"], **tolerances)
+        out_cpu = (
+            {"prediction": out[0], **out[1].to_tensordict().to_dict()}
+            if isinstance(out, tuple)
+            else {"prediction": out}
+        )
+        out_cpu = {name: value.to(device="cpu") for name, value in out_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {"out": out_cpu},
+        )
+        ref_out_cpu = (
+            ref["out"] if isinstance(ref["out"], dict) else {"prediction": ref["out"]}
+        )
+        ref_out_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_cpu,
+            ref_out_cpu,
+            **tolerances,
+        )
 
     @pytest.mark.parametrize(
         "img_shape,patch_shape,overlap_pix,boundary_pix,grid_name",
@@ -443,7 +746,7 @@ class TestNonRegression:
         grid_name,
     ):
         """Grid forward with externally pre-processed condition."""
-        if config_name == "uncond":
+        if config_name == "uncond" or config_name in EXTRA_TIME_FIELDS:
             pytest.skip("No condition to pre-process for unconditional model.")
 
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
@@ -457,17 +760,47 @@ class TestNonRegression:
         H, W = img_shape
         x = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, img_shape=img_shape, device=device)
 
         # Pre-process condition externally
         cond_patched = md.patch_condition(condition)
         out = md(x, t, condition=cond_patched, condition_is_patched=True)
 
-        assert out.shape == (BATCH, CHANNELS, H, W)
+        out_values = (
+            {"prediction": out[0], **out[1].to_tensordict().to_dict()}
+            if isinstance(out, tuple)
+            else {"prediction": out}
+        )
+        assert out_values["prediction"].shape == (
+            BATCH,
+            CHANNELS,
+            H,
+            W,
+        )
 
         ref_file = f"{REF_PREFIX}{config_name}_{grid_name}_fwd_condpatch.pth"
-        ref = load_or_create_reference(ref_file, lambda: {"out": out.cpu()})
-        compare_outputs(out, ref["out"], **tolerances)
+        out_cpu = (
+            {"prediction": out[0], **out[1].to_tensordict().to_dict()}
+            if isinstance(out, tuple)
+            else {"prediction": out}
+        )
+        out_cpu = {name: value.to(device="cpu") for name, value in out_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {"out": out_cpu},
+        )
+        ref_out_cpu = (
+            ref["out"] if isinstance(ref["out"], dict) else {"prediction": ref["out"]}
+        )
+        ref_out_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_cpu,
+            ref_out_cpu,
+            **tolerances,
+        )
 
     def test_forward_from_checkpoint(
         self, deterministic_settings, device, tolerances, config_name
@@ -483,6 +816,7 @@ class TestNonRegression:
 
         x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, device=device)
 
         x0_patched = md.patch_x(x0)
@@ -496,8 +830,29 @@ class TestNonRegression:
         )
 
         ref_file = f"{REF_PREFIX}{config_name}_fwd_rand_prepatched.pth"
-        ref = load_or_create_reference(ref_file, lambda: {"out1": out.cpu()})
-        compare_outputs(out, ref["out1"], **tolerances)
+        out_cpu = (
+            {"prediction": out[0], **out[1].to_tensordict().to_dict()}
+            if isinstance(out, tuple)
+            else {"prediction": out}
+        )
+        out_cpu = {name: value.to(device="cpu") for name, value in out_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {"out1": out_cpu},
+        )
+        ref_out1_cpu = (
+            ref["out1"]
+            if isinstance(ref["out1"], dict)
+            else {"prediction": ref["out1"]}
+        )
+        ref_out1_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out1_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_cpu,
+            ref_out1_cpu,
+            **tolerances,
+        )
 
     def test_patch_x_from_checkpoint(
         self, deterministic_settings, device, tolerances, config_name
@@ -518,11 +873,51 @@ class TestNonRegression:
 
         # Reuse the same reference files created by test_patch_x_non_regression.
         ref_file = f"{REF_PREFIX}{config_name}_patch_x.pth"
-        ref = load_or_create_reference(
-            ref_file, lambda: {"out1": out1.cpu(), "out2": out2.cpu()}
+        out1_cpu = (
+            {"prediction": out1[0], **out1[1].to_tensordict().to_dict()}
+            if isinstance(out1, tuple)
+            else {"prediction": out1}
         )
-        compare_outputs(out1, ref["out1"], **tolerances)
-        compare_outputs(out2, ref["out2"], **tolerances)
+        out1_cpu = {name: value.to(device="cpu") for name, value in out1_cpu.items()}
+        out2_cpu = (
+            {"prediction": out2[0], **out2[1].to_tensordict().to_dict()}
+            if isinstance(out2, tuple)
+            else {"prediction": out2}
+        )
+        out2_cpu = {name: value.to(device="cpu") for name, value in out2_cpu.items()}
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {
+                "out1": out1_cpu,
+                "out2": out2_cpu,
+            },
+        )
+        ref_out1_cpu = (
+            ref["out1"]
+            if isinstance(ref["out1"], dict)
+            else {"prediction": ref["out1"]}
+        )
+        ref_out1_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out1_cpu.items()
+        }
+        torch.testing.assert_close(
+            out1_cpu,
+            ref_out1_cpu,
+            **tolerances,
+        )
+        ref_out2_cpu = (
+            ref["out2"]
+            if isinstance(ref["out2"], dict)
+            else {"prediction": ref["out2"]}
+        )
+        ref_out2_cpu = {
+            name: value.to(device="cpu") for name, value in ref_out2_cpu.items()
+        }
+        torch.testing.assert_close(
+            out2_cpu,
+            ref_out2_cpu,
+            **tolerances,
+        )
 
     def test_fuse_from_checkpoint(
         self, deterministic_settings, device, tolerances, config_name
@@ -534,7 +929,11 @@ class TestNonRegression:
 
         ckpt_file = f"{REF_PREFIX}{config_name}.mdlus"
         md = load_or_create_checkpoint(ckpt_file, create_fn).to(device)
-        md.set_grid_patching(patch_shape=PATCH_SHAPE, overlap_pix=0, fuse=True)
+        md.set_grid_patching(
+            patch_shape=PATCH_SHAPE,
+            overlap_pix=0,
+            fuse=True,
+        )
 
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         fused = md.fuse(md.patch_x(x), batch_size=BATCH)
@@ -543,7 +942,25 @@ class TestNonRegression:
 
         ref_file = f"{REF_PREFIX}{config_name}_fuse.pth"
         ref = load_or_create_reference(ref_file, lambda: {"fused": fused.cpu()})
-        compare_outputs(fused, ref["fused"], **tolerances)
+        fused_cpu = (
+            {"prediction": fused[0], **fused[1].to_tensordict().to_dict()}
+            if isinstance(fused, tuple)
+            else {"prediction": fused}
+        )
+        fused_cpu = {name: value.to(device="cpu") for name, value in fused_cpu.items()}
+        ref_fused_cpu = (
+            ref["fused"]
+            if isinstance(ref["fused"], dict)
+            else {"prediction": ref["fused"]}
+        )
+        ref_fused_cpu = {
+            name: value.to(device="cpu") for name, value in ref_fused_cpu.items()
+        }
+        torch.testing.assert_close(
+            fused_cpu,
+            ref_fused_cpu,
+            **tolerances,
+        )
 
 
 # =============================================================================
@@ -554,18 +971,50 @@ class TestNonRegression:
 class TestGradientFlow:
     """Tests that gradients flow through the model and public methods."""
 
-    def test_forward_gradient_flow(self, device):
-        md = _create_md_model("uncond").to(device)
-        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
-
-        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
-            True
+    @pytest.mark.parametrize("config_name", [c[0] for c in MD_CONFIGS])
+    @pytest.mark.parametrize("fuse", [False, True])
+    def test_forward_gradient_flow(self, device, config_name, fuse):
+        md = _create_md_model(config_name).to(device=device, dtype=torch.float64)
+        if fuse:
+            md.set_grid_patching(
+                patch_shape=PATCH_SHAPE,
+                fuse=True,
+            )
+        else:
+            md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        x = (
+            make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
+            .double()
+            .requires_grad_(True)
         )
-        t = torch.rand(BATCH, device=device)
+        t = torch.rand(BATCH, device=device, dtype=torch.float64).requires_grad_(True)
+        condition = _make_condition(config_name, device=device)
+        if condition is not None:
+            condition = condition.double()
+        fields = EXTRA_TIME_FIELDS.get(config_name)
+        values = tuple(
+            (t.detach() / (index + 2)).requires_grad_(True)
+            for index, _ in enumerate(fields or ())
+        )
 
-        out = md(x, t)
-        out.sum().backward()
-        assert x.grad is not None and not torch.isnan(x.grad).any()
+        def forward(x, t, *values):
+            time = (
+                t
+                if fields is None
+                else (
+                    t,
+                    CustomExtraTimes(**dict(zip(fields, values)), batch_size=[BATCH]),
+                )
+            )
+            output = md(x, time, condition=condition)
+            output_values = (
+                {"prediction": output[0], **output[1].to_tensordict().to_dict()}
+                if isinstance(output, tuple)
+                else {"prediction": output}
+            )
+            return tuple(output_values.values())
+
+        assert torch.autograd.gradcheck(forward, (x, t, *values), fast_mode=True)
 
     def test_forward_gradient_flow_conditional(self, device):
         md = _create_md_model("cond_patch").to(device)
@@ -611,7 +1060,10 @@ class TestGradientFlow:
 
     def test_fuse_gradient_flow(self, device):
         md = _create_md_model("uncond").to(device)
-        md.set_grid_patching(patch_shape=PATCH_SHAPE, fuse=False)
+        md.set_grid_patching(
+            patch_shape=PATCH_SHAPE,
+            fuse=False,
+        )
 
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         patches = md.patch_x(x).detach().requires_grad_(True)
@@ -623,7 +1075,13 @@ class TestGradientFlow:
 # torch.compile Tests
 # =============================================================================
 
-COMPILE_CONFIGS = ["uncond", "cond_patch", "cond_interp", "cond_vec_img"]
+COMPILE_CONFIGS = [
+    "uncond",
+    "cond_patch",
+    "cond_interp",
+    "cond_vec_img",
+    *EXTRA_TIME_FIELDS,
+]
 
 
 @pytest.mark.usefixtures("nop_compile")
@@ -638,45 +1096,168 @@ class TestCompile:
         md = _create_md_model(config_name).to(device)
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
 
-        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
-        t = torch.rand(BATCH, device=device)
+        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
+            True
+        )
+        t = torch.rand(BATCH, device=device, requires_grad=True)
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, device=device)
 
         compiled_fn = torch.compile(
-            lambda xi, ti: md(xi, ti, condition=condition), fullgraph=True
+            lambda xi, ti: md(xi, ti, condition=condition),
+            backend="aot_eager",
+            fullgraph=True,
         )
 
         out_eager = md(x, t, condition=condition)
         out_compiled = compiled_fn(x, t)
-        torch.testing.assert_close(out_eager, out_compiled)
+        out_eager_cpu = (
+            {"prediction": out_eager[0], **out_eager[1].to_tensordict().to_dict()}
+            if isinstance(out_eager, tuple)
+            else {"prediction": out_eager}
+        )
+        out_eager_cpu = {
+            name: value.to(device="cpu") for name, value in out_eager_cpu.items()
+        }
+        out_compiled_cpu = (
+            {"prediction": out_compiled[0], **out_compiled[1].to_tensordict().to_dict()}
+            if isinstance(out_compiled, tuple)
+            else {"prediction": out_compiled}
+        )
+        out_compiled_cpu = {
+            name: value.to(device="cpu") for name, value in out_compiled_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_eager_cpu,
+            out_compiled_cpu,
+        )
+        primary_t, extras = t if isinstance(t, tuple) else (t, None)
+        inputs = (x, primary_t, *md.parameters())
+        out_eager_values = (
+            {"prediction": out_eager[0], **out_eager[1].to_tensordict().to_dict()}
+            if isinstance(out_eager, tuple)
+            else {"prediction": out_eager}
+        )
+        eager_loss = sum(value.sum() for value in out_eager_values.values())
+        out_compiled_values = (
+            {"prediction": out_compiled[0], **out_compiled[1].to_tensordict().to_dict()}
+            if isinstance(out_compiled, tuple)
+            else {"prediction": out_compiled}
+        )
+        compiled_loss = sum(value.sum() for value in out_compiled_values.values())
+        torch.testing.assert_close(
+            torch.autograd.grad(compiled_loss, inputs, retain_graph=True),
+            torch.autograd.grad(eager_loss, inputs, retain_graph=True),
+        )
 
         # Reset positions and call again — must not recompile
         md.reset_patch_indices()
         out_eager_2 = md(x, t, condition=condition)
         out_compiled_2 = compiled_fn(x, t)
-        torch.testing.assert_close(out_eager_2, out_compiled_2)
+        out_eager_2_cpu = (
+            {"prediction": out_eager_2[0], **out_eager_2[1].to_tensordict().to_dict()}
+            if isinstance(out_eager_2, tuple)
+            else {"prediction": out_eager_2}
+        )
+        out_eager_2_cpu = {
+            name: value.to(device="cpu") for name, value in out_eager_2_cpu.items()
+        }
+        out_compiled_2_cpu = (
+            {
+                "prediction": out_compiled_2[0],
+                **out_compiled_2[1].to_tensordict().to_dict(),
+            }
+            if isinstance(out_compiled_2, tuple)
+            else {"prediction": out_compiled_2}
+        )
+        out_compiled_2_cpu = {
+            name: value.to(device="cpu") for name, value in out_compiled_2_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_eager_2_cpu,
+            out_compiled_2_cpu,
+        )
 
     def test_forward_grid_compile(self, device, config_name):
         """Compiled grid-patching forward matches eager; no recompile on
         second call."""
         torch._dynamo.config.error_on_recompile = True
         md = _create_md_model(config_name).to(device)
-        md.set_grid_patching(patch_shape=PATCH_SHAPE, fuse=True)
+        md.set_grid_patching(
+            patch_shape=PATCH_SHAPE,
+            fuse=True,
+        )
 
-        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
-        t = torch.rand(BATCH, device=device)
+        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
+            True
+        )
+        t = torch.rand(BATCH, device=device, requires_grad=True)
+        t = _make_model_time(config_name, t)
         condition = _make_condition(config_name, device=device)
 
         compiled_fn = torch.compile(
-            lambda xi, ti: md(xi, ti, condition=condition), fullgraph=True
+            lambda xi, ti: md(xi, ti, condition=condition),
+            backend="aot_eager",
+            fullgraph=True,
         )
 
         out_eager = md(x, t, condition=condition)
         out_compiled = compiled_fn(x, t)
-        torch.testing.assert_close(out_eager, out_compiled)
+        out_eager_cpu = (
+            {"prediction": out_eager[0], **out_eager[1].to_tensordict().to_dict()}
+            if isinstance(out_eager, tuple)
+            else {"prediction": out_eager}
+        )
+        out_eager_cpu = {
+            name: value.to(device="cpu") for name, value in out_eager_cpu.items()
+        }
+        out_compiled_cpu = (
+            {"prediction": out_compiled[0], **out_compiled[1].to_tensordict().to_dict()}
+            if isinstance(out_compiled, tuple)
+            else {"prediction": out_compiled}
+        )
+        out_compiled_cpu = {
+            name: value.to(device="cpu") for name, value in out_compiled_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_eager_cpu,
+            out_compiled_cpu,
+        )
+        primary_t, extras = t if isinstance(t, tuple) else (t, None)
+        inputs = (x, primary_t, *md.parameters())
+        out_eager_values = (
+            {"prediction": out_eager[0], **out_eager[1].to_tensordict().to_dict()}
+            if isinstance(out_eager, tuple)
+            else {"prediction": out_eager}
+        )
+        eager_loss = sum(value.sum() for value in out_eager_values.values())
+        out_compiled_values = (
+            {"prediction": out_compiled[0], **out_compiled[1].to_tensordict().to_dict()}
+            if isinstance(out_compiled, tuple)
+            else {"prediction": out_compiled}
+        )
+        compiled_loss = sum(value.sum() for value in out_compiled_values.values())
+        torch.testing.assert_close(
+            torch.autograd.grad(compiled_loss, inputs, retain_graph=True),
+            torch.autograd.grad(eager_loss, inputs, retain_graph=True),
+        )
 
         out_compiled_2 = compiled_fn(x, t)
-        torch.testing.assert_close(out_eager, out_compiled_2)
+        out_compiled_2_cpu = (
+            {
+                "prediction": out_compiled_2[0],
+                **out_compiled_2[1].to_tensordict().to_dict(),
+            }
+            if isinstance(out_compiled_2, tuple)
+            else {"prediction": out_compiled_2}
+        )
+        out_compiled_2_cpu = {
+            name: value.to(device="cpu") for name, value in out_compiled_2_cpu.items()
+        }
+        torch.testing.assert_close(
+            out_eager_cpu,
+            out_compiled_2_cpu,
+        )
 
 
 # =============================================================================

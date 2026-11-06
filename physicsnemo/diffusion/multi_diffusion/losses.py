@@ -107,6 +107,12 @@ class MultiDiffusionMSEDSMLoss:
     For details on prediction types and ``score_to_x0_fn``, see
     :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`.
 
+    This loss supplies a single diffusion time tensor per patch batch and
+    expects a single prediction tensor. It does not consume tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`. Use a loss designed
+    for those fields when training a model that requires them.
+
     Parameters
     ----------
     model : MultiDiffusionModel2D
@@ -400,6 +406,12 @@ class MultiDiffusionWeightedMSEDSMLoss:
     For additional details, see :class:`MultiDiffusionMSEDSMLoss` and
     :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`.
 
+    This loss supplies a single diffusion time tensor per patch batch and
+    expects a single prediction tensor. It does not consume tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`. Use a loss designed
+    for those fields when training a model that requires them.
+
     Parameters
     ----------
     model : MultiDiffusionModel2D
@@ -673,6 +685,12 @@ class MultiDiffusionFlowMatchingLoss:
     loss. See :class:`MultiDiffusionMSEDSMLoss` for details about random patch
     resets, positional embeddings, conditioning, and reductions.
 
+    This loss supplies a single diffusion time tensor per patch batch and
+    expects a single prediction tensor. It does not consume tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`. Use a loss designed
+    for those fields when training a model that requires them.
+
     Parameters
     ----------
     model : MultiDiffusionModel2D
@@ -906,6 +924,12 @@ class MultiDiffusionWeightedFlowMatchingLoss:
     time-dependent weight :math:`w(t)` supplied by the noise scheduler. See
     :class:`MultiDiffusionFlowMatchingLoss` for the shared patching,
     prediction-conversion, and reduction behavior.
+
+    This loss supplies a single diffusion time tensor per patch batch and
+    expects a single prediction tensor. It does not consume tuples with
+    :class:`~physicsnemo.diffusion.DiffusionExtraTimes` or
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`. Use a loss designed
+    for those fields when training a model that requires them.
 
     Parameters
     ----------
