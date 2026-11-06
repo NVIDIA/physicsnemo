@@ -452,7 +452,7 @@ examples/weather/fcn_afno/
 examples/weather/flood_modeling/
 examples/weather/graphcast/ @mnabian
 examples/weather/mixture_of_experts/
-examples/weather/pangu_weather/ @dallasfoster
+examples/weather/pangu_weather/ @dallasfoster @pzharrington
 examples/weather/regen/
 examples/weather/regional_weather_diffusion/
 examples/weather/temporal_interpolation/
