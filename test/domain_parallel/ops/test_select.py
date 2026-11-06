@@ -302,3 +302,67 @@ def test_index_select_method_spelling(distributed_mesh):
         {},
         check_grads=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# aten.select / select_backward with a negative dim (dispatch-level handlers)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("dim", [-1, 4])
+def test_select_negative_dim_keeps_shard_dim(distributed_mesh, dim):
+    r"""The dispatch handlers see ``dim`` as given: a negative dim must not
+    shift the shard dim (``Shard(2)`` stays ``Shard(2)`` when the last dim goes),
+    and select_backward must insert the size at the same position."""
+    dm = DistributedManager()
+    full = torch.randn(2, 3, 8 * distributed_mesh.size(0), 5, 4, device=dm.device)
+    st = scatter_tensor(full, 0, distributed_mesh, (Shard(2),))
+
+    with torch._C.DisableTorchFunctionSubclass():
+        out = torch.ops.aten.select.int(st, dim, 1)
+        back = torch.ops.aten.select_backward.default(out, list(full.shape), dim, 1)
+
+    assert out._spec.placements == (Shard(2),)
+    assert tuple(out.shape) == (2, 3, full.shape[2], 5)
+    torch.testing.assert_close(out.full_tensor(), full.select(dim, 1))
+    assert back._spec.placements == (Shard(2),)
+    torch.testing.assert_close(
+        back.full_tensor(),
+        torch.ops.aten.select_backward.default(
+            full.select(dim, 1), list(full.shape), dim, 1
+        ),
+    )
+
+
+@pytest.mark.multigpu_static
+def test_select_negative_dim_on_shard_dim_rejected(distributed_mesh):
+    r"""Selecting the sharded dim through a negative index is rejected too."""
+    from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
+
+    dm = DistributedManager()
+    full = torch.randn(2, 8 * distributed_mesh.size(0), device=dm.device)
+    st = scatter_tensor(full, 0, distributed_mesh, (Shard(1),))
+    with torch._C.DisableTorchFunctionSubclass(), pytest.raises(MissingShardPatch):
+        torch.ops.aten.select.int(st, -1, 0)
+
+
+@pytest.mark.multigpu_static
+def test_compiled_stack_backward_keeps_shard_dim(distributed_mesh):
+    r"""``torch.stack(..., dim=-1)`` (RoPE's rotate-half) under compile: its
+    backward selects with ``dim=-1``; the input grad must stay ``Shard(2)``."""
+    dm = DistributedManager()
+    full = torch.randn(1, 4, 8 * distributed_mesh.size(0), 6, 8, device=dm.device)
+    st = scatter_tensor(full, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+
+    def rotate_half(x):
+        return torch.stack((-x[..., 1::2], x[..., 0::2]), dim=-1).flatten(-2)
+
+    torch._dynamo.reset()
+    out = torch.compile(rotate_half, backend="aot_eager", dynamic=False)(st)
+    out.square().sum().backward()
+
+    ref = full.clone().requires_grad_(True)
+    rotate_half(ref).square().sum().backward()
+    assert st.grad._spec.placements == (Shard(2),)
+    torch.testing.assert_close(st.grad.full_tensor(), ref.grad)
