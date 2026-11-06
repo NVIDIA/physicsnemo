@@ -22,7 +22,7 @@ import pytest
 
 pytest.importorskip("pyvista")
 
-from physicsnemo.experimental.guardrails.geometry import (
+from physicsnemo.experimental.uq.ood.geometry import (
     FEATURE_NAMES,
     FeatureSchema,
 )
