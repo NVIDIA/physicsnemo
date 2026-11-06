@@ -21,6 +21,7 @@ from .iddpm import IDDPMNoiseScheduler  # noqa: F401
 from .linear_gaussian import LinearGaussianNoiseScheduler  # noqa: F401
 from .rectified_flow import RectifiedFlowNoiseScheduler  # noqa: F401
 from .student_t_edm import StudentTEDMNoiseScheduler  # noqa: F401
+from .trigflow import TrigFlowNoiseScheduler  # noqa: F401
 from .ve import VENoiseScheduler  # noqa: F401
 from .vp import VPNoiseScheduler  # noqa: F401
 

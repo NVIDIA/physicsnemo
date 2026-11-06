@@ -23,11 +23,12 @@ from typing import Any, Dict, Literal, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Float, Shaped
 from tensordict import TensorDict
 from torch import Tensor
 
 from physicsnemo.core import Module
+from physicsnemo.diffusion.base import DiffusionExtraOutputs, DiffusionExtraTimes
 from physicsnemo.diffusion.multi_diffusion.patching import (
     GridPatching2D,
     RandomPatching2D,
@@ -79,7 +80,12 @@ class MultiDiffusionModel2D(Module):
         ) -> torch.Tensor          # Prediction, shape: (P*B, C, Hp, Wp)
 
     The ``MultiDiffusionModel2D`` wrapper itself also satisfies the
-    :class:`~physicsnemo.diffusion.DiffusionModel` interface.
+    :class:`~physicsnemo.diffusion.DiffusionModel` interface. Most wrapped
+    models accept a single diffusion time tensor and return a single
+    prediction tensor. Models that need extra times can accept
+    ``(t, extra_times)`` with :class:`~physicsnemo.diffusion.DiffusionExtraTimes`.
+    Models can also return ``(prediction, extra_outputs)`` with
+    :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`.
 
     .. important::
 
@@ -162,6 +168,12 @@ class MultiDiffusionModel2D(Module):
         Controls whether conditioning tensors are interpolated to patch
         resolution. Follows the same ``bool`` / ``Dict[str, bool]``
         convention as ``condition_patch``.
+    extra_outputs_fuse : Dict[str, bool] or None, default=None
+        Select auxiliary output fields for spatial fusion during grid sampling.
+        A selected field must have shape :math:`(P \times B, C_{extra}, H_p, W_p)`.
+        Fields not selected use an arithmetic mean across patches, preserving
+        their remaining dimensions. The reserved ``logvar`` field always uses
+        the nonspatial mean. Selecting it for spatial fusion raises an error.
 
     Forward
     -------
@@ -169,9 +181,11 @@ class MultiDiffusionModel2D(Module):
         Noisy or interpolated state. Shape :math:`(B, C, H, W)` at global
         resolution, or :math:`(P \times B, C, H_p, W_p)` if
         ``x_is_patched=True``.
-    t : torch.Tensor
-        Diffusion or flow-matching time. Shape :math:`(B,)`, or
-        :math:`(P \times B,)` if ``t_is_patched=True``.
+    t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+        Primary diffusion time, optionally paired with named extra times.
+        Every supplied time has shape :math:`(B,)`, or :math:`(P \times B,)`
+        if ``t_is_patched=True``. Extra times use the same batch order as the
+        primary time.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Conditioning information at **global** resolution (batch size
         :math:`B`), or already in patch-compatible format if
@@ -195,10 +209,12 @@ class MultiDiffusionModel2D(Module):
 
     Outputs
     -------
-    torch.Tensor
-        If fusing is enabled (grid patching with ``fuse=True``), the output
-        has shape :math:`(B, C, H, W)`. Otherwise the output has shape
-        :math:`(P \times B, C, H_p, W_p)`.
+    torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+        Prediction, optionally paired with auxiliary outputs.
+        If fusing is enabled (grid patching with ``fuse=True``), the prediction
+        has shape :math:`(B, C, H, W)` and auxiliary outputs have batch size ``[B]``. Otherwise the prediction has shape
+        :math:`(P \times B, C, H_p, W_p)` and auxiliary outputs have batch size
+        ``[P * B]``.
 
     Notes
     -----
@@ -391,6 +407,68 @@ class MultiDiffusionModel2D(Module):
     >>> denoised = mc_md_model(xN, t, condition=cond)  # denoised global state, shape: (B, C, H, W)
     >>> denoised.shape
     torch.Size([2, 3, 16, 16])
+
+    **Example 4:** Extend the conditional model in Example 3 with a
+    destination time ``r`` and a learned log-scale ``logvar``. Random patches
+    produce a prediction and one log-scale per patch; grid sampling fuses the
+    prediction and reduces the time-only log-scale to one value per sample.
+    This interface example does not define a canonical MeanFlow loss.
+
+    >>> from physicsnemo.diffusion import DiffusionExtraTimes, DiffusionExtraOutputs
+    >>> class ExtendedMultiCondModel(Module):
+    ...     def __init__(self):
+    ...         super().__init__()
+    ...         self.net = torch.nn.Conv2d(9, 3, 1)
+    ...         self.vec_proj = torch.nn.Linear(5, 3 * 8 * 8)
+    ...     def forward(self, x, t, condition=None):
+    ...         t, extra_times = t
+    ...         # The image, vector, and positional embedding use Example 3's layout.
+    ...         image = condition["image"]
+    ...         vector = condition["vector"]
+    ...         position = condition["positional_embedding"]
+    ...         h = self.net(torch.cat([x, image, position], dim=1))
+    ...         h = h + self.vec_proj(vector).view_as(h)
+    ...         prediction = h * (t - extra_times.r)[:, None, None, None]
+    ...         # A time-only head gives identical logvar values across patches.
+    ...         outputs = DiffusionExtraOutputs(logvar=t, batch_size=t.shape)
+    ...         return prediction, outputs
+    >>> extended_md = MultiDiffusionModel2D(
+    ...     model=ExtendedMultiCondModel(),
+    ...     global_spatial_shape=(16, 16),
+    ...     positional_embedding="sinusoidal",
+    ...     channels_positional_embedding=4,
+    ...     condition_interp={"image": True},
+    ... )
+    >>> extended_md.set_random_patching(patch_shape=(8, 8), patch_num=6)
+    >>> clean = torch.randn(2, 3, 16, 16)
+    >>> noisy = clean + 0.5 * torch.randn_like(clean)
+    >>> times = (
+    ...     0.5 * torch.ones(2),
+    ...     DiffusionExtraTimes(r=torch.zeros(2), batch_size=[2]),
+    ... )
+    >>> condition = TensorDict({
+    ...     "image": torch.randn(2, 2, 16, 16),
+    ...     "vector": torch.randn(2, 5),
+    ... }, batch_size=[2])
+    >>> prediction, outputs = extended_md(noisy, times, condition=condition)
+    >>> prediction.shape, outputs.logvar.shape
+    (torch.Size([12, 3, 8, 8]), torch.Size([12]))
+    >>> # A training loss can consume both the prediction and logvar.
+    >>> target = extended_md.patch_x(clean)
+    >>> residual = ((prediction - target) ** 2).mean(dim=(1, 2, 3))
+    >>> loss = (residual * (-outputs.logvar).exp() + outputs.logvar).mean()
+
+    Configure grid patches for sampling. The wrapper interpolates the image,
+    repeats the vector, and includes the positional embedding for each patch.
+    Because ``logvar`` depends only on the primary time, averaging its patch
+    copies recovers one value per sample without spatial fusion.
+
+    >>> _ = extended_md.eval()
+    >>> extended_md.set_grid_patching(patch_shape=(8, 8), overlap_pix=2, fuse=True)
+    >>> noise = torch.randn(2, 3, 16, 16)
+    >>> prediction, outputs = extended_md(noise, times, condition=condition)
+    >>> prediction.shape, outputs.logvar.shape
+    (torch.Size([2, 3, 16, 16]), torch.Size([2]))
     """
 
     # Class-level type annotation so static type checkers resolve the subscript
@@ -406,12 +484,18 @@ class MultiDiffusionModel2D(Module):
         channels_positional_embedding: int = 4,
         condition_patch: bool | Dict[str, bool] = False,
         condition_interp: bool | Dict[str, bool] = False,
+        extra_outputs_fuse: dict[str, bool] | None = None,
     ) -> None:
         super().__init__()
 
         self.model = model
         self.global_spatial_shape = tuple(global_spatial_shape)
         self._patching: RandomPatching2D | GridPatching2D | None = None
+        self.extra_outputs_fuse = dict(extra_outputs_fuse or {})
+        if self.extra_outputs_fuse.get("logvar", False):
+            raise ValueError(
+                "logvar is a scalar per sample and cannot be spatially fused."
+            )
         self._fuse: bool = False
         self._skip_positional_embedding_injection: bool = False
         # Persistent buffer so that patch_shape survives checkpoint save/load.
@@ -704,21 +788,31 @@ class MultiDiffusionModel2D(Module):
                 )
         return patching.apply(x)
 
-    def patch_t(self, t: Float[Tensor, " B"]) -> Float[Tensor, " P_times_B"]:
+    def patch_t(
+        self,
+        t: Float[Tensor, " B"]
+        | tuple[Float[Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+    ) -> (
+        Float[Tensor, " P_times_B"]
+        | tuple[Float[Tensor, " P_times_B"], Shaped[DiffusionExtraTimes, " P_times_B"]]
+    ):
         r"""Convert a diffusion or flow-matching time to patch-compatible format.
 
-        Repeats ``t`` :math:`P` times along the batch dimension so that
-        each patch receives the same time as its parent sample.
+        Repeats each supplied time :math:`P` times along the batch dimension
+        so that every patch receives its parent's primary and extra times.
+        An input tuple remains a tuple, including when all extra fields remain unset.
 
         Parameters
         ----------
-        t : Tensor
-            Diffusion or flow-matching time of shape :math:`(B,)`.
+        t : Tensor or tuple[Tensor, DiffusionExtraTimes]
+            Primary diffusion time and optional extra times, each with shape
+            :math:`(B,)`.
 
         Returns
         -------
-        Tensor
-            Expanded tensor of shape :math:`(P \times B,)`.
+        Tensor or tuple[Tensor, DiffusionExtraTimes]
+            Repeated times with shape :math:`(P \times B,)`. The extra-time
+            container has batch size ``[P * B]`` and retains unset fields.
 
         Raises
         ------
@@ -731,7 +825,16 @@ class MultiDiffusionModel2D(Module):
                 "No patching strategy set. Call set_random_patching() "
                 "or set_grid_patching() first."
             )
-        return t.repeat(patching.patch_num)
+        t, extra_times = t if isinstance(t, tuple) else (t, None)
+
+        def repeat_time(time):
+            return time.repeat(patching.patch_num)  # (P*B,)
+
+        batch_size = t.shape[0] * patching.patch_num
+        t = repeat_time(t)
+        if extra_times is not None:
+            return t, extra_times.apply(repeat_time, batch_size=[batch_size])
+        return t
 
     def patch_condition(
         self,
@@ -867,9 +970,16 @@ class MultiDiffusionModel2D(Module):
 
     def fuse(
         self,
-        input: Float[Tensor, "P_times_B C Hp Wp"],
+        input: Float[Tensor, "P_times_B C Hp Wp"]
+        | tuple[
+            Float[Tensor, "P_times_B C Hp Wp"],
+            Shaped[DiffusionExtraOutputs, " P_times_B"],
+        ],
         batch_size: int,
-    ) -> Float[Tensor, "B C H W"]:
+    ) -> (
+        Float[Tensor, "B C H W"]
+        | tuple[Float[Tensor, "B C H W"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
         r"""Fuse patches back into a full-resolution image.
 
         Only supported when :meth:`set_grid_patching` has been called.
@@ -878,21 +988,29 @@ class MultiDiffusionModel2D(Module):
 
         Parameters
         ----------
-        input : Tensor
-            Patched tensor of shape :math:`(P \times B, C, H_p, W_p)`.
+        input : Tensor or tuple[Tensor, DiffusionExtraOutputs]
+            Patch predictions of shape :math:`(P \times B, C, H_p, W_p)`,
+            optionally paired with auxiliary outputs of batch size ``[P * B]``.
         batch_size : int
             Original batch size :math:`B` before patching.
 
         Returns
         -------
-        Tensor
-            Fused tensor of shape :math:`(B, C, H, W)`.
+        Tensor or tuple[Tensor, DiffusionExtraOutputs]
+            Fused prediction of shape :math:`(B, C, H, W)`. Auxiliary outputs
+            have batch size ``[B]``. Fields selected in ``extra_outputs_fuse``
+            use spatial fusion. Other fields, including ``logvar``, use the
+            arithmetic mean across patches, preserving their other dimensions.
 
         Raises
         ------
         RuntimeError
             If no patching strategy is set, or if the current strategy is
             random patching.
+
+        ValueError
+            If a field selected for spatial fusion does not have the same
+            patch height and width as the prediction.
 
         Examples
         --------
@@ -917,7 +1035,32 @@ class MultiDiffusionModel2D(Module):
                 "Fusing is only supported with grid patching. "
                 "Call set_grid_patching() first."
             )
-        return self._patching.fuse(input, batch_size=batch_size)
+        prediction, extra_outputs = input if isinstance(input, tuple) else (input, None)
+        patch_shape = prediction.shape[-2:]
+
+        def fuse_tensor(value, spatial=True):
+            if spatial:
+                if not torch.compiler.is_compiling():
+                    if value.ndim != 4 or value.shape[-2:] != patch_shape:
+                        raise ValueError(
+                            "Spatial auxiliary outputs must have shape (P*B, C, Hp, Wp) "
+                            f"with patch dimensions {tuple(patch_shape)}, got {tuple(value.shape)}."
+                        )
+                return self._patching.fuse(value, batch_size=batch_size)
+            return value.reshape(-1, batch_size, *value.shape[1:]).mean(
+                dim=0
+            )  # (B, ...)
+
+        prediction = fuse_tensor(prediction)
+        if extra_outputs is not None:
+            extra_outputs = extra_outputs.named_apply(
+                lambda name, value: fuse_tensor(
+                    value, spatial=self.extra_outputs_fuse.get(name, False)
+                ),
+                batch_size=[batch_size],
+            )
+            return prediction, extra_outputs
+        return prediction
 
     # ------------------------------------------------------------------
     # Forward
@@ -926,7 +1069,10 @@ class MultiDiffusionModel2D(Module):
     def forward(
         self,
         x: Float[Tensor, "B C H W"] | Float[Tensor, "P_times_B C Hp Wp"],
-        t: Float[Tensor, " B"] | Float[Tensor, " P_times_B"],
+        t: Float[Tensor, " B"]
+        | Float[Tensor, " P_times_B"]
+        | tuple[Float[Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]]
+        | tuple[Float[Tensor, " P_times_B"], Shaped[DiffusionExtraTimes, " P_times_B"]],
         condition: Float[Tensor, " B *cond_dims"]
         | Float[Tensor, " P_times_B *cond_dims"]
         | TensorDict
@@ -935,7 +1081,15 @@ class MultiDiffusionModel2D(Module):
         t_is_patched: bool = False,
         condition_is_patched: bool = False,
         **model_kwargs: Any,
-    ) -> Float[Tensor, "P_times_B C Hp Wp"] | Float[Tensor, "B C H W"]:
+    ) -> (
+        Float[Tensor, "P_times_B C Hp Wp"]
+        | Float[Tensor, "B C H W"]
+        | tuple[
+            Float[Tensor, "P_times_B C Hp Wp"],
+            Shaped[DiffusionExtraOutputs, " P_times_B"],
+        ]
+        | tuple[Float[Tensor, "B C H W"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
         # No patching strategy: warn and pass through
         patching = self._patching
         if patching is None:
@@ -1005,7 +1159,7 @@ class MultiDiffusionModel2D(Module):
         output = self.model(x, t, condition=condition, **model_kwargs)
 
         if self._fuse:
-            output = patching.fuse(output, batch_size=B)
+            output = self.fuse(output, batch_size=B)
 
         return output
 

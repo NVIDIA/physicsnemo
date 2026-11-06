@@ -39,6 +39,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
 
+- Adds alpha distillation losses and an optional strategy layer in
+  `physicsnemo.diffusion.distillation` for sCM, MeanFlow, DMD2, and f-distill.
+  Use `DistillationLoss` or `WeightedDistillationLoss` in your own training
+  loop, or let `DistillationStrategy` manage the optimizer loop. Define custom
+  losses through `BaseDistillationLoss` without depending on FastGen.
+  Use `CheckpointStateBundle` to resume models, optimizers, and loss statistics.
+  These alpha APIs may change without backward compatibility. Distillation is
+  opt-in, with optional dependencies available through extras. Existing diffusion
+  training and inference remain unchanged, and distilled models continue to use
+  PhysicsNeMo inference APIs.
+- Adds `DiffusionExtraTimes` and `DiffusionExtraOutputs` to
+  `physicsnemo.diffusion` for utilities that carry named times or auxiliary
+  outputs. Compatible model interfaces and preconditioners can accept
+  `(t, extra_times)`, where `extra_times` is a `DiffusionExtraTimes` container,
+  and return `(prediction, extra_outputs)`, where `extra_outputs` is a
+  `DiffusionExtraOutputs` container. The API reserves the named field
+  `extra_times.r` for a destination diffusion time, as in MeanFlow. It reserves
+  the named field `extra_outputs.logvar` for learned loss weighting, as in sCM
+  and EDM2. Existing single-time, single-prediction calls remain
+  unchanged. Existing DSM and flow-matching losses continue to consume
+  single tensors. `MultiDiffusionModel2D` also carries these tuples through
+  patching. Its `extra_outputs_fuse` mapping selects custom spatial outputs
+  for grid fusion. The wrapper averages scalar outputs such as `logvar` across
+  patches. `MultiDiffusionPredictor` selects the prediction and
+  keeps its single-time, single-output interface.
+- Adds `TrigFlowNoiseScheduler` and `TrigFlowPreconditioner` to the diffusion
+  noise schedulers and preconditioners in `physicsnemo.diffusion`. Pair them
+  with the same `sigma_data` to train and sample models along a trigonometric
+  diffusion path, with the backbone predicting normalized velocity. Built-in
+  linear Gaussian schedulers also provide differentiable `snr_inv()` methods
+  to convert signal-to-noise amplitude ratios back to diffusion times. Use
+  these inverses to match noise levels across schedules. The amplitude ratio
+  is `alpha(t) / sigma(t)`. The power signal-to-noise ratio is its square.
+  Custom schedulers can supply their own inverse. These additions are opt-in.
+  Existing schedulers, preconditioners, and training workflows work as before.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
