@@ -143,6 +143,8 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
             "subsample_n_points": 30,
             "drop_interior_cells": True,
         },
+        {"interior_n_points_range": (20, 40)},
+        {"subsample_n_cells": 20, "interior_n_points_range": (20, 40)},
     ],
 )
 def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, options):
@@ -173,6 +175,38 @@ def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, o
     assert sorted(from_memmap.boundary_names) == sorted(from_store.boundary_names)
     for name in from_memmap.boundary_names:
         assert_meshes_equal(from_memmap.boundaries[name], from_store.boundaries[name])
+
+
+@pytest.mark.parametrize("pattern", ["*.pdmsh", "*.zarr"])
+def test_unseeded_interior_count_is_drawn_once(tmp_path, pattern):
+    """Without a seed, the zarr read and the reader share one count draw."""
+    domain = DomainMesh(
+        interior=make_point_cloud(seed=5),
+        boundaries={"wall": make_mesh(n_points=60, n_cells=50, seed=6)},
+    )
+    domain.save(tmp_path / "case.pdmsh")
+    to_zarr(domain, tmp_path / "case.zarr", chunk_rows=8)
+    lo, hi = 5, domain.interior.n_points
+    reader = DomainMeshReader(
+        tmp_path, pattern=pattern, interior_n_points_range=(lo, hi)
+    )
+    for seed in range(20):
+        torch.manual_seed(seed)
+        expected = int(torch.randint(lo, hi + 1, (1,)))
+        torch.manual_seed(seed)
+        assert reader[0][0].interior.n_points == expected
+
+
+def test_close_releases_store_handles(tmp_path):
+    """close() drops the cached zarr groups; the next read reopens them."""
+    to_zarr(make_domain_mesh(), tmp_path / "case.zarr")
+    reader = DomainMeshReader(tmp_path, pattern="*.zarr", subsample_n_points=5)
+    reader.set_generator(torch.Generator().manual_seed(0))
+    first, _ = reader[0]
+    reader.close()
+    assert not reader._zarr_groups
+    again, _ = reader[0]
+    assert_meshes_equal(first.interior, again.interior)
 
 
 def test_mixed_directory_discovery(tmp_path):

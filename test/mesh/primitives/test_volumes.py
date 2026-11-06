@@ -23,6 +23,9 @@ from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.mesh import primitives
 from physicsnemo.mesh.primitives.procedural import lumpy_ball
 
+if check_version_spec("pyvista"):
+    import pyvista as pv
+
 # Volume primitives that don't require pyvista
 PYVISTA_FREE_VOLUMES = ["cube_volume", "tetrahedron_volume"]
 
@@ -111,6 +114,42 @@ class TestVolumePrimitives:
         # Delaunay slivers have rounding-level volumes with arbitrary sign.
         tol = 1e-6 * det.abs().median()
         assert (det > -tol).all()
+
+    @requires_pyvista
+    @pytest.mark.parametrize("scale", [1.0, 1e-12])
+    @pytest.mark.parametrize("example_name", PYVISTA_VOLUMES)
+    def test_pyvista_volumes_partition_solid(self, example_name, scale):
+        """Tetrahedra fill the solid without overlap (VTK 9.7 Delaunay did not)."""
+        if example_name == "sphere_volume":
+            mesh = primitives.volumes.sphere_volume.load(radius=scale)
+            surface = pv.Sphere(radius=1.0, theta_resolution=20, phi_resolution=20)
+        else:
+            mesh = primitives.volumes.cylinder_volume.load(
+                radius=scale, height=2 * scale
+            )
+            surface = pv.Cylinder(radius=1.0, height=2.0, resolution=20)
+        tets = mesh.points.double()[mesh.cells] / scale  # (n_cells, 4, 3)
+        signed_volumes = torch.det(tets[:, 1:] - tets[:, [0]]) / 6
+
+        ### All positive, summing to the volume of the surface polyhedron
+        assert (signed_volumes > 0).all()
+        expected = surface.triangulate().volume
+        assert signed_volumes.sum().item() == pytest.approx(expected, rel=1e-5)
+
+        ### Random interior samples lie strictly inside exactly one tetrahedron
+        generator = torch.Generator().manual_seed(0)
+        n_samples = 1000
+        owner = torch.randint(len(tets), (n_samples,), generator=generator)
+        weights = -torch.rand(n_samples, 4, generator=generator).double().log()
+        weights = weights / weights.sum(dim=1, keepdim=True)
+        samples = torch.einsum("sk,skd->sd", weights, tets[owner])
+
+        # Barycentric coordinates of every sample in every tetrahedron
+        lhs = torch.cat([tets.transpose(1, 2), torch.ones_like(tets[:, None, :, 0])], 1)
+        rhs = torch.cat([samples, torch.ones(n_samples, 1, dtype=torch.float64)], 1)
+        bary = torch.einsum("nij,sj->sni", torch.linalg.inv(lhs), rhs)
+        n_containing = (bary > 1e-9).all(dim=-1).sum(dim=1)
+        assert (n_containing == 1).all()
 
 
 class TestCubeVolumeBoundary:
@@ -305,6 +344,11 @@ class TestLumpyBall:
 
         with pytest.raises(ValueError, match="noise_amplitude must be non-negative"):
             lumpy_ball.load(noise_amplitude=-0.1)
+
+    def test_non_star_shaped_noise_raises(self):
+        """Noise that folds the template would give overlapping tetrahedra."""
+        with pytest.raises(ValueError, match="noise_amplitude"):
+            lumpy_ball.load(n_shells=1, subdivisions=1, noise_amplitude=2.0, seed=49)
 
     @pytest.mark.parametrize("noise_amplitude", [0.3, 0.5, 0.8])
     def test_high_noise_valid_tetrahedra(self, noise_amplitude):

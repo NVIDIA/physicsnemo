@@ -46,6 +46,7 @@ from jaxtyping import Bool, Float, Int
 from physicsnemo.mesh.neighbors._adjacency import Adjacency
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.utils._tracing import is_tracing
 
 #: Absolute tolerance on the (dimensionless) sine of a vertex turn below which
 #: the turn is treated as straight rather than reflex, so near-collinear
@@ -203,7 +204,7 @@ def _triangulate_polygons(
     counts = polygons.counts
     # Cheap structural validation, off the torch.compile path (each check is a
     # host sync that would otherwise force a graph break).
-    if not torch.compiler.is_compiling() and counts.numel() > 0:
+    if not is_tracing() and counts.numel() > 0:
         if bool((counts < 3).any()):
             raise ValueError(
                 f"Every polygon needs >= 3 vertices to triangulate; got a "

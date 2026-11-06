@@ -69,82 +69,30 @@ def validation_plot(generated, truth, variable, background=None):
         )
 
 
-color_limits = {
-    "u10m": (-5, 5),
-    "v10": (-5, 5),
-    "t2m": (260, 310),
-    "tcwv": (0, 60),
-    "msl": (0.1, 0.3),
-    "refc": (-10, 30),
-}
+def inference_plot(prediction, target, title):
+    """Plot a generated sample, the target and their difference side by side.
 
+    Args:
+        prediction: Generated sample, 2D array
+        target: Target, 2D array
+        title: Title prefix for the panels, e.g. the variable name
 
-def inference_plot(
-    background,
-    state_pred,
-    state_true,
-    plot_var_background,
-    plot_var_state,
-    initial_time,
-    lead_time,
-):
-    fig, ax = plt.subplots(1, 4, figsize=(20, 5))
-
-    state_error = state_pred - state_true
-
-    if plot_var_state in color_limits:
-        im = ax[0].imshow(
-            state_pred,
-            origin="lower",
-            cmap="magma",
-            clim=color_limits[plot_var_state],
-        )
-    else:
-        im = ax[0].imshow(state_pred, origin="lower", cmap="magma")
-
-    fig.colorbar(im, ax=ax[0], fraction=0.046, pad=0.04)
-    ax[0].set_title(
-        "Predicted, {}, \n initial time {} \n lead_time {} hours".format(
-            plot_var_state, initial_time, lead_time
-        )
-    )
-    if plot_var_state in color_limits:
-        im = ax[1].imshow(
-            state_true,
-            origin="lower",
-            cmap="magma",
-            clim=color_limits[plot_var_state],
-        )
-    else:
-        im = ax[1].imshow(state_true, origin="lower", cmap="magma")
-    fig.colorbar(im, ax=ax[1], fraction=0.046, pad=0.04)
-    ax[1].set_title("Actual, {}".format(plot_var_state))
-    if plot_var_background in color_limits:
-        im = ax[2].imshow(
-            background,
-            origin="lower",
-            cmap="magma",
-            clim=color_limits[plot_var_background],
-        )
-    else:
-        im = ax[2].imshow(
-            background,
-            origin="lower",
-            cmap="magma",
-        )
-    fig.colorbar(im, ax=ax[2], fraction=0.046, pad=0.04)
-    ax[2].set_title("Background, {}".format(plot_var_background))
-    maxerror = np.max(np.abs(state_error))
-    im = ax[3].imshow(
-        state_error,
-        origin="lower",
-        cmap="RdBu_r",
-        vmax=maxerror,
-        vmin=-maxerror,
-    )
-    fig.colorbar(im, ax=ax[3], fraction=0.046, pad=0.04)
-    ax[3].set_title("Error, {}".format(plot_var_state))
-
+    Returns:
+        matplotlib figure
+    """
+    (fig, ax) = plt.subplots(1, 3, figsize=(15, 5))
+    (vmin, vmax) = (np.nanmin(target), np.nanmax(target))
+    error = prediction - target
+    max_error = np.nanmax(np.abs(error))
+    panels = [
+        (prediction, "Predicted", {"vmin": vmin, "vmax": vmax}),
+        (target, "Target", {"vmin": vmin, "vmax": vmax}),
+        (error, "Error", {"vmin": -max_error, "vmax": max_error, "cmap": "RdBu_r"}),
+    ]
+    for axis, (data, label, kwargs) in zip(ax, panels):
+        im = axis.imshow(data, **kwargs)
+        axis.set_title(f"{label}: {title}")
+        fig.colorbar(im, ax=axis, fraction=0.046, pad=0.04)
     return fig
 
 

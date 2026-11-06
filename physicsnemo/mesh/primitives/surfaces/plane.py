@@ -59,8 +59,8 @@ def load(
     n = subdivisions + 1
 
     # Create grid of points in xy-plane
-    x = torch.linspace(-size / 2, size / 2, n, device=device)
-    y = torch.linspace(-size / 2, size / 2, n, device=device)
+    x = torch.linspace(-size / 2, size / 2, n, device=device, dtype=torch.float32)
+    y = torch.linspace(-size / 2, size / 2, n, device=device, dtype=torch.float32)
     xx, yy = torch.meshgrid(x, y, indexing="ij")
 
     points_flat = torch.stack(
@@ -74,9 +74,9 @@ def load(
         raise ValueError(f"normal must be finite and nonzero, got {normal=}")
     normal_t = normal_t / length
 
-    if not torch.allclose(normal_t, torch.tensor([0.0, 0.0, 1.0], device=device)):
+    z_axis = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device)
+    if not torch.allclose(normal_t, z_axis):
         # Find rotation axis and angle
-        z_axis = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device)
         axis = torch.cross(z_axis, normal_t)
         axis_norm = torch.norm(axis)
 
@@ -96,14 +96,16 @@ def load(
                 device=device,
             )
             R = (
-                torch.eye(3, device=device)
+                torch.eye(3, dtype=torch.float32, device=device)
                 + torch.sin(angle) * K
                 + (1 - torch.cos(angle)) * torch.mm(K, K)
             )
             points = torch.mm(points_flat, R.T)
         elif normal_t[2] < 0:
             # normal is -z: rotate 180 degrees about the x-axis
-            points = points_flat * torch.tensor([1.0, -1.0, -1.0], device=device)
+            points = points_flat * torch.tensor(
+                [1.0, -1.0, -1.0], dtype=torch.float32, device=device
+            )
         else:
             # normal is +z to within rounding: no rotation
             points = points_flat

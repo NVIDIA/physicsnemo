@@ -39,6 +39,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._device import to_device
 from physicsnemo.mesh.utilities._normalization import safe_normalize
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -381,7 +382,7 @@ def scale_matrix(
     factor_t = to_device(factor, device, dtype)
     if factor_t.ndim == 0:
         factor_t = factor_t.expand(n_spatial_dims)
-    elif not torch.compiler.is_compiling() and factor_t.shape[-1] != n_spatial_dims:
+    elif not is_tracing() and factor_t.shape[-1] != n_spatial_dims:
         raise ValueError(
             f"factor must be scalar or shape ({n_spatial_dims},), got {factor_t.shape}"
         )
@@ -602,7 +603,7 @@ def transform(
         - centroids: Always transformed
         - normals: For square invertible matrices, transformed by inverse-transpose
     """
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2D, got shape {matrix.shape}")
         if matrix.shape[1] != mesh.n_spatial_dims:
@@ -675,10 +676,7 @@ def transform(
                     or (
                         assume_similarity
                         if assume_similarity is not None
-                        else (
-                            not torch.compiler.is_compiling()
-                            and _is_similarity_transform(matrix)
-                        )
+                        else (not is_tracing() and _is_similarity_transform(matrix))
                     )
                 ):
                     transformed = v @ inverse
@@ -762,7 +760,7 @@ def translate(
     """
     offset = to_device(offset, mesh.points.device, mesh.points.dtype)
 
-    if not torch.compiler.is_compiling():
+    if not is_tracing():
         if offset.shape[-1] != mesh.n_spatial_dims:
             raise ValueError(
                 f"offset must have shape ({mesh.n_spatial_dims},), got {offset.shape}"

@@ -65,7 +65,9 @@ def load(
         * torch.arange(1, n_radial + 1, device=device, dtype=torch.float32)
         / n_radial
     )
-    theta = torch.linspace(0, 2 * torch.pi, n_angular + 1, device=device)[:-1]
+    theta = torch.linspace(
+        0, 2 * torch.pi, n_angular + 1, device=device, dtype=torch.float32
+    )[:-1]
     R, THETA = torch.meshgrid(r_vals, theta, indexing="ij")
     x = R * torch.cos(THETA)
     y = R * torch.sin(THETA)

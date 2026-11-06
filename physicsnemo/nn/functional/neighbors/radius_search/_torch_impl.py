@@ -27,7 +27,7 @@ def _radius_search_dynamic(
     return_dists: bool,
     return_points: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Single-element dynamic radius search on (N, 3) and (Q, 3) tensors.
+    """Single-element dynamic radius search on (N, D) and (Q, D) tensors.
 
     Finds ALL neighbors within radius (variable-length output).
     """
@@ -67,7 +67,7 @@ def radius_search_impl(
     """
     Pure PyTorch implementation of the radius search.
 
-    Accepts both unbatched (N, 3) and batched (B, N, 3) inputs.
+    Accepts both unbatched (N, D) and batched (B, N, D) inputs.
     This is a brute force implementation that is not memory efficient.
     """
 
@@ -142,7 +142,7 @@ def radius_search_impl(
             B,
             queries.shape[1],
             max_points,
-            3,
+            points.shape[-1],
             device=queries.device,
             dtype=points.dtype,
         )
@@ -150,7 +150,7 @@ def radius_search_impl(
         pts_out = output_points
     else:
         pts_out = torch.empty(
-            0, max_points, 3, device=points.device, dtype=points.dtype
+            0, max_points, points.shape[-1], device=points.device, dtype=points.dtype
         )
 
     if was_unbatched:

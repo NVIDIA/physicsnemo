@@ -246,7 +246,8 @@ if PV_AVAILABLE:
         """
 
         if length is None:
-            lx, ly, lz = 2 * np.pi, 2 * np.pi, 2 * np.pi
+            length = 2 * np.pi
+        lx, ly, lz = length, length, length
 
         u, v, w = field[0, :, :, :], field[1, :, :, :], field[2, :, :, :]
 
