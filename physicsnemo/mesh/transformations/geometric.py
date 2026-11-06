@@ -254,6 +254,7 @@ def _resolve_rotation_axis(
     | None,
     n_spatial_dims: int,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> Float[torch.Tensor, " n_spatial_dims"] | None:
     """Normalize an axis specification into a tensor or None.
 
@@ -267,12 +268,14 @@ def _resolve_rotation_axis(
         Target device for a tensor axis. An axis given as a string or as
         Python values is returned on the host, so that it can be validated
         there without a device synchronization.
+    dtype : torch.dtype
+        Dtype of the rotation matrix. A tensor or sequence axis is resolved in
+        this dtype, or in ``float32`` for reduced-precision dtypes.
 
     Returns
     -------
     Float[torch.Tensor, " n_spatial_dims"] or None
-        Normalized axis tensor with shape :math:`(3,)` and dtype
-        ``float32``, or ``None`` for 2D rotation.
+        Axis tensor with shape :math:`(3,)`, or ``None`` for 2D rotation.
     """
     if isinstance(axis, str):
         axis_map = {"x": 0, "y": 1, "z": 2}
@@ -290,7 +293,7 @@ def _resolve_rotation_axis(
         axis = torch.as_tensor(
             axis,
             device=device if isinstance(axis, torch.Tensor) else "cpu",
-            dtype=torch.float32,
+            dtype=torch.promote_types(dtype, torch.float32),
         )
 
     expected_dims = 2 if axis is None else 3
@@ -339,7 +342,7 @@ def rotation_matrix(
     Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]
         Rotation matrix, shape :math:`(S, S)`.
     """
-    resolved = _resolve_rotation_axis(axis, n_spatial_dims, device)
+    resolved = _resolve_rotation_axis(axis, n_spatial_dims, device, dtype)
     return _build_rotation_matrix(
         angle=angle,
         axis=resolved,
@@ -460,11 +463,14 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
     The test divides :math:`M` by its largest absolute entry, then compares
     :math:`M^\top M / c` with :math:`I`, so its outcome is independent of the
     overall scale. The zero map (:math:`c = 0`) passes, as a uniform scale by
-    zero; maps with non-finite entries fail.
+    zero; maps with non-finite entries fail. For float16 and bfloat16, whose
+    rounding alone moves the Gram matrix by up to about two epsilons, ``atol``
+    is raised to four epsilons; float32 and float64 keep ``atol``.
     """
     n = matrix.shape[-1]
     peak = matrix.abs().amax()
-    matrix = matrix / torch.where(peak > 0, peak, 1)
+    matrix = matrix / torch.where(peak > 0, peak, 1)  # floating point from here on
+    atol = max(atol, 4 * torch.finfo(matrix.dtype).eps)
     gram = matrix.T @ matrix
     scale = gram.diagonal(dim1=-2, dim2=-1).mean()
     nonzero = scale != 0
@@ -508,7 +514,8 @@ def _scale_assumptions(
     squares = [(v / peak) * (v / peak) if peak > 0 else v * v for v in values]
     mean = sum(squares) / len(squares)
     # _is_similarity_transform's torch.allclose(..., I, atol=1e-6, rtol=1e-5)
-    # bounds each diagonal entry by atol + rtol * 1.
+    # bounds each diagonal entry by atol + rtol * 1: its float32/float64
+    # tolerance, stricter than the one it uses at runtime for 16-bit dtypes.
     is_similarity = mean == 0 or all(abs(s / mean - 1) <= 1e-6 + 1e-5 for s in squares)
     return abs(math.prod(values)) > 1e-10, is_similarity
 
@@ -621,7 +628,11 @@ def transform(
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
-        det = matrix.det()
+        ### det and inv_ex need LU, which has no float16/bfloat16 kernels, and
+        # |det| can overflow float16: work in at least float32, cast each result
+        solve_dtype = torch.promote_types(matrix.dtype, torch.float32)
+        solve_matrix = matrix.to(solve_dtype)
+        det = solve_matrix.det()
 
         ### The runtime det test syncs (host readback of a cuda tensor).
         if assume_invertible is not None:
@@ -636,7 +647,9 @@ def transform(
             ### Full-dimensional meshes: global area scaling
             if mesh.n_manifold_dims == mesh.n_spatial_dims:
                 if (v := mesh._cache.get(("cell", "areas"), None)) is not None:
-                    new_cache["cell", "areas"] = v * det_abs
+                    new_cache["cell", "areas"] = (v.to(solve_dtype) * det_abs).to(
+                        v.dtype
+                    )
 
             ### Codimension-1 manifolds: per-element area scaling via normals
             # Formula: area' = area * |det(M)| * ||M^{-T} n||
@@ -648,17 +661,21 @@ def transform(
                     mesh._cache.get((association, "normals"), None) is not None
                     for association in ("cell", "point")
                 ):
-                    inverse = torch.linalg.inv_ex(matrix, check_errors=False).inverse
+                    inverse = torch.linalg.inv_ex(
+                        solve_matrix, check_errors=False
+                    ).inverse
 
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = v @ inverse
+                    transformed = v.to(solve_dtype) @ inverse
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
-                        new_cache["cell", "areas"] = areas * det_abs * norm_scale
-                    new_cache["cell", "normals"] = det_sign * safe_normalize(
-                        transformed, dim=-1
-                    )
+                        new_cache["cell", "areas"] = (
+                            areas.to(solve_dtype) * det_abs * norm_scale
+                        ).to(areas.dtype)
+                    new_cache["cell", "normals"] = (
+                        det_sign * safe_normalize(transformed, dim=-1)
+                    ).to(v.dtype)
 
                 ### Vertex (point) normals are a *weighted average* of incident
                 # cell normals, so the inverse-transpose law applies to the average
@@ -679,10 +696,10 @@ def transform(
                         else (not is_tracing() and _is_similarity_transform(matrix))
                     )
                 ):
-                    transformed = v @ inverse
-                    new_cache["point", "normals"] = det_sign * safe_normalize(
-                        transformed, dim=-1
-                    )
+                    transformed = v.to(solve_dtype) @ inverse
+                    new_cache["point", "normals"] = (
+                        det_sign * safe_normalize(transformed, dim=-1)
+                    ).to(v.dtype)
 
     ### Opt-in: centroids
     if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:

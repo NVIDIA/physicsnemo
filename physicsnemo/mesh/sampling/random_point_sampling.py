@@ -113,10 +113,12 @@ def sample_random_points_on_cells(
 
     ### Sample from Gamma(alpha, 1) distribution and normalize to get Dirichlet
     # When alpha=1, Gamma(1,1) is equivalent to Exponential(1), which is more efficient.
-    # Build the distribution parameters in the mesh's dtype so the barycentric
-    # weights match the mesh precision (otherwise a float64 mesh silently samples
-    # weights in float32, halving precision).
-    dtype = mesh.points.dtype
+    # Build the distribution parameters in the mesh's dtype (at least float32)
+    # so the barycentric weights match the mesh precision (otherwise a float64
+    # mesh silently samples weights in float32, halving precision). Gamma has no
+    # float16/bfloat16 CPU kernels, so reduced precision samples in float32 and
+    # casts back.
+    dtype = torch.promote_types(mesh.points.dtype, torch.float32)
     if alpha == 1.0:
         distribution = torch.distributions.Exponential(
             rate=torch.ones((), device=mesh.points.device, dtype=dtype),
@@ -146,7 +148,7 @@ def sample_random_points_on_cells(
         sums > 0,
         raw_barycentric_coords / torch.where(sums > 0, sums, 1.0),
         1.0 / raw_barycentric_coords.shape[-1],
-    )
+    ).to(mesh.points.dtype)
 
     ### Compute weighted combination of cell vertices
     # Get the vertices for the selected cells: (n_samples, n_manifold_dims + 1, n_spatial_dims)
