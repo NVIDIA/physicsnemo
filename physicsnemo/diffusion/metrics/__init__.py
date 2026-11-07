@@ -16,35 +16,6 @@
 
 import warnings
 
-from physicsnemo.core.warnings import LegacyFeatureWarning
-
-# NOTE: re-import these general metrics for increased visibility in the
-# diffusion subpackage
-from physicsnemo.metrics.general.calibration import rank_probability_score
-from physicsnemo.metrics.general.crps import crps, kcrps
-from physicsnemo.metrics.general.ensemble_metrics import (
-    Mean,
-    StreamingStatistic,
-    Variance,
-)
-from physicsnemo.metrics.general.entropy import (
-    entropy_from_counts,
-    relative_entropy_from_counts,
-)
-from physicsnemo.metrics.general.histogram import (
-    Histogram,
-    cdf,
-    histogram,
-    normal_cdf,
-    normal_pdf,
-)
-from physicsnemo.metrics.general.power_spectrum import power_spectrum
-from physicsnemo.metrics.general.wasserstein import (
-    wasserstein_from_cdf,
-    wasserstein_from_normal,
-    wasserstein_from_samples,
-)
-
 from .fid import calculate_fid_from_inception_stats
 from .legacy_losses import (
     EDMLoss,
@@ -63,21 +34,38 @@ from .losses import (
     WeightedFlowMatchingLoss,
     WeightedMSEDSMLoss,
 )
+from .wasserstein import wasserstein_from_normal
+
+_REMOVED_METRICS = {
+    "rank_probability_score": "calibration",
+    "crps": "crps",
+    "kcrps": "crps",
+    "EnsembleMetrics": "ensemble_metrics",
+    "StreamingStatistic": "ensemble_metrics",
+    "Mean": "ensemble_metrics",
+    "Variance": "ensemble_metrics",
+    "entropy_from_counts": "entropy",
+    "relative_entropy_from_counts": "entropy",
+    "Histogram": "histogram",
+    "cdf": "histogram",
+    "histogram": "histogram",
+    "normal_cdf": "histogram",
+    "normal_pdf": "histogram",
+    "power_spectrum": "power_spectrum",
+    "wasserstein_from_cdf": "wasserstein",
+    "wasserstein_from_samples": "wasserstein",
+}
 
 
-def __getattr__(name):
-    """Keep the original base-class import available without eager warnings."""
-    if name == "EnsembleMetrics":
-        warnings.warn(
-            "EnsembleMetrics is deprecated; use StreamingStatistic instead.",
-            LegacyFeatureWarning,
-            stacklevel=2,
+def __getattr__(name: str) -> None:
+    """Explain replacement imports for removed general metric re-exports."""
+    if name in _REMOVED_METRICS:
+        replacement = "StreamingStatistic" if name == "EnsembleMetrics" else name
+        message = (
+            f"physicsnemo.diffusion.metrics.{name} has been removed. "
+            f"Use 'from physicsnemo.metrics.general.{_REMOVED_METRICS[name]} "
+            f"import {replacement}' instead."
         )
-        return StreamingStatistic
+        warnings.warn(message, FutureWarning, stacklevel=2)
+        raise ImportError(message)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-# Preserve historical wildcard exports, including imported public names, while
-# resolving the deprecated base lazily so ordinary module imports stay silent.
-__all__ = [name for name in globals() if not name.startswith("_")]
-__all__.append("EnsembleMetrics")
