@@ -3534,10 +3534,10 @@ class Mesh(
         1. **Merge duplicate points** (``merge_points``): Finds points
            within ``tolerance`` L2 distance using BVH spatial queries and
            merges them into a single representative.  Point data values
-           are averaged across merged groups.  Cost: :math:`O(N \log N)`
-           where :math:`N` is the number of points.  This is the most expensive
-           step - on meshes with millions of points it can take tens of
-           seconds.
+           are averaged across merged groups, and point measures summed.
+           Cost: :math:`O(N \log N)` where :math:`N` is the number of
+           points.  This is the most expensive step - on meshes with millions
+           of points it can take tens of seconds.
         2. **Remove duplicate cells** (``remove_duplicate_cells``): Sorts
            vertex indices within each cell and removes cells that share
            the same vertex set.  Cost: :math:`O(C \log C)` where :math:`C` is

@@ -203,6 +203,32 @@ class TestPCATangentSpace:
         tangent_norms = torch.norm(tangent_basis, dim=-1)
         assert torch.allclose(tangent_norms, torch.ones_like(tangent_norms), atol=1e-4)
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_half_precision_curve(self, device, dtype):
+        """16-bit curves get 16-bit tangents, and intrinsic LSQ gradients,
+        close to those of the same points in float32."""
+        from physicsnemo.mesh.primitives.curves import helix_3d
+
+        curve = helix_3d.load(n_points=40, device=device)
+        half = Mesh(points=curve.points.to(dtype), cells=curve.cells)
+        single = Mesh(points=half.points.float(), cells=curve.cells)
+        g = torch.tensor([1.0, 2.0, -3.0], device=device)
+
+        tangents, normals = estimate_tangent_space_pca(half)
+        gradient = half.gradient(half.points @ g.to(dtype))
+
+        assert tangents.dtype == normals.dtype == gradient.dtype == dtype
+        alignment = (tangents.float() * estimate_tangent_space_pca(single)[0]).sum(-1)
+        torch.testing.assert_close(
+            alignment.abs(), torch.ones_like(alignment), atol=1e-2, rtol=0
+        )
+        torch.testing.assert_close(
+            gradient.float(),
+            single.gradient(single.points @ g),
+            atol=2e-2 * g.norm(),
+            rtol=0,
+        )
+
 
 class TestGradientProjection:
     """Tests for gradient projection to tangent space."""

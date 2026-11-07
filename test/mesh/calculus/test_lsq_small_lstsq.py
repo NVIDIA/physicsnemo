@@ -235,8 +235,6 @@ def test_assembled_intrinsic_lsq_gradients_match_grouped(
     device: str, mesh_name: str, dtype: torch.dtype
 ):
     """The same for the tangent-space systems of surfaces and curves."""
-    if mesh_name == "helix" and dtype == torch.bfloat16:
-        pytest.skip("the tangents of curves in 3D need eigh, with no 16-bit kernel")
     mesh = _PARITY_MESHES[mesh_name](device)
     mesh = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
     fields = _parity_fields(mesh.points, dtype)
@@ -252,6 +250,21 @@ def test_assembled_intrinsic_lsq_gradients_match_grouped(
     for assembled, grouped in zip(*gradients):
         _assert_matches_grouped(assembled, grouped)
         assert (assembled[unsolved] == 0).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_intrinsic_lsq_gradient_of_point_cloud_is_zero(device: str, dtype: torch.dtype):
+    """A point cloud, a 0-manifold, has no tangent directions: its intrinsic
+    gradients are zero, by either path."""
+    generator = torch.Generator().manual_seed(0)
+    points = torch.rand(10, 3, generator=generator, dtype=dtype).to(device)
+    cloud = Mesh(points=points)
+
+    for grouped in (False, True):
+        gradient = _lsq_intrinsic._compute_point_gradients_lsq_intrinsic(
+            cloud, [points[:, 0]], grouped=grouped
+        )[0]
+        assert torch.equal(gradient, torch.zeros_like(points))
 
 
 def _backward_of_both_paths(
