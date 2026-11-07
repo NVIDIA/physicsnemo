@@ -166,6 +166,58 @@ def _compute_gradients_cells_lsq(
     return _compute_cell_gradients_lsq(mesh, cell_values, weight_power)
 
 
+def _unoriented_point_normals(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
+    """Unit normals at the points of a codimension-1 mesh, for tangent planes.
+
+    Those of :attr:`~physicsnemo.mesh.Mesh.point_normals`, except at points on
+    a facet of two inconsistently wound cells (as in ``get_boundary_mesh``
+    output or a Mobius strip), whose normals would cancel in the sum. There,
+    each incident cell normal more than 120 degrees from that of the incident
+    cell of largest area (lowest index among ties) is flipped before summing,
+    so the tangent planes do not depend on the winding. Cached, as point
+    normals are.
+    """
+
+    def compute() -> torch.Tensor:
+        from physicsnemo.mesh.repair.orientation import _inconsistently_wound_points
+
+        cells = mesh.cells
+        n_cells, n_vertices = cells.shape
+        flagged = mesh._cached(
+            ("topology", "inconsistently_wound_points"),
+            lambda: _inconsistently_wound_points(cells, mesh.n_points),
+        )
+
+        ### Reference: each point's incident cell of largest area, the lowest
+        ### index among ties
+        areas = mesh.cell_areas
+        max_areas = areas.new_zeros(mesh.n_points).scatter_reduce_(
+            0, cells.reshape(-1), areas.repeat_interleave(n_vertices), "amax"
+        )
+        cell_indices = torch.arange(n_cells, device=cells.device)
+        candidates = torch.where(
+            areas[:, None] == max_areas[cells], cell_indices[:, None], n_cells
+        )
+        reference = torch.full_like(flagged, n_cells, dtype=torch.long)
+        reference.scatter_reduce_(0, cells.reshape(-1), candidates.reshape(-1), "amin")
+        # Isolated points get a zero reference
+        cell_normals = mesh.cell_normals
+        reference_normals = torch.cat(
+            [cell_normals, cell_normals.new_zeros(1, mesh.n_spatial_dims)]
+        )[reference]
+
+        ### Flip, at flagged points, the cell normals opposed to the reference;
+        ### elsewhere the sum is exactly that of point_normals
+        opposed = (cell_normals.unsqueeze(1) * reference_normals[cells]).sum(-1) < -0.5
+        return mesh._compute_point_normals(
+            mesh._point_normal_weighting, flip=opposed & flagged[cells]
+        )
+
+    return mesh._cached(("point", "unoriented_normals"), compute)
+
+
 def project_to_tangent_space(
     mesh: "Mesh",
     gradients: Float[torch.Tensor, "n n_spatial_dims ..."],
@@ -212,9 +264,8 @@ def project_to_tangent_space(
             # Use cell normals
             normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
         else:
-            # For points, use area-weighted averaged normals from adjacent cells
-            # This is already computed and cached by mesh.point_normals
-            normals = mesh.point_normals  # (n_points, n_spatial_dims)
+            # For points, use weighted averages of the normals of adjacent cells
+            normals = _unoriented_point_normals(mesh)  # (n_points, n_spatial_dims)
 
         ### Project: grad_intrinsic = grad - (grad·n)n
         # grad·n contracts along the spatial dimension (dim=1 for gradients)

@@ -1132,11 +1132,15 @@ class Mesh(
         >>> # Normals are unit vectors (or zero for isolated points)
         >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
-        weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
         return self._cached(
             ("point", "normals"),
-            lambda: self.compute_point_normals(weighting=weighting),
+            lambda: self.compute_point_normals(weighting=self._point_normal_weighting),
         )
+
+    @property
+    def _point_normal_weighting(self) -> Literal["area", "angle_area"]:
+        """Weighting of :attr:`point_normals`: angle-area, or area on curves."""
+        return "area" if self.n_manifold_dims < 2 else "angle_area"
 
     def compute_point_normals(
         self,
@@ -1235,7 +1239,15 @@ class Mesh(
                 f"(cells must have interior angles).\n"
                 f"Got {self.n_manifold_dims=}. Use 'area' or 'unweighted' instead."
             )
+        return self._compute_point_normals(weighting)
 
+    def _compute_point_normals(
+        self,
+        weighting: Literal["area", "unweighted", "angle", "angle_area"],
+        flip: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """:meth:`compute_point_normals`, without its validation, negating the
+        normal of cell ``c`` at its vertex ``j`` wherever ``flip[c, j]``."""
         ### Get cell normals (triggers computation if not cached)
         cell_normals = self.cell_normals  # (n_cells, n_spatial_dims)
 
@@ -1270,6 +1282,11 @@ class Mesh(
             raise ValueError(
                 f"Invalid {weighting=!r}. Must be one of: "
                 f"'unweighted', 'area', 'angle', 'angle_area'."
+            )
+
+        if flip is not None:
+            normals_to_accumulate = torch.where(
+                flip.unsqueeze(-1), -normals_to_accumulate, normals_to_accumulate
             )
 
         ### Accumulate at each point
