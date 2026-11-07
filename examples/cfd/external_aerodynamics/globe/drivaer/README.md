@@ -128,6 +128,7 @@ results in the [GLOBE paper](https://arxiv.org/abs/2511.15856):
 4. Parse reference lengths and force coefficients from CSV files
 5. Create the two floor patches at the height of the tire contact
 6. Cache preprocessed samples as .pt files for fast subsequent loading
+   (about 295 GB for all 484 cars, written during the first epoch)
 7. At load time, randomly subsample cells for the GLOBE boundary mesh
    (default 50K faces, configurable via `--n-faces-per-boundary`)
 

@@ -196,6 +196,11 @@ def main(
     config_settings = locals()
 
     ### [Distributed Training Setup]
+    # The first compile of the training step can take about 20 minutes, and a
+    # recompile on one rank over 10 minutes, while the other ranks wait in the
+    # gradient all-reduce. PyTorch's default collective timeout (10 minutes)
+    # would end the job, so wait up to an hour unless the variable is set.
+    os.environ.setdefault("PHYSICSNEMO_DIST_TIMEOUT_S", "3600")
     DistributedManager.initialize()
     dist = DistributedManager()
     device = dist.device
@@ -313,6 +318,14 @@ def main(
     # GLOBE's checkpointed kernels unless floats are specialized
     # (pytorch/pytorch#193194, fixed in 2.15).
     torch._dynamo.config.specialize_float = True
+
+    # Dynamo's DDPOptimizer splits the compiled graph at DDP's gradient-bucket
+    # boundaries. With this model, Inductor then fails on the first training
+    # step ("AssertionError: For 2*s1 + s131, expected [s131] to have been
+    # codegen-ed" on PyTorch 2.13). Compiling the step as one graph avoids it;
+    # DDP then all-reduces the gradients after the backward pass instead of
+    # overlapping the two.
+    torch._dynamo.config.optimize_ddp = False
 
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:
