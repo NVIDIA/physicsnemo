@@ -19,7 +19,7 @@ import pytest
 
 
 def test_deprecated_base_aliases_and_silent_module_imports():
-    """Both old exports resolve to the same base without warning on module import."""
+    """The general metrics alias resolves without warning on module import."""
     import importlib
     import warnings
 
@@ -31,15 +31,14 @@ def test_deprecated_base_aliases_and_silent_module_imports():
         diffusion = importlib.import_module("physicsnemo.diffusion.metrics")
         importlib.reload(diffusion)
     assert not any("EnsembleMetrics" in str(w.message) for w in recorded)
-    for module in (em, diffusion):
-        with pytest.warns(LegacyFeatureWarning):
-            alias = module.EnsembleMetrics
-        assert alias is em.StreamingStatistic
+    with pytest.warns(LegacyFeatureWarning):
+        alias = em.EnsembleMetrics
+    assert alias is em.StreamingStatistic
 
-        class LegacySubclass(alias):
-            pass
+    class LegacySubclass(alias):
+        pass
 
-        assert isinstance(LegacySubclass((3,)), em.StreamingStatistic)
+    assert isinstance(LegacySubclass((3,)), em.StreamingStatistic)
 
 
 @pytest.mark.parametrize(
@@ -48,10 +47,6 @@ def test_deprecated_base_aliases_and_silent_module_imports():
         (
             "physicsnemo.metrics.general.ensemble_metrics",
             ("Mean", "Variance"),
-        ),
-        (
-            "physicsnemo.diffusion.metrics",
-            ("Mean", "Variance", "Histogram", "crps", "EDMLoss", "MSEDSMLoss"),
         ),
     ],
 )

@@ -142,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modules instead:
   - `rank_probability_score`: `physicsnemo.metrics.general.calibration`
   - `crps`, `kcrps`: `physicsnemo.metrics.general.crps`
-  - `EnsembleMetrics`, `Mean`, `Variance`:
+  - `StreamingStatistic`, `Mean`, `Variance`:
     `physicsnemo.metrics.general.ensemble_metrics`
   - `entropy_from_counts`, `relative_entropy_from_counts`:
     `physicsnemo.metrics.general.entropy`
@@ -153,6 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `physicsnemo.metrics.general.wasserstein`
 
   For example, use `from physicsnemo.metrics.general.crps import crps`.
+  Replace `EnsembleMetrics` imports with
+  `from physicsnemo.metrics.general.ensemble_metrics import StreamingStatistic`.
   Removed imports emit a warning and an error with the replacement import.
   `wasserstein_from_normal` remains available through both existing import paths.
 
