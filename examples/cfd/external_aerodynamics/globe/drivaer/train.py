@@ -620,7 +620,7 @@ def main(
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
-                if epoch % save_every == 0:
+                if epoch % save_every == 0 or epoch == n_epochs:
                     save_ckpt()
                 if loss["validation"] < best_loss:
                     best_loss = loss["validation"]
