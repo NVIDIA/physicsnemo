@@ -33,6 +33,8 @@ from .rope import (
     stereographic_projection,
 )
 from .point_tokenizer import PointCloudTokenizer
+from .radius_pooling import RadiusPooledFeatures
+from .sdf_stencil import SignedDistanceStencil
 from .point_utils import (
     chunked_knn_indices,
     compute_batch_offset_step,
@@ -55,6 +57,8 @@ __all__ = [
     "spherical_centroid",
     "stereographic_projection",
     "PointCloudTokenizer",
+    "RadiusPooledFeatures",
+    "SignedDistanceStencil",
     "chunked_knn_indices",
     "compute_batch_offset_step",
     "counts_to_mask",
