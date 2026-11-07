@@ -57,8 +57,8 @@ Set the dataset location via one of:
 
 ### Training
 
-Multi-node via SLURM (edit `DRIVAER_DATA_DIR` in `run.sh` to point to your
-dataset root, then):
+Via SLURM on one node of 4 GPUs, the reference setup (edit `DRIVAER_DATA_DIR`
+in `run.sh` to point to your dataset root, then):
 
 ```bash
 sbatch run.sh
@@ -100,8 +100,24 @@ Green's function-like kernels.  Key architectural properties:
 - **Parity-equivariant**: Reflections are handled correctly.
 
 For 3D, the model uses `n_spatial_dims=3` with 4 spherical harmonic terms
-and multiscale kernels parameterized by per-sample reference lengths
-(car length, sqrt of frontal area).
+and multiscale kernels parameterized by two per-sample reference lengths:
+the car's reference length `lRef` (its wheelbase) and a flat-plate estimate
+of the turbulent boundary-layer thickness.
+
+The boundary input has three partitions: the car surface (`vehicle`) and
+the wind-tunnel floor, split into an inviscid `slip_floor` upstream of
+x = -2.339 m and a viscous `no_slip_floor` downstream.
+
+The defaults follow the model and training configuration of the DrivAerML
+results in the [GLOBE paper](https://arxiv.org/abs/2511.15856):
+
+- 2 communication hyperlayers; kernel networks with 3 hidden layers of 512;
+  16 scalar and 8 vector latent channels; Barnes-Hut opening angle 1.5
+- 50,000 boundary faces and 50,000 prediction points sampled per car and step
+- Huber loss; Muon for matrix-shaped parameters and AdamW for the rest, with
+  learning rate 3e-3 and weight decay 1e-4
+- 450 epochs, with the learning rate dropping 10x every 200 epochs
+- bfloat16 autocast and `torch.compile`, on one node of 4 GPUs (batch size 4)
 
 ## Preprocessing Pipeline
 
@@ -110,9 +126,10 @@ and multiscale kernels parameterized by per-sample reference lengths
    C_f = wallShearStress / q_inf
 3. Interpolate cell-centered data to mesh vertices
 4. Parse reference lengths and force coefficients from CSV files
-5. Cache preprocessed samples as .pt files for fast subsequent loading
-6. At load time, randomly subsample cells for the GLOBE boundary mesh
-   (default 80K faces, configurable via `--n-faces-per-boundary`)
+5. Create the two floor patches at the height of the tire contact
+6. Cache preprocessed samples as .pt files for fast subsequent loading
+7. At load time, randomly subsample cells for the GLOBE boundary mesh
+   (default 50K faces, configurable via `--n-faces-per-boundary`)
 
 ## Expected Training Behavior
 

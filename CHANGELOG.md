@@ -162,6 +162,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"grp.v"` now raises a `KeyError` that names the wrong fields.
 - GLOBE returns nested output fields in sorted key order, such as
   `("flow", "nut")` before `("flow", "u")`.
+- The GLOBE DrivAerML example's defaults follow the configuration of the
+  DrivAerML results in the GLOBE paper: kernel networks of 3 x 512, 16 scalar
+  and 8 vector latents, 50,000 boundary faces per step, and learning rate 3e-3,
+  dropping 10x every 200 epochs over 450 epochs (`--n-epochs` and
+  `--lr-decay-epochs` replace `--patience-steps`). AdamW replaces RAdam beside
+  Muon, gradients are no longer clipped, and `run.sh` uses one node.
 - `ClusterTree.compute_source_aggregates` packs its source data with
   `TensorDict.pack`, so source data with leaves of several dtypes now raises
   a `TypeError` instead of being promoted.
