@@ -513,10 +513,11 @@ class DefaultTrainingLoop(p.TrainingLoop):
                     model.zero_grad(set_to_none=True)
                     loss = train_step_fn(model, batch, *args, **kwargs)
                     log.log_minibatch({"train_loss": loss.detach().item()})
-                    # normally, static capture will call backward because of AMP
+                    # static capture calls backward because of AMP, and steps
+                    # the optimizer itself through its grad scaler
                     if not self.enable_static_capture:
                         loss.backward()
-                    optimizer.step()
+                        optimizer.step()
                     if lr_scheduler:
                         lr_scheduler.step()
             ########### VALIDATION STEP LOOP ###########
