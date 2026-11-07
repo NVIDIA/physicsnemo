@@ -1,0 +1,9 @@
+# Adapted from the MIT-licensed Microsoft style for Vale
+# (https://github.com/errata-ai/Microsoft).
+extends: existence
+message: "Try to simplify this sentence."
+nonword: true
+scope: sentence
+level: suggestion
+tokens:
+  - ';'
