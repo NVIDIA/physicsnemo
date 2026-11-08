@@ -195,15 +195,16 @@ class RunningNorm(Module):
             # nanmean returns NaN when a reduction slice is entirely zeros.
             # There is no signal in that slice, so keep the running estimate
             # unchanged instead of letting log(0) = -inf poison the EWMA.
+            # Select the fallback in log space: exp(ln_running_mean) can
+            # overflow to inf in reduced-precision dtypes (e.g. half), and
+            # log(inf) would then poison the EWMA just like log(0) did.
             all_nan = torch.isnan(values)
-            fallback = torch.where(
+            fallback_ln = torch.where(
                 self._initialized,
-                self.ln_running_mean.exp(),
-                torch.ones_like(values),
+                self.ln_running_mean,
+                torch.zeros_like(values),
             )
-            values = torch.where(all_nan, fallback, values)
-
-            ln_batch_mean = values.log()
+            ln_batch_mean = torch.where(all_nan, fallback_ln, values.log())
 
             ### Compute the new running mean value
             # Uninitialized case

@@ -54,6 +54,27 @@ def test_all_zero_slice_leaves_running_estimate_unchanged():
     assert norm.ln_running_mean.item() == pytest.approx(estimate_before, rel=1e-5)
 
 
+def test_all_zero_slice_does_not_overflow_half_precision_estimate():
+    # In half precision a finite estimate close to the dtype maximum has
+    # exp(ln_running_mean) = inf. The all-zero fallback must stay in log
+    # space, otherwise a zero batch turns a finite estimate into inf and
+    # every later output collapses to zero.
+    norm = RunningNorm(shape=(1,), initialization_behavior="first_batch").half()
+    norm.train()
+    norm(torch.tensor([65504.0], dtype=torch.float16))  # ln(65504) ~= 11.09
+    estimate_before = norm.ln_running_mean.item()
+    assert math.isfinite(estimate_before)
+
+    out = norm(torch.zeros(1, dtype=torch.float16))
+    assert torch.isfinite(out).all()
+    assert norm.ln_running_mean.item() == pytest.approx(estimate_before, rel=1e-3)
+
+    # Later finite inputs must still produce finite, non-zero output.
+    out = norm(torch.tensor([10.0], dtype=torch.float16))
+    assert torch.isfinite(out).all()
+    assert (out != 0).all()
+
+
 def test_reduction_ignores_zeros():
     # Zero entries are excluded from mean(abs(x)), so the estimate after
     # [1, 2, 0] is 1.5 rather than 1.0.
