@@ -57,12 +57,19 @@ Set the dataset location via one of:
 
 ### Training
 
-Via SLURM on one node of 4 GPUs, the reference setup (edit `DRIVAER_DATA_DIR`
-in `run.sh` to point to your dataset root, then):
+To train with SLURM on one node of 4 GPUs (the reference setup), set
+`DRIVAER_DATA_DIR` in `run.sh` to your dataset root. A full run takes about
+2.5 days, longer than one 4-hour job. Each job saves a checkpoint before its
+time limit, and the next job with the same name resumes from it
+(`--dependency=singleton`), so queue enough jobs at once:
 
 ```bash
-sbatch run.sh
+for i in $(seq 16); do sbatch run.sh; done
 ```
+
+Checkpoints from earlier versions of this example do not load. Start a new
+run in a new output directory, for example with a new job name (`-J`) in
+`run.sh`.
 
 Or run locally on a single GPU:
 
@@ -111,13 +118,23 @@ x = -2.339 m and a viscous `no_slip_floor` downstream.
 The defaults follow the model and training configuration of the DrivAerML
 results in the [GLOBE paper](https://arxiv.org/abs/2511.15856):
 
-- 2 communication hyperlayers; kernel networks with 3 hidden layers of 512;
-  16 scalar and 8 vector latent channels; Barnes-Hut opening angle 1.5
-- 50,000 boundary faces and 50,000 prediction points sampled per car and step
-- Huber loss; Muon for matrix-shaped parameters and AdamW for the rest, with
-  learning rate 3e-3 and weight decay 1e-4
-- 450 epochs, with the learning rate dropping 10x every 200 epochs
-- bfloat16 autocast and `torch.compile`, on one node of 4 GPUs (batch size 4)
+- 2 communication hyperlayers, kernel networks with 3 hidden layers of 512,
+  16 scalar and 8 vector latent channels, and a Barnes-Hut opening angle of 1.5
+- 50,000 car-surface faces and 50,000 prediction points sampled per car and
+  step
+- Huber loss
+- Muon for matrix-shaped parameters and AdamW for the rest, with learning rate
+  3e-3 and weight decay 1e-4
+- 450 epochs, with the learning rate dropping 10x every 200 epochs (3e-3,
+  3e-4, then 3e-5). The paper's run stopped after about 430 epochs.
+- bfloat16 autocast and `torch.compile`, on one node of 4 GPUs (one car per
+  GPU, so 4 cars per step)
+
+The data pipeline is this example's own, so its scores are not directly
+comparable with the paper's. It trains on 436 cars and validates on 48 (the
+paper: 400 and 34), predicts at mesh vertices with equal weights (the paper:
+at surface cells, with an area-weighted loss), and uses each car's own
+reference lengths.
 
 ## Preprocessing Pipeline
 
@@ -134,12 +151,14 @@ results in the [GLOBE paper](https://arxiv.org/abs/2511.15856):
 
 ## Expected Training Behavior
 
-This section describes what a healthy training run with reference settings (as
-of 2026-05-05) looks like, so you can sanity-check your own runs.
+This section describes a healthy run with the default settings, so you can
+sanity-check your own runs.
 
-- Reference hardware: 4 nodes x 4 B200 192GB
-- Wall time per epoch: 217 seconds
-- Peak VRAM per rank: ~179 GB
-- At epoch 20, train loss ~0.07, validation loss ~0.07; both still decreasing.
-- At epoch 100, train loss ~0.0150, validation loss ~0.0155; both still decreasing.
-- At epoch 500, train loss ~0.0080, validation loss ~0.0085; both still decreasing.
+- Reference hardware: 1 node of 4 NVIDIA GB300 GPUs
+- Wall time per epoch: about 460 seconds (about 4.0 seconds per training
+  step). The first epoch takes about 72 minutes, almost all of it
+  `torch.compile`, and a few early epochs take about 13 minutes while one GPU
+  recompiles for a new input size.
+- Peak memory per GPU: about 120 GiB
+- At epoch 20, train loss ~0.012 and validation loss ~0.011; both still
+  decreasing.
