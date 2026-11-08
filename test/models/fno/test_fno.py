@@ -169,6 +169,36 @@ def test_fno_optims(device, dimension):
 
 
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4])
+def test_fno_compile_dynamic_resolution(device, dimension):
+    """FNO compiled with dynamic=True should not recompile when the grid size changes"""
+    from torch._dynamo.utils import counters
+
+    torch.manual_seed(0)
+    model = FNO(
+        in_channels=2,
+        out_channels=2,
+        decoder_layers=1,
+        decoder_layer_size=8,
+        dimension=dimension,
+        latent_channels=4,
+        num_fno_layers=2,
+        num_fno_modes=2,
+        padding=0,
+    ).to(device)
+
+    torch._dynamo.reset()
+    counters.clear()
+    compiled = torch.compile(model, backend="eager", dynamic=True, fullgraph=True)
+    with torch.no_grad():
+        for size in (6, 7, 8):
+            invar = torch.randn(2, 2, *([size] * dimension), device=device)
+            torch.testing.assert_close(compiled(invar), model(invar))
+
+    assert counters["stats"]["unique_graphs"] == 1
+    torch._dynamo.reset()
+
+
+@pytest.mark.parametrize("dimension", [1, 2, 3, 4])
 def test_fno_checkpoint(device, dimension):
     """Test FNO checkpoint save/load"""
     # Construct FNO models

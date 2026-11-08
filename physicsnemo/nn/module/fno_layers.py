@@ -32,6 +32,18 @@ import physicsnemo.nn as layers
 from physicsnemo.core.module import Module
 
 
+def _unit_grid(size: int, device: torch.device) -> Float[Tensor, " size"]:
+    r"""Evenly spaced points on :math:`[0, 1]`, like ``torch.linspace(0, 1, size)``.
+
+    ``torch.linspace`` makes ``torch.compile`` specialize on ``size``, so a
+    model compiled with ``dynamic=True`` would recompile for every new grid
+    resolution. Building the grid from ``torch.arange`` keeps ``size`` symbolic.
+    """
+    return torch.arange(size, dtype=torch.float32, device=device) / torch.sym_max(
+        size - 1, 1
+    )
+
+
 class FNO1DEncoder(Module):
     r"""1D Spectral encoder for FNO.
 
@@ -195,7 +207,7 @@ class FNO1DEncoder(Module):
             Meshgrid tensor of shape :math:`(B, 1, L)`.
         """
         bsize, size_x = shape[0], shape[2]
-        grid_x = torch.linspace(0, 1, size_x, dtype=torch.float32, device=device)
+        grid_x = _unit_grid(size_x, device)
         grid_x = grid_x.unsqueeze(0).unsqueeze(0).repeat(bsize, 1, 1)
         return grid_x
 
@@ -404,8 +416,8 @@ class FNO2DEncoder(Module):
             Meshgrid tensor of shape :math:`(B, 2, H, W)`.
         """
         bsize, size_x, size_y = shape[0], shape[2], shape[3]
-        grid_x = torch.linspace(0, 1, size_x, dtype=torch.float32, device=device)
-        grid_y = torch.linspace(0, 1, size_y, dtype=torch.float32, device=device)
+        grid_x = _unit_grid(size_x, device)
+        grid_y = _unit_grid(size_y, device)
         grid_x, grid_y = torch.meshgrid(grid_x, grid_y, indexing="ij")
         grid_x = grid_x.unsqueeze(0).unsqueeze(0).repeat(bsize, 1, 1, 1)
         grid_y = grid_y.unsqueeze(0).unsqueeze(0).repeat(bsize, 1, 1, 1)
@@ -624,9 +636,9 @@ class FNO3DEncoder(Module):
             Meshgrid tensor of shape :math:`(B, 3, D, H, W)`.
         """
         bsize, size_x, size_y, size_z = shape[0], shape[2], shape[3], shape[4]
-        grid_x = torch.linspace(0, 1, size_x, dtype=torch.float32, device=device)
-        grid_y = torch.linspace(0, 1, size_y, dtype=torch.float32, device=device)
-        grid_z = torch.linspace(0, 1, size_z, dtype=torch.float32, device=device)
+        grid_x = _unit_grid(size_x, device)
+        grid_y = _unit_grid(size_y, device)
+        grid_z = _unit_grid(size_z, device)
         grid_x, grid_y, grid_z = torch.meshgrid(grid_x, grid_y, grid_z, indexing="ij")
         grid_x = grid_x.unsqueeze(0).unsqueeze(0).repeat(bsize, 1, 1, 1, 1)
         grid_y = grid_y.unsqueeze(0).unsqueeze(0).repeat(bsize, 1, 1, 1, 1)
@@ -855,10 +867,10 @@ class FNO4DEncoder(Module):
             shape[4],
             shape[5],
         )
-        grid_x = torch.linspace(0, 1, size_x, dtype=torch.float32, device=device)
-        grid_y = torch.linspace(0, 1, size_y, dtype=torch.float32, device=device)
-        grid_z = torch.linspace(0, 1, size_z, dtype=torch.float32, device=device)
-        grid_t = torch.linspace(0, 1, size_t, dtype=torch.float32, device=device)
+        grid_x = _unit_grid(size_x, device)
+        grid_y = _unit_grid(size_y, device)
+        grid_z = _unit_grid(size_z, device)
+        grid_t = _unit_grid(size_t, device)
         grid_x, grid_y, grid_z, grid_t = torch.meshgrid(
             grid_x, grid_y, grid_z, grid_t, indexing="ij"
         )
