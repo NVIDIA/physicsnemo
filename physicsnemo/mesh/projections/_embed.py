@@ -181,5 +181,6 @@ def embed(
         new_points = torch.cat([prefix, zeros, suffix], dim=1)
 
     ### Connectivity is unchanged, so retain topology while invalidating all
-    # embedding-dependent geometry caches.
-    return mesh.with_points(new_points)
+    # embedding-dependent geometry caches. Zero-padding coordinates is an
+    # isometry, so explicit measures are unchanged.
+    return mesh.with_points(new_points, preserve_measures=True)

@@ -25,6 +25,7 @@ from .activations import (
     Stan,
     get_activation,
 )
+from .attention_layers import UNetAttention3D
 from .ball_query import BQWarp
 from .concrete_dropout import (
     ConcreteDropout,
@@ -39,7 +40,7 @@ from .conditioning_embedders import (
     ZeroConditioningEmbedder,
     get_conditioning_embedder,
 )
-from .conv_layers import ConvBlock, CubeEmbedding
+from .conv_layers import Conv3D, ConvBlock, CubeEmbedding
 from .dgm_layers import DGMLayer
 from .dit_layers import (
     AttentionModuleBase,
@@ -83,7 +84,7 @@ from .fully_connected_layers import (
     ConvNdKernel1Layer,
     FCLayer,
 )
-from .group_norm import GroupNorm, get_group_norm
+from .group_norm import GroupNorm, GroupNorm3D, get_group_norm
 from .hpx import (
     HEALPixAvgPool,
     HEALPixFoldFaces,
@@ -126,6 +127,6 @@ from .transformer_layers import (
     FuserLayer,
     SwinTransformer,
 )
-from .unet_layers import UNetBlock
+from .unet_layers import UNetBlock, UNetBlock3D
 from .weight_fact import WeightFactLinear
 from .weight_norm import WeightNormLinear

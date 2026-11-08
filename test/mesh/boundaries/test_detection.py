@@ -16,6 +16,8 @@
 
 """Tests for boundary detection functions."""
 
+import itertools
+
 import pytest
 import torch
 
@@ -254,6 +256,21 @@ class TestBoundaryEdges:
         assert (3, 4) not in edge_set, (
             "Edge (3, 4) is not co-cellular and should not be a boundary edge"
         )
+
+    def test_single_4_simplex(self, device):
+        """A single 4-simplex has all 10 of its vertex pairs as boundary edges."""
+        points = torch.cat([torch.zeros(1, 4), torch.eye(4)]).to(device)
+        cells = torch.tensor([[0, 1, 2, 3, 4]], dtype=torch.int64, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        boundary_edges = get_boundary_edges(mesh)
+
+        expected = torch.tensor(
+            list(itertools.combinations(range(5), 2)),
+            dtype=torch.int64,
+            device=device,
+        )
+        assert torch.equal(boundary_edges, expected)
 
 
 class TestBoundaryCells:

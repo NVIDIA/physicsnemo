@@ -39,7 +39,7 @@ Reader  -->  Dataset  -->  DataLoader  -->  Training loop
 Three dataset types share this pattern:
 
 | Type | Data model | Transform base |
-|------|------------|----------------|
+| ------ | ------------ | ---------------- |
 | `Dataset` | `TensorDict` fields | `Transform` |
 | `MeshDataset` | `Mesh` / `DomainMesh` tensorclasses | `MeshTransform` |
 | `MultiDataset` | Union of child `DatasetBase` instances | Delegates to children |
@@ -85,6 +85,39 @@ For meshes, the `MeshTransform` ABC provides the same interface with
 `__call__(Mesh) -> Mesh` plus `apply_to_domain(DomainMesh)` for
 multi-region consistency.
 
+### Field names and nested TensorDicts
+
+A `TensorDict` (and therefore `Mesh.point_data` / `cell_data` /
+`global_data`) is a tree: a key is either a top-level string or a tuple of
+strings addressing a leaf inside nested sub-TensorDicts, e.g.
+`("solution", "gauge_pressure")`. TensorDict never parses separators in a
+string key, and `td.keys()` / `td.items()` / `td.values()` default to the
+top level only (`include_nested=False`), yielding sub-TensorDicts as values.
+
+Every transform, reader option, and collator that takes a field name from
+a config routes it through `physicsnemo.datapipes.keys.as_nested_key`:
+
+- A `"."` in a name addresses a nested leaf: `"solution.gauge_pressure"`
+  is `("solution", "gauge_pressure")`. This is the same separator
+  `TensorDict.flatten_keys` uses.
+- `"."` and `"/"` are reserved: `"."` is the config nesting separator and
+  `"/"` is the on-disk one (VTK, HDF5, zarr). Do not use either inside a
+  field name; a leaf literally named `p.mean` is unsupported and will be
+  read as the nested key `("p", "mean")`.
+
+Users never have to flatten or unflatten a TensorDict to reach a nested
+field. When writing new datapipe code, use `key in td` (works for both
+forms) rather than `key in td.keys()`, iterate with
+`td.items(include_nested=True, leaves_only=True)` rather than
+`td.items()`, apply leaf-wise functions with `td.apply` /
+`td.named_apply(fn, nested_keys=True)`, and read fields through
+`physicsnemo.datapipes.keys.get_leaf`, which reports missing fields with
+the full leaf listing and rejects a group name with an actionable error.
+
+`Mesh.to_pyvista` / `from_pyvista` serialize nested keys as `"/"`-joined
+VTK array names (`"solution/gauge_pressure"`), mirroring HDF5 / zarr group
+paths; that separator is an on-disk encoding, not a config convention.
+
 ### Collators
 
 Collators combine per-sample `(data, metadata)` tuples into batches,
@@ -92,7 +125,7 @@ where `data` is usually a `TensorDict`, `Mesh`, or `DomainMesh` depending
 on the dataset and collator:
 
 | Collator | Strategy |
-|----------|----------|
+| ---------- | ---------- |
 | `DefaultCollator` | `TensorDict.stack()` -- all samples must share shape |
 | `ConcatCollator` | `torch.cat()` along an axis with optional `batch_idx` -- for variable-length point clouds |
 | `FunctionCollator` | Wraps any callable |
@@ -131,8 +164,12 @@ from physicsnemo.datapipes import Dataset, ZarrReader, Normalize, SubsamplePoint
 dataset = Dataset(
     ZarrReader("/data/field.zarr", fields=["pressure", "velocity"]),
     transforms=[
-        Normalize(["pressure"], method="mean_std",
-                  means={"pressure": 0.0}, stds={"pressure": 1.0}),
+        Normalize(
+            ["pressure"],
+            method="mean_std",
+            means={"pressure": 0.0},
+            stds={"pressure": 1.0},
+        ),
         SubsamplePoints(["pressure", "velocity"], n_points=10000),
     ],
     device="cuda",
@@ -183,8 +220,9 @@ def submit(self, work_item, stream=None):
     future = self._executor.submit(self._load_host, work_item)
     return PrefetchHandle(future=future, stream=stream)
 
+
 def consume(self, handle, *, defer_sync=False):
-    payload = handle.future.result()       # re-raises producer errors
+    payload = handle.future.result()  # re-raises producer errors
     # H2D + transforms here; defer_sync controls who gates the compute stream
     return self._consume(payload, handle.stream, defer_sync=defer_sync)
 ```
@@ -231,15 +269,15 @@ def _consume(self, payload, stream=None, *, defer_sync=False):
     if device is not None and stream is not None:
         compute_stream = torch.cuda.current_stream()
         # Bind torch to the preprocessing stream.
-        with preprocessing_stream(stream):              # torch.cuda.stream
-            data = data.to(device, non_blocking=True)   # H2D on prep stream
-            data = self.transforms(data)                # transforms on SAME stream
+        with preprocessing_stream(stream):  # torch.cuda.stream
+            data = data.to(device, non_blocking=True)  # H2D on prep stream
+            data = self.transforms(data)  # transforms on SAME stream
         event = torch.cuda.Event()
         event.record(stream)
         if defer_sync:
-            self._events_pending.append(event)          # DataLoader gates later
+            self._events_pending.append(event)  # DataLoader gates later
         else:
-            compute_stream.wait_event(event)            # inline order, no host block
+            compute_stream.wait_event(event)  # inline order, no host block
     else:
         data = self.transforms(data)
     return data, payload.metadata
@@ -356,8 +394,8 @@ above is most effective when the reader pins its output.
 Prefetching can be toggled at runtime for debugging:
 
 ```python
-loader.disable_prefetch()   # fully synchronous: pump + streams off
-loader.enable_prefetch()    # restore prefetch (streams too, when CUDA)
+loader.disable_prefetch()  # fully synchronous: pump + streams off
+loader.enable_prefetch()  # restore prefetch (streams too, when CUDA)
 ```
 
 Toggles take effect at the next iteration.  The two halves can also be

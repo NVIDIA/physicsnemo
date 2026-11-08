@@ -22,6 +22,8 @@ that the :class:`physicsnemo.mesh.Mesh` constructor itself robustly accepts
 PyVista's :class:`DataSetAttributes` containers (a non-dict ``Mapping``).
 """
 
+import gc
+
 import numpy as np
 import pytest
 import torch
@@ -265,6 +267,7 @@ class TestForceCopy:
         pv_mesh = to_pyvista(mesh, force_copy=True)
         pv_mesh.points[0, 0] = 10.0
         pv_mesh.cell_connectivity[0] = 1
+        assert not np.shares_memory(pv_mesh.cell_connectivity, mesh.cells.numpy())
         pv_mesh.point_data["point_value"][0] = 10.0
         pv_mesh.cell_data["cell_value"][0] = 10.0
         pv_mesh.field_data["case_value"][0] = 10.0
@@ -274,6 +277,25 @@ class TestForceCopy:
         torch.testing.assert_close(mesh.point_data["point_value"], source_point_data)
         torch.testing.assert_close(mesh.cell_data["cell_value"], source_cell_data)
         torch.testing.assert_close(mesh.global_data["case_value"], source_global_data)
+
+    @pytest.mark.parametrize("n_manifold_dims", [1, 3])
+    def test_to_pyvista_shared_cells_outlive_source_mesh(self, n_manifold_dims):
+        # Without force_copy, the VTK connectivity shares mesh.cells' storage;
+        # it must stay valid after the source Mesh is freed.
+        cells = torch.tensor(
+            [[0, 1], [1, 2]] if n_manifold_dims == 1 else [[0, 1, 2, 3]]
+        )
+        expected = cells.clone()
+        mesh = Mesh(points=torch.rand(4, 3), cells=cells)
+        pv_mesh = to_pyvista(mesh)
+        cell_array = pv_mesh.GetLines() if n_manifold_dims == 1 else pv_mesh.GetCells()
+        assert np.shares_memory(cell_array.connectivity_array, cells.numpy())
+        del mesh, cells, cell_array
+        gc.collect()
+        _ = [torch.full((1000, 4), -1) for _ in range(100)]
+
+        round_trip = from_pyvista(pv_mesh, manifold_dim=n_manifold_dims)
+        torch.testing.assert_close(round_trip.cells, expected)
 
 
 ### Parametrized Tests for Device Handling ###

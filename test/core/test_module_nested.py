@@ -200,3 +200,66 @@ def test_load_from_checkpoint(device, override):
             )
     registry.__clear_registry__()
     registry.__restore_registry__()
+
+
+@pytest.mark.parametrize("legacy_format", [False, True], ids=["zip", "tar"])
+def test_save_overwrites_existing_checkpoint(tmp_path, legacy_format):
+    file_name = tmp_path / "checkpoint.mdlus"
+    M1(1.0).save(file_name, legacy_format=legacy_format)
+    M1(2.0).save(file_name, legacy_format=legacy_format)
+
+    m_loaded = M1.from_checkpoint(str(file_name))
+    assert m_loaded.b == 2.0
+    # No temporary files left next to the checkpoint
+    assert [p.name for p in tmp_path.iterdir()] == ["checkpoint.mdlus"]
+
+
+@pytest.mark.parametrize("legacy_format", [False, True], ids=["zip", "tar"])
+def test_save_failure_leaves_destination_intact(tmp_path, monkeypatch, legacy_format):
+    from fsspec.implementations.local import LocalFileSystem
+
+    file_name = tmp_path / "checkpoint.mdlus"
+    M1(1.0).save(file_name, legacy_format=legacy_format)
+    original_bytes = file_name.read_bytes()
+
+    # Simulate the process dying part-way through writing the archive: some
+    # bytes reach the destination filesystem, then an error.
+    real_open = LocalFileSystem.open
+
+    def truncated_open(self, path, mode="rb", *args, **kwargs):
+        f = real_open(self, path, mode, *args, **kwargs)
+        f.write(b"partial")
+        f.close()
+        raise RuntimeError("killed mid-transfer")
+
+    monkeypatch.setattr(LocalFileSystem, "open", truncated_open)
+    with pytest.raises(RuntimeError, match="killed mid-transfer"):
+        M1(2.0).save(file_name, legacy_format=legacy_format)
+
+    assert file_name.read_bytes() == original_bytes
+    assert [p.name for p in tmp_path.iterdir()] == ["checkpoint.mdlus"]
+    assert M1.from_checkpoint(str(file_name)).b == 1.0
+
+
+def test_save_failure_cleanup_error_does_not_mask_transfer_error(
+    tmp_path, monkeypatch, caplog
+):
+    """If removing the temporary file fails too, the transfer error still surfaces
+    and the cleanup failure is logged rather than silently dropped."""
+    from fsspec.implementations.local import LocalFileSystem
+
+    file_name = tmp_path / "checkpoint.mdlus"
+
+    def failing_open(self, path, mode="rb", *args, **kwargs):
+        raise RuntimeError("killed mid-transfer")
+
+    def failing_exists(self, path, *args, **kwargs):
+        raise OSError("filesystem unavailable")
+
+    monkeypatch.setattr(LocalFileSystem, "open", failing_open)
+    monkeypatch.setattr(LocalFileSystem, "exists", failing_exists)
+    with caplog.at_level("WARNING", logger="core.module"):
+        with pytest.raises(RuntimeError, match="killed mid-transfer"):
+            M1(1.0).save(file_name)
+    assert list(tmp_path.iterdir()) == []
+    assert any("filesystem unavailable" in r.getMessage() for r in caplog.records)

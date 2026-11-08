@@ -19,10 +19,12 @@ from typing import Any, Dict
 
 import numpy as np
 import torch
+from jaxtyping import Float
 from torch import nn
 
-from physicsnemo.nn.module.conv_layers import Conv2d
-from physicsnemo.nn.module.group_norm import get_group_norm
+from physicsnemo.core.module import Module
+from physicsnemo.nn.module.conv_layers import Conv2d, Conv3D
+from physicsnemo.nn.module.group_norm import GroupNorm3D, get_group_norm
 from physicsnemo.nn.module.utils import get_earth_position_index
 
 
@@ -176,6 +178,109 @@ class UNetAttention(torch.nn.Module):
 
         x: torch.Tensor = self.proj(attn.reshape(*x.shape)).add_(x)
         return x
+
+
+class UNetAttention3D(Module):
+    r"""
+    Multi-head 3D self-attention block.
+
+    Applies group normalization followed by multi-head self-attention with a
+    residual connection. Operates on volumetric feature maps of shape
+    :math:`(B, C, D, H, W)`, flattening the spatial dimensions for attention.
+
+    Parameters
+    ----------
+    out_channels : int
+        Number of channels :math:`C` in the input and output feature maps.
+        Must be divisible by ``num_heads``.
+    num_heads : int
+        Number of attention heads. Must be a positive integer.
+    eps : float, optional, default=1e-5
+        Epsilon for numerical stability in
+        :class:`~physicsnemo.nn.GroupNorm3D`.
+    init_zero : dict, optional, default={'init_weight': 0}
+        Initialization kwargs with near-zero weights for the output projection.
+    init_attn : dict or None, optional, default=None
+        Initialization kwargs for the QKV projection. Defaults to ``init`` if
+        ``None``.
+    init : dict, optional, default={}
+        Initialization kwargs for convolutional layers.
+
+    Raises
+    ------
+    ValueError
+        If ``num_heads`` is not a positive integer, or if ``out_channels`` is
+        not divisible by ``num_heads``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input feature map of shape :math:`(B, C, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output feature map of shape :math:`(B, C, D, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn import UNetAttention3D
+    >>> attn = UNetAttention3D(out_channels=32, num_heads=4)
+    >>> x = torch.randn(2, 32, 4, 12, 16)
+    >>> attn(x).shape
+    torch.Size([2, 32, 4, 12, 16])
+    """
+
+    def __init__(
+        self,
+        *,
+        out_channels: int,
+        num_heads: int,
+        eps: float = 1e-5,
+        init_zero: Dict[str, Any] = dict(init_weight=0),
+        init_attn: Any = None,
+        init: Dict[str, Any] = dict(),
+    ) -> None:
+        super().__init__()
+        if not isinstance(num_heads, int) or num_heads <= 0:
+            raise ValueError(f"num_heads must be a positive integer, got {num_heads}")
+        if out_channels % num_heads != 0:
+            raise ValueError(
+                "out_channels must be divisible by num_heads, "
+                f"got out_channels={out_channels} and num_heads={num_heads}"
+            )
+
+        self.num_heads = num_heads
+        self.norm = GroupNorm3D(num_channels=out_channels, eps=eps)
+        self.qkv = Conv3D(
+            in_channels=out_channels,
+            out_channels=out_channels * 3,
+            kernel=1,
+            **(init_attn if init_attn is not None else init),
+        )
+        self.proj = Conv3D(
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel=1,
+            **init_zero,
+        )
+
+    def forward(
+        self, x: Float[torch.Tensor, "B C D H W"]
+    ) -> Float[torch.Tensor, "B C D H W"]:
+        x1 = self.qkv(self.norm(x))  # (B, 3*C, D, H, W)
+
+        # Apply multi-head attention over the flattened volume.
+        qkv = (
+            x1.reshape(x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1)
+        ).permute(0, 1, 4, 3, 2)  # (B, num_heads, D*H*W, 3, C//num_heads)
+        q, k, v = (qkv[..., index, :] for index in range(3))
+        attn = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, scale=1 / math.sqrt(k.shape[-1])
+        )  # (B, num_heads, D*H*W, C//num_heads)
+        attn = attn.transpose(-1, -2)  # (B, num_heads, C//num_heads, D*H*W)
+        return self.proj(attn.reshape(*x.shape)).add_(x)
 
 
 class EarthAttention3D(nn.Module):

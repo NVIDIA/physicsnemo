@@ -31,6 +31,7 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 from jaxtyping import Float
+from torch.distributed.tensor import Replicate
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -51,6 +52,7 @@ from .activation_checkpointing import (
     should_checkpoint_component,
 )
 from .context_projector import GlobalContextBuilder
+from .flare_plus_plus import _FLAREPlusPlusBlock
 
 te = OptionalImport("transformer_engine.pytorch")
 
@@ -246,7 +248,9 @@ class GeoTransolver(Module):
     time_input : bool, optional
         Whether to include time embeddings. Default is ``False``.
     plus : bool, optional
-        Whether to use Transolver++ features in the GALE layers. Default is ``False``.
+        Whether to use Transolver++ features in the GALE layers. This is a
+        separate architecture from FLARE++ and must be ``False`` when
+        ``attention_type="GALE_FPP"``. Default is ``False``.
     include_local_features : bool, optional
         Whether to include local features in the global context. Default is ``False``.
     radii : list[float], optional
@@ -260,11 +264,11 @@ class GeoTransolver(Module):
         (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
         flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
         spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
-    attention_type : {"GALE", "GALE_FA"}, optional
+    attention_type : {"GALE", "GALE_FA", "GALE_FPP"}, optional
         Attention implementation used inside each GALE block: ``"GALE"`` for the
-        reference version, ``"GALE_FA"`` for the flash-attention one.  Validated
-        in :class:`~physicsnemo.nn.GALEBlock`, which raises on any other value.
-        Default is ``"GALE"``.
+        reference version, ``"GALE_FA"`` for fixed-query FLARE, and
+        ``"GALE_FPP"`` for input-conditioned FLARE++ routing. Default is
+        ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
@@ -431,7 +435,7 @@ class GeoTransolver(Module):
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
         structured_shape: tuple[int, ...] | None = None,
-        attention_type: Literal["GALE", "GALE_FA"] = "GALE",
+        attention_type: Literal["GALE", "GALE_FA", "GALE_FPP"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
         activation_checkpointing: bool = False,
@@ -440,6 +444,19 @@ class GeoTransolver(Module):
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
+
+        if attention_type == "GALE_FPP" and plus:
+            raise ValueError(
+                "attention_type='GALE_FPP' implements FLARE++ and requires "
+                "plus=False. The plus=True option enables the separate "
+                "Transolver++ Gumbel-slice path and must not be combined with "
+                "FLARE++."
+            )
+        if attention_type == "GALE_FPP" and use_te:
+            raise ValueError(
+                "The GALE_FPP backend does not support Transformer Engine; "
+                "set use_te=False."
+            )
 
         # Set defaults for mutable arguments
         if radii is None:
@@ -544,28 +561,46 @@ class GeoTransolver(Module):
             else n_hidden
         )
 
-        # GALE transformer blocks
-        self.blocks = nn.ModuleList(
-            [
-                GALEBlock(
-                    num_heads=n_head,
-                    hidden_dim=effective_hidden,
-                    dropout=dropout,
-                    act=act,
-                    mlp_ratio=mlp_ratio,
-                    slice_num=slice_num,
-                    last_layer=(layer_idx == n_layers - 1),
-                    use_te=use_te,
-                    plus=plus,
-                    context_dim=context_dim,
-                    spatial_shape=structured_shape,
-                    attention_type=attention_type,
-                    concrete_dropout=concrete_dropout,
-                    state_mixing_mode=state_mixing_mode,
-                )
-                for layer_idx in range(n_layers)
-            ]
-        )
+        # Keep the model-specific FLARE++ adapter out of the general GALE API.
+        if attention_type == "GALE_FPP":
+            self.blocks = nn.ModuleList(
+                [
+                    _FLAREPlusPlusBlock(
+                        num_heads=n_head,
+                        hidden_dim=effective_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        slice_num=slice_num,
+                        context_dim=context_dim,
+                        concrete_dropout=concrete_dropout,
+                        state_mixing_mode=state_mixing_mode,
+                    )
+                    for _ in range(n_layers)
+                ]
+            )
+        else:
+            self.blocks = nn.ModuleList(
+                [
+                    GALEBlock(
+                        num_heads=n_head,
+                        hidden_dim=effective_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        slice_num=slice_num,
+                        last_layer=(layer_idx == n_layers - 1),
+                        use_te=use_te,
+                        plus=plus,
+                        context_dim=context_dim,
+                        spatial_shape=structured_shape,
+                        attention_type=attention_type,
+                        concrete_dropout=concrete_dropout,
+                        state_mixing_mode=state_mixing_mode,
+                    )
+                    for layer_idx in range(n_layers)
+                ]
+            )
 
         # Output projection layers - one per output type
         if use_te:
@@ -646,7 +681,7 @@ class GeoTransolver(Module):
 
     def _checkpoint_block(
         self,
-        block: GALEBlock,
+        block: nn.Module,
         x: tuple[torch.Tensor, ...] | list[torch.Tensor],
         embedding_states: torch.Tensor | None,
     ) -> list[torch.Tensor]:
@@ -758,6 +793,112 @@ class GeoTransolver(Module):
         ValueError
             If input tensors have incorrect dimensions.
         """
+        output, embedding_states, point_features, _ = self._forward_impl(
+            local_embedding, local_positions, global_embedding, geometry, time
+        )
+        outputs = [output]
+        if return_embedding_states:
+            outputs.append(embedding_states)
+        if return_point_features:
+            outputs.append(point_features)
+        return tuple(outputs) if len(outputs) > 1 else output
+
+    def forward_with_geometry_features(
+        self,
+        local_embedding: (
+            Float[torch.Tensor, "batch tokens features"]
+            | tuple[Float[torch.Tensor, "batch tokens features"], ...]
+        ),
+        local_positions: (
+            Float[torch.Tensor, "batch tokens spatial_dim"]
+            | tuple[Float[torch.Tensor, "batch tokens spatial_dim"], ...]
+            | None
+        ) = None,
+        global_embedding: Float[torch.Tensor, "batch global_tokens global_dim"]
+        | None = None,
+        geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
+        time: torch.Tensor | None = None,
+    ) -> tuple[
+        Float[torch.Tensor, "..."] | tuple[Float[torch.Tensor, "..."], ...],
+        Float[torch.Tensor, "batch heads slices dim_head"] | None,
+    ]:
+        r"""Predict and return detached geometry tokens in one forward pass.
+
+        Parameters
+        ----------
+        local_embedding : torch.Tensor | tuple[torch.Tensor, ...]
+            Input tensor of shape :math:`(B, N, C)`, or one tensor per stream.
+            Structured inputs follow the same conventions as :meth:`forward`.
+        local_positions : torch.Tensor | tuple[torch.Tensor, ...] | None, optional, default=None
+            Positions of shape :math:`(B, N, 3)` for each input stream.
+            Required when ``include_local_features=True``.
+        global_embedding : torch.Tensor | None, optional, default=None
+            Global context of shape :math:`(B, N_g, C_g)`.
+        geometry : torch.Tensor | None, optional, default=None
+            Geometry inputs of shape :math:`(B, N_geo, C_geo)`.
+        time : torch.Tensor | None, optional, default=None
+            Time embedding (not yet implemented).
+
+        Returns
+        -------
+        tuple[torch.Tensor | tuple[torch.Tensor, ...], torch.Tensor | None]
+            Always ``(prediction, geometry_features)``. Prediction has the same
+            shape, stream structure, and gradients as :meth:`forward` with its
+            return flags unset. Geometry features have shape
+            :math:`(B, H, S, D_g)` and are detached from the computation graph.
+            They are ``None`` when geometry tokenization or its input is absent.
+            Pending domain reductions are completed before returning features.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``time`` is provided.
+        ValueError
+            If inputs do not satisfy the same requirements as :meth:`forward`.
+
+        Notes
+        -----
+        Features contain only geometry tokens, not combined global context.
+        Pooling and OOD scoring belong to the caller. This method does not run
+        model-level forward hooks. For a wrapper such as DistributedDataParallel,
+        call this method inside an adapter's ``forward`` and wrap that adapter;
+        calling it through ``wrapper.module`` bypasses the wrapper's forward.
+
+        Examples
+        --------
+        >>> model = GeoTransolver(functional_dim=3, out_dim=1, geometry_dim=3,
+        ...                       n_layers=1, n_hidden=16, n_head=4, use_te=False)
+        >>> inputs = torch.randn(1, 10, 3)
+        >>> geometry = torch.randn(1, 20, 3)
+        >>> prediction, tokens = model.forward_with_geometry_features(
+        ...     inputs, geometry=geometry)
+        """
+        prediction, _, _, geometry_features = self._forward_impl(
+            local_embedding, local_positions, global_embedding, geometry, time
+        )
+        # Tokenization may leave a pending reduction over domain shards.
+        # Complete it before callers pool or score these features.
+        placements = getattr(geometry_features, "placements", ())
+        if any(p.is_partial() for p in placements):
+            geometry_features = geometry_features.redistribute(
+                placements=[Replicate() if p.is_partial() else p for p in placements]
+            )
+        return prediction, geometry_features
+
+    def _forward_impl(
+        self,
+        local_embedding: torch.Tensor | tuple[torch.Tensor, ...],
+        local_positions: torch.Tensor | tuple[torch.Tensor, ...] | None,
+        global_embedding: torch.Tensor | None,
+        geometry: torch.Tensor | None,
+        time: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+    ]:
+        r"""Compute predictions and features shared by both public entry points."""
         # Track whether input was a single tensor for output format
         single_input = isinstance(local_embedding, torch.Tensor)
 
@@ -835,10 +976,9 @@ class GeoTransolver(Module):
                     f"got {global_embedding.ndim}D tensor with shape {tuple(global_embedding.shape)}"
                 )
 
-        # Build context embeddings and extract local features. The third
-        # return value (detached geometry latent) is consumed by an optional
-        # external OOD guard wrapper via a forward hook, not here.
-        embedding_states, local_embedding_bq, _ = self._build_context(
+        # Geometry features are detached tokens from the geometry tokenizer,
+        # distinct from the combined geometry/global context embeddings.
+        embedding_states, local_embedding_bq, geometry_features = self._build_context(
             local_embedding, local_positions, geometry, global_embedding
         )
 
@@ -889,10 +1029,4 @@ class GeoTransolver(Module):
             x = tuple(x)
             point_features_out = tuple(point_features)
 
-        if return_embedding_states and return_point_features:
-            return x, embedding_states, point_features_out
-        if return_embedding_states:
-            return x, embedding_states
-        if return_point_features:
-            return x, point_features_out
-        return x
+        return x, embedding_states, point_features_out, geometry_features

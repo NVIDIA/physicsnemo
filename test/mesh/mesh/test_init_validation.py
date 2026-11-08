@@ -26,10 +26,77 @@ appropriate errors for:
 
 import pytest
 import torch
-from tensordict import TensorDict
+from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.mesh import _requested_float_dtype
+from physicsnemo.mesh.mesh import _requested_dtype, _set_subclass_fields
+
+
+def test_mesh_inherits_tensorclass():
+    assert TensorClass in Mesh.__bases__
+
+
+class FieldlessMesh(Mesh):
+    """Downstream-style Mesh subclass with no redeclared fields."""
+
+
+class MeshWithExtra(Mesh):
+    """Mesh subtype with one additional floating field."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+def test_fieldless_subclass_keeps_constructor_defaults():
+    mesh = FieldlessMesh(torch.randn(4, 2))
+
+    assert type(mesh) is FieldlessMesh
+    assert mesh.cells.shape == (0, 1)
+    assert not list(mesh.point_data.keys())
+    assert not list(mesh.cell_data.keys())
+    assert not list(mesh.global_data.keys())
+
+
+def test_subclass_with_extra_field_needs_no_init(tmp_path):
+    """A subclass that adds a field constructs, clones, moves, indexes, rebuilds
+    and round-trips without an ``__init__`` of its own."""
+    mesh = MeshWithExtra(
+        points=torch.randn(4, 2),
+        cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+        extra=torch.arange(4, dtype=torch.float32),
+    )
+    assert type(mesh) is MeshWithExtra
+    assert torch.equal(mesh.extra, torch.arange(4, dtype=torch.float32))
+    assert mesh.cell_data.batch_size == (2,)
+    assert MeshWithExtra(points=torch.randn(4, 2)).extra is None
+
+    for result in (
+        mesh.clone(),
+        mesh.to(torch.float64),
+        mesh.to("cpu"),
+        mesh[...],
+        mesh.with_points(mesh.points + 1.0),  # rebuilds through __init__
+    ):
+        assert type(result) is MeshWithExtra
+        assert torch.equal(result.extra.float(), mesh.extra)
+
+    mesh.save(tmp_path / "mesh")
+    loaded = MeshWithExtra.load(tmp_path / "mesh")
+    assert type(loaded) is MeshWithExtra
+    assert torch.equal(loaded.extra, mesh.extra)
+    assert torch.equal(loaded.cells, mesh.cells)
+
+
+def test_set_subclass_fields_rejects_undeclared_keyword():
+    """Only fields that the subclass adds are accepted as extra keywords."""
+    mesh = MeshWithExtra(points=torch.randn(4, 2))
+    _set_subclass_fields(mesh, Mesh, {"extra": torch.ones(4)})
+    assert torch.equal(mesh.extra, torch.ones(4))
+    for name in ("unknown", "points"):
+        with pytest.raises(
+            TypeError,
+            match=rf"MeshWithExtra.__init__\(\) got an unexpected keyword argument '{name}'",
+        ):
+            _set_subclass_fields(mesh, Mesh, {name: torch.ones(4)})
 
 
 class TestPointsValidation:
@@ -77,6 +144,119 @@ class TestPointsValidation:
         with pytest.raises(ValueError, match=r"`points` must have shape.*got.*shape"):
             Mesh(points=points, cells=cells)
 
+    @pytest.mark.parametrize(
+        "dtype, expected_dtype",
+        [
+            (torch.int64, torch.float64),
+            (torch.uint64, torch.float64),
+            (torch.int32, torch.float64),
+            (torch.uint32, torch.float64),
+            (torch.int16, torch.float32),
+            (torch.uint16, torch.float32),
+            (torch.int8, torch.float32),
+            (torch.uint8, torch.float32),
+            (torch.bool, torch.float32),
+        ],
+    )
+    def test_integer_points_promoted_without_narrowing(self, dtype, expected_dtype):
+        """Integer coordinates use a floating dtype wide enough for their values."""
+        mesh = Mesh(
+            points=torch.ones((3, 2), dtype=dtype),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+
+        assert mesh.points.dtype == expected_dtype
+
+    @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.uint64])
+    def test_translated_integer_triangle_preserves_geometry(self, dtype, device):
+        """A large offset must not collapse an edge during coordinate promotion."""
+        points = torch.tensor(
+            [[2**24, 0, 0], [2**24 + 1, 0, 0], [2**24, 2, 0]],
+            dtype=dtype,
+            device=device,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]], device=device))
+
+        torch.testing.assert_close(mesh.points, points.to(torch.float64))
+        torch.testing.assert_close(
+            mesh.cell_areas, torch.tensor([1.0], dtype=torch.float64, device=device)
+        )
+
+    @pytest.mark.parametrize(
+        "dtype, value",
+        [
+            (torch.int64, 2**53 + 1),
+            (torch.int64, -(2**53 + 1)),
+            (torch.int64, 2**63 - 1),
+            (torch.uint64, 2**53 + 1),
+            (torch.uint64, 2**64 - 1),
+        ],
+    )
+    def test_inexact_integer_coordinates_rejected(self, dtype, value, device):
+        """Construction must not round coordinates unrepresentable in float64."""
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            Mesh(points=torch.tensor([[value, 0]], dtype=dtype, device=device))
+
+    @pytest.mark.parametrize(
+        "dtype, value",
+        [(torch.int64, -(2**63)), (torch.int64, 2**60), (torch.uint64, 2**63)],
+    )
+    def test_exact_large_integer_coordinates_accepted(self, dtype, value, device):
+        """Representable large powers of two need not be rejected by a range cap."""
+        mesh = Mesh(points=torch.tensor([[value, 0]], dtype=dtype, device=device))
+
+        assert int(mesh.points[0, 0]) == value
+
+    @pytest.mark.parametrize("dtype", [torch.int64, torch.uint64])
+    @pytest.mark.parametrize("metadata_only", ["meta", "fake"])
+    def test_integer_geometry_without_concrete_values(self, dtype, metadata_only):
+        """Shape-only construction defers value checks until data is available."""
+        from contextlib import nullcontext
+
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        context = FakeTensorMode() if metadata_only == "fake" else nullcontext()
+        device = "meta" if metadata_only == "meta" else "cpu"
+        with context:
+            mesh = Mesh(points=torch.ones(3, 2, dtype=dtype, device=device))
+            assert mesh.points.dtype == torch.float64
+            assert mesh.points.shape == (3, 2)
+
+    def test_explicit_float_conversion_allows_rounding(self):
+        """Callers can deliberately choose floating precision before construction."""
+        points = torch.tensor([[2**53 + 1, 0]], dtype=torch.int64).double()
+
+        mesh = Mesh(points=points)
+
+        assert mesh.points is points
+
+    @pytest.mark.parametrize(
+        "dtype", [torch.float16, torch.bfloat16, torch.float64, torch.complex64]
+    )
+    def test_floating_and_complex_points_preserved(self, dtype):
+        """Test that the float32 promotion does not narrow or widen valid dtypes."""
+        mesh = Mesh(
+            points=torch.ones((3, 2), dtype=dtype),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+
+        assert mesh.points.dtype == dtype
+
+    def test_integer_points_do_not_truncate_cell_areas(self):
+        """Regression: integer coordinates used to make `cell_areas` silently wrong.
+
+        Geometry evaluated in integer arithmetic truncated the result, so this
+        unit right triangle of exact area 0.5 reported 0 -- with no error. The
+        wrongness was data-dependent (an exact area of 6.0 came out right),
+        which is what made it dangerous.
+        """
+        mesh = Mesh(
+            points=torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int64),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+
+        torch.testing.assert_close(mesh.cell_areas, torch.tensor([0.5]).double())
+
 
 class TestCellsValidation:
     """Tests for cells tensor validation."""
@@ -115,6 +295,13 @@ class TestCellsValidation:
         with pytest.raises((ValueError, IndexError)):
             Mesh(points=points, cells=cells)
 
+    def test_cells_require_at_least_one_vertex_column(self):
+        with pytest.raises(ValueError, match="at least one vertex index"):
+            Mesh(
+                points=torch.randn(3, 2),
+                cells=torch.empty((3, 0), dtype=torch.long),
+            )
+
 
 class TestCellsDtypeValidation:
     """Tests for cells dtype validation."""
@@ -133,19 +320,39 @@ class TestCellsDtypeValidation:
         mesh = Mesh(points=points, cells=cells)
         assert mesh.cells.dtype == torch.int32
 
-    def test_cells_int16_valid(self):
-        """Test that int16 cells are accepted."""
+    @pytest.mark.parametrize(
+        "dtype",
+        [
+            torch.uint8,
+            torch.uint16,
+            torch.uint32,
+            torch.uint64,
+            torch.int8,
+            torch.int16,
+        ],
+    )
+    def test_small_integer_cells_normalized_to_int64(self, dtype):
         points = torch.randn(10, 3)
-        cells = torch.randint(0, 10, (5, 3), dtype=torch.int16)
+        cells = torch.tensor([[0, 1, 2], [2, 3, 4]], dtype=dtype)
+
         mesh = Mesh(points=points, cells=cells)
-        assert mesh.cells.dtype == torch.int16
+
+        assert mesh.cells.dtype == torch.int64
+        torch.testing.assert_close(mesh.cell_centroids, points[mesh.cells].mean(dim=1))
+
+    @pytest.mark.parametrize("index", [2**63, 2**64 - 1])
+    def test_uint64_connectivity_cannot_wrap_negative(self, index, device):
+        """An overflowing unsigned ID must not become a valid negative index."""
+        cells = torch.tensor([[0, 1, index]], dtype=torch.uint64, device=device)
+        with pytest.raises(ValueError, match="uint64 indices.*int64"):
+            Mesh(points=torch.randn(3, 2, device=device), cells=cells)
 
     def test_cells_float32_raises(self):
         """Test that float32 cells raise TypeError."""
         points = torch.randn(10, 3)
         cells = torch.randint(0, 10, (5, 3)).float()  # float32
 
-        with pytest.raises(TypeError, match=r"`cells` must have an int-like dtype"):
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
             Mesh(points=points, cells=cells)
 
     def test_cells_float64_raises(self):
@@ -153,7 +360,7 @@ class TestCellsDtypeValidation:
         points = torch.randn(10, 3)
         cells = torch.randint(0, 10, (5, 3)).double()  # float64
 
-        with pytest.raises(TypeError, match=r"`cells` must have an int-like dtype"):
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
             Mesh(points=points, cells=cells)
 
     def test_cells_float16_raises(self):
@@ -161,8 +368,15 @@ class TestCellsDtypeValidation:
         points = torch.randn(10, 3)
         cells = torch.randint(0, 10, (5, 3)).half()  # float16
 
-        with pytest.raises(TypeError, match=r"`cells` must have an int-like dtype"):
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
             Mesh(points=points, cells=cells)
+
+    @pytest.mark.parametrize("dtype", [torch.bool, torch.complex64])
+    def test_non_integer_cells_raise(self, dtype):
+        cells = torch.ones((2, 3), dtype=dtype)
+
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
+            Mesh(points=torch.randn(4, 3), cells=cells)
 
 
 class TestDimensionValidation:
@@ -359,7 +573,8 @@ class TestParametrized:
         assert mesh.n_manifold_dims == n_manifold_dims
 
 
-def test_to_float_dtype_preserves_integer_cells_and_data():
+@pytest.mark.parametrize("known_device", [False, True])
+def test_to_float_dtype_preserves_integer_cells_and_data(known_device):
     """Regression: Mesh.to(<float dtype>) must cast floating tensors only. The
     integer `cells` (and integer data) must NOT be cast to a float dtype, which
     previously raised in __post_init__ ('cells must have an int-like dtype')."""
@@ -367,8 +582,13 @@ def test_to_float_dtype_preserves_integer_cells_and_data():
     mesh.point_data["temp"] = torch.randn(4)  # float -> cast
     mesh.point_data["region"] = torch.tensor([1, 2, 3, 4])  # int -> preserved
     _ = mesh.cell_areas  # warm a float cache
+    if known_device:
+        mesh = mesh.to("cpu")
 
     m64 = mesh.to(torch.float64)
+    assert mesh.points.dtype == torch.float32
+    assert mesh.point_data["temp"].dtype == torch.float32
+    assert mesh._cache["cell", "areas"].dtype == torch.float32
     assert m64.points.dtype == torch.float64
     assert m64.cells.dtype == torch.int64
     assert m64.point_data["temp"].dtype == torch.float64
@@ -379,6 +599,21 @@ def test_to_float_dtype_preserves_integer_cells_and_data():
     # Point cloud (empty cells) must also round-trip.
     pc = Mesh(points=torch.randn(5, 2)).to(torch.float64)
     assert pc.points.dtype == torch.float64 and pc.cells.dtype == torch.int64
+
+
+def test_to_float_dtype_preserves_subclass_fields():
+    """Floating conversion applies to added fields without downcasting."""
+    mesh = MeshWithExtra(
+        points=torch.randn(4, 2),
+        extra=torch.arange(4, dtype=torch.float32),
+    )
+
+    converted = mesh.to(torch.float64)
+
+    assert type(converted) is MeshWithExtra
+    assert converted.points.dtype == torch.float64
+    assert converted.cells.dtype == torch.int64
+    assert converted.extra.dtype == torch.float64
 
 
 def test_to_same_device_preserves_values_and_int_cells():
@@ -395,7 +630,7 @@ def test_to_same_float_dtype_preserves_integer_cells():
     """Regression (PR #1716 review): casting to the float dtype the mesh already has
     must still take the cells-safe path. The old `probe.dtype != points.dtype` guard
     fell through to the generated tensorclass `.to`, which cast the integer cells to
-    float and re-raised 'cells must have an int-like dtype'."""
+    float and re-raised 'cells must have an integer dtype'."""
     mesh = Mesh(
         points=torch.randn(4, 3).double(),  # already float64
         cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
@@ -434,19 +669,16 @@ def test_to_float_dtype_forwards_transfer_kwargs():
         (("cpu", torch.float64), {}, torch.float64),  # to(device, dtype) positional
         ((torch.zeros(1, dtype=torch.float64),), {}, torch.float64),  # to(other)
         ((), {"dtype": torch.float64}, torch.float64),  # to(dtype=...)
-        ((torch.complex64,), {}, torch.complex64),  # complex is cast-worthy
+        ((torch.complex64,), {}, torch.complex64),
         (("cuda",), {}, None),  # device-only (str)
         ((), {"device": "cpu"}, None),  # device-only (kwarg)
-        ((torch.int32,), {}, None),  # integer dtype -> delegate
+        ((torch.int32,), {}, torch.int32),
         ((), {}, None),  # no args
     ],
 )
-def test_requested_float_dtype_detects_overloads(args, kwargs, expected):
-    """`_requested_float_dtype` drives the cast-vs-delegate decision: it must detect an
-    explicitly requested float/complex dtype across torch's `.to` overloads (positional
-    dtype, device+dtype, `other` tensor, `dtype=` kwarg) and return None for device-only
-    moves and integer dtypes -- independent of any current dtype."""
-    assert _requested_float_dtype(args, kwargs) == expected
+def test_requested_dtype_detects_overloads(args, kwargs, expected):
+    """The Mesh mover must detect dtype requests across Tensor.to overloads."""
+    assert _requested_dtype(args, kwargs) == expected
 
 
 def test_to_other_tensor_overload_casts_floats_preserves_int_cells():
@@ -459,3 +691,31 @@ def test_to_other_tensor_overload_casts_floats_preserves_int_cells():
     assert out.points.dtype == torch.float64
     assert out.cells.dtype == torch.int64
     assert out.point_data["region"].dtype == torch.int64
+
+
+def test_to_rejects_integer_coordinate_dtype():
+    mesh = Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+
+    with pytest.raises(TypeError, match="coordinates must remain floating point"):
+        mesh.to(torch.int32)
+
+
+def test_to_complex_preserves_integer_cells():
+    mesh = Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+
+    converted = mesh.to(torch.complex64)
+
+    assert converted.points.dtype == torch.complex64
+    assert converted.cells.dtype == torch.int64
+
+
+def test_rebuilds_that_change_dtypes_or_shapes_are_validated():
+    """tensordict rebuilds a mesh without ``__init__`` for generic casts and for
+    stacking; ``__post_init__`` still rejects the invalid meshes they would build.
+    (Mesh does not opt into ``skip_post_init_on_rebuild`` for this reason.)"""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+
+    with pytest.raises(TypeError, match="integer dtype"):
+        mesh.double()  # also casts the cells; ``mesh.to(torch.float64)`` does not
+    with pytest.raises(ValueError, match="points"):
+        torch.stack([mesh, mesh])

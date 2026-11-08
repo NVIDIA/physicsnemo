@@ -6,7 +6,7 @@ Samplers and Solvers
 .. currentmodule:: physicsnemo.diffusion.samplers
 
 The sampler is the main interface for generating new data from a trained
-diffusion model.  Starting from pure noise :math:`\mathbf{x}_N`, the solver
+diffusion or flow-matching model. Starting from pure noise :math:`\mathbf{x}_N`, the solver
 iteratively denoises the latent state through a sequence of time-steps until it
 reaches a clean sample :math:`\mathbf{x}_0`.
 
@@ -92,7 +92,7 @@ A complete sampling workflow involves these steps:
    :ref:`Available Solvers <diffusion_available_solvers>`), or simply pass a
    built-in string key (for example, ``"heun"``) to :func:`sample`.
 
-6. **Call** :func:`sample` to run the reverse diffusion loop.
+6. **Call** :func:`sample` to run the reverse process.
 
 
 Example: Unconditional Image Generation
@@ -178,7 +178,7 @@ effect on sample quality:
 Example: Vector-Space Diffusion (Non-Image Data)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The diffusion framework is not limited to image data.  Any tensor-valued data
+The module is not limited to image data. Any tensor-valued data
 can be used, including 1D vectors.  Here the backbone uses the
 :class:`~physicsnemo.models.mlp.FullyConnected` model from PhysicsNeMo,
 wrapped with a thin adapter to match the
@@ -406,6 +406,26 @@ There are two ways to use solvers:
 - ``"edm_stochastic_heun"`` ---
   :class:`~physicsnemo.diffusion.samplers.EDMStochasticHeunSolver`.
   Second-order with configurable stochastic noise injection.
+- ``"exponential_euler"`` ---
+  :class:`~physicsnemo.diffusion.samplers.ExponentialEulerSolver`.
+  Generalized first-order semi-linear integration encompassing explicit Euler,
+  the first-order DPM-Solver, and DDIM-like sampling for distilled few-step
+  models.
+- ``"edm_stochastic_exponential_euler"`` ---
+  :class:`~physicsnemo.diffusion.samplers.EDMStochasticExponentialEulerSolver`.
+  Generalized stochastic exponential integration encompassing EDM-style
+  churn, stochastic DDIM, and related re-noising methods for distilled
+  few-step and consistency models.
+- ``"dpmpp_2m"`` ---
+  :class:`~physicsnemo.diffusion.samplers.DPMPlusPlus2M`.
+  Generalized second-order integration encompassing classical
+  Adams-Bashforth-2 and ``DPM-Solver++(2M)`` for efficient high-quality
+  sampling.
+- ``"dpmpp_2m_unic2"`` ---
+  :class:`~physicsnemo.diffusion.samplers.DPMPlusPlus2MUniC2`.
+  Generalized predictor-corrector integration encompassing corrected
+  Adams-Bashforth-2 and ``DPM-Solver++(2M)`` with the UniC-2 corrector for
+  higher-order sampling.
 
 **Custom solvers** can be defined by implementing the
 :class:`~physicsnemo.diffusion.samplers.Solver` protocol: any object
@@ -498,6 +518,38 @@ Solvers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: physicsnemo.diffusion.samplers.EDMStochasticHeunSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`ExponentialEulerSolver`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.ExponentialEulerSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`EDMStochasticExponentialEulerSolver`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.EDMStochasticExponentialEulerSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`DPMPlusPlus2M`
+^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.DPMPlusPlus2M
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`DPMPlusPlus2MUniC2`
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.DPMPlusPlus2MUniC2
     :show-inheritance:
     :members:
     :exclude-members: __init__

@@ -41,9 +41,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import matplotlib.pyplot as plt
 import pyvista as pv
 import torch
 import torch.nn.functional as F
+from _style import (
+    FAINT_EDGE,
+    FIXED,
+    FOURTH,
+    RESULT,
+    SECOND,
+    SURFACE,
+    SURFACE_EDGE,
+    mesh_label,
+    save,
+)
+from matplotlib.patches import Patch
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import to_pyvista
@@ -66,13 +79,12 @@ PLANE_Y_POINTS = 19
 
 DOME_HEIGHT = 0.82
 
-PLANE_COLOR = "#3182A8"
-VIOLATION_COLOR = "#F06B32"
-REPAIRED_COLOR = "#2B9A66"
-OPTIMIZED_COLOR = "#D59B2D"
-SHELL_COLOR = "#A8B4C0"
-EDGE_COLOR = "#34495E"
-TEXT_COLOR = "#1E293B"
+PLANE_COLOR = SECOND
+VIOLATION_COLOR = RESULT
+REPAIRED_COLOR = FIXED
+OPTIMIZED_COLOR = FOURTH
+SHELL_COLOR = FAINT_EDGE
+EDGE_COLOR = SURFACE_EDGE
 
 
 @dataclass(frozen=True)
@@ -677,9 +689,9 @@ def _add_surface(
         feature_angle=28.0,
         show_edges=edges,
         edge_color=EDGE_COLOR,
-        line_width=0.42,
-        ambient=0.28,
-        diffuse=0.72,
+        line_width=0.6,
+        ambient=0.35,
+        diffuse=0.7,
     )
 
 
@@ -729,72 +741,77 @@ def render_case(
     )
     plane = to_pyvista(target)
 
-    plotter = pv.Plotter(shape=(1, 3), window_size=(2400, 640))
-    plotter.enable_anti_aliasing("ssaa")
-
-    plotter.subplot(0, 0)
-    _add_surface(plotter, source_shell, SHELL_COLOR, edges=False)
-    _add_surface(plotter, source_valid, OPTIMIZED_COLOR, edges=True)
-    _add_surface(plotter, source_cap, VIOLATION_COLOR, edges=True)
-    _add_constraint_plane(plotter, plane)
-    plotter.add_text(
-        "BEFORE: OPTIMIZED ENCLOSURE\n"
-        "gold and orange form one broad lid dome\n"
-        f"orange upper dome crosses plane by {metrics.max_correction:.2f}",
-        position="upper_left",
-        font_size=11,
-        color=TEXT_COLOR,
-    )
-
-    plotter.subplot(0, 1)
-    _add_surface(plotter, result_shell, SHELL_COLOR, edges=False)
-    _add_surface(plotter, result_valid, OPTIMIZED_COLOR, edges=True)
-    _add_surface(plotter, result_cap, REPAIRED_COLOR, edges=True)
-    _add_constraint_plane(plotter, plane)
-    plotter.add_mesh(
-        source_cap,
-        color=VIOLATION_COLOR,
-        opacity=0.46,
-        style="wireframe",
-        line_width=0.85,
-        render_lines_as_tubes=True,
-    )
-    plotter.add_text(
-        "AFTER: SELECTED CAP REPAIR\n"
-        "gold lower dome is retained exactly\n"
-        "green cap meets plane, orange wireframe shows prior dome",
-        position="upper_left",
-        font_size=11,
-        color=TEXT_COLOR,
-    )
-
-    plotter.subplot(0, 2)
-    _add_surface(
-        plotter,
-        to_pyvista(result),
-        SHELL_COLOR,
-        edges=True,
-    )
-    plotter.add_text(
-        "FINAL TRIANGULATED MESH\nfeasible geometry with original connectivity",
-        position="upper_left",
-        font_size=11,
-        color=TEXT_COLOR,
-    )
-
     camera, parallel_scale = _camera(source, target)
-    for column in range(3):
-        plotter.subplot(0, column)
+
+    def new_plotter() -> pv.Plotter:
+        plotter = pv.Plotter(off_screen=True, window_size=(1000, 800))
+        plotter.enable_anti_aliasing("ssaa")
+        plotter.set_background("white")
+        return plotter
+
+    def screenshot(plotter: pv.Plotter):
         plotter.camera_position = camera
         plotter.camera.parallel_projection = True
         plotter.camera.parallel_scale = parallel_scale
-        plotter.hide_axes()
-    plotter.set_background("#F8FAFC", all_renderers=True)
+        image = plotter.screenshot(return_img=True)
+        plotter.close()
+        return image
 
+    before = new_plotter()
+    _add_surface(before, source_shell, SHELL_COLOR, edges=False)
+    _add_surface(before, source_valid, OPTIMIZED_COLOR, edges=True)
+    _add_surface(before, source_cap, VIOLATION_COLOR, edges=True)
+    _add_constraint_plane(before, plane)
+
+    after = new_plotter()
+    _add_surface(after, result_shell, SHELL_COLOR, edges=False)
+    _add_surface(after, result_valid, OPTIMIZED_COLOR, edges=True)
+    _add_surface(after, result_cap, REPAIRED_COLOR, edges=True)
+    _add_constraint_plane(after, plane)
+    after.add_mesh(
+        source_cap.extract_all_edges().tube(radius=0.004),
+        color=VIOLATION_COLOR,
+        opacity=0.5,
+    )
+
+    final = new_plotter()
+    _add_surface(final, to_pyvista(result), SURFACE, edges=True)
+
+    panels = (
+        (
+            f"optimized enclosure\n{mesh_label(source)}\n"
+            f"cap crosses the plane by up to {metrics.max_correction:.2f}",
+            screenshot(before),
+        ),
+        (
+            f"shrinkwrap(plane, point_weights=movable)\n{mesh_label(result)}\n"
+            "cap meets the plane, the rest is retained",
+            screenshot(after),
+        ),
+        (
+            f"result\n{mesh_label(result)}\nsame connectivity as the input",
+            screenshot(final),
+        ),
+    )
+    figure, axes = plt.subplots(1, 3, figsize=(14.0, 4.9))
+    for axis, (title, image) in zip(axes, panels, strict=True):
+        axis.imshow(image)
+        axis.set_title(title)
+        axis.set_axis_off()
+    figure.legend(
+        handles=[
+            Patch(color=OPTIMIZED_COLOR, label="retained optimized surface"),
+            Patch(color=VIOLATION_COLOR, label="cap above the plane"),
+            Patch(color=REPAIRED_COLOR, label="repaired cap"),
+            Patch(color=PLANE_COLOR, label="clearance plane"),
+        ],
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+    )
+    figure.subplots_adjust(left=0.0, right=1.0, bottom=0.1, top=0.82, wspace=0.02)
     output.parent.mkdir(parents=True, exist_ok=True)
-    plotter.render()
-    plotter.screenshot(output, transparent_background=False)
-    plotter.close()
+    save(figure, output)
 
 
 def main(*, output: Path) -> None:
@@ -811,7 +828,6 @@ def main(*, output: Path) -> None:
         f"{int(case.movable.sum()):,} repaired vertices, "
         f"volume={metrics.result_volume:.4f}"
     )
-    print(f"Saved {output}")
 
 
 def _parse_args() -> argparse.Namespace:

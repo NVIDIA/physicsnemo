@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+from datetime import timedelta
 
 import pytest
 import torch
@@ -455,6 +456,37 @@ def test_isolate_torch_compile_cache_opt_out(monkeypatch):
     DistributedManager._isolate_torch_compile_cache(local_rank=1, world_size=4)
 
     assert "TORCHINDUCTOR_CACHE_DIR" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [(None, None), ("90", timedelta(seconds=90)), ("0.5", timedelta(seconds=0.5))],
+)
+def test_manager_process_group_timeout(monkeypatch, env_value, expected):
+    """PHYSICSNEMO_DIST_TIMEOUT_S is forwarded to init_process_group; unset
+    leaves the backend default (timeout=None)."""
+    monkeypatch.setenv("MASTER_ADDR", "localhost")
+    monkeypatch.setenv("MASTER_PORT", "12345")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    if env_value is None:
+        monkeypatch.delenv("PHYSICSNEMO_DIST_TIMEOUT_S", raising=False)
+    else:
+        monkeypatch.setenv("PHYSICSNEMO_DIST_TIMEOUT_S", env_value)
+
+    captured = {}
+
+    def fake_init_process_group(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        torch.distributed, "init_process_group", fake_init_process_group
+    )
+
+    DistributedManager.initialize()
+
+    assert captured["timeout"] == expected
 
 
 if __name__ == "__main__":

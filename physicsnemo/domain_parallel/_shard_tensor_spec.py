@@ -101,6 +101,18 @@ class ShardTensorSpec(DTensorSpec):
         hash_tuple = tuple(hash_items)
         return hash(hash_tuple)
 
+    def __setattr__(self, attr: str, value) -> None:
+        r"""Invalidate the cached hash when the sharding shapes change.
+
+        ``DTensorSpec.__setattr__`` resets ``_hash`` for the fields it hashes;
+        ``_sharding_shapes`` is hashed here as well and is populated lazily,
+        so it needs the same treatment or a spec hashed before population
+        keeps a stale hash.
+        """
+        super().__setattr__(attr, value)
+        if attr == "_sharding_shapes" and hasattr(self, "_hash"):
+            self._hash = None
+
     def __hash__(self) -> int:
         r"""Compute the hash lazily.
 
@@ -355,13 +367,19 @@ def _gather_shard_shapes_for_dim(
     """
     local_size = dist.get_world_size(group=local_group)
 
-    if not isinstance(local_shape, torch.Tensor):
-        shape = torch.tensor(local_shape, device="cpu", pin_memory=True)
+    # Collectives run on the process group's backend device: CUDA when
+    # available, otherwise CPU (gloo) -- so CPU-only single-process use of
+    # ``sharding_shapes="infer"`` works too.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if isinstance(local_shape, torch.Tensor):
+        shape = local_shape
+    else:
+        shape = torch.tensor(local_shape, device="cpu", pin_memory=(device == "cuda"))
 
-    local_shape = shape.to(device="cuda", non_blocking=True)
+    local_shape = shape.to(device=device, non_blocking=True)
 
     all_shapes = [
-        torch.zeros_like(local_shape, device="cuda") for _ in range(local_size)
+        torch.zeros_like(local_shape, device=device) for _ in range(local_size)
     ]
 
     dist.all_gather(all_shapes, local_shape, group=local_group)
@@ -652,3 +670,80 @@ def _infer_shard_tensor_spec_from_local_chunks(
         _local_shape=local_chunk.shape,
         _sharding_shapes=sharding_shapes,
     )
+
+
+def validate_aligned_sharding(specs, op_name: str) -> None:
+    r"""Reject operand specs whose uneven shard boundaries are misaligned.
+
+    The unified alignment check for multi-operand ops: used by the core
+    DTensor-fallback paths in ``shard_tensor.py`` and available to custom
+    op handlers (``custom_ops`` / ``shard_utils``) that pair local tensors
+    themselves.
+
+    With uneven sharding, two ShardTensors can share a global shape and a
+    placement tuple while assigning DIFFERENT global rows to each rank;
+    local execution then pairs unrelated rows and silently returns wrong
+    values (zero-size shards even defeat the local shape check, since a
+    size-1 dim broadcasts against a size-0 dim). See issue #1943.
+
+    The raise is reserved for the pathological case: EVERYTHING else about
+    the layout agrees -- same mesh, same tensor rank, same placements tuple,
+    and same global extent on every sharded tensor dim -- yet the per-rank
+    boundary partition differs. Any other disagreement (different meshes,
+    ranks, placements, or global extents) is a different-layout situation
+    with its own error paths (redistribution, broadcasting shape checks) and
+    is deliberately left alone.
+
+    Specs without cached shard shapes are skipped -- this check is pure
+    metadata and must never trigger the lazy collective inference in
+    ``sharding_shapes()`` -- as are plain ``DTensorSpec`` objects (their
+    boundaries are implicitly even). The check is identical on every rank,
+    so the raise can never desynchronize a collective.
+
+    Parameters
+    ----------
+    specs : Sequence
+        Operand specs; ``ShardTensorSpec`` entries are compared, anything
+        without cached ``_sharding_shapes`` is tolerated and skipped.
+    op_name : str
+        Operation name for the error message.
+
+    Raises
+    ------
+    RuntimeError
+        If two specs agree on mesh, rank, placements, and sharded-dim
+        global extents but split those extents differently across ranks.
+    """
+    if len(specs) < 2:
+        return
+
+    # Boundaries are only comparable between specs whose layout otherwise
+    # agrees: same mesh, tensor rank, placements, and sharded-dim extents.
+    # The first spec seen for a layout sets the reference partition
+    # (setdefault); later specs must match it.
+    reference: dict = {}
+    for spec in specs:
+        placements = tuple(spec.placements)
+        sharded = tuple(
+            (mesh_dim, p.dim) for mesh_dim, p in enumerate(placements) if p.is_shard()
+        )
+        if not sharded:
+            continue
+        cached = getattr(spec, "_sharding_shapes", None) or {}
+        shape = tuple(spec.tensor_meta.shape)
+        key = (spec.mesh, len(shape), placements, tuple(shape[d] for _, d in sharded))
+        known = reference.setdefault(key, {})
+        for mesh_dim, tensor_dim in sharded:
+            if mesh_dim not in cached:
+                continue  # boundaries not cached; comparing would need comms
+            sizes = tuple(s[tensor_dim] for s in cached[mesh_dim])
+            ref_sizes = known.setdefault(mesh_dim, sizes)
+            if ref_sizes != sizes:
+                raise RuntimeError(
+                    f"{op_name} on ShardTensor operands with misaligned uneven "
+                    f"shard boundaries: the specs agree on mesh, placements, "
+                    f"and global shape, but mesh dim {mesh_dim} splits tensor "
+                    f"dim {tensor_dim} as {ref_sizes} on one operand and "
+                    f"{sizes} on another. Local execution would pair "
+                    "unrelated elements; gather or reshard first."
+                )

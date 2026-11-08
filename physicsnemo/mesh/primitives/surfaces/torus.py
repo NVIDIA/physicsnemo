@@ -33,6 +33,9 @@ def load(
 ) -> Mesh[2, 3]:
     """Create a torus surface in 3D space.
 
+    The normals point outward, away from the center of the tube, as described
+    in :ref:`mesh-orientation-conventions`.
+
     Parameters
     ----------
     major_radius : float
@@ -83,8 +86,10 @@ def load(
     next_j = ii_flat * n_minor + (jj_flat + 1) % n_minor
     next_both = ((ii_flat + 1) % n_major) * n_minor + (jj_flat + 1) % n_minor
 
-    tri1 = torch.stack([idx, next_j, next_i], dim=1)
-    tri2 = torch.stack([next_j, next_both, next_i], dim=1)
-    cells = torch.cat([tri1, tri2], dim=0)
+    # Write both triangle blocks into one preallocated tensor (no cat temporaries).
+    n_quads = idx.shape[0]
+    cells = torch.empty((2 * n_quads, 3), dtype=idx.dtype, device=device)
+    torch.stack([idx, next_i, next_j], dim=1, out=cells[:n_quads])
+    torch.stack([next_j, next_i, next_both], dim=1, out=cells[n_quads:])
 
     return Mesh(points=points, cells=cells)

@@ -32,6 +32,7 @@ import torch
 from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import NestedKey, as_nested_key
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import (
@@ -156,16 +157,25 @@ class NonDimensionalizeByMetadata(MeshTransform):
     - **density**: ``rho / rho_inf``
     - **identity**: pass-through (no scaling applied)
 
-    If ``L_ref`` is present in ``global_data``, mesh points are divided
-    by it to produce non-dimensional coordinates: ``x* = x / L_ref``.
-    This normalises point clouds and cell centroids computed downstream.
+    If ``L_ref`` is present in ``global_data`` and ``scale_geometry`` is
+    ``True`` (the default), mesh points are divided by it to produce
+    non-dimensional coordinates: ``x* = x / L_ref``. This normalises point
+    clouds and cell centroids computed downstream. The geometry is scaled
+    once per instance, so a chain that needs a second instance (for example
+    ``point_data`` fields on the interior and ``cell_data`` fields on the
+    boundaries) sets ``scale_geometry: false`` on every instance after the
+    first; otherwise the coordinates are divided by ``L_ref`` again.
 
     Args:
         fields: Mapping of ``{field_name: field_type}`` where *field_type*
             is one of ``"pressure"``, ``"stress"``, ``"velocity"``,
-            ``"temperature"``, ``"density"``, or ``"identity"``.
+            ``"temperature"``, ``"density"``, or ``"identity"``. A ``"."``
+            in a field name addresses a nested leaf (``"solution.p"``).
         association: Mesh field association containing the fields
             (``"point_data"`` or ``"cell_data"``).
+        scale_geometry: Divide the mesh coordinates by ``L_ref`` (and multiply
+            them back in :meth:`inverse`). Leave ``True`` on the first instance
+            in a transform chain and set ``False`` on any further instance.
 
     Example YAML::
 
@@ -174,12 +184,20 @@ class NonDimensionalizeByMetadata(MeshTransform):
             pMeanTrim: pressure
             wallShearStressMeanTrim: stress
           association: point_data
+        # a second instance for boundary face data: fields only, geometry
+        # was already scaled above
+        - _target_: ${dp:NonDimensionalizeByMetadata}
+          fields:
+            prescribed.velocity: velocity
+          association: cell_data
+          scale_geometry: false
     """
 
     def __init__(
         self,
         fields: dict[str, NondimFieldType],
         association: MeshFieldAssociation = "point_data",
+        scale_geometry: bool = True,
     ) -> None:
         super().__init__()
         if association not in MESH_FIELD_ASSOCIATIONS:
@@ -194,7 +212,12 @@ class NonDimensionalizeByMetadata(MeshTransform):
                     f"Must be one of {sorted(_FIELD_TYPES)}."
                 )
         self._fields = fields
+        ### Same mapping keyed by TensorDict key, for nested-aware lookups.
+        self._field_keys: dict[NestedKey, NondimFieldType] = {
+            as_nested_key(name): ftype for name, ftype in fields.items()
+        }
         self._association = association
+        self._scale_geometry = scale_geometry
 
     def _transform_mesh(
         self,
@@ -224,8 +247,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
         ### Clone and non-dimensionalize the targeted association's
         ### TensorDict in place.
         new_td = getattr(mesh, self._association).clone()
-        for field_name, ftype in self._fields.items():
-            if skip_missing and field_name not in new_td.keys():
+        for field_name, ftype in self._field_keys.items():
+            ### ``key in td`` resolves nested keys; ``td.keys()`` would not.
+            if skip_missing and field_name not in new_td:
                 continue
             val = new_td[field_name].float()
             new_td[field_name] = field_fn(
@@ -244,7 +268,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
 
         # Scale geometry to/from nondim space (x* = x / L_ref).
         # assume_invertible=True avoids a per-mesh sync from the det check.
-        if L_ref is not None:
+        if L_ref is not None and self._scale_geometry:
             torch._assert_async(L_ref != 0)
             factor = L_ref if inverse else 1.0 / L_ref
             new_mesh = new_mesh.scale(factor, assume_invertible=True)
@@ -333,11 +357,14 @@ class NonDimensionalizeByMetadata(MeshTransform):
             whose leaves are in physical units.
         """
 
-        ### ``named_apply`` walks every leaf in ``td`` and collects the
-        ### returns into a fresh TD; leaves whose name is absent from
-        ### ``field_types`` pass through unchanged.
-        def _redim(name: str, val: torch.Tensor) -> torch.Tensor:
-            ftype = field_types.get(name)
+        ### ``named_apply(nested_keys=True)`` walks every leaf in ``td``,
+        ### passing the full key (tuple when nested), and collects the
+        ### returns into a fresh TD; leaves absent from ``field_types``
+        ### pass through unchanged.
+        by_key = {as_nested_key(name): ftype for name, ftype in field_types.items()}
+
+        def _redim(name: NestedKey, val: torch.Tensor) -> torch.Tensor:
+            ftype = by_key.get(name)
             if ftype is None:
                 return val
             return _redim_field(
@@ -352,7 +379,10 @@ class NonDimensionalizeByMetadata(MeshTransform):
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.
-        return td.named_apply(_redim)  # ty: ignore[invalid-return-type]
+        return td.named_apply(_redim, nested_keys=True)  # ty: ignore[invalid-return-type]
 
     def extra_repr(self) -> str:
-        return f"fields={self._fields}, association={self._association!r}"
+        return (
+            f"fields={self._fields}, association={self._association!r}, "
+            f"scale_geometry={self._scale_geometry}"
+        )

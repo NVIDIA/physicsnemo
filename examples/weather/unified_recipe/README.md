@@ -81,7 +81,7 @@ model, run
 Progress can be monitored using MLFlow. Open a new terminal and navigate to the
 training directory, then run:
 
-```mlflow ui -p 2458```
+```mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db -p 2458```
 
 View progress in a browser at <http://127.0.0.1:2458>
 
@@ -96,8 +96,8 @@ If running inside a docker container, you may need to include the
 ## SFNO Training
 
 One of the showcased models available in the configs is [Spherical Fourier Neural Operators:
-Learning Stable Dynamics on the Sphere](https://arxiv.org/pdf/2306.03838.pdf). In order to
-train the SFNO model, [PhysicsNeMo Makani](https://github.com/NVIDIA/modulus-makani)
+Learning Stable Dynamics on the Sphere](https://arxiv.org/pdf/2306.03838.pdf). In order
+to train the SFNO model, [PhysicsNeMo Makani](https://github.com/NVIDIA/modulus-makani)
 needs to be installed. This allows the model to be added to physicsnemo's model registry.
 For more information on this process, please refer to [PhysicsNeMo model registry](
 https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html#physicsnemo-model-registry-and-entry-points).

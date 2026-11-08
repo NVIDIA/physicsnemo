@@ -24,6 +24,7 @@ Used by the LSQ gradient solvers (standard and intrinsic) and PCA tangent
 space estimation to avoid duplicating the grouping + extraction boilerplate.
 """
 
+import itertools
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -65,6 +66,7 @@ def iter_neighborhood_batches(
     *,
     min_neighbors: int = 0,
     max_neighbors: int | None = None,
+    largest_first: bool = False,
 ) -> Iterator[NeighborhoodBatch]:
     """Iterate over neighborhoods grouped by neighbor count.
 
@@ -86,13 +88,16 @@ def iter_neighborhood_batches(
         Clamp each entity's neighbor count to at most this value.
         Useful for PCA where only the k nearest neighbors are needed.
         If ``None``, use all neighbors.
+    largest_first : bool
+        Yield the batches in order of decreasing size (entities times
+        neighbors), so that the largest temporaries come first.
 
     Yields
     ------
     NeighborhoodBatch
         One batch per unique (effective) neighbor count that meets the
         ``min_neighbors`` threshold. Batches are yielded in order of
-        ascending neighbor count.
+        ascending neighbor count, unless ``largest_first``.
     """
     device = positions.device
 
@@ -100,29 +105,37 @@ def iter_neighborhood_batches(
     neighbor_counts = adjacency.counts
 
     ### Optionally clamp to max_neighbors
+    # (clamp takes the bound as a kernel argument; a device tensor built from it
+    # would be a blocking host-to-device copy)
     if max_neighbors is not None:
-        effective_counts = torch.minimum(
-            neighbor_counts,
-            torch.tensor(max_neighbors, dtype=neighbor_counts.dtype, device=device),
-        )
+        effective_counts = neighbor_counts.clamp(max=max_neighbors)
     else:
         effective_counts = neighbor_counts
 
     ### Group by effective neighbor count
-    unique_counts, inverse_indices = torch.unique(effective_counts, return_inverse=True)
+    # A stable sort lists each group's entities contiguously, in ascending index
+    # order. One transfer then brings every group's count and size to the host,
+    # rather than synchronizing the device twice per group.
+    order = torch.argsort(effective_counts, stable=True)
+    unique_counts, group_sizes = torch.unique_consecutive(
+        effective_counts[order], return_counts=True
+    )
+    group_counts, group_sizes = torch.stack((unique_counts, group_sizes)).tolist()
 
     ### Yield one batch per unique count
-    for count_idx, count_tensor in enumerate(unique_counts):
-        n_neighbors = int(count_tensor)
+    group_starts = itertools.accumulate(group_sizes, initial=0)
+    groups = list(zip(group_counts, group_starts, group_sizes))
+    if largest_first:
+        groups.sort(key=lambda group: group[0] * group[2], reverse=True)
+    for n_neighbors, group_start, group_size in groups:
+        group_end = group_start + group_size
 
         # Skip groups below the minimum threshold
         if n_neighbors < min_neighbors:
             continue
 
-        # Find all entities in this group
-        entity_indices = torch.where(inverse_indices == count_idx)[0]
-        if len(entity_indices) == 0:
-            continue
+        # All entities in this group
+        entity_indices = order[group_start:group_end]
 
         ### Extract neighbor indices for the entire group at once
         # Build a (n_group, n_neighbors) index matrix into adjacency.indices

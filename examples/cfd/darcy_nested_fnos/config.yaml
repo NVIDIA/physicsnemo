@@ -48,8 +48,8 @@ normaliser:
     mean: 1.25
     std: .75
   darcy:
-    mean: 2.6E-2
-    std: 1.5E-2
+    mean: 5.0E-2
+    std: 2.8E-2
 
 scheduler:
   initial_lr: 1.E-3

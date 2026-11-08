@@ -101,11 +101,12 @@ metrics: [l2]
 # Integrates the predicted (and reference) surface traction (-Cp*n + Cf)
 # over the vehicle into force/moment coefficients: CD/CL/CS (drag/lift/side)
 # and CMR/CMP/CMY (roll/pitch/yaw). Auto-skips when the dataset has no
-# Cp/Cf surface fields (e.g. volume runs). Magnitudes are only physical at
-# full surface resolution: a `sampling_resolution` below the mesh's cell
-# count truncates the integral (pred and true alike; infer.py warns when
-# it detects this). See src/forces.py for the math and sign/orientation
-# conventions.
+# Cp/Cf surface fields (e.g. volume runs). A `sampling_resolution` below the
+# mesh's cell count subsamples the surface: effective measures compensate
+# for the dropped area, but the coefficients become estimates with sampling
+# noise and possible bias, including from a sample-dependent moment origin
+# (infer.py warns when it detects this). See src/forces.py for the
+# assumptions, the math, and the sign/orientation conventions.
 force_coefficients:
   enabled: true
   # A_ref in physical units. CD/CL/CM magnitudes are only physically

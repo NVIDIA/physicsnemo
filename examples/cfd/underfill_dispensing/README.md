@@ -413,10 +413,10 @@ Computes a boolean mask selecting nodes near the VOF interface:
 
 ```python
 band = compute_interface_band(
-    vof,               # [N] or [N, 1]
-    coords,            # [N, 3]
-    vof_lo=0.01,       # Lower VOF threshold
-    vof_hi=0.99,       # Upper VOF threshold
+    vof,  # [N] or [N, 1]
+    coords,  # [N, 3]
+    vof_lo=0.01,  # Lower VOF threshold
+    vof_hi=0.99,  # Upper VOF threshold
     band_fraction=0.05,
     absolute_expansion=None,
 )

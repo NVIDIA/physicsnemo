@@ -26,8 +26,15 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
 
 from .utils import numerical_shard_tensor_check
+
+
+def _sum_of_squares(out):
+    """Loss with O(1) gradients: the default mean gives ~1e-6 grads on these
+    shapes, and an absolute tolerance then accepts garbage."""
+    return out.float().square().sum()
 
 
 class SDPAWrapper(torch.nn.Module):
@@ -129,6 +136,161 @@ def test_sdpa_sequence_parallel(
     )
 
 
+def _ring_seq_len(distributed_mesh, uneven: bool) -> int:
+    # 64 per rank, plus 3 so the shards are uneven and not 32-aligned.
+    return 64 * distributed_mesh.size(0) + (3 if uneven else 0)
+
+
+@pytest.mark.multigpu_static
+def test_sdpa_ring_uneven_shards(distributed_mesh):
+    """Ring SDPA with uneven, non-32-aligned sequence shards, fwd + bwd.
+
+    Each ring step receives the neighbor's (differently sized) K/V block,
+    and the saved log-sum-exp must keep the kernel's padded layout.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven=True)
+    q, k, v = (
+        generate_sequence_data(2, seq_len, 4, 32, device=dm.device) for _ in range(3)
+    )
+    sq, sk, sv = (
+        scatter_tensor(t, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+        for t in (q, k, v)
+    )
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        SDPAWrapper(),
+        [sq, sk, sv],
+        {},
+        check_grads=True,
+        loss_fn=_sum_of_squares,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("uneven", [False, True])
+def test_sdpa_ring_attn_mask(distributed_mesh, uneven):
+    """Ring SDPA with an additive mask sharded like q: each ring step must use
+    the mask columns of the K/V block it holds, not the same columns every
+    step."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven)
+    q, k, v = (
+        generate_sequence_data(1, seq_len, 4, 32, device=dm.device) for _ in range(3)
+    )
+    mask = torch.randn(1, 4, seq_len, seq_len, device=dm.device)
+    sq, sk, sv = (
+        scatter_tensor(t, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+        for t in (q, k, v)
+    )
+    smask = scatter_tensor(mask, 0, distributed_mesh, (Shard(2),))
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        SDPAWrapper(),
+        [sq, sk, sv],
+        {"attn_mask": smask},
+        check_grads=True,
+        loss_fn=_sum_of_squares,
+    )
+
+
+@pytest.mark.multigpu_static
+def test_sdpa_ring_attn_mask_broadcast_key_rejected(distributed_mesh):
+    """A mask that broadcasts over the key dim can't be split per K/V block."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven=False)
+    q, k, v = (
+        scatter_tensor(
+            generate_sequence_data(1, seq_len, 4, 32, device=dm.device),
+            0,
+            distributed_mesh,
+            (Shard(2),),
+        )
+        for _ in range(3)
+    )
+    mask = scatter_tensor(
+        torch.zeros(1, 4, seq_len, 1, device=dm.device),
+        0,
+        distributed_mesh,
+        (Shard(2),),
+    )
+    with pytest.raises(MissingShardPatch, match="full key length"):
+        torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+
+
+@pytest.mark.multigpu_static
+def test_sdpa_ring_bool_mask_rejected(distributed_mesh):
+    """The ring passes masks straight to the kernel, which expects additive bias."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven=False)
+    q, k, v = (
+        scatter_tensor(
+            generate_sequence_data(1, seq_len, 4, 32, device=dm.device),
+            0,
+            distributed_mesh,
+            (Shard(2),),
+        )
+        for _ in range(3)
+    )
+    mask = scatter_tensor(
+        torch.ones(1, 4, seq_len, seq_len, dtype=torch.bool, device=dm.device),
+        0,
+        distributed_mesh,
+        (Shard(2),),
+    )
+    with pytest.raises(MissingShardPatch, match="bool attn_mask"):
+        torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("backward", [False, True])
+@pytest.mark.parametrize("amp", [False, True])
+def test_sdpa_sequence_parallel_autocast(distributed_mesh, backward, amp):
+    """Ring SDPA with and without bf16 autocast at one configuration.
+
+    Under autocast the fp32 log-space accumulators must not leak into the
+    output dtype: the backward kernel needs q, output and grad_output alike.
+    """
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    batch_size, seq_len, num_heads, head_dim = 2, 256, 8, 32
+
+    q = generate_sequence_data(batch_size, seq_len, num_heads, head_dim).to(dm.device)
+    k = generate_sequence_data(batch_size, seq_len, num_heads, head_dim).to(dm.device)
+    v = generate_sequence_data(batch_size, seq_len, num_heads, head_dim).to(dm.device)
+
+    placements = (Shard(2),)
+    sq = scatter_tensor(q, 0, distributed_mesh, placements, requires_grad=backward)
+    sk = scatter_tensor(k, 0, distributed_mesh, placements, requires_grad=backward)
+    sv = scatter_tensor(v, 0, distributed_mesh, placements, requires_grad=backward)
+
+    tol = 5e-2 if amp else 1e-5
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        SDPAWrapper(),
+        [sq, sk, sv],
+        {},
+        check_grads=backward,
+        atol=tol,
+        rtol=tol,
+        loss_fn=_sum_of_squares,
+        amp=amp,
+        amp_dtype=torch.bfloat16,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Mixed-placement SDPA, as used by FLARE and GALE_FA:
 #   pass 1: sdpa(G_replicated, k_sharded, v_sharded)  -- latent tokens attend
@@ -155,8 +317,9 @@ def _assert_placements(expected_placements):
 @pytest.mark.parametrize("seq_len_q", [64])
 @pytest.mark.parametrize("seq_len_kv", [256])
 @pytest.mark.parametrize("backward", [False, True])
+@pytest.mark.parametrize("amp", [False, True])
 def test_sdpa_replicated_q_sharded_kv(
-    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward
+    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward, amp
 ):
     r"""FLARE pass 1: replicated queries attending to a sharded point cloud.
 
@@ -182,14 +345,21 @@ def test_sdpa_replicated_q_sharded_kv(
     sk = scatter_tensor(k, 0, distributed_mesh, (Shard(2),), requires_grad=backward)
     sv = scatter_tensor(v, 0, distributed_mesh, (Shard(2),), requires_grad=backward)
 
+    # bf16 autocast is the recipe's precision. The log-sum-exp stats are fp32,
+    # so the combine must cast back to q's dtype for the backward kernel.
+    tol = 5e-2 if amp else 1e-4
+
     numerical_shard_tensor_check(
         distributed_mesh,
         SDPAWrapper(),
         [sq, sk, sv],
         {},
         check_grads=backward,
-        atol=1e-4,
-        rtol=1e-4,
+        atol=tol,
+        rtol=tol,
+        loss_fn=_sum_of_squares,
+        amp=amp,
+        amp_dtype=torch.bfloat16,
         output_check_fn=_assert_placements((Replicate(),)),
     )
 
@@ -200,8 +370,9 @@ def test_sdpa_replicated_q_sharded_kv(
 @pytest.mark.parametrize("seq_len_q", [256])
 @pytest.mark.parametrize("seq_len_kv", [64])
 @pytest.mark.parametrize("backward", [False, True])
+@pytest.mark.parametrize("amp", [False, True])
 def test_sdpa_sharded_q_replicated_kv(
-    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward
+    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward, amp
 ):
     r"""FLARE pass 2: sharded queries attending to replicated keys/values.
 
@@ -226,13 +397,20 @@ def test_sdpa_sharded_q_replicated_kv(
     sk = scatter_tensor(k, 0, distributed_mesh, (Replicate(),), requires_grad=backward)
     sv = scatter_tensor(v, 0, distributed_mesh, (Replicate(),), requires_grad=backward)
 
+    # bf16 autocast is the recipe's precision. The log-sum-exp stats are fp32,
+    # so the combine must cast back to q's dtype for the backward kernel.
+    tol = 5e-2 if amp else 1e-4
+
     numerical_shard_tensor_check(
         distributed_mesh,
         SDPAWrapper(),
         [sq, sk, sv],
         {},
         check_grads=backward,
-        atol=1e-4,
-        rtol=1e-4,
+        atol=tol,
+        rtol=tol,
+        loss_fn=_sum_of_squares,
+        amp=amp,
+        amp_dtype=torch.bfloat16,
         output_check_fn=_assert_placements((Shard(2),)),
     )

@@ -58,7 +58,9 @@ def _repair_degenerate_faces(
     once per call: any face whose height is below
     :data:`_DEGENERATE_TRI_REL_HEIGHT` times its longest edge has its off-edge
     vertex moved to the edge midpoint plus a perpendicular offset ``h``, giving
-    an equivalent thin-but-valid triangle over the same edge.
+    an equivalent thin-but-valid triangle over the same edge. The offset points
+    toward the original off-edge vertex, so the face keeps its plane and its
+    orientation; only exactly collinear faces get an arbitrary perpendicular.
 
     ``h`` is ``max(rel * L, 8 * eps_f32 * max|coord|)`` with ``L`` the longest
     edge: the first term keeps the repaired face far above the float32 regime
@@ -108,9 +110,23 @@ def _repair_degenerate_faces(
     e0 = torch.where(is_ab | is_ac, a, b)
     e1 = torch.where(is_ab, b, c)
 
-    # Unit perpendicular to the edge: cross against whichever of x-hat / y-hat
-    # is less aligned with it (at least one of the two always works).
+    # Unit perpendicular to the edge, toward the off-edge vertex, so the
+    # repaired face keeps the original's plane and orientation (its normal).
+    # Writing it as (edge x d) x edge keeps it orthogonal to the edge even
+    # when the off-edge offset d is mostly rounding. It is a direction choice,
+    # so it carries no gradient: an ill-conditioned 1 / height term otherwise.
     edge = e1 - e0
+    tiny = torch.finfo(face_vertices.dtype).tiny
+    off = torch.where(is_ab, c, torch.where(is_ac, b, a))
+    edge_dir = (edge / edge.norm(dim=-1, keepdim=True).clamp(min=tiny)).detach()
+    side = torch.linalg.cross(
+        torch.linalg.cross(edge_dir, (off - e0).detach(), dim=-1), edge_dir, dim=-1
+    )
+    side_norm = side.norm(dim=-1, keepdim=True)
+
+    # Exactly collinear faces have no side. Fall back to an arbitrary unit
+    # perpendicular: cross against whichever of x-hat / y-hat is less aligned
+    # with the edge (at least one of the two always works).
     x_hat = torch.zeros_like(edge)
     x_hat[:, 0] = 1.0
     y_hat = torch.zeros_like(edge)
@@ -120,8 +136,8 @@ def _repair_degenerate_faces(
     edge_sq = (edge * edge).sum(-1)
     use_alt = (perp * perp).sum(-1) < 0.5 * edge_sq
     perp = torch.where(use_alt.unsqueeze(-1), perp_alt, perp)
-    tiny = torch.finfo(face_vertices.dtype).tiny
     perp = perp / perp.norm(dim=-1, keepdim=True).clamp(min=tiny)
+    perp = torch.where(side_norm > 0, side / side_norm.clamp(min=tiny), perp)
 
     eps = torch.finfo(face_vertices.dtype).eps
     coord_scale = face_vertices.abs().amax(dim=(1, 2))
@@ -250,6 +266,11 @@ def signed_distance_field(
 
     Distances are computed in float32 (inputs are cast as needed) and results
     are cast back to the ``query_points`` dtype.
+
+    ``sdf`` is differentiable with respect to ``mesh.points`` and
+    ``query_points``, including through the degenerate-face repair below;
+    ``hit_points`` and ``hit_faces`` carry no gradients. See
+    :func:`physicsnemo.nn.functional.signed_distance_field`.
 
     (Near-)degenerate faces -- repeated vertices or collinear points, which
     Warp's mesh query would otherwise skip -- are repaired into equivalent

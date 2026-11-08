@@ -32,6 +32,9 @@ def load(
 ) -> Mesh[2, 3]:
     """Create a flat triangulated plane in 3D space.
 
+    The normals point in the direction of ``normal``, as described in
+    :ref:`mesh-orientation-conventions`.
+
     Parameters
     ----------
     size : float
@@ -40,7 +43,8 @@ def load(
         Number of subdivisions per edge. Creates (subdivisions+1)^2 vertices
         and 2*subdivisions^2 triangles.
     normal : tuple[float, float, float]
-        Normal vector to the plane (will be normalized).
+        Normal vector to the plane (will be normalized). Must be finite and
+        nonzero.
     device : str
         Compute device ('cpu' or 'cuda').
 
@@ -55,8 +59,8 @@ def load(
     n = subdivisions + 1
 
     # Create grid of points in xy-plane
-    x = torch.linspace(-size / 2, size / 2, n, device=device)
-    y = torch.linspace(-size / 2, size / 2, n, device=device)
+    x = torch.linspace(-size / 2, size / 2, n, device=device, dtype=torch.float32)
+    y = torch.linspace(-size / 2, size / 2, n, device=device, dtype=torch.float32)
     xx, yy = torch.meshgrid(x, y, indexing="ij")
 
     points_flat = torch.stack(
@@ -65,17 +69,21 @@ def load(
 
     # Rotate to align with normal if not (0, 0, 1)
     normal_t = torch.tensor(normal, dtype=torch.float32, device=device)
-    normal_t = normal_t / torch.norm(normal_t)
+    length = torch.norm(normal_t)
+    if not 0 < length < torch.inf:
+        raise ValueError(f"normal must be finite and nonzero, got {normal=}")
+    normal_t = normal_t / length
 
-    if not torch.allclose(normal_t, torch.tensor([0.0, 0.0, 1.0], device=device)):
+    z_axis = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device)
+    if not torch.allclose(normal_t, z_axis):
         # Find rotation axis and angle
-        z_axis = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device)
         axis = torch.cross(z_axis, normal_t)
         axis_norm = torch.norm(axis)
 
         if axis_norm > 1e-6:
             axis = axis / axis_norm
-            angle = torch.acos(torch.dot(z_axis, normal_t))
+            # atan2 stays accurate near +-z, where acos of a float32 cosine does not
+            angle = torch.atan2(axis_norm, torch.dot(z_axis, normal_t))
 
             # Rodrigues' rotation formula
             K = torch.tensor(
@@ -88,12 +96,18 @@ def load(
                 device=device,
             )
             R = (
-                torch.eye(3, device=device)
+                torch.eye(3, dtype=torch.float32, device=device)
                 + torch.sin(angle) * K
                 + (1 - torch.cos(angle)) * torch.mm(K, K)
             )
             points = torch.mm(points_flat, R.T)
+        elif normal_t[2] < 0:
+            # normal is -z: rotate 180 degrees about the x-axis
+            points = points_flat * torch.tensor(
+                [1.0, -1.0, -1.0], dtype=torch.float32, device=device
+            )
         else:
+            # normal is +z to within rounding: no rotation
             points = points_flat
     else:
         points = points_flat
@@ -104,8 +118,8 @@ def load(
         for j in range(subdivisions):
             idx = i * n + j
             # Two triangles per quad
-            cells.append([idx, idx + 1, idx + n])
-            cells.append([idx + 1, idx + n + 1, idx + n])
+            cells.append([idx, idx + n, idx + 1])
+            cells.append([idx + 1, idx + n, idx + n + 1])
 
     cells = torch.tensor(cells, dtype=torch.int64, device=device)
     return Mesh(points=points, cells=cells)

@@ -15,7 +15,7 @@ explicitly justified in code comments and approved during code review.
 ## Rule Index
 
 | Rule ID | Summary | Apply When |
-|---------|---------|------------|
+| --------- | --------- | ------------ |
 | `EXT-001` | Keep `pyproject.toml` as the single source of truth for dependencies | Declaring or modifying package requirements |
 | `EXT-002` | Preserve the dependency hierarchy via optional dependency groups | Adding dependencies to any `physicsnemo` submodule |
 | `EXT-003` | Classify every external import as hard or optional and guard optional ones | Importing third-party packages anywhere in the codebase |
@@ -128,8 +128,7 @@ if CUML_AVAILABLE and CUPY_AVAILABLE:
     cuml = importlib.import_module("cuml")
     cp = importlib.import_module("cupy")
 
-    def knn_impl(points, queries, k) -> torch.Tensor:
-        ...
+    def knn_impl(points, queries, k) -> torch.Tensor: ...
 else:
 
     def knn_impl(*args, **kwargs) -> torch.Tensor:

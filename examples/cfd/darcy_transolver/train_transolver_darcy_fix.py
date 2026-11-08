@@ -172,7 +172,7 @@ def forward_train_full_loop(
     y: torch.Tensor,
     y_normalizer,
     precision_context,
-    scaler: torch.cuda.amp.GradScaler = None,
+    scaler: torch.amp.GradScaler = None,
 ) -> torch.Tensor:
     """
     Forward and backward pass for one iteration, with optional mixed precision training.
@@ -187,7 +187,7 @@ def forward_train_full_loop(
         y (torch.Tensor): Target tensor.
         y_normalizer: Normalizer for the target tensor.
         precision_context: Context manager for precision (e.g., autocast).
-        scaler (torch.cuda.amp.GradScaler, optional): GradScaler for mixed precision.
+        scaler (torch.amp.GradScaler, optional): GradScaler for mixed precision.
 
     Returns:
         torch.Tensor: The computed loss for this minibatch.
@@ -217,7 +217,7 @@ def train_epoch(
     loss_fun: callable,
     y_normalizer,
     precision_context,
-    scaler: torch.cuda.amp.GradScaler,
+    scaler: torch.amp.GradScaler,
 ) -> torch.Tensor:
     """
     One epoch of training. Returns the loss from the last minibatch used, averaged across replicas.
@@ -231,7 +231,7 @@ def train_epoch(
         loss_fun (callable): Loss function.
         y_normalizer: Normalizer for the target tensor.
         precision_context: Context manager for precision (e.g., autocast).
-        scaler (torch.cuda.amp.GradScaler): GradScaler for mixed precision.
+        scaler (torch.amp.GradScaler): GradScaler for mixed precision.
 
     Returns:
         torch.Tensor: The averaged loss from the last minibatch.

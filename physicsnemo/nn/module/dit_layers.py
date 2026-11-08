@@ -527,7 +527,9 @@ class Natten2DSelfAttention(AttentionModuleBase):
             2, 0, 3, 1, 4
         )  # (3, B, num_heads, N, head_dim)
         q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
+        # LayerNorm is an autocast-to-fp32 operation. Cast its outputs back to
+        # the QKV projection dtype because NATTEN requires Q, K, and V to match.
+        q, k = self.q_norm(q).to(v.dtype), self.k_norm(k).to(v.dtype)
 
         # Windowed neighborhood self-attention
         q, k, v = map(
@@ -639,7 +641,9 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
             2, 0, 3, 1, 4
         )  # (3, B, num_heads, N, head_dim)
         q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
+        # LayerNorm is an autocast-to-fp32 operation. Cast its outputs back to
+        # the QKV projection dtype because NATTEN requires Q, K, and V to match.
+        q, k = self.q_norm(q).to(v.dtype), self.k_norm(k).to(v.dtype)
 
         # Reshape Q, K to spatial layout for RoPE indexing.
         q_2d = q.reshape(B, self.num_heads, h, w, self.head_dim)
@@ -866,9 +870,9 @@ class DiTBlock(nn.Module):
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(modulation_input_dim, 6 * hidden_size, bias=True)
         )
-        self.modulation = lambda x, scale, shift: x * (
-            1 + scale.unsqueeze(1)
-        ) + shift.unsqueeze(1)
+        self.modulation = lambda x, scale, shift: (
+            x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        )
 
         self.drop_path = DropPath(drop_path)
 
@@ -980,9 +984,9 @@ class ProjLayer(nn.Module):
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
-        self.modulation = lambda x, scale, shift: x * (
-            1 + scale.unsqueeze(1)
-        ) + shift.unsqueeze(1)
+        self.modulation = lambda x, scale, shift: (
+            x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        )
 
     def forward(
         self,

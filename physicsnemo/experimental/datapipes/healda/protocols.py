@@ -27,8 +27,10 @@ implementation.
 from typing import Any, Protocol, runtime_checkable
 
 import cftime
-import pandas as pd
 import torch
+from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 
 @runtime_checkable
@@ -51,7 +53,7 @@ class ObsLoader(Protocol):
                 return {"obs": tables}
     """
 
-    async def sel_time(self, times: pd.DatetimeIndex) -> dict[str, list[Any]]:
+    async def sel_time(self, times: "pd.DatetimeIndex") -> dict[str, list[Any]]:
         """Load observation data for the given timestamps.
 
         Args:

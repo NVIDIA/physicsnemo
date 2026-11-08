@@ -17,7 +17,7 @@
 import torch
 
 from contextlib import nullcontext
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel
 import numpy as np
 import time
@@ -246,7 +246,7 @@ class GraphCastTrainer(BaseTrainer):
             self.optimizer, T_max=cfg.num_iters_step2, eta_min=0.0
         )
         scheduler3 = LambdaLR(
-            self.optimizer, lr_lambda=lambda epoch: (cfg.lr_step3 / cfg.lr)
+            self.optimizer, lr_lambda=lambda epoch: cfg.lr_step3 / cfg.lr
         )
         self.scheduler = SequentialLR(
             self.optimizer,

@@ -25,6 +25,7 @@ from __future__ import annotations
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import as_nested_key, as_nested_keys, get_leaf
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -84,9 +85,9 @@ class BroadcastGlobalFeatures(Transform):
             Key to store the broadcasted features.
         """
         super().__init__()
-        self.input_keys = input_keys
-        self.n_points_key = n_points_key
-        self.output_key = output_key
+        self.input_keys = as_nested_keys(input_keys)
+        self.n_points_key = as_nested_key(n_points_key)
+        self.output_key = as_nested_key(output_key)
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -107,18 +108,12 @@ class BroadcastGlobalFeatures(Transform):
         KeyError
             If required keys are not found in the TensorDict.
         """
-        if self.n_points_key not in data.keys():
-            raise KeyError(f"Reference key '{self.n_points_key}' not found")
-
-        n_points = data[self.n_points_key].shape[0]
+        n_points = get_leaf(data, self.n_points_key, what="Reference key").shape[0]
 
         # Collect features
         features = []
         for key in self.input_keys:
-            if key not in data.keys():
-                raise KeyError(f"Feature key '{key}' not found")
-
-            feature = data[key]
+            feature = get_leaf(data, key, what="Feature key")
 
             # Ensure scalar features are expanded
             if feature.ndim == 0:

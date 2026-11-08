@@ -34,6 +34,15 @@ from typing import Any, Callable, Optional, Sequence
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    as_nested_key,
+    as_nested_keys,
+    get_leaf,
+    key_to_str,
+    leaf_keys,
+    require_keys,
+)
+
 
 def _collate_metadata(metadata_list: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """
@@ -53,6 +62,38 @@ def _collate_metadata(metadata_list: Sequence[dict[str, Any]]) -> list[dict[str,
         List of metadata dicts.
     """
     return list(metadata_list)
+
+
+def _stack_past_batch_dims(data_list: list[TensorDict], dim: int) -> TensorDict:
+    """
+    Stack TensorDicts along a dim past their batch dims.
+
+    ``torch.stack`` on TensorDicts deprecates such a dim (tensordict 0.15),
+    so each tensor is stacked with ``torch.stack`` instead. Non-tensor
+    values have no dims past the batch dims: they are stacked along a new
+    dim right after the batch dims, which keeps the value of every sample.
+
+    Parameters
+    ----------
+    data_list : list[TensorDict]
+        TensorDicts with the same keys and batch size.
+    dim : int
+        Dimension along which to stack each tensor.
+
+    Returns
+    -------
+    TensorDict
+        Stacked TensorDict, with the batch size of the inputs.
+    """
+    tensors = [data.filter_non_tensor_data() for data in data_list]
+    batched = tensors[0].apply(
+        lambda *leaves: torch.stack(leaves, dim=dim), *tensors[1:]
+    )
+    tensor_keys = list(tensors[0].keys(include_nested=True, leaves_only=True))
+    non_tensors = [data.exclude(*tensor_keys) for data in data_list]
+    if not non_tensors[0].is_empty():
+        batched.update(torch.stack(non_tensors, dim=data_list[0].batch_dims))
+    return batched
 
 
 class Collator(ABC):
@@ -154,7 +195,7 @@ class DefaultCollator(Collator):
             compatibility with PyTorch DataLoader.
         """
         self.stack_dim = stack_dim
-        self.keys = keys
+        self.keys = as_nested_keys(keys) if keys is not None else None
         self.collate_metadata = collate_metadata
 
     def __call__(
@@ -189,9 +230,16 @@ class DefaultCollator(Collator):
         # Use TensorDict.stack() for efficient batching
         if self.keys is not None:
             # Filter to only requested keys
+            for data in data_list:
+                require_keys(data, self.keys, what="Key")
             data_list = [data.select(*self.keys) for data in data_list]
 
-        batched_data = torch.stack(data_list, dim=self.stack_dim)
+        dim = self.stack_dim
+        batch_dims = data_list[0].batch_dims
+        if -batch_dims - 1 <= dim <= batch_dims:
+            batched_data = torch.stack(data_list, dim=dim)
+        else:
+            batched_data = _stack_past_batch_dims(data_list, dim)
 
         # Collate metadata only if requested
         if self.collate_metadata:
@@ -264,8 +312,8 @@ class ConcatCollator(Collator):
         """
         self.dim = dim
         self.add_batch_idx = add_batch_idx
-        self.batch_idx_key = batch_idx_key
-        self.keys = keys
+        self.batch_idx_key = as_nested_key(batch_idx_key)
+        self.keys = as_nested_keys(keys) if keys is not None else None
         self.collate_metadata = collate_metadata
 
     def __call__(
@@ -298,23 +346,25 @@ class ConcatCollator(Collator):
         data_list = [data for data, _ in samples]
 
         first_data = data_list[0]
-        keys = self.keys if self.keys else list(first_data.keys())
+        ### Walk leaf keys (nested included) so a sample with grouped fields
+        ### concatenates leaf-by-leaf instead of tripping over sub-TensorDicts.
+        keys = self.keys if self.keys else leaf_keys(first_data)
         device = first_data.device
 
-        batched_tensors = {}
+        batched_data = TensorDict({}, device=device)
         sizes = []  # Track sizes for batch indices
 
         for key in keys:
             tensors = []
             for data in data_list:
-                if key not in data.keys():
-                    raise ValueError(f"Data missing key '{key}'")
-                tensor = data[key]
+                if key not in data:
+                    raise ValueError(f"Data missing key '{key_to_str(key)}'")
+                tensor = get_leaf(data, key, what="Key")
                 tensors.append(tensor)
                 if key == keys[0]:  # Track sizes from first key
                     sizes.append(tensor.shape[self.dim])
 
-            batched_tensors[key] = torch.cat(tensors, dim=self.dim)
+            batched_data.set(key, torch.cat(tensors, dim=self.dim))
 
         # Add batch indices
         if self.add_batch_idx:
@@ -323,10 +373,7 @@ class ConcatCollator(Collator):
                 batch_indices.append(
                     torch.full((size,), i, dtype=torch.long, device=device)
                 )
-            batched_tensors[self.batch_idx_key] = torch.cat(batch_indices, dim=0)
-
-        # Create batched TensorDict
-        batched_data = TensorDict(batched_tensors, device=device)
+            batched_data.set(self.batch_idx_key, torch.cat(batch_indices, dim=0))
 
         # Collate metadata only if requested
         if self.collate_metadata:

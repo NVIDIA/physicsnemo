@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 name: Bootstrap cuDNN CI container
 description: Install OS dependencies and uv in CUDA cuDNN container jobs
 inputs:
@@ -12,7 +28,7 @@ inputs:
       otherwise silently invalidate the wheel store). Bump in lockstep
       with the workflow's UV_VERSION env value.
     required: false
-    default: "0.11.7"
+    default: "0.13.5"
 runs:
   using: composite
   steps:
@@ -77,17 +93,6 @@ runs:
         echo "DISPLAY=:99" >> "$GITHUB_ENV"
         echo "Xvfb running on :99 (pid=${xvfb_pid})"
 
-    - name: Install Hugging Face CLI
-      shell: bash
-      env:
-        PIP_BREAK_SYSTEM_PACKAGES: "1"
-      run: |
-        set -euo pipefail
-        # typer >= 0.26 dropped click as a runtime dep, but huggingface_hub's
-        # `hf` CLI still does `import click`. Install click explicitly until
-        # upstream re-adds it (or the CLI stops importing click directly).
-        pip install --quiet huggingface_hub[hf_xet] click
-
     - name: Install uv (pinned)
       shell: bash
       env:
@@ -99,6 +104,17 @@ runs:
         curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
         # Modern uv (>= 0.5) installs to ~/.local/bin, not ~/.cargo/bin.
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Install Hugging Face CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Use the pinned uv, not Ubuntu's apt pip: that pip vendors a certifi
+        # that still trusts the compromised emSign root CA.
+        # typer >= 0.26 dropped click as a runtime dep, but huggingface_hub's
+        # `hf` CLI still does `import click`. Install click explicitly until
+        # upstream re-adds it (or the CLI stops importing click directly).
+        uv pip install --system --break-system-packages --quiet "huggingface_hub[hf_xet]" click
 
     - name: Print toolchain versions
       shell: bash

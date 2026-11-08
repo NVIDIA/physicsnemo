@@ -160,6 +160,29 @@ def test_point_normals_cache_correct_under_shear():
     )
 
 
+def test_cached_normals_remain_unit_after_large_scale_transform(device):
+    """Small inverse-transformed normals retain their direction and unit length."""
+    mesh = Mesh(
+        points=torch.tensor(
+            [[0.0, 0.0], [1.0, 0.25], [1.5, 1.5]],
+            dtype=torch.float64,
+            device=device,
+        ),
+        cells=torch.tensor([[0, 1], [1, 2]], device=device),
+    )
+    _ = mesh.cell_normals
+    _ = mesh.point_normals
+    matrix = torch.diag(torch.tensor([1.0e14, 2.0e14], device=device).double())
+
+    transformed = mesh.transform(matrix, assume_invertible=True)
+    fresh = Mesh(points=transformed.points, cells=transformed.cells)
+
+    for association in ("cell", "point"):
+        cached = transformed._cache[association, "normals"]
+        torch.testing.assert_close(cached, getattr(fresh, f"{association}_normals"))
+        torch.testing.assert_close(cached.norm(dim=-1), torch.ones_like(cached[:, 0]))
+
+
 def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
     """Assert tensor is on expected device."""
     actual_device = tensor.device.type
@@ -1612,6 +1635,21 @@ class TestMatrixHelpers:
         )
         assert R.shape == (3, 3)
         assert R.dtype == torch.float64
+
+    @pytest.mark.parametrize(
+        ("dtype", "atol"),
+        [(torch.float64, 1e-15), (torch.float32, 1e-6), (torch.bfloat16, 1e-2)],
+    )
+    @pytest.mark.parametrize("axis", [None, "z"])
+    def test_rotation_matrix_precision_follows_dtype(self, dtype, atol, axis):
+        """A Python-float angle is evaluated at the precision of ``dtype``."""
+        n = 2 if axis is None else 3
+        R = rotation_matrix(0.3, axis, n, torch.device("cpu"), dtype)
+        assert R.dtype == dtype
+        c, s = np.cos(0.3), np.sin(0.3)
+        expected = torch.eye(n, dtype=torch.float64)
+        expected[:2, :2] = torch.tensor([[c, -s], [s, c]], dtype=torch.float64)
+        torch.testing.assert_close(R.double(), expected, rtol=0, atol=atol)
 
     def test_scale_matrix_uniform(self):
         M = scale_matrix(

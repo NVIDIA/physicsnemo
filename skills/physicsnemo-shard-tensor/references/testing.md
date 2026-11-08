@@ -42,18 +42,21 @@ from torch.distributed.tensor.placement_types import Shard
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
 
+
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("backward", [False, True])
 def test_my_op_1dmesh(distributed_mesh, backward):
     dm = DistributedManager()
-    image = torch.randn(1, 16, 128, 128).to(dm.device)   # batch 1!
+    image = torch.randn(1, 16, 128, 128).to(dm.device)  # batch 1!
 
-    sharded = scatter_tensor(image, 0, distributed_mesh, (Shard(2),),
-                             requires_grad=backward)
+    sharded = scatter_tensor(
+        image, 0, distributed_mesh, (Shard(2),), requires_grad=backward
+    )
 
     module = MyNewLayer(...)
-    numerical_shard_tensor_check(distributed_mesh, module, [sharded], {},
-                                 check_grads=backward)
+    numerical_shard_tensor_check(
+        distributed_mesh, module, [sharded], {}, check_grads=backward
+    )
 ```
 
 `numerical_shard_tensor_check` (`test/domain_parallel/ops/utils.py`) runs the
@@ -69,7 +72,7 @@ parametrized, and every config branch of your patch — including one test
 asserting `MissingShardPatch` is raised for unsupported configs:
 
 ```python
-with pytest.raises(NotImplementedError):   # MissingShardPatch subclasses it
+with pytest.raises(NotImplementedError):  # MissingShardPatch subclasses it
     module(sharded_bad_config)
 ```
 
@@ -102,14 +105,18 @@ import torch
 
 
 def pytest_addoption(parser):
-    parser.addoption("--multigpu", action="store_true",
-                     help="run distributed tests (launch via torchrun)")
+    parser.addoption(
+        "--multigpu",
+        action="store_true",
+        help="run distributed tests (launch via torchrun)",
+    )
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "multigpu: needs torchrun + --multigpu")
     if config.getoption("--multigpu"):
         from physicsnemo.distributed import DistributedManager
+
         DistributedManager.initialize()
 
 
@@ -124,6 +131,7 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture(scope="session")
 def domain_mesh():
     from physicsnemo.distributed import DistributedManager
+
     dm = DistributedManager()
     torch.cuda.set_device(dm.device)
     # 1-D mesh over all ranks; add a (ddp, domain) 2-D variant for wrapper
@@ -152,8 +160,9 @@ from torch.distributed.tensor import DTensor
 from physicsnemo.domain_parallel import ShardTensor
 
 
-def check_distributed_vs_local(module, sharded_args, *, check_grads=True,
-                               atol=1e-4, rtol=1e-4):
+def check_distributed_vs_local(
+    module, sharded_args, *, check_grads=True, atol=1e-4, rtol=1e-4
+):
     """Run `module` on sharded and on full inputs; outputs and grads must match.
 
     `module` must NOT be wrapped (no DDP/FSDP2) - the deepcopy below is the
@@ -173,8 +182,11 @@ def check_distributed_vs_local(module, sharded_args, *, check_grads=True,
     out_dist = module(*sharded_args)
     out_local = local_module(*full_args)
 
-    out_dist_full = (out_dist.full_tensor()
-                     if isinstance(out_dist, (ShardTensor, DTensor)) else out_dist)
+    out_dist_full = (
+        out_dist.full_tensor()
+        if isinstance(out_dist, (ShardTensor, DTensor))
+        else out_dist
+    )
     torch.testing.assert_close(out_dist_full, out_local, atol=atol, rtol=rtol)
 
     if check_grads:
@@ -182,21 +194,24 @@ def check_distributed_vs_local(module, sharded_args, *, check_grads=True,
         # through the ShardTensor reduction ops - that is part of the test.
         out_dist.sum().backward()
         out_local.sum().backward()
-        for (name, p_d), (_, p_l) in zip(module.named_parameters(),
-                                         local_module.named_parameters()):
+        for (name, p_d), (_, p_l) in zip(
+            module.named_parameters(), local_module.named_parameters()
+        ):
             assert (p_d.grad is None) == (p_l.grad is None), name
             if p_d.grad is None:
                 continue
             g = p_d.grad
             if isinstance(g, (ShardTensor, DTensor)):
                 g = g.full_tensor()
-            torch.testing.assert_close(g, p_l.grad, atol=atol, rtol=rtol,
-                                       msg=f"grad mismatch: {name}")
+            torch.testing.assert_close(
+                g, p_l.grad, atol=atol, rtol=rtol, msg=f"grad mismatch: {name}"
+            )
         # Input grads too, when requested via requires_grad at scatter time.
         for sa, fa in zip(sharded_args, full_args):
             if isinstance(sa, ShardTensor) and sa.requires_grad:
-                torch.testing.assert_close(sa.grad.full_tensor(), fa.grad,
-                                           atol=atol, rtol=rtol)
+                torch.testing.assert_close(
+                    sa.grad.full_tensor(), fa.grad, atol=atol, rtol=rtol
+                )
 ```
 
 A test then looks identical to the physicsnemo op tests:
@@ -204,9 +219,8 @@ A test then looks identical to the physicsnemo op tests:
 ```python
 @pytest.mark.multigpu
 def test_my_layer(domain_mesh):
-    x = torch.randn(1, 16, 128, 128, device="cuda")          # batch 1!
-    sharded = scatter_tensor(x, 0, domain_mesh, (Shard(2),),
-                             requires_grad=True)
+    x = torch.randn(1, 16, 128, 128, device="cuda")  # batch 1!
+    sharded = scatter_tensor(x, 0, domain_mesh, (Shard(2),), requires_grad=True)
     check_distributed_vs_local(MyNewLayer(16), [sharded])
 ```
 

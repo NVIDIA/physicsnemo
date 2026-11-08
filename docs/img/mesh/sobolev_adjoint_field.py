@@ -18,23 +18,18 @@
 
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import torch
+from _style import DIVERGING, DPI, FIXED, TEXT, clean_axis, mesh_label
 from matplotlib.colors import TwoSlopeNorm
 
 from physicsnemo.mesh import Mesh
 
 OUTPUT = Path(__file__).parent / "sobolev_adjoint_field.png"
 
-NVIDIA_GREEN = "#76B900"
-MESH_EDGE = "#263238"
-ARROW_COLOR = "#17242a"
-FIXED_EDGE = "#49575d"
+MESH_EDGE = "#304050"
+ARROW_COLOR = TEXT
 
 
 def _make_square(resolution: int = 9) -> tuple[Mesh, torch.Tensor]:
@@ -163,7 +158,7 @@ def _draw_field(
         triangulation,
         normalized_field[:, 1],
         shading="gouraud",
-        cmap="coolwarm",
+        cmap=DIVERGING,
         norm=norm,
     )
     axis.triplot(
@@ -183,7 +178,7 @@ def _draw_field(
         angles="xy",
         scale_units="xy",
         scale=1.0,
-        width=0.0048,
+        width=0.006,
         headwidth=3.7,
         headlength=4.8,
         color=ARROW_COLOR,
@@ -193,33 +188,15 @@ def _draw_field(
     axis.scatter(
         points[fixed_points, 0],
         points[fixed_points, 1],
-        s=20,
-        facecolor="white",
-        edgecolor=FIXED_EDGE,
-        linewidth=0.8,
+        s=60,
+        color=FIXED,
+        edgecolor="white",
+        linewidth=1.2,
         zorder=5,
     )
 
-    axis.set_title(title, fontsize=15, fontweight="bold", pad=18)
-    axis.text(
-        0.5,
-        1.015,
-        f"normalized edge roughness  {roughness:.2f}",
-        transform=axis.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=10.5,
-        color="#4c5b61",
-    )
-    axis.set_xlim(-0.055, 1.055)
-    axis.set_ylim(-0.055, 1.055)
-    axis.set_aspect("equal")
-    axis.set_xlabel("x")
-    axis.set_ylabel("y")
-    axis.set_xticks((0.0, 0.5, 1.0))
-    axis.set_yticks((0.0, 0.5, 1.0))
-    axis.tick_params(colors="#4c5b61")
-    axis.spines[["top", "right"]].set_visible(False)
+    axis.set_title(f"{title}\nnormalized edge roughness {roughness:.2f}")
+    clean_axis(axis, ((-0.04, 1.04), (-0.04, 1.04)))
     return surface
 
 
@@ -261,18 +238,18 @@ def main() -> None:
     triangulation = mtri.Triangulation(points[:, 0], points[:, 1], cells)
     norm = TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=1.0)
 
-    figure, axes = plt.subplots(1, 2, figsize=(11.8, 5.7), dpi=160)
+    figure, axes = plt.subplots(1, 2, figsize=(12.5, 7.6))
     panels = (
         (
             axes[0],
             raw_field,
-            "Before: raw vertex adjoint",
+            f"raw vertex adjoint\n{mesh_label(mesh)}",
             raw_roughness.item(),
         ),
         (
             axes[1],
             sobolev_field,
-            "After: Sobolev-filtered adjoint",
+            f"sobolev_deform(length_scale=0.15)\n{mesh_label(mesh)}",
             sobolev_roughness.item(),
         ),
     )
@@ -289,55 +266,25 @@ def main() -> None:
             norm=norm,
         )
 
-    figure.suptitle(
-        "Sobolev filtering removes vertex-scale adjoint oscillation",
-        fontsize=17,
-        fontweight="bold",
-        y=0.985,
-    )
-    figure.text(
-        0.49,
-        0.53,
-        "→",
-        ha="center",
-        va="center",
-        fontsize=28,
-        color=NVIDIA_GREEN,
-        fontweight="bold",
-    )
-    figure.text(
-        0.46,
-        0.025,
-        "Colors and arrows share one scale. Open circles mark fixed vertices.",
-        ha="center",
-        fontsize=10.5,
-        color="#4c5b61",
-    )
     if surface is None:
         raise RuntimeError("No field panels were rendered")
     colorbar = figure.colorbar(
         surface,
         ax=axes,
-        fraction=0.036,
-        pad=0.045,
-        shrink=0.82,
+        orientation="horizontal",
+        fraction=0.045,
+        pad=0.03,
+        shrink=0.5,
     )
-    colorbar.set_label("Normalized vertical adjoint", fontsize=11)
-    colorbar.ax.tick_params(labelsize=9.5)
-
-    figure.subplots_adjust(
-        left=0.065,
-        right=0.9,
-        bottom=0.12,
-        top=0.84,
-        wspace=0.25,
-    )
-    figure.savefig(OUTPUT, bbox_inches="tight", facecolor="white")
+    colorbar.set_label("normalized vertical adjoint (arrows share the scale)")
+    colorbar.set_ticks((-1.0, -0.5, 0.0, 0.5, 1.0))
+    # Smooth color ramps band under a 256-color palette, so keep full RGB.
+    figure.savefig(OUTPUT, dpi=DPI, facecolor="white", bbox_inches="tight")
     plt.close(figure)
+    print(f"Saved {OUTPUT} ({OUTPUT.stat().st_size / 1024:.0f} KB)")
 
     print(f"Raw adjoint roughness: {raw_roughness.item():.4f}")
     print(f"Sobolev adjoint roughness: {sobolev_roughness.item():.4f}")
-    print(f"Saved {OUTPUT}")
 
 
 if __name__ == "__main__":

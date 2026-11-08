@@ -153,11 +153,15 @@ class ReservoirGraphBuilder:
         pattern = os.path.join(self.sim_dir, "**", extension)
         return sorted(
             glob.glob(pattern, recursive=True),
-            key=lambda fp: int(
-                re.search(pattern_regex, os.path.basename(fp), re.IGNORECASE).group(1)
-            )
-            if re.search(pattern_regex, os.path.basename(fp), re.IGNORECASE)
-            else float("inf"),
+            key=lambda fp: (
+                int(
+                    re.search(pattern_regex, os.path.basename(fp), re.IGNORECASE).group(
+                        1
+                    )
+                )
+                if re.search(pattern_regex, os.path.basename(fp), re.IGNORECASE)
+                else float("inf")
+            ),
         )
 
     def _set_output_path(self):

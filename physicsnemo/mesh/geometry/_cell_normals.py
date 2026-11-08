@@ -32,8 +32,11 @@ factorization which does not support reduced-precision dtypes.
 """
 
 import torch
-import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Float, Int
+
+from physicsnemo.mesh.utilities._gather import gather_rows
+from physicsnemo.mesh.utilities._normalization import safe_normalize
+from physicsnemo.utils._small_linalg import small_det
 
 
 def compute_cell_normals(
@@ -57,7 +60,7 @@ def compute_cell_normals(
     -------
     Float[torch.Tensor, "n_cells n_spatial_dims"]
         Unit normal vectors. For degenerate cells (zero-area), the normal is
-        a zero vector (from ``F.normalize``'s default behavior).
+        a zero vector.
 
     Examples
     --------
@@ -75,22 +78,47 @@ def compute_cell_normals(
 
     match n_spatial_dims:
         case 2:
-            result = _normals_2d(relative_vectors)
+            return _normals_2d(relative_vectors)
         case 3:
-            result = _normals_3d(relative_vectors)
+            return _normals_3d(relative_vectors)
         case _:
-            result = _normals_general(relative_vectors)
-
-    # Lock the dtype contract: under CUDA ``torch.autocast`` (e.g. bf16),
-    # ``F.normalize`` calls ``aten::norm`` which is on the fp32 cast list, so
-    # the closed-form branches can silently return fp32 even when
-    # ``relative_vectors`` is bf16.
-    return result.to(relative_vectors.dtype)
+            return _normals_general(relative_vectors)
 
 
 # ---------------------------------------------------------------------------
 # Specialized branches
 # ---------------------------------------------------------------------------
+
+
+def _compute_cell_normals_from_points(
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
+) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
+    """:func:`compute_cell_normals` of the cells' edge vectors, from the points.
+
+    Gathers the cell vertices one at a time, so that in 2D and 3D nothing
+    larger than the unnormalized normals is alive while they are normalized.
+    The values are identical to those of :func:`compute_cell_normals`.
+    """
+    if points.shape[-1] not in (2, 3):
+        # Includes points in 1D, whose cells have no edges to gather one by one
+        relative_vectors = gather_rows(points, cells[:, 1:]) - gather_rows(
+            points, cells[:, :1]
+        )
+        return _normals_general(relative_vectors)
+
+    v0 = gather_rows(points, cells[:, 0])
+    edges = [gather_rows(points, cells[:, k]) - v0 for k in range(1, cells.shape[1])]
+    del v0
+
+    if points.shape[-1] == 2:
+        # 90-degree CCW rotation, as in _normals_2d
+        normals = torch.stack([-edges[0][:, 1], edges[0][:, 0]], dim=-1)
+    else:
+        # Cross product, as in _normals_3d
+        normals = torch.linalg.cross(edges[0], edges[1])
+    del edges
+    return safe_normalize(normals, dim=-1)
 
 
 def _normals_2d(
@@ -99,7 +127,7 @@ def _normals_2d(
     """Edge normals in 2D via 90-degree CCW rotation: (x, y) -> (-y, x)."""
     e = relative_vectors[:, 0]  # (n_cells, 2)
     normals = torch.stack([-e[:, 1], e[:, 0]], dim=-1)
-    return F.normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1)
 
 
 def _normals_3d(
@@ -107,7 +135,7 @@ def _normals_3d(
 ) -> Float[torch.Tensor, "n_cells 3"]:
     """Triangle normals in 3D via cross product."""
     normals = torch.linalg.cross(relative_vectors[:, 0], relative_vectors[:, 1])
-    return F.normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1)
 
 
 def _normals_general(
@@ -123,8 +151,9 @@ def _normals_general(
 
     where :math:`E_{\setminus i}` is :math:`E` with column ``i`` removed.
 
-    Disables ``torch.autocast`` because ``torch.det`` dispatches to cuBLAS
-    LU factorization which does not support reduced-precision dtypes.
+    The minors have closed forms up to 3x3 (d = 4). Disables ``torch.autocast``
+    because beyond that ``torch.linalg.det`` dispatches to cuBLAS LU
+    factorization, which does not support reduced-precision dtypes.
     """
     n_spatial_dims = relative_vectors.shape[-1]
     n_manifold_dims = relative_vectors.shape[-2]
@@ -140,10 +169,10 @@ def _normals_general(
                 [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
                 dim=-1,
             )
-            det = submatrix.det()
+            det = small_det(submatrix)
             sign = (-1) ** (n_manifold_dims + i)
             normal_components.append(sign * det)
 
         normals = torch.stack(normal_components, dim=-1)
 
-    return F.normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1)

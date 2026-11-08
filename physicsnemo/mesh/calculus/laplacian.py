@@ -39,8 +39,6 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.mesh.utilities._tolerances import safe_eps
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -90,12 +88,13 @@ def _apply_cotan_laplacian_operator(
     >>> scalar_field = torch.randn(4)
     >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field)
     """
-    ### Initialize output with same shape as data
+    ### Initialize output with same shape as data, in the promoted dtype
     device = data.device
+    dtype = torch.promote_types(data.dtype, cotan_weights.dtype)
     if data.ndim == 1:
-        laplacian = torch.zeros(n_points, dtype=data.dtype, device=device)
+        laplacian = torch.zeros(n_points, dtype=dtype, device=device)
     else:
-        laplacian = torch.zeros_like(data)
+        laplacian = torch.zeros(data.shape, dtype=dtype, device=device)
 
     ### Extract vertex indices
     v0_indices = edges[:, 0]  # (n_edges,)
@@ -115,10 +114,11 @@ def _apply_cotan_laplacian_operator(
         contrib_v0 = weights_expanded * (data[v1_indices] - data[v0_indices])
         contrib_v1 = weights_expanded * (data[v0_indices] - data[v1_indices])
 
-        # Flatten for scatter_add
-        laplacian_flat = laplacian.reshape(n_points, -1)
-        contrib_v0_flat = contrib_v0.reshape(len(edges), -1)
-        contrib_v1_flat = contrib_v1.reshape(len(edges), -1)
+        # Flatten for scatter_add (explicit sizes: there may be no edges)
+        n_components = data.shape[1:].numel()
+        laplacian_flat = laplacian.reshape(n_points, n_components)
+        contrib_v0_flat = contrib_v0.reshape(len(edges), n_components)
+        contrib_v1_flat = contrib_v1.reshape(len(edges), n_components)
 
         v0_expanded = v0_indices.unsqueeze(-1).expand(-1, contrib_v0_flat.shape[1])
         v1_expanded = v1_indices.unsqueeze(-1).expand(-1, contrib_v1_flat.shape[1])
@@ -182,12 +182,14 @@ def compute_laplacian_points_dec(
     ### Normalize by Voronoi areas
     # Standard cotangent Laplacian: Δf_i = (1/A_voronoi_i) × accumulated_sum
     dual_volumes_0 = get_or_compute_dual_volumes_0(mesh)
+    # Isolated vertices (zero dual volume, zero sum) keep their 0
+    dual_volumes_0 = torch.where(dual_volumes_0 > 0, dual_volumes_0, 1.0)
 
     if point_values.ndim == 1:
-        laplacian = laplacian / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
+        laplacian = laplacian / dual_volumes_0
     else:
         laplacian = laplacian / dual_volumes_0.view(
             -1, *([1] * (point_values.ndim - 1))
-        ).clamp(min=safe_eps(dual_volumes_0.dtype))
+        )
 
     return laplacian

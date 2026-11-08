@@ -31,14 +31,25 @@ from .indexing import index_zero_edges_batched_2d
 
 @wp.kernel
 def bilinear_upsample_batched_2d(
-    array: wp.array3d(dtype=float), lx: int, ly: int, grid_reduction_factor: int
+    src: wp.array3d(dtype=float),
+    dst: wp.array3d(dtype=float),
+    lx: int,
+    ly: int,
+    grid_reduction_factor: int,
 ):  # pragma: no cover
     """Bilinear upsampling from batch 2d array
 
+    Coarse-grid nodes live at indices ``k * grid_reduction_factor - 1`` and are
+    read from ``src``; every fine-grid node is written to ``dst``. Nodes outside
+    the array are treated as zero (Dirichlet boundary). ``src`` and ``dst`` must
+    not alias.
+
     Parameters
     ----------
-    array : wp.array3d
-        Array to perform upsampling on
+    src : wp.array3d
+        Array holding the coarse-grid solution
+    dst : wp.array3d
+        Array to write the upsampled solution to
     lx : int
         Grid size X
     ly : int
@@ -49,17 +60,17 @@ def bilinear_upsample_batched_2d(
     # get index
     b, x, y = wp.tid()
 
-    # get four neighbors coordinates
+    # nearest coarse node at or below, and the next coarse node above
     x_0 = x - (x + 1) % grid_reduction_factor
-    x_1 = x + (x + 1) % grid_reduction_factor
+    x_1 = x_0 + grid_reduction_factor
     y_0 = y - (y + 1) % grid_reduction_factor
-    y_1 = y + (y + 1) % grid_reduction_factor
+    y_1 = y_0 + grid_reduction_factor
 
     # simple linear upsampling
-    d_0_0 = index_zero_edges_batched_2d(array, b, x_0, y_0, lx, ly)
-    d_1_0 = index_zero_edges_batched_2d(array, b, x_1, y_0, lx, ly)
-    d_0_1 = index_zero_edges_batched_2d(array, b, x_0, y_1, lx, ly)
-    d_1_1 = index_zero_edges_batched_2d(array, b, x_1, y_1, lx, ly)
+    d_0_0 = index_zero_edges_batched_2d(src, b, x_0, y_0, lx, ly)
+    d_1_0 = index_zero_edges_batched_2d(src, b, x_1, y_0, lx, ly)
+    d_0_1 = index_zero_edges_batched_2d(src, b, x_0, y_1, lx, ly)
+    d_1_1 = index_zero_edges_batched_2d(src, b, x_1, y_1, lx, ly)
 
     # get relative distance
     rel_x = wp.float32(x - x_0) / wp.float32(grid_reduction_factor)
@@ -73,7 +84,7 @@ def bilinear_upsample_batched_2d(
     d = (1.0 - rel_y) * d_x_0 + rel_y * d_x_1
 
     # set interpolation
-    array[b, x, y] = d
+    dst[b, x, y] = d
 
 
 @wp.kernel

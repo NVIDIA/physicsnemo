@@ -715,9 +715,62 @@ class TestExtrude:
         expected_extruded = mesh.points + torch.tensor([1.0, 2.0, 0.0])
         assert torch.allclose(extruded.points[2:], expected_extruded)
 
+    def test_extrude_transfers_explicit_cell_measures(self):
+        """Extruded cells keep the parent's ratio of explicit to geometric measure."""
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+
+        ### A 3-4-5 triangle (area 6) weighted 3x, swept by height 4
+        points = torch.tensor([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+        set_cell_measures(mesh, torch.tensor([18.0]))
+
+        extruded = extrude(mesh, vector=[0.0, 0.0, 4.0])
+
+        torch.testing.assert_close(cell_measures(extruded), 3.0 * extruded.cell_areas)
+        torch.testing.assert_close(cell_measures(extruded).sum(), torch.tensor(72.0))
+
+    @pytest.mark.parametrize("n_spatial_dims", [2, 3])
+    def test_extrude_rejects_dimensional_point_measures(self, n_spatial_dims):
+        """Copied area quadrature would double; counting measures carry over."""
+        from physicsnemo.mesh.calculus.measure import (
+            point_measures,
+            set_point_measures,
+        )
+
+        ### Unit square, extruded with (2D) or without (3D) a new spatial dimension
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        points = torch.nn.functional.pad(points, (0, n_spatial_dims - 2))
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+        set_point_measures(mesh, torch.full((4,), 0.25), dimension=2)
+
+        with pytest.raises(ValueError, match="dimensional point measures"):
+            extrude(mesh, allow_new_spatial_dims=True)
+
+        set_point_measures(mesh, torch.ones(4), dimension=0)
+        extruded = extrude(mesh, allow_new_spatial_dims=True)
+        torch.testing.assert_close(point_measures(extruded), torch.ones(8))
+
 
 class TestEmbed:
     """Test suite for spatial dimension embedding functionality."""
+
+    def test_embed_preserves_point_measures(self):
+        """Zero-padding coordinates is an isometry, so point quadrature is kept."""
+        from physicsnemo.mesh.calculus.measure import point_measures
+
+        ### Centroid quadrature of a 3-4-5 triangle: one point of area 6
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        cloud = mesh.to_point_cloud(point_source="cell_centroids")
+
+        embedded = embed(cloud, target_n_spatial_dims=3)
+
+        torch.testing.assert_close(
+            embedded.points, torch.tensor([[1.0, 4.0 / 3.0, 0.0]])
+        )
+        torch.testing.assert_close(point_measures(embedded), torch.tensor([6.0]))
 
     def test_embed_2d_to_3d(self):
         """Test embedding a 2D mesh in 2D space into 3D space."""
@@ -1115,6 +1168,23 @@ class TestEmbed:
 class TestProject:
     """Test suite for spatial dimension projection functionality."""
 
+    @pytest.mark.parametrize("transform_cell_data", [False, True])
+    def test_project_transfers_explicit_cell_measures(self, transform_cell_data):
+        """Cell measures follow the projected geometry, however data is handled."""
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+
+        ### Area 10 in 3D; its xy shadow has area 6
+        points = torch.tensor([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 3.0, 4.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+        set_cell_measures(mesh, torch.tensor([10.0]))
+
+        projected = project(
+            mesh, target_n_spatial_dims=2, transform_cell_data=transform_cell_data
+        )
+
+        torch.testing.assert_close(cell_measures(projected), torch.tensor([6.0]))
+        torch.testing.assert_close(cell_measures(mesh), torch.tensor([10.0]))
+
     def test_project_3d_to_2d(self):
         """Test projecting a 2D mesh in 3D space down to 2D space."""
         ### Create 2D triangle in 3D space
@@ -1430,6 +1500,27 @@ class TestProject:
         assert result.point_data["displacement"].shape == (2, 2)
         expected = torch.tensor([[1.0, 3.0], [4.0, 6.0]])
         assert torch.allclose(result.point_data["displacement"], expected)
+
+    def test_project_transform_keeps_field_dtypes(self):
+        """Float32 fields on float64 points (as VTK files store them) keep
+        their dtype, for vectors and rank-2 tensors."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float64)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        stress = torch.arange(18, dtype=torch.float32).reshape(2, 3, 3)
+        point_data = TensorDict(
+            {"U": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), "stress": stress},
+            batch_size=[2],
+        )
+        mesh = Mesh(points=points, cells=cells, point_data=point_data)
+
+        result = project(mesh, keep_dims=[0, 1], transform_point_data=True)
+
+        assert result.point_data["U"].dtype == torch.float32
+        assert torch.equal(
+            result.point_data["U"], torch.tensor([[1.0, 2.0], [4.0, 5.0]])
+        )
+        assert result.point_data["stress"].dtype == torch.float32
+        assert torch.equal(result.point_data["stress"], stress[:, :2, :2])
 
     def test_project_transform_scalars_invariant(self):
         """Test that scalar fields are unchanged even when transform flags are True."""

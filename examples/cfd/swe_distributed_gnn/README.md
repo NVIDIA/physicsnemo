@@ -1,12 +1,5 @@
 # Shallow Water Equations - Distributed GraphCast
 
-> **Note**: This example is currently not functional. Distributed mode
-(partition_size > 1) is not supported with the PyG backend.
-Support for distributed message passing using PyG
-backend will likely be included in a future release.
-Until then, this example will raise a `NotImplementedError` when
-attempting to use distributed mode.
-
 This example demonstrates how to leverage a distributed version of GraphCast to scale
 to larger Graph Neural Network (GNN) workloads.
 
@@ -19,7 +12,8 @@ the total fluid column height $\eta(x,y,t)$ was composed of a mean height plus s
 perturbation, but the initial velocity fields $u(x,y,t)$ and $v(x,y,t)$ were initially
 zero. These equations are given by
 
-$$\begin{align}
+$$
+\begin{align}
 \frac{\partial(\eta)}{\partial t}+\frac{\partial(\eta u)}{\partial x}+
 \frac{\partial(\eta v)}{\partial y}&=0,  \\
 \frac{\partial(\eta u)}{\partial t}+
@@ -29,13 +23,16 @@ $$\begin{align}
 \frac{\partial(\eta v)}{\partial t}+\frac{\partial(\eta u v)}{\partial x}+
 \frac{\partial}{\partial y}\left(\eta v^{2}+\frac{1}{2} g
 \eta^{2}\right)&=\nu\left(v_{xx} + v_{yy}\right),
-\end{align}$$
+\end{align}
+$$
 
-$$\begin{align}
+$$
+\begin{align}
 \textrm{with} \quad \eta(x,y,0) = \eta_{0}(x,y),\ u(x,y,0)=0,\
 v(x,y,0)=0,\ \quad
 x,y \in[0,1), \ t \in[0,1],
-\end{align}$$
+\end{align}
+$$
 
 where the gravitational coefficient $g=1$ and the viscosity coefficient
 $\nu=0.002$ to prevent the formation of shocks.
@@ -77,11 +74,13 @@ where $H_{edge}[uv] = h_{edge,uv}$
 Message passing itself then is often denoted as as an alternating step of
 preparing messages between nodes u and v
 
-$$m_{uv}^{(k)} = COMBINE^{(k)} \left(
+$$
+m_{uv}^{(k)} = COMBINE^{(k)} \left(
 f_{\theta_{src}}^{(k)}\left(h_{src,u}^{(k-1)}\right),
 f_{\theta_{dst}}^{(k)}\left(h_{dst,v}^{(k-1)}\right),
 f_{\theta_{edge}}^{(k)}\left(h_{edge,uv}^{(k-1)}
-\right)\right)$$
+\right)\right)
+$$
 
 and aggregation of messages.
 
@@ -98,11 +97,13 @@ operation can correspond to a weighted aggregation based on scaled dot-product
 based attention scores. The overall message passing scheme then is rather just
 a single aggregation step
 
-$$h_{dst,v}^{(k)} = AGG_{u: u\in \mathcal{N}(v)} \left(
+$$
+h_{dst,v}^{(k)} = AGG_{u: u\in \mathcal{N}(v)} \left(
 f_{\theta_{src}}^{(k)}\left(h_{src,u}^{(k-1)}\right),
 f_{\theta_{dst}}^{(k)}\left(h_{dst,v}^{(k-1)}\right),
 f_{\theta_{edge}}^{(k)}\left(h_{edge,uv}^{(k-1)}\right)\right
-)$$
+)
+$$
 
 By just looking at these definitions, we can already make the following observations
 
@@ -139,7 +140,6 @@ from physicsnemo.distributed import mark_module_as_shared
 
 ...
 
-
 model_with_shared_weights = GraphCast(...)
 mark_module_as_shared(model_with_shared_weights)
 ```
@@ -157,7 +157,8 @@ design.
 Finally, to allow each rank perform the message operations independently, we need to exchange
 the necessary and missing source node features. This is done in a formed of indexed
 all-to-all fashion. Each rank prepares exchange buffers for each other rank which contain
-the deduplicated source node features which are needed in the local graph on the remote rank.
+the deduplicated source node features which are needed in the local graph on the
+remote rank.
 In the following communication phase, all ranks exchange their exchange buffers in an
 all-to-all fashion. Finally, these exchanges buffers will be concatenated leading to a
 contiguous tensor of all necessary local source node features on each rank. Once the message
@@ -167,7 +168,8 @@ follows in a similar fashion.
 <!-- {: .center} -->
 ![Visualization of Distributed Message Passing](../../../docs/img/swe_distributed_gnn_figures/dist_message_passing.png)
 
-Most of these distributed primitives are hidden away in the `CuGraphCSC` wrapper class.
+Most of these distributed primitives are hidden away in the `DistributedGraph` class,
+which the GNN layers accept in place of a PyG graph.
 The following example briefly shows how these would work in a simplified context.
 `GraphCastNet` itself already has been implemented such that its graph use these wrappers
 under the hood which means that the user only has to e.g. specify the name of the process
@@ -178,7 +180,7 @@ methods and classes.
 
 ```python
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.models.gnn_layers import CuGraphCSC
+from physicsnemo.nn.module.gnn_layers import DistributedGraph, edge_index_to_csc
 
 ...
 
@@ -192,32 +194,35 @@ dist_manager = DistributedManager()
 
 ...
 
-# create wrapper graph
-graph = CuGraphCSC.from_dgl(
-    dgl_graph,
+# partition a PyG graph across the ranks of the process group
+offsets, indices, edge_perm = edge_index_to_csc(pyg_graph.edge_index, num_dst_nodes)
+graph = DistributedGraph(
+    offsets,
+    indices,
     partition_size=graph_partition_pg_size,
-    partition_group_name=graph_partition_pg_name,
+    graph_partition_group_name=graph_partition_pg_name,
+    num_src_nodes=num_src_nodes,
 )
 
 ...
 
-# get partitioned tensors from global tensors
+# get partitioned tensors from global tensors; edge features follow the
+# graph's CSC order, so permute them first
 part_src_feat = graph.get_src_node_features_in_partition(global_src_feat)
 part_dst_feat = graph.get_dst_node_features_in_partition(global_dst_feat)
-part_edge_feat = graph.get_edge_features_in_partition(global_edge_feat)
+part_edge_feat = graph.get_edge_features_in_partition(global_edge_feat[edge_perm])
 
-# get tensors in local graph from global tensors
-local_src_feat = graph.get_src_node_features_in_local_graph(global_src_feat)
+# fetch the source node features that the local graph needs from other ranks
+local_src_feat = graph.get_src_node_features_in_local_graph(part_src_feat)
 # by design, local_dst_feat and local_edge_feat should be the same as
 # part_dst_feat and part_edge_feat
-local_dst_feat = graph.get_dst_node_features_in_local_graph(global_dst_feat)
-local_edge_feat = graph.get_edge_features_in_local_graph(global_edge_feat)
+local_dst_feat = graph.get_dst_node_features_in_local_graph(part_dst_feat)
+local_edge_feat = graph.get_edge_features_in_local_graph(part_edge_feat)
 
-# get global tensors from partitioned tensors
+# get global tensors from partitioned tensors (edge features in CSC order)
 global_src_feat = graph.get_global_src_node_features(part_src_feat)
 global_dst_feat = graph.get_global_dst_node_features(part_dst_feat)
 global_edge_feat = graph.get_global_edge_features(part_edge_feat)
-
 ```
 
 As explained in more detail in the corresponding documentation sections, the
@@ -304,9 +309,9 @@ Based on some validation and scaling runs, we have verified both being able to p
 the convergence pattern of the single-GPU reference as well as providing linear reductions
 of the memory footprint on each GPUs which allows for weak scaling to higher resolutions.
 
-Loss Validation Experiment | Scaling Experiment
-:-------------------------:|:-------------------------:
-![Validation of Loss Convergence](../../../docs/img/swe_distributed_gnn_figures/val_loss_latlon.png)  |  ![Validation of Loss Convergence](../../../docs/img/swe_distributed_gnn_figures/memory_scaling_dim128.png)
+| Loss Validation Experiment | Scaling Experiment |
+| :-------------------------: | :-------------------------: |
+| ![Validation of Loss Convergence](../../../docs/img/swe_distributed_gnn_figures/val_loss_latlon.png) | ![Validation of Loss Convergence](../../../docs/img/swe_distributed_gnn_figures/memory_scaling_dim128.png) |
 
 ## References
 

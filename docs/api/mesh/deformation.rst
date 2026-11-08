@@ -8,6 +8,17 @@ objectives. They can regularize a deformation predicted by a model or produced
 by an optimizer while gradients continue to the deformed coordinates and the
 parameters that generated them.
 
+:bdg-success:`CPU and GPU` :bdg-info:`autograd`
+:bdg-warning:`float32 and float64 only`
+
+.. figure:: /img/mesh/square_deformation_energies.png
+   :alt: Original square and unregularized and penalty-regularized RBF deformations
+   :width: 100%
+
+   A square deformed toward one radial basis function (RBF) target, with no
+   penalties (center) and with strain, area, and inversion penalties (right).
+   Titles give the relative area error and the minimum signed area ratio.
+
 These functions provide penalty terms, not a deformation solver or exact
 constraint mechanism. A finite penalty weight does not guarantee that an area,
 volume, or inversion limit is satisfied exactly. The caller chooses an
@@ -36,7 +47,7 @@ Choosing an Energy
 
 ``simplex_measure_energy``
     Penalizes length, area, or volume change in each simplex. This is a local
-    regularizer: one expanding element cannot cancel one contracting element.
+    regularizer, so one expanding element cannot cancel one contracting element.
     Full-dimensional ratios are signed relative to each reference simplex, so
     this term is also sensitive to reflection. Embedded-simplex ratios are
     unsigned.
@@ -68,8 +79,8 @@ Choosing an Energy
     surface in 3D. It is a geometric hinge regularizer. It is not a calibrated
     shell constitutive law unless the caller supplies the appropriate material,
     thickness, and discretization scaling outside this function. The mesh must
-    contain unique triangles, with at most two incident triangles per edge.
-    Boundary edges are omitted because they do not define a hinge.
+    contain unique triangles, with at most two incident triangles for each edge.
+    The energy omits boundary edges because they do not define a hinge.
 
 Local and Total Area Control in 2D
 ----------------------------------
@@ -141,16 +152,12 @@ orientation loss.
         energy.backward()
         optimizer.step()
 
-In a practical design problem, fixed controls or boundary conditions can be
-enforced in the parameterization, as above, or included in the objective.
+In a practical design problem, you can enforce fixed controls or boundary
+conditions in the parameterization, as above, or include them in the objective.
 
 The figure compares the same RBF target with and without geometric penalties.
 The third panel is *penalty-regularized*: finite weights reduce, but do not
 strictly eliminate, the geometric residuals.
-
-.. figure:: /img/mesh/square_deformation_energies.png
-   :alt: Original square and unregularized and penalty-regularized RBF deformations
-   :width: 100%
 
 Volume and Bending Control in 3D
 --------------------------------
@@ -164,11 +171,17 @@ optimizing the parameters of a global deformation:
         closed_surface_volume_energy,
         surface_bending_energy,
     )
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
-    volume_penalty = closed_surface_volume_energy(reference, points)
-    bending_penalty = surface_bending_energy(reference, points)
-    loss = target_loss + 200.0 * volume_penalty + 0.05 * bending_penalty
+    sphere = sphere_icosahedral.load(subdivisions=2)
+    stretch = torch.tensor([1.2, 1.0, 1.0], requires_grad=True)
+    points = sphere.points * stretch  # a stand-in for a learned deformation
+
+    volume_penalty = closed_surface_volume_energy(sphere, points)
+    bending_penalty = surface_bending_energy(sphere, points)
+    loss = 200.0 * volume_penalty + 0.05 * bending_penalty  # add your objective
     loss.backward()
+    print(stretch.grad)  # all positive: a descent step shrinks the stretched sphere
 
 The volume term controls only the scalar enclosed volume. Bending regularizes
 changes between adjacent triangle normals, but neither term detects global
@@ -183,9 +196,9 @@ Differentiability and Backends
 
 The Torch backend supports higher-order derivatives. The Warp backend is
 intended for first-order optimization on CUDA. Its backward pass scatters
-per-element contributions to shared vertices with atomic operations, so the
-last bits of a CUDA result may vary between executions. Use the Torch backend
-when deterministic higher-order derivatives are required.
+the contributions of each element to shared vertices with atomic operations,
+so the last bits of a CUDA result can vary between executions. Use the Torch
+backend when you need deterministic higher-order derivatives.
 
 Automatic dispatch selects Torch on CPU and Warp on CUDA when Warp is
 available. Both backends support gradients with respect to the current and
@@ -211,6 +224,26 @@ measure energies choose a zero current-coordinate subgradient there. They can
 discourage collapse while the simplex has positive measure, but cannot reopen
 an already collapsed embedded simplex without another objective term or a
 noncollapsed initialization.
+
+Summary
+-------
+
+.. autosummary::
+   :nosignatures:
+
+   simplex_strain_energy
+   simplex_measure_energy
+   total_measure_energy
+   simplex_inversion_energy
+   surface_bending_energy
+   closed_surface_volume_energy
+
+Related Topics
+--------------
+
+For more information, refer to the following resources:
+
+- :doc:`transformations` for the deformations that these energies regularize.
 
 API Reference
 -------------

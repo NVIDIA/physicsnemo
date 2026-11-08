@@ -47,11 +47,11 @@ For CUDA 12, a basic install, optional features, or source setup, refer to
   </tr>
   <tr>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/active_learning_aero"><img width="100%" alt="Ground-truth and GeoTransolver-predicted pressure and wall-shear-stress fields on a held-out ShiftSUV" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/al_shiftsuv_field_predictions.png"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/regional_weather_diffusion"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe"><strong>Unified external aerodynamics</strong></a>: train and compare current surface and volume models</td>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/regional_weather_diffusion"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
   </tr>
   <tr>
     <th width="50%" align="center">Semiconductor packaging</th>
@@ -175,7 +175,7 @@ code. The final column links to examples and papers.
 
 | Model family | Data representation | Known uses and starting points |
 | --- | --- | --- |
-| [Diffusion U-Nets](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/diffusion_unets) / [DiT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dit) | 2D fields or patch tokens | Stochastic regional forecasting, downscaling, and inverse problems: [StormCast and StormScope](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast), [diffusion FWI](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi) |
+| [Diffusion U-Nets](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/diffusion_unets) / [DiT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dit) | 2D fields or patch tokens | Stochastic regional forecasting, downscaling, and inverse problems: [StormCast and StormScope](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/regional_weather_diffusion), [diffusion FWI](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi) |
 | [TopoDiff](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/topodiff) | 2D topology fields conditioned on design constraints | Generative topology optimization: [recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/generative/topodiff), [paper](https://arxiv.org/abs/2208.09591) |
 
 Refer to the [model catalog](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_models.html)
@@ -229,8 +229,7 @@ The diagram is simplified. Follow the links below for the public surfaces.
   including distributed FFTs;
   and the [model lifecycle core](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/core).
 
-Cross-cutting [deployment helpers](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/deploy)
-cover ONNX export and runtime. [Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
+[Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
 incubate models such as [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe)
 and [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa),
 alongside uncertainty quantification, guardrails, parameter-efficient fine-tuning
@@ -263,8 +262,13 @@ dependency constraints. The command at the top of this README selects the CUDA 1
 backend. Use the CUDA 12 backend instead with:
 
 ```bash
-pip install "nvidia-physicsnemo[cu12]"
+pip install "nvidia-physicsnemo[cu12]" \
+  --extra-index-url https://download.pytorch.org/whl/cu129
 ```
+
+Specify the CUDA 12.9 PyTorch index because pip does not read the index settings
+in `pyproject.toml`. The CUDA 12 backend is Linux-only and uses PyTorch 2.13,
+the newest release with CUDA 12.9 wheels.
 
 For a basic installation that uses PyPI's default PyTorch distribution and does not
 install the CUDA-specific RAPIDS packages:
@@ -307,7 +311,7 @@ Contributions to the library, examples, and documentation are welcome.
   and coordinate the proposed work with maintainers in an issue or discussion.**
   Every pull request should correspond to an open issue. For substantial changes,
   wait for maintainer feedback before starting implementation.
-- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.MD),
+- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.md),
   and report vulnerabilities privately through the
   [security policy](https://github.com/NVIDIA/physicsnemo/blob/main/SECURITY.md).
 
@@ -322,6 +326,18 @@ If PhysicsNeMo supports your research, cite the project using the metadata in
 [CITATION.cff](https://github.com/NVIDIA/physicsnemo/blob/main/CITATION.cff). Work that
 uses PhysicsNeMo domain parallelism should also cite
 [*ShardTensor: Domain Parallelism for Scientific Machine Learning*](https://arxiv.org/abs/2605.11111).
+Work that uses PhysicsNeMo-Mesh (`physicsnemo.mesh`) should also cite
+[*PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI*](https://arxiv.org/abs/2610.39072).
+
+## Share Your Research
+
+Publishing a paper that uses PhysicsNeMo? Add it to our
+[Research and Publications Using PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst)
+page so the community can find it. Open a
+[research paper submission](https://github.com/NVIDIA/physicsnemo/issues/new?template=research_paper.yml)
+with your paper's details, or edit
+[`docs/research.rst`](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst)
+directly and open a pull request.
 
 ## License
 

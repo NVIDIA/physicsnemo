@@ -195,10 +195,11 @@ python train.py \
     loggers.wandb.mode=online
 ```
 
-This will change the number of model message passing layers to 10, set learning rate to 0.0003
-and enable Weights & Biases logger.
+This will change the number of model message passing layers to 10, set learning rate to
+0.0003 and enable Weights & Biases logger.
 
-Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU training, run
+Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU
+training, run
 
 ```bash
 mpirun -np <num_GPUs> python train.py +experiment=ahmed/mgn data.data_dir=/data/ahmed_body/
@@ -236,7 +237,8 @@ python train.py +experiment=ahmed/bsms_mgn \
     model.num_mesh_levels=6 \
 ```
 
-When trained using provided experiment, `ahmed/bsms_mgn`, results should look something like:
+When trained using provided experiment, `ahmed/bsms_mgn`, results should look something
+like:
 
 | Model | RRMSE |
 | :--- | ---: |

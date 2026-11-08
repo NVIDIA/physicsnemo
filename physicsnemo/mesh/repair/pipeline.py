@@ -30,7 +30,7 @@ def repair_mesh(
     merge_points: bool = True,
     remove_degenerates: bool = True,
     remove_isolated: bool = True,
-    fix_orientation: bool = False,  # Requires 3D, has loops
+    fix_orientation: bool = False,
     fill_holes: bool = False,  # Expensive, opt-in
     tolerance: float = 1e-6,
     area_tolerance: float = 1e-10,
@@ -42,8 +42,8 @@ def repair_mesh(
     Operations are applied in a specific order to maximize effectiveness.
 
     Order of operations:
-    1. Remove degenerate cells (zero area)
-    2. Merge duplicate points
+    1. Merge duplicate points
+    2. Remove degenerate cells (zero area), including those the merge collapses
     3. Remove isolated points
     4. Fix orientation (if enabled)
     5. Fill holes (if enabled)
@@ -59,7 +59,10 @@ def repair_mesh(
     remove_isolated : bool, optional
         Remove points not referenced by any cell.
     fix_orientation : bool, optional
-        Ensure consistent face normals (2D in 3D only).
+        Orient all cells consistently (cells with at least two vertices). Each
+        connected component follows the winding of its lowest-index cell,
+        except that cells filling their space, such as tetrahedra in 3D, get
+        positive volumes. See :func:`~physicsnemo.mesh.repair.fix_orientation`.
     fill_holes : bool, optional
         Close boundary loops (expensive).
     tolerance : float, optional
@@ -87,16 +90,7 @@ def repair_mesh(
     current_mesh = mesh
     all_stats = {}
 
-    ### Operation 1: Remove degenerate cells
-    if remove_degenerates:
-        from physicsnemo.mesh.repair.degenerate_removal import (
-            remove_degenerate_cells as remove_deg,
-        )
-
-        current_mesh, stats = remove_deg(current_mesh, area_tolerance=area_tolerance)
-        all_stats["degenerates"] = stats
-
-    ### Operation 2: Merge duplicate points (via clean_mesh)
+    ### Operation 1: Merge duplicate points (via clean_mesh)
     if merge_points:
         from physicsnemo.mesh.repair._cleaning import clean_mesh
 
@@ -116,6 +110,15 @@ def repair_mesh(
         }
         all_stats["clean"] = clean_stats
 
+    ### Operation 2: Remove degenerate cells
+    if remove_degenerates:
+        from physicsnemo.mesh.repair.degenerate_removal import (
+            remove_degenerate_cells as remove_deg,
+        )
+
+        current_mesh, stats = remove_deg(current_mesh, area_tolerance=area_tolerance)
+        all_stats["degenerates"] = stats
+
     ### Operation 3: Remove isolated points
     if remove_isolated:
         from physicsnemo.mesh.repair._cleaning import (
@@ -127,7 +130,7 @@ def repair_mesh(
 
     ### Operation 4: Fix orientation
     if fix_orientation:
-        if current_mesh.n_manifold_dims == 2 and current_mesh.n_spatial_dims == 3:
+        if current_mesh.n_manifold_dims >= 1:
             from physicsnemo.mesh.repair.orientation import (
                 fix_orientation as fix_orient,
             )
@@ -135,7 +138,7 @@ def repair_mesh(
             current_mesh, stats = fix_orient(current_mesh)
             all_stats["orientation"] = stats
         else:
-            all_stats["orientation"] = {"skipped": "Only for 2D manifolds in 3D"}
+            all_stats["orientation"] = {"skipped": "Points have no orientation"}
 
     ### Operation 5: Fill holes
     if fill_holes:
