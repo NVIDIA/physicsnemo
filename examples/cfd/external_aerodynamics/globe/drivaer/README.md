@@ -59,15 +59,18 @@ Set the dataset location via one of:
 
 To train with SLURM on one node of 4 GPUs (the reference setup), set
 `DRIVAER_DATA_DIR` in `run.sh` to your dataset root. A full run takes about
-2.5 days, longer than one 4-hour job. Each job saves a checkpoint before its
-time limit, and the next job with the same name resumes from it
-(`--dependency=singleton`), so queue enough jobs at once:
+2.5 days on 4 GB300 GPUs, longer than one 4-hour job. Each job saves a
+checkpoint before its time limit, and the next job with the same name resumes
+from it (`--dependency=singleton`), so queue enough jobs at once:
 
 ```bash
-for i in $(seq 16); do sbatch run.sh; done
+for i in $(seq 18); do sbatch run.sh; done
 ```
 
-Checkpoints from earlier versions of this example do not load. Start a new
+If the run stops before epoch 450, queue more jobs. A job that starts after
+the last epoch exits right after it loads the checkpoint.
+
+Checkpoints from earlier versions of this example do not resume. Start a new
 run in a new output directory, for example with a new job name (`-J`) in
 `run.sh`.
 
@@ -158,7 +161,10 @@ sanity-check your own runs.
 - Wall time per epoch: about 460 seconds (about 4.0 seconds per training
   step). The first epoch takes about 72 minutes, almost all of it
   `torch.compile`, and a few early epochs take about 13 minutes while one GPU
-  recompiles for a new input size.
-- Peak memory per GPU: about 120 GiB
-- At epoch 20, train loss ~0.012 and validation loss ~0.011; both still
+  recompiles the training step. These times were measured with the
+  preprocessing cache already built. A new run also writes the cache during
+  its first epoch, which then takes longer.
+- Peak memory per GPU: about 120 GiB in `nvidia-smi` (about 117 GiB in
+  MLflow's `system/vram_gb`)
+- At epoch 20, train loss ~0.012 and validation loss ~0.011. Both are still
   decreasing.
