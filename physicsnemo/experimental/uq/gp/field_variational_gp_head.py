@@ -787,6 +787,167 @@ class FieldVariationalGPHead(nn.Module):
             (eye * 0.01).expand_as(vd.chol_variational_covar)
         )
 
+    @torch.no_grad()
+    def seed_inducing_points(
+        self,
+        features: Float[torch.Tensor, "... dim"],
+        method: Literal["kmeans", "random"] = "kmeans",
+        generator: torch.Generator | None = None,
+    ) -> None:
+        r"""Place the inducing points on representative raw features.
+
+        Unlike :meth:`set_inducing_points`, which takes the locations as given,
+        this picks them from a pool of candidate features (e.g. a few thousand
+        points from each of several training samples):
+
+        1. With ``feature_norm="l2_radial"``, the radial BatchNorm's running
+           statistics are re-estimated on the candidates, so the kernel space
+           is standardized against what the backbone produces *now* (its
+           running stats otherwise lag a backbone that is still training).
+        2. The candidates are mapped to kernel space with the head in eval
+           mode.
+        3. ``method="kmeans"`` picks the k-means++ medoids there
+           (:func:`~physicsnemo.experimental.uq.gp.training.kmeans_medoids`);
+           ``"random"`` draws uniformly. A uniform draw over mesh points lands
+           almost entirely in the dominant region (e.g. the far field), while
+           k-means also covers small, distinct regions (shocks, wakes,
+           boundary layers).
+        4. :meth:`set_inducing_points` installs the chosen *raw* features and
+           resets the variational distribution.
+
+        Because the variational distribution is reset, call this when the
+        run starts or when the training data changes (e.g. after an
+        active-learning step), then restart any KL / ELBO warm-up and clear
+        the optimizer state of the GP parameters.
+
+        Parameters
+        ----------
+        features : torch.Tensor
+            Candidate raw features of shape :math:`(..., D)`, the same space
+            :meth:`forward` takes; leading dims are flattened.
+        method : {"kmeans", "random"}, optional
+            Selection rule. Default is ``"kmeans"``.
+        generator : torch.Generator | None, optional
+            CPU generator for reproducible selection. Default is ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``method`` is unknown or there are fewer candidates than
+            inducing points.
+        """
+        from .training import kmeans_medoids
+
+        if method not in ("kmeans", "random"):
+            raise ValueError(f"method must be 'kmeans' or 'random', got {method!r}")
+        raw, _ = self._flatten_points(features)
+        base = self.gp_layer.variational_strategy.base_variational_strategy
+        n_inducing = base.inducing_points.shape[-2]
+        if raw.shape[0] < n_inducing:
+            raise ValueError(
+                f"need at least {n_inducing} candidate points, got {raw.shape[0]}"
+            )
+        if self.feature_extractor is not None:
+            raw = raw.to(next(self.feature_extractor.parameters()).device)
+
+        was_training = self.training
+        try:
+            if self._radial_bn is not None:
+                h = (
+                    self.feature_extractor(raw)
+                    if self.feature_extractor is not None
+                    else raw
+                )
+                bn = self._radial_bn
+                bn.reset_running_stats()
+                momentum, bn.momentum = bn.momentum, None  # cumulative average
+                bn.train()
+                bn(h.norm(dim=-1, keepdim=True))
+                bn.momentum = momentum
+            self.eval()
+            if method == "kmeans":
+                idx = kmeans_medoids(
+                    self._transform_features(raw), n_inducing, generator=generator
+                )
+            else:
+                idx = torch.randperm(raw.shape[0], generator=generator)[:n_inducing]
+            self.set_inducing_points(raw[idx.to(raw.device)])
+        finally:
+            self.train(was_training)
+
+    def set_num_data(self, n: int) -> None:
+        r"""Set the dataset size :math:`N` that normalizes the ELBO.
+
+        The negative ELBO averages the expected log-likelihood over the points
+        in the batch and divides the KL term by ``num_data / beta``. When the
+        training set grows (active learning) or when strongly correlated
+        points should count as fewer independent observations, update it
+        here rather than rebuilding the head. A larger ``n`` weakens the KL
+        term and narrows the posterior.
+
+        Parameters
+        ----------
+        n : int
+            Number of training observations (points, for this head). Values
+            below 1 are clamped to 1.
+        """
+        n = max(int(n), 1)
+        self.mll.num_data = n
+        self._num_data = n
+
+    def param_groups(self, gp_lr: float = 1e-2, nn_lr: float = 1e-3) -> list[dict]:
+        r"""Optimizer parameter groups following the reference recipe.
+
+        GP state (variational distribution, inducing locations, kernel and
+        likelihood hyperparameters, ``log_base_noise``) trains at ``gp_lr``;
+        the neural networks (DKL ``feature_extractor``, ``noise_head``) at
+        ``nn_lr``. Each group carries a ``"name"`` (``"gp"`` / ``"gp_nn"``).
+
+        Parameters
+        ----------
+        gp_lr : float, optional
+            Learning rate for GP state. Default is ``1e-2``.
+        nn_lr : float, optional
+            Learning rate for the networks. Default is ``1e-3``.
+
+        Returns
+        -------
+        list[dict]
+            Groups for a ``torch.optim`` optimizer; every parameter of the head
+            appears exactly once. The ``"gp_nn"`` group is omitted when the head
+            has no networks.
+
+        Examples
+        --------
+        >>> # opt = torch.optim.AdamW(head.param_groups(), weight_decay=1e-4)
+        """
+        nets = [m for m in (self.feature_extractor, self.noise_head) if m is not None]
+        nn_params = [p for m in nets for p in m.parameters()]
+        nn_ids = {id(p) for p in nn_params}
+        gp_params = [p for p in self.parameters() if id(p) not in nn_ids]
+        groups = [{"params": gp_params, "lr": gp_lr, "name": "gp"}]
+        if nn_params:
+            groups.append({"params": nn_params, "lr": nn_lr, "name": "gp_nn"})
+        return groups
+
+    def _apply(self, fn, recurse=True):
+        r"""Keep the GP internals in float64 through ``.to()``, ``.float()``, etc.
+
+        A blanket dtype cast of the parent model (e.g. ``model.to(device,
+        torch.float32)``) would otherwise downcast the GP layer while
+        :meth:`_apply_fe` still upcasts features to float64, and gpytorch then
+        fails on mixed dtypes. Only the GP internals are restored; the DKL
+        extractor and radial BatchNorm stay in the backbone's precision.
+        """
+        super()._apply(fn, recurse)
+        if self._use_double:
+            for sub in (self.gp_layer, self.likelihood, self.noise_head):
+                if sub is not None:
+                    sub.double()
+            if self.log_base_noise is not None:
+                self.log_base_noise.data = self.log_base_noise.data.double()
+        return self
+
     def forward(
         self, features: Float[torch.Tensor, "... dim"]
     ) -> gpytorch.distributions.MultitaskMultivariateNormal:

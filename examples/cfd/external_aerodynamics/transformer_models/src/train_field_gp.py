@@ -29,8 +29,9 @@ The total loss is::
 where ``neg_elbo`` is the negative multitask variational ELBO on the
 (normalized) per-point fields with KL annealing (``beta``), ``mse`` is an
 auxiliary anchor on the GP mean that leads the early epochs, and ``dist_pen`` is
-the within-sample latent distance penalty (see :func:`_dist_penalty`).  ``beta``
-and ``w_nll`` are both ramped from 0 over their warmup windows.
+the within-sample latent distance penalty (see
+:func:`~physicsnemo.experimental.uq.gp.latent_distance_penalty`).  ``beta`` and
+``w_nll`` are both ramped from 0 over their warmup windows.
 
 See the "Field GP" section of the example README for the exact launch command.
 """
@@ -54,7 +55,6 @@ from omegaconf import DictConfig
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
-from jaxtyping import Float
 from torch.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
@@ -76,6 +76,7 @@ from train import (
     update_model_params_for_fp8,
 )
 from gp_utils import gp_ramp_weight, sync_non_ddp_gradients
+from physicsnemo.experimental.uq.gp import latent_distance_penalty, subsample_points
 from field_gp_utils import (
     collect_inducing_features,
     compute_field_targets_from_batch,
@@ -200,90 +201,6 @@ def _atomic_save_checkpoint(ckpt_args: dict, epoch: int) -> None:
         os.replace(f, os.path.join(ckpt_dir, os.path.basename(f)))
     _fsync_path(ckpt_dir)
     shutil.rmtree(staging, ignore_errors=True)
-
-
-def _maybe_subsample(
-    point_features: Float[torch.Tensor, "batch points dim"],
-    target: Float[torch.Tensor, "batch points tasks"],
-    n_points: int | None,
-) -> tuple[
-    Float[torch.Tensor, "batch sub_points dim"],
-    Float[torch.Tensor, "batch sub_points tasks"],
-]:
-    """Optionally subsample the point dimension to ``n_points`` for the GP step.
-
-    Which points are kept follows torch's global RNG, so a seeded run
-    (``cfg.seed``) draws the same subsets.
-    """
-    if n_points is None:
-        return point_features, target
-    n_total = point_features.shape[1]
-    if n_points >= n_total:
-        return point_features, target
-    idx = torch.randperm(n_total, device=point_features.device)[:n_points]
-    return point_features[:, idx], target[:, idx]
-
-
-def _dist_penalty(
-    gp_feats: Float[torch.Tensor, "batch points gp_dim"],
-    target: Float[torch.Tensor, "batch points tasks"],
-    n_pairs: int,
-    margin: float,
-) -> Float[torch.Tensor, ""]:
-    """Within-sample latent distance penalty (bi-Lipschitz-style, target-aware).
-
-    For random point pairs inside each geometry, penalize pairs whose GP-input
-    (kernel-space) distance is *smaller* than their target-space distance. This
-    forces the encoder to keep points with different target fields far apart in
-    the space the kernel measures, so the GP can assign larger variance where
-    predictions differ.
-
-    Both distances are made scale-free by dividing by their (detached) batch
-    mean, so the penalty shapes *relative* geometry rather than absolute scale
-    (which the feature-norm already pins). One-sided hinge => pairs that are
-    already well-separated are not pulled together.
-
-    Parameters
-    ----------
-    gp_feats : (B, P, D) tensor
-        Per-point features in GP-input space (output of ``transform_features``),
-        with gradient to the backbone.
-    target : (B, P, T) tensor
-        Per-point field targets.
-    n_pairs : int
-        Random point pairs sampled per geometry.  Drawn from torch's global RNG,
-        so a seeded run (``cfg.seed``) samples the same pairs.
-    margin : float
-        Multiplier on the (normalized) target distance the latent distance must
-        meet or exceed before the hinge stops penalizing.
-
-    Returns
-    -------
-    Float[torch.Tensor, ""]
-        Scalar penalty, averaged over pairs and then over geometries.
-    """
-    if gp_feats.dim() != 3:
-        gp_feats = gp_feats.reshape(1, -1, gp_feats.shape[-1])
-        target = target.reshape(1, -1, target.shape[-1])
-    b, p, _ = gp_feats.shape
-    if p < 2 or n_pairs < 1:
-        return gp_feats.new_zeros(())
-    target = target.to(gp_feats.dtype)
-
-    # Pairs for every geometry at once: (b, n_pairs) index matrices gathered
-    # against a (b, 1) row index.
-    i = torch.randint(0, p, (b, n_pairs), device=gp_feats.device)
-    j = torch.randint(0, p, (b, n_pairs), device=gp_feats.device)
-    rows = torch.arange(b, device=gp_feats.device).unsqueeze(1)
-    lat_gap = gp_feats[rows, i] - gp_feats[rows, j]
-    tgt_gap = target[rows, i] - target[rows, j]
-    d_lat = lat_gap.pow(2).sum(-1).clamp_min(1e-12).sqrt()
-    d_tgt = tgt_gap.pow(2).sum(-1).clamp_min(1e-12).sqrt()
-    # Scale-free per geometry, so a geometry with a wide target range does not
-    # dominate the batch.
-    d_lat = d_lat / (d_lat.mean(dim=1, keepdim=True).detach() + 1e-12)
-    d_tgt = d_tgt / (d_tgt.mean(dim=1, keepdim=True).detach() + 1e-12)
-    return torch.relu(margin * d_tgt - d_lat).mean(dim=1).sum() / max(b, 1)
 
 
 #: Every knob the training loop reads off the config, checked once at startup.
@@ -661,7 +578,7 @@ def main(cfg: DictConfig):
                     return_point_features=True,
                 )
 
-            pf_step, tgt_step = _maybe_subsample(
+            pf_step, tgt_step = subsample_points(
                 point_features, targets, gp_points_per_step
             )
             # Transform once into GP-input (kernel) space so both the ELBO and
@@ -673,7 +590,7 @@ def main(cfg: DictConfig):
             )
             mean_mse = F.mse_loss(mean, tgt_step.to(mean.dtype))
             if dist_penalty_weight > 0.0:
-                dist_pen = _dist_penalty(
+                dist_pen = latent_distance_penalty(
                     gp_feats, tgt_step, dist_penalty_pairs, dist_penalty_margin
                 )
             else:
