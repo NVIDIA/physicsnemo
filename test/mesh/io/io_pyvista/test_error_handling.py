@@ -301,8 +301,7 @@ class TestToPyvistaEmptyMeshes:
         pv_mesh = to_pyvista(mesh)
 
         assert pv_mesh.n_points == 2
-        # PyVista PolyData with empty faces may still have cells (as vertices)
-        # The important thing is that faces are empty
+        assert pv_mesh.n_cells == 0
         assert isinstance(pv_mesh, pv.PolyData)
 
     def test_to_pyvista_empty_3d(self):

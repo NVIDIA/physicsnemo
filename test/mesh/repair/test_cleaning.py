@@ -23,6 +23,8 @@ Tests validate that mesh cleaning correctly:
 - Preserves data through cleaning operations
 """
 
+import math
+
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
@@ -117,6 +119,24 @@ class TestMergeDuplicatePoints:
 
         ### Should have 3 unique points: 0/2, 1/3, 4
         assert cleaned.n_points == 3
+
+    def test_merge_cluster_of_more_than_100_coincident_points(self, device):
+        """Every point of a large coincident cluster merges into one."""
+        # A fan of 150 separate triangles around the origin: the center is
+        # repeated 150 times and each rim point twice.
+        n = 150
+        angles = torch.arange(n, device=device) * (2 * math.pi / n)
+        rim = torch.stack([angles.cos(), angles.sin()], dim=1)
+        center = torch.zeros(n, 2, device=device)
+        points = torch.stack([center, rim, rim.roll(-1, dims=0)], dim=1).reshape(-1, 2)
+        cells = torch.arange(3 * n, device=device).reshape(n, 3)
+        mesh = Mesh(points=points, cells=cells)
+
+        cleaned = mesh.clean()
+
+        ### One center point plus the n rim points
+        assert cleaned.n_points == n + 1
+        assert cleaned.n_cells == n
 
     def test_merge_preserves_point_data(self, device):
         """Point data is averaged when merging."""
@@ -378,6 +398,25 @@ class TestEdgeCases:
 
         assert cleaned.n_points == 0
         assert cleaned.n_cells == 0
+
+    def test_clean_mesh_without_cells_keeps_point_data_fields(self, device):
+        """Removing every point of a cell-free mesh keeps the point data fields."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]], device=device)
+        cells = torch.empty((0, 3), device=device, dtype=torch.int64)
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={
+                "T": torch.arange(3.0, device=device),
+                "flow": {"v": torch.ones(3, 2, device=device)},
+            },
+        )
+
+        cleaned = mesh.clean()
+
+        assert cleaned.n_points == 0
+        assert cleaned.point_data["T"].shape == (0,)
+        assert cleaned.point_data["flow", "v"].shape == (0, 2)
 
     def test_clean_single_cell(self, device):
         """Cleaning single cell mesh works correctly."""

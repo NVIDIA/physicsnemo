@@ -58,6 +58,37 @@ def sort_index_tuples(rows: torch.Tensor) -> torch.Tensor:
     return _sort_by_network(rows, network)
 
 
+def sort_index_tuples_(rows: torch.Tensor) -> torch.Tensor:
+    """Sort the entries of each integer tuple in place where possible.
+
+    Same values as :func:`sort_index_tuples`, for a tensor that the caller owns
+    and no longer needs unsorted, such as a fresh gather. Tuples of at most four
+    entries are sorted in place by the same sorting network (on CPU at any size,
+    on CUDA at the sizes where :func:`sort_index_tuples` uses the network), so no
+    sorted copy and no unused permutation are allocated. Otherwise this returns
+    :func:`sort_index_tuples` of ``rows``.
+
+    Parameters
+    ----------
+    rows : torch.Tensor
+        Integer tensor with shape ``(..., n_columns)``, possibly overwritten.
+
+    Returns
+    -------
+    torch.Tensor
+        ``rows`` sorted in place, or a new sorted tensor of the same shape.
+    """
+    network = _SORTING_NETWORKS.get(rows.shape[-1])
+    if network is None or (rows.is_cuda and rows.numel() < _SORTING_NETWORK_MIN_NUMEL):
+        return sort_index_tuples(rows)
+    for i, j in network:
+        column_i, column_j = rows[..., i], rows[..., j]
+        lower = torch.minimum(column_i, column_j)
+        column_j.clamp_(min=column_i)  # the maximum, in place
+        column_i.copy_(lower)
+    return rows
+
+
 def _sort_by_network(
     rows: torch.Tensor, network: tuple[tuple[int, int], ...]
 ) -> torch.Tensor:
@@ -132,16 +163,19 @@ def unique_index_tuples(
             return_counts=return_counts,
         )
 
-    rows_i64 = rows.to(dtype=torch.int64)
-    packed = rows_i64[:, 0]
+    # Accumulate the keys in place in a copy, which never aliases ``rows``. A
+    # single column is never written to, so it needs no copy.
+    packed = rows[:, 0].to(dtype=torch.int64, copy=n_columns > 1)
     for column_idx in range(1, n_columns):
-        packed = packed * index_bound + rows_i64[:, column_idx]
+        packed *= index_bound
+        packed += rows[:, column_idx]
 
     unique_result = torch.unique(
         packed,
         return_inverse=return_inverse,
         return_counts=return_counts,
     )
+    del packed
 
     if isinstance(unique_result, tuple):
         unique_packed = unique_result[0]
@@ -149,16 +183,21 @@ def unique_index_tuples(
     else:
         unique_packed = unique_result
         extra_outputs = ()
+    del unique_result
 
     unique_rows = torch.empty(
         (unique_packed.numel(), n_columns),
         dtype=rows.dtype,
         device=rows.device,
     )
+    # Unpack by dividing the unique keys in place: this is their last use.
     remainder = unique_packed
+    del unique_packed
     for column_idx in range(n_columns - 1, -1, -1):
-        unique_rows[:, column_idx] = (remainder % index_bound).to(rows.dtype)
-        remainder = remainder // index_bound
+        unique_rows[:, column_idx] = remainder % index_bound
+        if column_idx > 0:
+            remainder.div_(index_bound, rounding_mode="floor")
+    del remainder
 
     if extra_outputs:
         return (unique_rows, *extra_outputs)

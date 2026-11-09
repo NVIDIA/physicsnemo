@@ -77,12 +77,17 @@ def get_cell_to_cells_adjacency(
     [[1], [0]]
     """
     from physicsnemo.mesh.boundaries import extract_candidate_facets
-    from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
+    from physicsnemo.mesh.neighbors._adjacency import (
+        _PACKED_PAIR_KEY_LIMIT,
+        adjacency_from_sorted_keys,
+        build_adjacency_from_pairs,
+    )
 
     device = mesh.cells.device
+    n_cells = mesh.n_cells
 
     ### Handle empty mesh
-    if mesh.n_cells == 0:
+    if n_cells == 0:
         return Adjacency(
             offsets=torch.zeros(1, dtype=torch.int64, device=device),
             indices=torch.zeros(0, dtype=torch.int64, device=device),
@@ -98,19 +103,23 @@ def get_cell_to_cells_adjacency(
     )
 
     ### Label each candidate with its unique facet and that facet's cell count
-    _, facet_ids, facet_counts = unique_index_tuples(
+    # Temporaries are deleted at their last use throughout, to lower the peak.
+    unique_facets, facet_ids, facet_counts = unique_index_tuples(
         candidate_facets,
         index_bound=mesh.n_points,
         return_inverse=True,
         return_counts=True,
     )
+    del unique_facets, candidate_facets
 
     ### Group the candidates of each facet into one contiguous run
-    order = torch.argsort(facet_ids)
+    sorted_facet_ids, order = torch.sort(facet_ids)
+    del facet_ids
     sorted_cells = parent_cell_indices[order]
-    sorted_facet_ids = facet_ids[order]
+    del order, parent_cell_indices
     facet_starts = torch.cumsum(facet_counts, dim=0) - facet_counts
     group_starts = facet_starts[sorted_facet_ids]  # run start of each candidate
+    del facet_starts
     positions = torch.arange(len(sorted_cells), dtype=torch.int64, device=device)
     local_indices = positions - group_starts  # rank of each candidate in its run
 
@@ -119,38 +128,55 @@ def get_cell_to_cells_adjacency(
     # facet (k = 1) yields none. Fully vectorized, with one device sync for the
     # data-dependent number of pairs.
     n_pairs_per_candidate = facet_counts[sorted_facet_ids] - 1
+    del sorted_facet_ids, facet_counts
     n_pairs = int(n_pairs_per_candidate.sum())
     source_positions = torch.repeat_interleave(
         positions, n_pairs_per_candidate, output_size=n_pairs
     )
+    del positions
 
     # For a source at local index i of a run of k, the targets are the local
     # indices 0, ..., i - 1, i + 1, ..., k - 1: count 0..k-2, skipping i.
     pair_starts = torch.cumsum(n_pairs_per_candidate, dim=0) - n_pairs_per_candidate
-    counter = (
+    del n_pairs_per_candidate
+    target_positions = (
         torch.arange(n_pairs, dtype=torch.int64, device=device)
         - pair_starts[source_positions]
     )
-    target_local_indices = counter + (counter >= local_indices[source_positions])
-    target_positions = group_starts[source_positions] + target_local_indices
+    del pair_starts
+    target_positions += target_positions >= local_indices[source_positions]
+    del local_indices
+    target_positions += group_starts[source_positions]
+    del group_starts
 
-    # Stack into pairs (source, target)
-    # Shape: (n_pairs, 2)
-    cell_pairs_tensor = torch.stack(
-        [sorted_cells[source_positions], sorted_cells[target_positions]], dim=1
-    )
+    source_cells = sorted_cells[source_positions]
+    del source_positions
+    target_cells = sorted_cells[target_positions]
+    del target_positions, sorted_cells
 
     ### Remove duplicate pairs (can happen if cells share multiple facets)
     # This ensures each neighbor appears exactly once per source
-    unique_pairs = unique_index_tuples(cell_pairs_tensor, index_bound=mesh.n_cells)
+    if n_cells * n_cells >= _PACKED_PAIR_KEY_LIMIT:
+        # The packed keys below could overflow: deduplicate (source, target) rows.
+        unique_pairs = unique_index_tuples(
+            torch.stack([source_cells, target_cells], dim=1), index_bound=n_cells
+        )
+        return build_adjacency_from_pairs(
+            source_indices=unique_pairs[:, 0],
+            target_indices=unique_pairs[:, 1],
+            n_sources=n_cells,
+            n_targets=n_cells,
+        )
 
-    ### Build adjacency using shared utility
-    return build_adjacency_from_pairs(
-        source_indices=unique_pairs[:, 0],
-        target_indices=unique_pairs[:, 1],
-        n_sources=mesh.n_cells,
-        n_targets=mesh.n_cells,
-    )
+    # Pack each pair into one key, source * n_cells + target. The sorted unique
+    # keys are already in (source, target) order, the order of the adjacency.
+    pair_keys = source_cells
+    pair_keys *= n_cells
+    pair_keys += target_cells
+    del source_cells, target_cells
+    unique_keys = torch.unique(pair_keys)
+    del pair_keys
+    return adjacency_from_sorted_keys(unique_keys, n_cells, n_cells)
 
 
 def get_cell_to_points_adjacency(mesh: "Mesh") -> Adjacency:

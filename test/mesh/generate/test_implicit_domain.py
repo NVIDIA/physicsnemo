@@ -32,6 +32,7 @@ from physicsnemo.mesh.generate import (
     refit_mesh_to_implicit,
     sdf_box,
     sdf_difference,
+    sdf_polygon_2d,
     sdf_sphere,
     sdf_union,
 )
@@ -104,6 +105,18 @@ def test_dtype_policy_and_override():
     )
     assert mesh32.points.dtype == torch.float32
     assert_valid_volume_mesh(mesh32)
+
+
+def test_float32_polygon_square():
+    """A float32 polygon square meshes like the float64 one: projections that
+    land exactly on its axis-aligned edges must still pass the coverage guard."""
+    phi = sdf_polygon_2d([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]])
+    mesh = mesh_implicit_domain(phi, ([-1, -1], [1, 1]), 0.1, dtype=torch.float32)
+    assert mesh.points.dtype == torch.float32
+    assert_valid_volume_mesh(mesh)
+    # Unit area, less the rounding of the four corners (no feature points)
+    vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+    assert abs(vol - 1.0) < 0.03
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +250,16 @@ def test_boundary_on_zero_set():
     assert float(DISK_2D(mesh.points[bnd]).abs().max()) < 0.05 * 0.08
     # Interior vertices are strictly inside.
     assert float(DISK_2D(mesh.points[~bnd]).max()) < 0.0
+
+
+def test_boundary_vertex_mask_int32_cells():
+    """int32 connectivity gives the same boundary vertices as int64."""
+    points, cells = kuhn_lattice([0, 0, 0], [1, 1, 1], 0.5)
+    # A 3x3x3 lattice: every vertex but the center lies on the cube's surface
+    expected = ((points == 0) | (points == 1)).any(dim=1)
+    assert int(expected.sum()) == 26
+    assert torch.equal(boundary_vertex_mask(points, cells), expected)
+    assert torch.equal(boundary_vertex_mask(points, cells.int()), expected)
 
 
 def test_volume_converges_to_analytic():

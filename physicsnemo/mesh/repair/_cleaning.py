@@ -338,7 +338,7 @@ def remove_unused_points(
         return (
             torch.empty((0, points.shape[1]), dtype=points.dtype, device=device),
             cells,
-            TensorDict({}, batch_size=torch.Size([0]), device=device),
+            point_data[:0],
             torch.full((n_points,), -1, dtype=torch.int64, device=device),
         )
 

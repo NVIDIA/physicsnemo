@@ -29,6 +29,9 @@ def load(
 ) -> Mesh[1, 2]:
     """Create a closed circle curve in 2D space.
 
+    The points run counterclockwise, so the edge normals point inward, as
+    described in :ref:`mesh-orientation-conventions`.
+
     Parameters
     ----------
     radius : float

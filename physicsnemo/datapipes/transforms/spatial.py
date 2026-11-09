@@ -39,6 +39,40 @@ from physicsnemo.datapipes.transforms.base import Transform
 from physicsnemo.nn.functional import knn
 
 
+def _apply_mask(
+    tensor: torch.Tensor, mask: torch.Tensor, index: torch.Tensor | None
+) -> torch.Tensor:
+    """
+    Return ``tensor[mask]``, gathering rows by ``index`` when it is given.
+
+    ``index`` holds the indices of a 1-D ``mask``. Computing it once and
+    gathering with ``index_select`` is faster than masking each tensor, which
+    finds the indices again, with a CUDA sync, for every tensor.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Tensor whose leading dimension matches ``mask``.
+    mask : torch.Tensor
+        Boolean mask of the rows to keep.
+    index : torch.Tensor or None
+        ``mask.nonzero().squeeze(-1)`` for a 1-D ``mask``, else None.
+
+    Returns
+    -------
+    torch.Tensor
+        The rows of ``tensor`` where ``mask`` is True.
+    """
+    if index is None or not isinstance(tensor, torch.Tensor):
+        return tensor[mask]
+    if tensor.shape[:1] != mask.shape:
+        raise IndexError(
+            f"The shape of the mask {list(mask.shape)} at index 0 does not match "
+            f"the shape of the indexed tensor {list(tensor.shape)} at index 0"
+        )
+    return tensor.index_select(0, index)
+
+
 @register()
 class BoundingBoxFilter(Transform):
     r"""
@@ -137,16 +171,19 @@ class BoundingBoxFilter(Transform):
             ids_max = coords < bbox_max
             ids_in_bbox = ids_min & ids_max
             ids_in_bbox = ids_in_bbox.all(dim=-1)
+            index = ids_in_bbox.nonzero().squeeze(-1) if ids_in_bbox.ndim == 1 else None
 
             # Apply mask to coordinates
-            updates[coord_key] = coords[ids_in_bbox]
+            updates[coord_key] = _apply_mask(coords, ids_in_bbox, index)
 
             # Apply same mask to dependent keys
             for dep_key in self.dependent_keys:
                 if dep_key in data:
-                    updates[dep_key] = get_leaf(data, dep_key, what="Dependent key")[
-                        ids_in_bbox
-                    ]
+                    updates[dep_key] = _apply_mask(
+                        get_leaf(data, dep_key, what="Dependent key"),
+                        ids_in_bbox,
+                        index,
+                    )
 
         return data.update(updates)
 

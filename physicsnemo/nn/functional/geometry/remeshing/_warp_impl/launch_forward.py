@@ -27,7 +27,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
     farthest_point_sampling,
 )
-from physicsnemo.nn.functional.weighted_multinomial import weighted_multinomial
+from physicsnemo.utils import weighted_multinomial
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 from ._kernels import (

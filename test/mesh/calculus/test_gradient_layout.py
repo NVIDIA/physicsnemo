@@ -157,3 +157,69 @@ def test_dec_and_lsq_preserve_trailing_value_dimensions() -> None:
     assert dec_gradient.shape == (mesh.n_points, 2, 2, 3)
     torch.testing.assert_close(dec_gradient, expected)
     torch.testing.assert_close(lsq_gradient, expected)
+
+
+@pytest.mark.parametrize("location", ["points", "cells"])
+@pytest.mark.parametrize("gradient_type", ["extrinsic", "intrinsic", "both"])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("mesh_name", ["sphere", "cube"])
+def test_lsq_derivatives_of_several_fields_match_one_field_at_a_time(
+    location, gradient_type, dtype, mesh_name
+) -> None:
+    """The LSQ derivatives of several fields share their LSQ systems.
+
+    Each field must still get the gradient it gets alone, bit for bit, with
+    nested keys, mixed ranks and two dtypes in one call.
+    """
+    from physicsnemo.mesh.calculus.derivatives import (
+        compute_cell_derivatives,
+        compute_point_derivatives,
+    )
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    from physicsnemo.mesh.primitives.volumes import cube_volume
+
+    if mesh_name == "sphere":
+        mesh = sphere_icosahedral.load(subdivisions=2)
+    else:
+        mesh = cube_volume.load(subdivisions=3)
+    mesh = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
+    n = mesh.n_points if location == "points" else mesh.n_cells
+    g = torch.Generator().manual_seed(0)
+    fields = {
+        "p": torch.randn(n, generator=g, dtype=dtype),
+        ("flow", "u"): torch.randn(n, 3, generator=g, dtype=dtype),
+        ("flow", "k"): torch.randn(n, generator=g, dtype=dtype),
+        "S": torch.randn(n, 2, 2, generator=g, dtype=dtype),
+        # Strided fields: a transposed tensor and every other column
+        "T": torch.randn(n, 2, 2, generator=g, dtype=dtype).transpose(1, 2),
+        "w": torch.randn(n, 6, generator=g, dtype=dtype)[:, ::2],
+    }
+    ### A field of the other dtype: its own group. (The intrinsic point
+    ### gradient of a field whose dtype differs from the surface mesh's raises.)
+    if not (
+        gradient_type == "intrinsic" and location == "points" and mesh_name == "sphere"
+    ):
+        other = torch.float64 if dtype == torch.float32 else torch.float32
+        fields["q"] = torch.randn(n, generator=g, dtype=other)
+    data = mesh.point_data if location == "points" else mesh.cell_data
+    for key, value in fields.items():
+        data[key] = value
+    compute = (
+        compute_point_derivatives if location == "points" else compute_cell_derivatives
+    )
+
+    together = compute(mesh, keys=list(fields), gradient_type=gradient_type)
+    out = together.point_data if location == "points" else together.cell_data
+    suffixes = (
+        ["_gradient"]
+        if gradient_type != "both"
+        else ["_gradient_extrinsic", "_gradient_intrinsic"]
+    )
+    for key in fields:
+        alone = compute(mesh, keys=key, gradient_type=gradient_type)
+        expected = alone.point_data if location == "points" else alone.cell_data
+        for suffix in suffixes:
+            out_key = (
+                key + suffix if isinstance(key, str) else key[:-1] + (key[-1] + suffix,)
+            )
+            assert torch.equal(out[out_key], expected[out_key]), out_key

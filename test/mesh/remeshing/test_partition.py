@@ -223,6 +223,23 @@ class TestCentroids:
             two_triangles_3d.cell_centroids,
         )
 
+    def test_single_seed_centroid_of_small_float32_cells(self, two_triangles_3d: Mesh):
+        """Cells of area 5e-11 (a 10-um float32 square in metres) still give
+        the area-weighted centroid, (0.5, 0.5, 0) * scale for equal areas."""
+        scale = 1e-5
+        mesh = Mesh(
+            points=(scale * two_triangles_3d.points).float(),
+            cells=two_triangles_3d.cells,
+        )
+        seeds = torch.tensor([[0.5, 0.5, 0.0]]) * scale
+        result = partition_cells(mesh, seeds)
+        torch.testing.assert_close(
+            result.cluster_centroids,
+            torch.tensor([[0.5, 0.5, 0.0]]) * scale,
+            rtol=1e-5,
+            atol=1e-6 * scale,
+        )
+
 
 ### Empty clusters ###
 

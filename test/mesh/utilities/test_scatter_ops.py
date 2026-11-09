@@ -117,6 +117,24 @@ class TestScatterAggregateMeanWithWeights:
 
         assert torch.allclose(result_weighted, result_unweighted)
 
+    @pytest.mark.parametrize(
+        "dtype", [torch.float32, torch.float64, torch.complex64, torch.int32]
+    )
+    def test_unweighted_fast_path_matches_unit_weights_exactly(self, dtype):
+        """The unweighted-mean fast path equals the weighted path with unit weights."""
+        torch.manual_seed(0)
+        randn_dtype = dtype if dtype.is_complex else torch.float64
+        src_data = (torch.randn(12, 3, dtype=randn_dtype) * 10).to(dtype)
+        src_to_dst = torch.tensor([0, 1, 1, 2, 2, 2, 0, 1, 2, 4, 4, 0])  # 3 empty
+
+        result_unweighted = scatter_aggregate(src_data, src_to_dst, n_dst=5)
+        result_weighted = scatter_aggregate(
+            src_data, src_to_dst, n_dst=5, weights=torch.ones(12)
+        )
+
+        assert result_unweighted.dtype == result_weighted.dtype
+        assert torch.equal(result_unweighted, result_weighted)
+
     def test_mean_with_zero_weight_ignored(self):
         """Test that zero-weighted sources are effectively ignored."""
         src_data = torch.tensor([1.0, 2.0, 100.0])  # 100 should be ignored
@@ -130,6 +148,20 @@ class TestScatterAggregateMeanWithWeights:
         # Weighted mean: (1*1 + 2*1 + 100*0) / (1 + 1 + 0) = 3/2 = 1.5
         expected = torch.tensor([1.5])
         assert torch.allclose(result, expected)
+
+    def test_mean_with_tiny_weights(self):
+        """A weighted mean of a constant is that constant however small the
+        positive weights, such as the cell volumes of a 1-mm float32 mesh in
+        metres; a destination without sources stays 0."""
+        src_data = torch.tensor([3.0, 3.0, 5.0])
+        src_to_dst = torch.tensor([0, 0, 1])
+        weights = torch.tensor([1e-10, 2e-10, 1e-20])
+
+        result = scatter_aggregate(
+            src_data, src_to_dst, n_dst=3, weights=weights, aggregation="mean"
+        )
+
+        torch.testing.assert_close(result, torch.tensor([3.0, 5.0, 0.0]))
 
 
 class TestScatterAggregateSum:

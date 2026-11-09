@@ -507,6 +507,16 @@ def numerical_shard_tensor_check(
             # Skip params unused by this config (no grad on either side).
             if param.grad is None and d_param.grad is None:
                 continue
+            # A plain parameter must receive a plain gradient: a distributed
+            # .grad on a plain leaf breaks optimizers (mixed plain/DTensor
+            # foreach lists) even when its gathered values are correct, so
+            # the value comparison below cannot catch it. Type mismatches
+            # are rank-symmetric, so a plain assert cannot deadlock.
+            if not hasattr(d_param, "_spec") and hasattr(d_param.grad, "_spec"):
+                raise AssertionError(
+                    f"plain parameter received a distributed gradient "
+                    f"({type(d_param.grad).__name__})"
+                )
             default_tensor_comparison(
                 param.grad, d_param.grad, atol=atol, rtol=rtol, group=group
             )

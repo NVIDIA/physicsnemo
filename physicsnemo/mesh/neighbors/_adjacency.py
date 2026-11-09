@@ -24,8 +24,14 @@ import torch
 from jaxtyping import Int
 from tensordict import TensorClass
 
+from physicsnemo.utils._tracing import is_tracing
 
-class Adjacency(TensorClass):
+# Packed (source, target) keys ``source * n_targets + target`` are used while
+# ``n_sources * n_targets`` stays below this bound, safely inside int64.
+_PACKED_PAIR_KEY_LIMIT = 1 << 62
+
+
+class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
     """Ragged adjacency list stored with offset-indices encoding.
 
     This structure efficiently represents variable-length neighbor lists using two
@@ -40,7 +46,11 @@ class Adjacency(TensorClass):
         ``indices[offsets[i]:offsets[i+1]]``.
     indices : torch.Tensor
         Flattened array of all neighbor indices.
-        Shape ``(total_neighbors,)``, dtype int64.
+        Shape ``(total_neighbors,)``, integer dtype. The adjacencies that
+        ``Mesh`` builds store cell indices as int64 and point indices in the
+        dtype of ``mesh.cells``, so the point-to-points and cell-to-points
+        adjacencies of an int32 mesh have int32 indices. A mesh without
+        cells gives int64 indices.
 
     Examples
     --------
@@ -66,7 +76,10 @@ class Adjacency(TensorClass):
     indices: Int[torch.Tensor, " n_total_neighbors"]
 
     def __post_init__(self) -> None:
-        if not torch.compiler.is_compiling():
+        # Runs on construction and load, but not when tensordict rebuilds an
+        # existing adjacency (clone, to, indexing): the offsets read below
+        # synchronize a CUDA device.
+        if not is_tracing():
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
             if len(self.offsets) < 1:
@@ -339,16 +352,20 @@ def build_adjacency_from_pairs(
         n_targets = int(target_indices.max().item()) + 1
 
     ### Lexicographic sort by (source, target). The common mesh case has small
-    # bounded indices, so a single composite-key argsort avoids two stable sorts.
-    if n_sources * n_targets < (1 << 62):
+    # bounded indices, so a single composite-key sort avoids two stable sorts.
+    if n_sources * n_targets < _PACKED_PAIR_KEY_LIMIT:
         composite_keys = source_indices.long() * n_targets + target_indices.long()
-        sort_indices = torch.argsort(composite_keys)
-    else:
-        # Fall back to two stable argsorts when the composite key could overflow.
-        sort_by_target = torch.argsort(target_indices, stable=True)
-        sort_indices = sort_by_target[
-            torch.argsort(source_indices[sort_by_target], stable=True)
-        ]
+        sorted_keys = torch.sort(composite_keys).values
+        del composite_keys
+        return adjacency_from_sorted_keys(
+            sorted_keys, n_sources, n_targets, dtype=target_indices.dtype
+        )
+
+    # Fall back to two stable argsorts when the composite key could overflow.
+    sort_by_target = torch.argsort(target_indices, stable=True)
+    sort_indices = sort_by_target[
+        torch.argsort(source_indices[sort_by_target], stable=True)
+    ]
 
     sorted_sources = source_indices[sort_indices]
     sorted_targets = target_indices[sort_indices]
@@ -367,3 +384,42 @@ def build_adjacency_from_pairs(
         indices=sorted_targets,
         device=device,
     )
+
+
+def adjacency_from_sorted_keys(
+    sorted_keys: Int[torch.Tensor, " n_pairs"],
+    n_sources: int,
+    n_targets: int,
+    dtype: torch.dtype = torch.int64,
+) -> Adjacency:
+    """Build offset-index adjacency from ascending packed (source, target) keys.
+
+    Parameters
+    ----------
+    sorted_keys : torch.Tensor
+        Ascending int64 keys ``source * n_targets + target``, shape (n_pairs,).
+        The caller must ensure ``n_sources * n_targets < 2**62``.
+    n_sources : int
+        Total number of source entities.
+    n_targets : int
+        Strict upper bound for target indices; the radix of the keys.
+    dtype : torch.dtype, optional
+        Integer dtype of the returned ``indices``.
+
+    Returns
+    -------
+    Adjacency
+        Adjacency whose neighbor lists hold the targets of each source in
+        ascending order.
+    """
+    device = sorted_keys.device
+    ### offsets[i] is the number of keys below i * n_targets, i.e. the number of
+    # pairs whose source is below i. (CUDA bincount would synchronize twice to
+    # bound its input.)
+    source_starts = (
+        torch.arange(n_sources + 1, dtype=torch.int64, device=device) * n_targets
+    )
+    offsets = torch.searchsorted(sorted_keys, source_starts)
+    del source_starts
+    indices = (sorted_keys % n_targets).to(dtype)
+    return Adjacency(offsets=offsets, indices=indices, device=device)

@@ -76,6 +76,11 @@ def _compute_1d_turning_angle_sums(mesh: "Mesh") -> torch.Tensor:
     For 2D ambient space, signed angles (via atan2) capture orientation;
     for higher ambient dimensions, unsigned angles are used.
 
+    The signed 2D angle needs the two edges at a vertex to be consistently
+    oriented (one ending and one starting there); otherwise the unsigned angle
+    is used. :func:`~physicsnemo.mesh.repair.fix_orientation` orients a curve
+    consistently.
+
     Parameters
     ----------
     mesh : Mesh
@@ -111,35 +116,37 @@ def _compute_1d_turning_angle_sums(mesh: "Mesh") -> torch.Tensor:
         edge0_verts = mesh.cells[edge0_cells]  # (n_two_edge, 2)
         edge1_verts = mesh.cells[edge1_cells]  # (n_two_edge, 2)
 
-        # Determine which edge is incoming (point is at position 1)
+        # Determine which edges are incoming (point is at position 1)
         edge0_is_incoming = edge0_verts[:, 1] == two_edge_indices
+        edge1_is_incoming = edge1_verts[:, 1] == two_edge_indices
 
-        prev_vertex = torch.where(
-            edge0_is_incoming,
-            edge0_verts[:, 0],
-            edge1_verts[:, 0],
-        )
-        next_vertex = torch.where(
-            edge0_is_incoming,
-            edge1_verts[:, 1],
-            edge0_verts[:, 1],
-        )
+        # The other endpoint of each edge
+        other0 = torch.where(edge0_is_incoming, edge0_verts[:, 0], edge0_verts[:, 1])
+        other1 = torch.where(edge1_is_incoming, edge1_verts[:, 0], edge1_verts[:, 1])
 
-        v_from_prev = mesh.points[two_edge_indices] - mesh.points[prev_vertex]
-        v_to_next = mesh.points[next_vertex] - mesh.points[two_edge_indices]
+        # Unsigned interior angle between the two edges as seen from the vertex
+        center = mesh.points[two_edge_indices]
+        interior_angles = stable_angle_between_vectors(
+            mesh.points[other0] - center, mesh.points[other1] - center
+        )
 
         if mesh.n_spatial_dims == 2:
-            # 2D: signed angle via cross product -> interior angle = pi - signed
+            # 2D: signed angle via cross product -> interior angle = pi - signed,
+            # where the edges are consistently oriented (one in, one out)
+            prev_vertex = torch.where(edge0_is_incoming, other0, other1)
+            next_vertex = torch.where(edge0_is_incoming, other1, other0)
+            v_from_prev = center - mesh.points[prev_vertex]
+            v_to_next = mesh.points[next_vertex] - center
             cross_z = (
                 v_from_prev[:, 0] * v_to_next[:, 1]
                 - v_from_prev[:, 1] * v_to_next[:, 0]
             )
             dot = (v_from_prev * v_to_next).sum(dim=-1)
-            interior_angles = torch.pi - torch.atan2(cross_z, dot)
-        else:
-            # The interior angle is between the two edges as seen from the vertex;
-            # the angle between v_from_prev and v_to_next is the turning angle.
-            interior_angles = stable_angle_between_vectors(-v_from_prev, v_to_next)
+            interior_angles = torch.where(
+                edge0_is_incoming != edge1_is_incoming,
+                torch.pi - torch.atan2(cross_z, dot),
+                interior_angles,
+            )
 
         angle_sums[two_edge_indices] = interior_angles
 

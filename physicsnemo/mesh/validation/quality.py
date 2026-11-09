@@ -29,6 +29,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.geometry._angles import compute_vertex_angles
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
+from physicsnemo.mesh.utilities._gather import gather_rows
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -69,7 +70,7 @@ def compute_cell_edge_lengths(
     if mesh.n_cells == 0:
         return torch.zeros((0, 0), dtype=mesh.points.dtype, device=mesh.points.device)
 
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
+    cell_vertices = gather_rows(mesh.points, mesh.cells)  # (n_cells, n_verts, n_dims)
     n_verts_per_cell = mesh.n_manifold_dims + 1
 
     # All (i, j) pairs with i < j via upper-triangular indices
@@ -84,39 +85,51 @@ def compute_cell_edge_lengths(
     return torch.linalg.vector_norm(edge_vectors, dim=-1)
 
 
-def _compute_simplex_altitudes(
+def _compute_min_simplex_altitudes(
     mesh: "Mesh",
     cell_measures: Float[torch.Tensor, " n_cells"],
-) -> Float[torch.Tensor, "n_cells n_vertices_per_cell"]:
-    """Compute the altitude opposite every simplex vertex."""
+    edge_lengths: Float[torch.Tensor, "n_cells n_edges_per_cell"],
+) -> Float[torch.Tensor, " n_cells"]:
+    """Compute the smallest altitude of every simplex.
+
+    The altitude opposite vertex k is ``n * volume / facet_k``, where facet_k is
+    the measure of the facet without vertex k. Since ``n * volume >= 0`` and
+    correctly rounded division is monotone, the smallest altitude is exactly
+    ``n * volume / max_k facet_k``, so the altitudes are never all formed.
+    """
     n_manifold_dims = mesh.n_manifold_dims
     n_vertices_per_cell = n_manifold_dims + 1
 
     if n_manifold_dims == 1:
         # A segment's two opposing facets are points with unit 0-volume.
-        return cell_measures[:, None].expand(-1, n_vertices_per_cell)
+        return cell_measures
 
-    cell_vertices = mesh.points[mesh.cells]
-    vertex_indices = torch.arange(n_vertices_per_cell, device=mesh.cells.device)
-    # Row k lists the vertices of the facet opposite vertex k (every index but k),
-    # built arithmetically: a boolean-mask index would synchronize the device.
-    facet_positions = torch.arange(n_manifold_dims, device=mesh.cells.device)
-    facet_indices = facet_positions + (facet_positions >= vertex_indices[:, None])
-    facet_vertices = cell_vertices[:, facet_indices]
-    facet_relative_vectors = facet_vertices[..., 1:, :] - facet_vertices[..., :1, :]
-    facet_measures = compute_cell_areas(facet_relative_vectors.flatten(0, 1)).unflatten(
-        0, (mesh.n_cells, n_vertices_per_cell)
-    )
+    if n_manifold_dims == 2:
+        # The facets of a triangle are its edges (1, 2), (0, 2), (0, 1), in the
+        # reverse of the column order of compute_cell_edge_lengths
+        facet_measures = edge_lengths.unbind(dim=1)[::-1]
+    else:
+        vertices = [
+            gather_rows(mesh.points, mesh.cells[:, k])
+            for k in range(n_vertices_per_cell)
+        ]
+        facet_measures = []
+        for k in range(n_vertices_per_cell):
+            facet = [vertices[i] for i in range(n_vertices_per_cell) if i != k]
+            facet_measures.append(
+                compute_cell_areas(
+                    torch.stack([v - facet[0] for v in facet[1:]], dim=1)
+                )
+            )
+        del vertices
 
     # An absolute epsilon is not dimensionally valid here: facet measures have
     # units of length ** (d - 1), while the common tolerance is length-valued.
     # Guard exact zeros without changing any positive, representable measure.
-    facet_denominators = torch.where(
-        facet_measures > 0,
-        facet_measures,
-        torch.ones_like(facet_measures),
+    facet_denominators = torch.stack(
+        [torch.where(m > 0, m, torch.ones_like(m)) for m in facet_measures], dim=1
     )
-    return n_manifold_dims * cell_measures[:, None] / facet_denominators
+    return n_manifold_dims * cell_measures / facet_denominators.max(dim=1).values
 
 
 def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
@@ -154,6 +167,18 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     >>> metrics = compute_quality_metrics(mesh)
     >>> assert "quality_score" in metrics.keys()
     """
+    return _compute_quality_metrics(mesh, compute_cell_edge_lengths(mesh))
+
+
+def _compute_quality_metrics(
+    mesh: "Mesh",
+    edge_lengths: Float[torch.Tensor, "n_cells n_edges_per_cell"],
+) -> TensorDict:
+    """Compute the quality metrics from ``compute_cell_edge_lengths(mesh)``.
+
+    Callers that also need the edge lengths, such as
+    ``compute_mesh_statistics``, compute them once and pass them in.
+    """
     if mesh.n_cells == 0:
         return TensorDict(
             {},
@@ -189,9 +214,6 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
             device=device,
         )
 
-    ### Compute edge lengths for each cell
-    edge_lengths = compute_cell_edge_lengths(mesh)  # (n_cells, n_edges_per_cell)
-
     max_edge = edge_lengths.max(dim=1).values
     min_edge = edge_lengths.min(dim=1).values
 
@@ -210,7 +232,7 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
 
     ### Compute a dimensionless, scale-invariant simplex aspect ratio
     cell_measures = mesh.cell_areas
-    min_altitude = _compute_simplex_altitudes(mesh, cell_measures).min(dim=1).values
+    min_altitude = _compute_min_simplex_altitudes(mesh, cell_measures, edge_lengths)
     min_altitude_denominator = torch.where(
         min_altitude > 0,
         min_altitude,

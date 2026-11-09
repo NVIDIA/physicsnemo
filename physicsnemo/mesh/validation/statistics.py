@@ -25,7 +25,10 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.validation.quality import compute_quality_metrics
+from physicsnemo.mesh.validation.quality import (
+    _compute_quality_metrics,
+    compute_cell_edge_lengths,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -45,7 +48,10 @@ def compute_mesh_statistics(
     - n_spatial_dims: Spatial dimension
     - n_degenerate_cells: Cells with area < tolerance
     - n_isolated_vertices: Vertices not in any cell
-    - edge_length_stats: (min, mean, max, std) of edge lengths
+    - edge_length_stats: (min, mean, max, std) of the lengths of every edge of
+      every cell, so an interior edge shared by two cells counts twice. On a
+      closed surface, where every edge has two cells, these equal the
+      statistics of the unique edges.
     - cell_area_stats: (min, mean, max, std) of cell areas
     - aspect_ratio_stats: (min, mean, max, std) of aspect ratios
     - quality_score_stats: (min, mean, max, std) of quality scores
@@ -95,12 +101,15 @@ def compute_mesh_statistics(
         .sum()
     )
 
-    ### Compute quality metrics (includes edge lengths internally)
-    # compute_quality_metrics already computes min/max edge lengths per cell,
-    # so we derive stats from those to avoid a redundant compute_cell_edge_lengths call.
-    quality_metrics = compute_quality_metrics(mesh)
-    min_edge = quality_metrics["min_edge_length"]
-    max_edge = quality_metrics["max_edge_length"]
+    ### Lengths of every edge of every cell (a shared edge counts once per cell)
+    # The quality metrics reuse them, so they are computed once.
+    cell_edge_lengths = compute_cell_edge_lengths(mesh)
+    quality_metrics = _compute_quality_metrics(mesh, cell_edge_lengths)
+    if mesh.n_manifold_dims == 0:
+        # A 0-simplex has no edges; its quality metrics report a NaN length.
+        edge_lengths = quality_metrics["min_edge_length"]
+    else:
+        edge_lengths = cell_edge_lengths.flatten()
     optional_stats = [
         key
         for key in ("aspect_ratio", "quality_score")
@@ -117,11 +126,7 @@ def compute_mesh_statistics(
         (areas < tolerance).sum(),
         n_used,
         *summarize(areas),
-        min_edge.min(),
-        min_edge.mean(),
-        max_edge.mean(),
-        max_edge.max(),
-        max_edge.std(correction=0),
+        *summarize(edge_lengths),
         *[s for key in optional_stats for s in summarize(quality_metrics[key])],
     ]
     values = torch.stack([s.to(torch.float64) for s in scalars]).tolist()
@@ -129,14 +134,8 @@ def compute_mesh_statistics(
     stats["n_degenerate_cells"] = int(values[0])
     stats["n_isolated_vertices"] = mesh.n_points - int(values[1])
     stats["cell_area_stats"] = tuple(values[2:6])
-    edge_min, min_edge_mean, max_edge_mean, edge_max, edge_std = values[6:11]
-    stats["edge_length_stats"] = (
-        edge_min,
-        (min_edge_mean + max_edge_mean) / 2.0,
-        edge_max,
-        edge_std,
-    )
+    stats["edge_length_stats"] = tuple(values[6:10])
     for i, key in enumerate(optional_stats):
-        stats[f"{key}_stats"] = tuple(values[11 + 4 * i : 15 + 4 * i])
+        stats[f"{key}_stats"] = tuple(values[10 + 4 * i : 14 + 4 * i])
 
     return stats

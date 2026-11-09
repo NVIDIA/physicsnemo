@@ -76,7 +76,7 @@ def sharp(
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh (2D or 3D).
+        Simplicial mesh of segments, triangles, or tetrahedra.
     edge_1form : torch.Tensor
         1-form values on edges, shape ``(n_edges,)`` or ``(n_edges, ...)``.
     edges : torch.Tensor
@@ -95,17 +95,18 @@ def sharp(
     n_points = mesh.n_points
     n_spatial_dims = mesh.n_spatial_dims
 
-    ### Initialize output
+    ### Initialize output, in the promoted dtype of the 1-form and the geometry
+    dtype = torch.promote_types(edge_1form.dtype, mesh.points.dtype)
     if edge_1form.ndim == 1:
         vector_field = torch.zeros(
             (n_points, n_spatial_dims),
-            dtype=edge_1form.dtype,
+            dtype=dtype,
             device=mesh.points.device,
         )
     else:
         vector_field = torch.zeros(
             (n_points, n_spatial_dims) + edge_1form.shape[1:],
-            dtype=edge_1form.dtype,
+            dtype=dtype,
             device=mesh.points.device,
         )
 
@@ -128,9 +129,11 @@ def sharp(
     ### Build mapping from edges to cells containing them
     from physicsnemo.mesh.boundaries import extract_candidate_facets
 
+    # The edges of each cell are its facets of codimension n_manifold_dims - 1
+    # (for a 1D mesh, the cell itself)
     candidate_edges, parent_cells = extract_candidate_facets(
         mesh.cells,
-        manifold_codimension=1,
+        manifold_codimension=mesh.n_manifold_dims - 1,
     )
 
     ### Match candidates to input edges to get 1-form values
@@ -232,9 +235,12 @@ def sharp(
                 contrib_spatial_expanded * alpha_expanded
             )  # (n_matched, n_spatial_dims, features...)
 
-            # Flatten and scatter
-            contributions_flat = contributions.reshape(len(matched_edge_indices), -1)
-            vector_field_flat = vector_field.reshape(n_points, -1)
+            # Flatten and scatter (explicit sizes: there may be no edges or points)
+            n_components = vector_field.shape[1:].numel()
+            contributions_flat = contributions.reshape(
+                len(matched_edge_indices), n_components
+            )
+            vector_field_flat = vector_field.reshape(n_points, n_components)
 
             vertex_indices_expanded = vertex_indices.unsqueeze(-1).expand(
                 -1, contributions_flat.shape[1]
@@ -326,9 +332,10 @@ def flat(
         # Scalar field case
         projection = (avg_vectors * edge_vectors).sum(dim=-1)  # (n_edges,)
     else:
-        # Tensor field case
-        projection = (avg_vectors * edge_vectors.unsqueeze(-1)).sum(
-            dim=1
-        )  # (n_edges, ...)
+        # Tensor field case: align edge vectors with the spatial axis (dim=1)
+        edge_vectors_expanded = edge_vectors.view(
+            *edge_vectors.shape, *([1] * (vector_field.ndim - 2))
+        )  # (n_edges, n_spatial_dims, 1, ..., 1)
+        projection = (avg_vectors * edge_vectors_expanded).sum(dim=1)  # (n_edges, ...)
 
     return projection

@@ -29,7 +29,7 @@ import torch
 from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.mesh import _requested_dtype
+from physicsnemo.mesh.mesh import _requested_dtype, _set_subclass_fields
 
 
 def test_mesh_inherits_tensorclass():
@@ -54,6 +54,49 @@ def test_fieldless_subclass_keeps_constructor_defaults():
     assert not list(mesh.point_data.keys())
     assert not list(mesh.cell_data.keys())
     assert not list(mesh.global_data.keys())
+
+
+def test_subclass_with_extra_field_needs_no_init(tmp_path):
+    """A subclass that adds a field constructs, clones, moves, indexes, rebuilds
+    and round-trips without an ``__init__`` of its own."""
+    mesh = MeshWithExtra(
+        points=torch.randn(4, 2),
+        cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+        extra=torch.arange(4, dtype=torch.float32),
+    )
+    assert type(mesh) is MeshWithExtra
+    assert torch.equal(mesh.extra, torch.arange(4, dtype=torch.float32))
+    assert mesh.cell_data.batch_size == (2,)
+    assert MeshWithExtra(points=torch.randn(4, 2)).extra is None
+
+    for result in (
+        mesh.clone(),
+        mesh.to(torch.float64),
+        mesh.to("cpu"),
+        mesh[...],
+        mesh.with_points(mesh.points + 1.0),  # rebuilds through __init__
+    ):
+        assert type(result) is MeshWithExtra
+        assert torch.equal(result.extra.float(), mesh.extra)
+
+    mesh.save(tmp_path / "mesh")
+    loaded = MeshWithExtra.load(tmp_path / "mesh")
+    assert type(loaded) is MeshWithExtra
+    assert torch.equal(loaded.extra, mesh.extra)
+    assert torch.equal(loaded.cells, mesh.cells)
+
+
+def test_set_subclass_fields_rejects_undeclared_keyword():
+    """Only fields that the subclass adds are accepted as extra keywords."""
+    mesh = MeshWithExtra(points=torch.randn(4, 2))
+    _set_subclass_fields(mesh, Mesh, {"extra": torch.ones(4)})
+    assert torch.equal(mesh.extra, torch.ones(4))
+    for name in ("unknown", "points"):
+        with pytest.raises(
+            TypeError,
+            match=rf"MeshWithExtra.__init__\(\) got an unexpected keyword argument '{name}'",
+        ):
+            _set_subclass_fields(mesh, Mesh, {name: torch.ones(4)})
 
 
 class TestPointsValidation:
@@ -664,3 +707,15 @@ def test_to_complex_preserves_integer_cells():
 
     assert converted.points.dtype == torch.complex64
     assert converted.cells.dtype == torch.int64
+
+
+def test_rebuilds_that_change_dtypes_or_shapes_are_validated():
+    """tensordict rebuilds a mesh without ``__init__`` for generic casts and for
+    stacking; ``__post_init__`` still rejects the invalid meshes they would build.
+    (Mesh does not opt into ``skip_post_init_on_rebuild`` for this reason.)"""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+
+    with pytest.raises(TypeError, match="integer dtype"):
+        mesh.double()  # also casts the cells; ``mesh.to(torch.float64)`` does not
+    with pytest.raises(ValueError, match="points"):
+        torch.stack([mesh, mesh])

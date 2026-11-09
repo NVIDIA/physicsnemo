@@ -87,6 +87,8 @@ def process_scalars(
         if scalar_tensor.ndim > 1:
             # Flatten all trailing dimensions and compute norm
             scalar_tensor = scalar_tensor.reshape(n_expected, -1)
+            if not (scalar_tensor.is_floating_point() or scalar_tensor.is_complex()):
+                scalar_tensor = scalar_tensor.float()  # norm needs floating input
             scalar_tensor = torch.norm(scalar_tensor, dim=-1)
             label = "Magnitude"
         else:
@@ -118,6 +120,8 @@ def process_scalars(
         # If multi-dimensional, compute L2 norm across trailing dimensions
         if scalar_tensor.ndim > 1:
             scalar_tensor = scalar_tensor.reshape(n_expected, -1)
+            if not (scalar_tensor.is_floating_point() or scalar_tensor.is_complex()):
+                scalar_tensor = scalar_tensor.float()  # norm needs floating input
             scalar_tensor = torch.norm(scalar_tensor, dim=-1)
             label = f"{label} (magnitude)"
 

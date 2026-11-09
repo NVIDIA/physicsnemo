@@ -32,7 +32,7 @@ ARG TARGETPLATFORM
 
 # Install uv (use system Python for installs; set so --system is default)
 # Keep the installer version aligned with the deterministic CI environments.
-COPY --from=ghcr.io/astral-sh/uv:0.12.20 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 # Use system Python, allow installs into the externally managed base environment,
 # and copy installed files out of the temporary cache mount.
 ENV UV_SYSTEM_PYTHON=1 \
@@ -44,9 +44,9 @@ ENV UV_SYSTEM_PYTHON=1 \
 # inherited constraint file in one layer. Package downloads live only in the
 # BuildKit cache mount, and apt metadata is removed before the layer is committed.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install "pip>=26.2.1" "setuptools>=84.0.0" && \
+    uv pip install "pip>=26.2.2" "certifi>=2026.10.19" "setuptools>=84.0.0" && \
     apt-get update && \
-    apt-get install -y git-lfs graphviz libgl1 zip unzip && \
+    apt-get install -y ca-certificates git-lfs graphviz libgl1 zip unzip && \
     git lfs install && \
     FILE="/etc/pip/constraint.txt" && \
     if [ -f "$FILE" ]; then \

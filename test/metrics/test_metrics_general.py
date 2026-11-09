@@ -606,7 +606,7 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
         os.environ["WORLD_SIZE"] = "1"
         DistributedManager.initialize()
 
-    ens_metric = em.EnsembleMetrics((1, 72, 144), device=device)
+    ens_metric = em.StreamingStatistic((1, 72, 144), device=device)
     with pytest.raises(NotImplementedError) as e_info:
         print(e_info)
         ens_metric.__call__()

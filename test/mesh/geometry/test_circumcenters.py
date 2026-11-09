@@ -91,6 +91,42 @@ def test_near_degenerate_triangle_circumcenter_is_finite() -> None:
     assert torch.isfinite(centers).all()
 
 
+@pytest.mark.parametrize("scale", [1.0, 1e-4, 1e-6])
+def test_small_triangle_circumcenter_3d(scale) -> None:
+    """The 3D triangle closed form has no absolute floor: a 0.1-mm triangle
+    in metres keeps its analytic circumcenter (0.5, 0.26875) * scale."""
+    vertices = scale * torch.tensor(
+        [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.3, 0.8, 0.0]]], dtype=torch.float64
+    )
+    expected = scale * torch.tensor([[0.5, 0.26875, 0.0]], dtype=torch.float64)
+
+    centers = compute_circumcenters(vertices)
+
+    torch.testing.assert_close(centers, expected, rtol=1e-12, atol=1e-12 * scale)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_degenerate_triangles_3d_return_centroid(device, dtype) -> None:
+    """Degenerate 3D triangles return their centroid, like degenerate cells
+    of the general path, with finite gradients."""
+    vertices = torch.tensor(
+        [
+            [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]],  # collinear
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 2.0, 3.0]],  # coincident
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],  # a point
+        ],
+        dtype=dtype,
+        device=device,
+        requires_grad=True,
+    )
+
+    centers = compute_circumcenters(vertices)
+
+    torch.testing.assert_close(centers, vertices.mean(dim=1))
+    centers.sum().backward()
+    assert torch.isfinite(vertices.grad).all()
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_cuda_triangle_circumcenters_match_cpu() -> None:
     from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral

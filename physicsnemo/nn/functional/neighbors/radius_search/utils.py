@@ -18,21 +18,37 @@ import torch
 
 
 def validate_inputs(points: torch.Tensor, queries: torch.Tensor):
-    """Validate and normalize inputs to (B, N, 3) shape. Returns (points, queries, was_unbatched)."""
+    """Validate and normalize inputs to (B, N, D) shape. Returns (points, queries, was_unbatched).
+
+    ``D`` is the number of coordinates. It must be at least 1, and the same for
+    points and queries.
+    """
     if points.ndim == 2 and queries.ndim == 2:
-        return points.unsqueeze(0), queries.unsqueeze(0), True
+        was_unbatched = True
     elif points.ndim == 3 and queries.ndim == 3:
         if points.shape[0] != queries.shape[0]:
             raise ValueError(
                 f"Batch dimensions must match: points has {points.shape[0]}, "
                 f"queries has {queries.shape[0]}"
             )
-        return points, queries, False
+        was_unbatched = False
     else:
         raise ValueError(
-            f"points and queries must be 2D (N, 3) or 3D (B, N, 3), "
-            f"got {points.ndim}D and {queries.ndim}D"
+            f"points and queries must have rank 2 (N, D) or 3 (B, N, D), "
+            f"got ranks {points.ndim} and {queries.ndim}"
         )
+
+    if points.shape[-1] != queries.shape[-1]:
+        raise ValueError(
+            f"points and queries must have the same number of coordinates, "
+            f"got {points.shape[-1]} and {queries.shape[-1]}"
+        )
+    if points.shape[-1] == 0:
+        raise ValueError("points and queries must have at least 1 coordinate, got 0")
+
+    if was_unbatched:
+        return points.unsqueeze(0), queries.unsqueeze(0), True
+    return points, queries, False
 
 
 def format_returns(

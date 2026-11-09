@@ -18,29 +18,37 @@
 
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
+import numpy as np
+import pyvista as pv
 import torch
+from _style import (
+    ACCENT_LIGHTING,
+    FIXED,
+    RESULT,
+    SECOND,
+    SURFACE,
+    SURFACE_EDGE,
+    mesh_label,
+    save,
+    spheres,
+)
 from matplotlib.lines import Line2D
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.deformation import (
     closed_surface_volume_energy,
     surface_bending_energy,
 )
+from physicsnemo.mesh.io import to_pyvista
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.nn.functional import radial_basis_function_deform_points
 
+pv.OFF_SCREEN = True
+
 OUTPUT = Path(__file__).parent / "sphere_deformation_energies.png"
 
-MESH_COLOR = "#a8c6c9"
-EDGE_COLOR = "#455a64"
-ANCHOR_COLOR = "#c36a2d"
-HANDLE_COLOR = "#5b9f00"
-AUXILIARY_COLOR = "#6f5aa8"
+CAMERA = [(4.3, -5.6, 2.4), (0.05, 0.0, 0.2), (0.0, 0.0, 1.0)]
 
 
 def _backend() -> tuple[torch.device, str]:
@@ -127,91 +135,105 @@ def _signed_volume(points: torch.Tensor, triangles: torch.Tensor) -> torch.Tenso
     )
 
 
-def _draw_surface(axis, points: torch.Tensor, triangles: torch.Tensor) -> None:
-    """Draw one triangle-surface panel with shared camera limits."""
+def _render(actors, camera):
+    """Render PyVista actors from a fixed camera, so that panels share one scale."""
 
-    points_np = points.detach().cpu().numpy()
-    triangles_np = triangles.detach().cpu().numpy()
-    axis.add_collection3d(
-        Poly3DCollection(
-            points_np[triangles_np],
-            facecolor=MESH_COLOR,
-            edgecolor=EDGE_COLOR,
-            linewidth=0.18,
-            alpha=0.98,
-            zorder=1,
-        )
+    plotter = pv.Plotter(off_screen=True, window_size=(900, 900))
+    plotter.enable_anti_aliasing("ssaa")
+    # The surface is translucent, so that controls on the far side stay visible.
+    plotter.enable_depth_peeling()
+    plotter.set_background("white")
+    for dataset, kwargs in actors:
+        plotter.add_mesh(dataset, **{"ambient": 0.35, **kwargs})
+    plotter.camera_position = camera
+    image = plotter.screenshot(return_img=True)
+    plotter.close()
+    return image
+
+
+def _trim(images, margin=40):
+    """Crop the white border shared by same-size renders, keeping their common scale."""
+
+    ink = np.any([(image[..., :3] < 250).any(axis=2) for image in images], axis=0)
+    rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
+    r0, r1 = max(rows[0] - margin, 0), rows[-1] + margin
+    c0, c1 = max(cols[0] - margin, 0), cols[-1] + margin
+    return [image[r0:r1, c0:c1] for image in images]
+
+
+def _surface(mesh):
+    """Return the shaded surface actor of a mesh."""
+
+    return (
+        to_pyvista(mesh),
+        {
+            "color": SURFACE,
+            "show_edges": True,
+            "edge_color": SURFACE_EDGE,
+            "line_width": 0.6,
+            "diffuse": 0.7,
+            "opacity": 0.55,
+        },
     )
-    axis.set_xlim(-1.45, 1.55)
-    axis.set_ylim(-1.45, 1.45)
-    axis.set_zlim(-1.35, 1.75)
-    axis.set_box_aspect((1.0, 1.0, 1.0), zoom=1.18)
-    axis.view_init(elev=20.0, azim=-57.0)
-    axis.set_axis_off()
 
 
-def _draw_controls(
-    axis,
-    controls: torch.Tensor,
-    displacements: torch.Tensor,
-    *,
-    original: bool,
-) -> None:
-    """Draw anchors, auxiliary controls, and the target handle."""
+def _arrows(starts, vectors, color):
+    """Draw displacement arrows as solid geometry."""
 
+    arrows = [
+        pv.Arrow(
+            start=start,
+            direction=vector,
+            scale=float(np.linalg.norm(vector)),
+            tip_radius=0.18,
+            shaft_radius=0.06,
+            tip_length=0.35,
+        )
+        for start, vector in zip(starts, vectors, strict=True)
+    ]
+    return (pv.merge(arrows), {"color": color, **ACCENT_LIGHTING})
+
+
+def _legend(figure, entries):
+    """Add a marker legend at the bottom center."""
+
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor=color,
+            markeredgecolor="white",
+            markersize=12,
+            label=label,
+        )
+        for label, color in entries
+    ]
+    figure.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False)
+
+
+def _panel(mesh, points, controls, displacements, *, original):
+    """Render one deformed surface with its anchors, controls, and handle."""
+
+    shown = Mesh(points=points.detach().cpu().float(), cells=mesh.cells)
     controls_np = controls.detach().cpu().numpy()
     displacements_np = displacements.detach().cpu().numpy()
-    shown = controls_np if original else controls_np + displacements_np
-
-    axis.scatter(
-        *shown[:2].T,
-        s=24,
-        color=ANCHOR_COLOR,
-        depthshade=False,
-        zorder=5,
-    )
-    axis.scatter(
-        *shown[2:13].T,
-        s=20,
-        color=AUXILIARY_COLOR,
-        depthshade=False,
-        zorder=5,
-    )
-
+    placed = controls_np if original else controls_np + displacements_np
     source = controls_np[-1]
     destination = source + displacements_np[-1]
-    handle = source if original else destination
-    axis.scatter(
-        *handle,
-        s=36,
-        color=HANDLE_COLOR,
-        depthshade=False,
-        zorder=6,
-    )
-    delta = destination - source
-    axis.quiver(
-        *source,
-        *delta,
-        color=HANDLE_COLOR,
-        arrow_length_ratio=0.15,
-        linewidth=1.8,
-        zorder=5,
-    )
-
-
-def _annotate(axis, volume_error: float, bending: float) -> None:
-    """Place geometric residuals in a panel-local annotation box."""
-
-    axis.text2D(
-        0.035,
-        0.96,
-        f"volume error: {volume_error:.2e}\nbending: {bending:.2e}",
-        transform=axis.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9.5,
-        bbox={"facecolor": "white", "edgecolor": "#90a4ae", "alpha": 0.93},
-    )
+    actors = [
+        _surface(shown),
+        (spheres(placed[:2], 0.06), {"color": FIXED, **ACCENT_LIGHTING}),
+        (spheres(placed[2:13], 0.055), {"color": SECOND, **ACCENT_LIGHTING}),
+        (
+            spheres((source if original else destination)[None], 0.075),
+            {"color": RESULT, **ACCENT_LIGHTING},
+        ),
+    ]
+    if not original:
+        actors.append(_arrows(source[None], (destination - source)[None], RESULT))
+    return _render(actors, CAMERA)
 
 
 def main() -> None:
@@ -283,21 +305,21 @@ def main() -> None:
 
     panels = (
         (
-            "Reference surface\nfixed RBF controls",
+            "reference sphere, fixed RBF controls",
             reference.points,
             torch.zeros_like(controls),
             original_metrics,
             True,
         ),
         (
-            "Target deformation\nwithout geometric penalties",
+            "RBF target, no penalties",
             unregularized,
             _displacements(controls, unregularized_auxiliary, target_displacement),
             unregularized_metrics,
             False,
         ),
         (
-            "Penalty-regularized\nvolume + bending",
+            "volume + bending penalties",
             regularized,
             _displacements(controls, auxiliary.detach(), target_displacement),
             regularized_metrics,
@@ -305,80 +327,35 @@ def main() -> None:
         ),
     )
 
-    figure = plt.figure(figsize=(15.2, 4.35))
-    axes = [
-        figure.add_subplot(
-            1,
-            3,
-            index + 1,
-            projection="3d",
-            computed_zorder=False,
-        )
-        for index in range(3)
-    ]
-    for axis, (title, points, displacements, residuals, original) in zip(
-        axes, panels, strict=True
+    cpu_reference = reference.to("cpu")
+    images = _trim(
+        [
+            _panel(cpu_reference, points, controls, displacements, original=original)
+            for _, points, displacements, _, original in panels
+        ]
+    )
+    height, width = images[0].shape[:2]
+    figure, axes = plt.subplots(1, 3, figsize=(13.5, 4.5 * height / width + 1.15))
+    for axis, image, (title, _, _, residuals, _) in zip(
+        axes, images, panels, strict=True
     ):
-        _draw_surface(axis, points, reference.cells)
-        _draw_controls(axis, controls, displacements, original=original)
-        _annotate(axis, *residuals)
-        axis.set_title(title, fontsize=14, pad=3)
-
-    legend_handles = (
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="none",
-            markerfacecolor=ANCHOR_COLOR,
-            markeredgecolor="none",
-            markersize=8,
-            label="fixed anchors",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="none",
-            markerfacecolor=AUXILIARY_COLOR,
-            markeredgecolor="none",
-            markersize=8,
-            label="optimized controls",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="none",
-            markerfacecolor=HANDLE_COLOR,
-            markeredgecolor="none",
-            markersize=8,
-            label="target handle",
+        volume_error, bending = residuals
+        axis.imshow(image)
+        axis.set_title(
+            f"{title}\n{mesh_label(reference)}\n"
+            f"volume error {volume_error:.1e}, bending {bending:.2f}"
+        )
+        axis.set_axis_off()
+    _legend(
+        figure,
+        (
+            ("fixed anchors", FIXED),
+            ("optimized controls", SECOND),
+            ("target handle", RESULT),
         ),
     )
-    figure.legend(
-        handles=legend_handles,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.085),
-        ncol=3,
-        frameon=False,
-        fontsize=10.5,
-    )
-    figure.subplots_adjust(
-        left=0.015,
-        right=0.985,
-        bottom=0.14,
-        top=0.84,
-        wspace=0.02,
-    )
-    figure.savefig(
-        OUTPUT,
-        dpi=145,
-        facecolor="white",
-        bbox_inches="tight",
-        pad_inches=0.08,
-    )
-    plt.close(figure)
+    figure.subplots_adjust(left=0.0, right=1.0, bottom=0.07, top=0.98, wspace=0.02)
+    save(figure, OUTPUT, tight=True)
     print(f"Saved {OUTPUT} with {implementation} on {device}")
 
 

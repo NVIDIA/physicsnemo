@@ -55,6 +55,7 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
+from physicsnemo.mesh.utilities._gather import gather_rows
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -229,7 +230,7 @@ def compute_vertex_angles(
         if points.numel() > 0:  # an empty tensor has no largest entry
             scale = points.detach().abs().amax()
             points = points / torch.where(scale > 0, scale, 1.0)
-        cell_vertices = points[mesh.cells]
+        cell_vertices = gather_rows(points, mesh.cells)
         v0 = cell_vertices[:, 0, :]
         v1 = cell_vertices[:, 1, :]
         v2 = cell_vertices[:, 2, :]
@@ -247,45 +248,57 @@ def compute_vertex_angles(
     # cancellation in float32 when angles are near 0 or pi, because
     # cos(epsilon) = 1 - epsilon^2/2 is indistinguishable from 1.0.
     # Computing in float64 avoids this with negligible overhead.
-    cell_vertices = mesh.points[mesh.cells].double()
+    points = mesh.points.double()
+    n_verts = n_edges + 1
+    vertices = [gather_rows(points, mesh.cells[:, k]) for k in range(n_verts)]
 
-    ### Build edge vectors for all vertices simultaneously
-    # For each vertex k, edges[k, i] = v_{(k+i+1) mod n_verts} - v_k
-    # Shape: (n_cells, n_verts, n_edges, n_spatial_dims)
-    edges = torch.stack(
-        [
-            torch.roll(cell_vertices, shifts=-(i + 1), dims=1) - cell_vertices
-            for i in range(n_edges)
-        ],
-        dim=2,
-    )
+    ### Unit edge vectors, one per vertex pair a < b: (n_cells, n_spatial_dims)
+    # The edges from vertex k are v_{(k+i+1) mod n_verts} - v_k. The edge from b
+    # to a is exactly -unit_edges[a, b] in IEEE arithmetic, so each undirected
+    # edge is built once instead of stacking all directed edges.
+    eps = safe_eps(torch.float64)
+    unit_edges = {}
+    for a, b in itertools.combinations(range(n_verts), 2):
+        edge = vertices[b] - vertices[a]
+        unit_edges[a, b] = edge / edge.norm(dim=-1, keepdim=True).clamp(min=eps)
+    del points, vertices
 
-    ### Compute edge lengths: (n_cells, n_verts, n_edges)
-    edge_lengths = edges.norm(dim=-1)
+    angles = []
+    for k in range(n_verts):
+        neighbors = [(k + i + 1) % n_verts for i in range(n_edges)]
+        rows = [unit_edges[min(k, j), max(k, j)] for j in neighbors]
+        signs = [1 if k < j else -1 for j in neighbors]
 
-    ### Compute normalized edges: (n_cells, n_verts, n_edges, n_spatial_dims)
-    edges_normalized = edges / edge_lengths.unsqueeze(-1).clamp(
-        min=safe_eps(torch.float64)
-    )
+        ### sqrt(det(C)) at vertex k: (n_cells,)
+        # C is the Gram matrix of the unit edges, so sqrt(det(C)) is n! times the
+        # volume of the simplex they span. compute_cell_areas has closed forms for
+        # up to 3 edges; where there are as many edges as spatial dimensions it
+        # takes their determinant directly, without the cancellation of forming
+        # det(C).
+        if n_edges == 3 and mesh.n_spatial_dims == 3:
+            # The scalar triple product of compute_cell_areas, inlined: |det|
+            # does not depend on the signs of the rows. 6 * (|det| / 6) keeps
+            # its rounding.
+            det = (rows[0] * torch.linalg.cross(rows[1], rows[2])).sum(-1)
+            numerator = 6 * (det.abs() / 6)
+        else:
+            directed = [row if sign > 0 else -row for row, sign in zip(rows, signs)]
+            numerator = math.factorial(n_edges) * compute_cell_areas(
+                torch.stack(directed, dim=1)
+            )
+            del directed
 
-    ### sqrt(det(C)) for each vertex: (n_cells, n_verts)
-    # C is the Gram matrix of the unit edges, so sqrt(det(C)) is n! times the
-    # volume of the simplex they span. compute_cell_areas has closed forms for
-    # up to 3 edges; where there are as many edges as spatial dimensions it takes
-    # their determinant directly, without the cancellation of forming det(C).
-    numerator = math.factorial(n_edges) * compute_cell_areas(
-        edges_normalized.flatten(0, 1)
-    ).unflatten(0, edges_normalized.shape[:2])
+        ### sum_{i<j} C_ij, one off-diagonal entry at a time: (n_cells,)
+        # Flipping the sign of an edge flips the sign of its dot products exactly.
+        sum_off_diag = torch.zeros_like(numerator)
+        for i, j in itertools.combinations(range(n_edges), 2):
+            dot = (rows[i] * rows[j]).sum(-1)
+            sum_off_diag += dot if signs[i] == signs[j] else -dot
 
-    ### sum_{i<j} C_ij, one off-diagonal entry at a time: (n_cells, n_verts)
-    sum_off_diag = torch.zeros_like(numerator)
-    for i, j in itertools.combinations(range(n_edges), 2):
-        sum_off_diag += (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(-1)
+        ### Compute angle: Omega = 2 * arctan2(sqrt(det(C)), 1 + sum_{i<j} C_ij)
+        angles.append(2.0 * torch.atan2(numerator, 1.0 + sum_off_diag))
 
-    ### Compute angle: Omega = 2 * arctan2(sqrt(det(C)), 1 + sum_{i<j} C_ij)
-    angles = 2.0 * torch.atan2(numerator, 1.0 + sum_off_diag)
-
-    return angles.to(input_dtype)
+    return torch.stack(angles, dim=1).to(input_dtype)
 
 
 def compute_vertex_angle_sums(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:

@@ -14,30 +14,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
+import pandas as pd
 import pytest
 import torch
 import train
+import xarray as xr
+import zarr
+from datasets.xarray import SOLAR_ANGLE_CHANNELS, XarrayDataset, write_example_files
 from hydra import compose, initialize
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf, open_dict
+from tensordict import TensorDict
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from torch.distributed.tensor import DTensor
 from utils import parallel, trainer
+from utils.nn import (
+    TimeScaledModel,
+    diffusion_model_forward,
+    get_preconditioned_natten_dit,
+    resize_dit,
+)
 
+from physicsnemo.core import Module
+from physicsnemo.diffusion.metrics.losses import MSEDSMLoss
+from physicsnemo.diffusion.noise_schedulers import RectifiedFlowNoiseScheduler
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.nn import RopeNatten2DSelfAttention
+from physicsnemo.utils.zenith_angle import zenith_azimuth_angles_from_timestamp
 
 DistributedManager.initialize()
 
+# The rectified-flow scheduler warns about t_max = 1; the x-prediction loss and
+# the flow used for sampling stay finite there
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:RectifiedFlowNoiseScheduler was constructed with t_max=1.0"
+)
+
 
 # Retrieve and fixture configs
-def _load_config(config_name: str) -> DictConfig:
+def _load_config(config_name: str, overrides: tuple[str, ...] = ()) -> DictConfig:
     """Load a StormCast test configuration through Hydra."""
     with initialize(version_base=None, config_path="config", job_name="test_training"):
-        return compose(config_name=config_name)
+        return compose(config_name=config_name, overrides=list(overrides))
 
 
 @pytest.fixture
@@ -56,6 +80,12 @@ def cfg_diffusion():
 def cfg_diffusion_unet():
     """Return the diffusion UNet test configuration."""
     return _load_config(config_name="test_diffusion_unet.yaml")
+
+
+@pytest.fixture
+def cfg_flow_matching():
+    """Return the flow matching (CorrDiff-ERA5-HRRR style) test configuration."""
+    return _load_config(config_name="test_flow_matching.yaml")
 
 
 def _setup_rundir(tmp_path, num_procs):
@@ -200,6 +230,49 @@ def test_training(
         rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
     )
     assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+@pytest.mark.parametrize(
+    "domain_parallel_size, force_sharding", [(1, False), (1, True), (2, False)]
+)
+def test_training_reference_dit(
+    tmp_path: Path, *, domain_parallel_size: int, force_sharding: bool
+):
+    """Train the reference DiT config (RoPE attention with qk_norm) in bf16."""
+    dist = DistributedManager()
+    if dist.world_size > domain_parallel_size:
+        pytest.skip(
+            f"Skipping: number of processes ({dist.world_size}) > domain_parallel_size ({domain_parallel_size})."
+        )
+    if domain_parallel_size > dist.world_size:
+        pytest.skip(
+            f"Skipping: not enough processes ({dist.world_size}) to use domain_parallel_size of {domain_parallel_size}."
+        )
+
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg = _load_config("test_diffusion.yaml", overrides=("model=reference_dit",))
+    cfg.training.rundir = rundir
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.force_sharding = force_sharding
+    cfg.training.perf.fp_optimizations = "amp-bf16"
+    train.main(cfg)
+
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+    # The checkpoint must restore the RoPE + qk_norm model, without an additive
+    # positional embedding
+    dit = Module.from_checkpoint(ckpt_path).model.model
+    assert dit.rope is not None
+    assert not isinstance(dit.tokenizer.pos_embed, torch.nn.Parameter)
+    for block in dit.blocks:
+        assert isinstance(block.attention, RopeNatten2DSelfAttention)
+        assert not isinstance(block.attention.q_norm, torch.nn.Identity)
 
 
 @pytest.mark.parametrize("net_architecture", ["unet", "dit"])
@@ -794,7 +867,7 @@ def test_model_types(
 def test_two_element_state_rejected():
     """The two-element `state: [input, target]` convention has been removed;
     a dataset that still returns it must fail loudly rather than silently
-    mis-train (see the 'Adding custom datasets' section of the README)."""
+    mis-train (see docs/CUSTOM_DATASET.md)."""
     from utils.nn import unpack_batch
 
     batch = {"state": [torch.zeros(1, 3, 4, 4), torch.zeros(1, 3, 4, 4)]}
@@ -859,6 +932,741 @@ def test_datapipes_backend_training(
     cfg.dataset.loader.backend = "datapipes"
     if "regression" in cfg.model.diffusion_conditions:
         cfg.model.diffusion_conditions.remove("regression")
+
+    train.main(cfg)
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+# =============================================================================
+# Flow matching (CorrDiff-ERA5-HRRR)
+# =============================================================================
+
+
+# Launch configurations (world_size, domain_parallel_size, batch_size): a test
+# runs the cases matching the number of processes pytest was launched with.
+# ``data_parallel`` uses FSDP only, ``domain_parallel`` shards the spatial
+# dimension with ShardTensor, ``data_domain_parallel`` combines both on a
+# (2, 2) mesh.
+_PARALLEL_CONFIGS = pytest.mark.parametrize(
+    "world_size, domain_parallel_size, batch_size",
+    [(1, 1, 1), (2, 1, 2), (2, 2, 1), (4, 2, 2)],
+    ids=["single", "data_parallel", "domain_parallel", "data_domain_parallel"],
+)
+
+
+def _skip_unless_world_size(world_size: int) -> DistributedManager:
+    """Skip the test unless it was launched with ``world_size`` processes."""
+    dist = DistributedManager()
+    if dist.world_size != world_size:
+        pytest.skip(
+            f"Skipping: this configuration requires {world_size} process(es), "
+            f"current: {dist.world_size}."
+        )
+    return dist
+
+
+@_PARALLEL_CONFIGS
+@pytest.mark.parametrize("net_architecture", ["dit", "unet"])
+@pytest.mark.parametrize("prediction_type", ["x0", "epsilon", "flow"])
+@pytest.mark.parametrize("fp_optimizations", ["fp32", "amp-bf16"])
+def test_flow_matching_training(
+    tmp_path: Path,
+    cfg_flow_matching: DictConfig,
+    *,
+    world_size: int,
+    domain_parallel_size: int,
+    batch_size: int,
+    net_architecture: Literal["unet", "dit"],
+    prediction_type: Literal["x0", "epsilon", "flow"],
+    fp_optimizations: Literal["fp32", "amp-bf16"],
+):
+    """Test that flow matching training runs with the DiT and the U-Net, with
+    x0, epsilon, and flow prediction, on 1, 2 and 4 processes (data and
+    domain parallelism), and writes the TimeScaledModel checkpoint and
+    validation plots."""
+    dist = _skip_unless_world_size(world_size)
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+
+    cfg = cfg_flow_matching.copy()
+    cfg.training.rundir = rundir
+    cfg.training.batch_size = batch_size
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.perf.fp_optimizations = fp_optimizations
+    cfg.training.loss.prediction_type = prediction_type
+    if prediction_type == "epsilon":
+        with open_dict(cfg):
+            cfg.training.loss.t_max = (
+                0.99  # the epsilon conversion is singular at t = 1
+            )
+    cfg.model.architecture = net_architecture
+    if net_architecture == "unet":
+        cfg.dataset.num_scalar_cond_channels = 0  # scalar conditions need the DiT
+        cfg.model.hyperparameters = {"model_channels": 8, "channel_mult": [1, 1]}
+    train.main(cfg)
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "TimeScaledModel.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Flow matching checkpoint not found"
+    assert isinstance(Module.from_checkpoint(ckpt_path), TimeScaledModel)
+    assert os.path.isdir(os.path.join(rundir, "images", "state_0"))
+
+
+@_PARALLEL_CONFIGS
+@pytest.mark.parametrize("prediction_type", ["x0", "epsilon"])
+def test_edm_time_scaled_training(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    *,
+    world_size: int,
+    domain_parallel_size: int,
+    batch_size: int,
+    prediction_type: Literal["x0", "epsilon"],
+):
+    """Test that the time-scaled preconditioner also trains with the EDM loss,
+    predicting the clean state or the noise: the preconditioner, the loss type,
+    and the prediction type are independent settings. Runs on 1, 2 and 4
+    processes (data and domain parallelism)."""
+    dist = _skip_unless_world_size(world_size)
+    cfg = cfg_diffusion.copy()
+    cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg.training.batch_size = batch_size
+    cfg.training.domain_parallel_size = domain_parallel_size
+    with open_dict(cfg):
+        cfg.model.preconditioner = "time_scaled"  # with the default time_scale
+    cfg.training.loss.prediction_type = prediction_type
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+    train.main(cfg)
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+    ckpt_path = os.path.join(
+        cfg.training.rundir, "checkpoints_diffusion", "TimeScaledModel.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+def test_edm_preconditioner_requires_x0(cfg_diffusion: DictConfig):
+    """Test that the EDM preconditioner rejects other prediction types."""
+    cfg = cfg_diffusion.copy()
+    cfg.training.loss.prediction_type = "epsilon"
+    with pytest.raises(ValueError, match="predicts x0"):
+        trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+
+
+@pytest.mark.parametrize("prediction_type", ["epsilon", "score"])
+def test_flow_matching_singular_prediction_requires_t_max_below_one(
+    cfg_flow_matching: DictConfig, prediction_type: str
+):
+    """Test that flow matching rejects epsilon and score prediction up to t = 1,
+    where their conversion to the flow divides by zero, and accepts t_max < 1."""
+    cfg = cfg_flow_matching.copy()
+    cfg.training.loss.prediction_type = prediction_type
+    with pytest.raises(ValueError, match="singular at t = 1"):
+        trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+    with open_dict(cfg):
+        cfg.training.loss.t_max = 0.99
+    trainer.MainConfig(**OmegaConf.to_container(cfg, resolve=True))
+
+
+@pytest.mark.parametrize("attention_backend", ["natten2d_rope", "natten2d"])
+def test_resize_dit(tmp_path: Path, attention_backend: str):
+    """Test that a DiT trained on patches runs on a larger domain after
+    resize_dit, as inference.py does for full-domain sampling, with unchanged
+    weights; and that resizing a DiT with a learned absolute positional
+    embedding raises."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: resize_dit is tested with 1 process.")
+    device = DistributedManager().device
+    net = get_preconditioned_natten_dit(
+        target_channels=2,
+        conditional_channels=1,
+        img_resolution=(32, 32),
+        hidden_size=32,
+        depth=1,
+        num_heads=1,
+        patch_size=2,
+        attn_kernel_size=7,
+        attention_backend=attention_backend,
+        preconditioner="time_scaled",
+    )
+    ckpt_path = str(tmp_path / "net.mdlus")
+    net.save(ckpt_path)
+    net = Module.from_checkpoint(ckpt_path).to(device)
+
+    if attention_backend == "natten2d":
+        with pytest.raises(ValueError, match="learned absolute positional embedding"):
+            resize_dit(net, (64, 96))
+        return
+
+    x = torch.randn(1, 2, 64, 96, device=device)
+    condition = torch.randn(1, 1, 64, 96, device=device)
+    t = torch.full((1,), 0.5, device=device)
+    weights = {k: v.clone() for (k, v) in net.state_dict().items()}
+    resize_dit(net, (64, 96))
+    assert net.model.model.input_size == (64, 96)
+    for k, v in net.state_dict().items():
+        torch.testing.assert_close(v, weights[k], rtol=0, atol=0)
+    with torch.no_grad():
+        assert net(x, t, condition=condition).shape == x.shape
+
+
+def test_flow_matching_x0_loss_equals_mse(
+    tmp_path: Path, cfg_flow_matching: DictConfig
+):
+    """Test that the x0-prediction flow matching loss equals the x0-prediction
+    loss of MSEDSMLoss, ||x0_hat - x0||^2, for sampled times and at the
+    endpoints t = 0 and t = 1."""
+    dist = DistributedManager()
+    if dist.world_size > 1:
+        pytest.skip("Skipping: single-process test.")
+    cfg = cfg_flow_matching.copy()
+    cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    tr = trainer.Trainer(cfg)
+    x0_mse = MSEDSMLoss(
+        tr.net, tr.train_noise_scheduler, prediction_type="x0", reduction="none"
+    )
+    device = tr.device
+    (h, w) = cfg.dataset.image_size
+    x0 = torch.randn(2, cfg.dataset.num_state_channels, h, w, device=device)
+    condition = TensorDict(
+        {
+            "cond_concat": torch.randn(
+                2, cfg.dataset.num_background_channels, h, w, device=device
+            ),
+            "cond_vec": torch.randn(
+                2, cfg.dataset.num_scalar_cond_channels, device=device
+            ),
+        },
+        batch_size=[2],
+        device=device,
+    )
+    for t in (None, torch.tensor([0.0, 1.0], device=device)):
+        with torch.no_grad():
+            torch.manual_seed(0)
+            loss = tr.loss_fn(x0, torch.ones_like(x0), t=t, condition=condition)
+            torch.manual_seed(0)  # same times and noise as in the training loss
+            expected = x0_mse(x0, t=t, condition=condition)
+        assert torch.isfinite(loss).all()
+        assert torch.equal(loss, expected)
+
+
+class _GaussianX0Predictor(torch.nn.Module):
+    """Exact x0-predictor E[x0 | x_t] for data x0 ~ N(mean, std^2) on the
+    rectified-flow path x_t = (1 - t) x0 + t eps."""
+
+    def __init__(self, mean: float, std: float):
+        super().__init__()
+        self.mean = mean
+        self.var = std**2
+
+    def forward(self, x, t, condition=None):
+        alpha = (1 - t).reshape(-1, 1, 1, 1)
+        sigma = t.reshape(-1, 1, 1, 1)
+        gain = alpha * self.var / (alpha**2 * self.var + sigma**2)
+        return self.mean + gain * (x - alpha * self.mean)
+
+
+@pytest.mark.parametrize(
+    "solver, num_steps, time_shift",
+    [("heun", 32, 1.0), ("heun", 64, 4.0), ("euler", 128, 1.0)],
+)
+def test_rectified_flow_sampling_from_pure_noise(
+    solver: str, num_steps: int, time_shift: float
+):
+    """Test that rectified-flow sampling from pure noise (t = 1) with the exact
+    x0-predictor of Gaussian data reproduces the data distribution, with and
+    without a time shift."""
+    device = DistributedManager().device
+    (mean, std) = (2.0, 0.5)
+    model = _GaussianX0Predictor(mean, std).to(device)
+    torch.manual_seed(0)
+    x = diffusion_model_forward(
+        model,
+        torch.zeros(4, 1, 64, 64, device=device),  # the predictor ignores the condition
+        shape=(4, 1, 64, 64),
+        scheduler=RectifiedFlowNoiseScheduler(t_max=1.0),
+        sampler_args={
+            "num_steps": num_steps,
+            "solver": solver,
+            "time_shift": time_shift,
+        },
+        formulation="flow",
+        prediction_type="x0",
+    )
+    assert torch.isfinite(x).all()
+    assert abs(x.mean().item() - mean) < 0.02
+    assert abs(x.std().item() - std) < 0.02
+
+
+def _write_corrdiff_conus_data(path: Path) -> dict:
+    """Write a small dataset in the layout that CorrDiffConusDataset expects.
+    The ERA5 fields are linear in latitude and longitude, so their bilinear
+    interpolation to the HRRR grid is exact."""
+    times = pd.date_range("2025-01-01", periods=6, freq="h")
+    (y, x) = np.meshgrid(np.arange(12), np.arange(16), indexing="ij")
+    lat = (35.0 + 0.5 * y + 0.1 * x).astype(np.float32)
+    lon = (-105.0 + 0.6 * x + 0.05 * y).astype(np.float32)
+    rng = np.random.default_rng(0)
+    hrrr = rng.normal(size=(6, 2, 12, 16)).astype(np.float32)
+    xr.Dataset(
+        {
+            "HRRR": (("time", "channel", "y", "x"), hrrr),
+            "latitude": (("y", "x"), lat),
+            "longitude": (("y", "x"), lon),
+            "valid_data": ("time", np.array([True] * 5 + [False])),  # last hour invalid
+        },
+        coords={"time": times, "channel": np.array(["u10m", "t2m"])},
+    ).to_zarr(path / "hrrr-conus" / "2025.zarr")
+
+    # ERA5 fields c0 + c1 * lat + c2 * lon, without the hour at index 4
+    (era5_lat, era5_lon) = (np.arange(50.0, 29.0, -1.0), np.arange(-110.0, -89.0))
+    coefs = np.array([[1.0, 0.2, -0.3], [2.0, -0.1, 0.4], [3.0, 0.05, 0.1]])
+    fields = (
+        coefs[:, 0, None, None]
+        + coefs[:, 1, None, None] * era5_lat[:, None]
+        + coefs[:, 2, None, None] * era5_lon[None, :]
+    )
+    era5_times = times[[0, 1, 2, 3, 5]]
+    xr.Dataset(
+        {
+            "data": (
+                ("time", "channel", "latitude", "longitude"),
+                np.repeat(fields[None], len(era5_times), axis=0).astype(np.float32),
+            )
+        },
+        coords={
+            "time": era5_times,
+            "channel": np.array(["u10m", "tcwv", "sp"]),
+            "latitude": era5_lat,
+            "longitude": era5_lon,
+        },
+    ).to_zarr(path / "era5-conus" / "2025.zarr")
+
+    invariant_names = ["elev_mean", "elev_std", "lsm_mean"]
+    invariants = rng.normal(size=(3, 12, 16)).astype(np.float32)
+    os.makedirs(path / "invariants")
+    xr.Dataset(
+        {v: (("y", "x"), invariants[k]) for (k, v) in enumerate(invariant_names)}
+    ).to_netcdf(path / "invariants" / "invariants_HRRR.nc")
+
+    stats = {
+        "hrrr": {"u10m": {"mean": 0.5, "std": 2.0}, "t2m": {"mean": -1.0, "std": 4.0}},
+        "era5": {v: {"mean": 1.0, "std": 3.0} for v in ["u10m", "tcwv", "sp"]},
+        "invariant": {v: {"mean": 0.1, "std": 2.0} for v in invariant_names},
+    }
+    os.makedirs(path / "stats")
+    with open(path / "stats" / "hrrr_era5_stats.json", "w") as f:
+        json.dump(stats, f)
+    return {
+        "hrrr": hrrr,
+        "lat": lat,
+        "lon": lon,
+        "coefs": coefs,
+        "invariants": invariants,
+        "times": times,
+    }
+
+
+def test_corrdiff_conus_dataset(tmp_path: Path):
+    """Test time filtering, cropping, interpolation, normalization, patches,
+    and presence flags of CorrDiffConusDataset on a small synthetic dataset."""
+    from datasets.corrdiff_conus import CorrDiffConusDataset
+
+    dist = DistributedManager()
+    if dist.world_size > 1:
+        pytest.skip("Skipping: single-process test.")
+    data = _write_corrdiff_conus_data(tmp_path)
+    params = dict(
+        data_path=str(tmp_path),
+        years=[2025],
+        time_range_train=["2025-01-01T00:00:00", "2025-01-01T02:00:00"],
+        time_range_valid=["2025-01-01T02:00:00", "2025-01-02T00:00:00"],
+        crop_window=[[1, 11], [2, 14]],
+        drop_variables=["tcwv", "sp"],
+        drop_prob=1.0,
+    )
+    crop = (slice(1, 11), slice(2, 14))
+
+    # Validation on the full domain: the dataset skips the invalid HRRR hour
+    # and the hour missing in ERA5, and keeps every input
+    valid = CorrDiffConusDataset(dict(params, patch_shape=None), train=False)
+    assert list(valid.times) == list(data["times"][[2, 3]])
+    assert valid.image_shape() == (10, 12)
+    assert len(valid.background_channels()) == 3 + 1 + 3
+    assert valid.get_invariants() is None
+    item = valid[0]
+    np.testing.assert_allclose(
+        item["state"],
+        (data["hrrr"][2][:, crop[0], crop[1]] - np.array([0.5, -1.0])[:, None, None])
+        / np.array([2.0, 4.0])[:, None, None],
+        rtol=1e-6,
+    )
+    (lat, lon) = (data["lat"][crop], data["lon"][crop])
+    coefs = data["coefs"]
+    era5 = (
+        coefs[:, 0, None, None]
+        + coefs[:, 1, None, None] * lat
+        + coefs[:, 2, None, None] * lon
+    )
+    np.testing.assert_allclose(item["background"][:3], (era5 - 1.0) / 3.0, atol=1e-4)
+    np.testing.assert_allclose(
+        item["background"][4:],
+        (data["invariants"][:, crop[0], crop[1]] - 0.1) / 2.0,
+        rtol=1e-6,
+    )
+    year_phase = 2 * np.pi * (2 / 24) / 365.25  # 02:00 on January 1
+    np.testing.assert_allclose(
+        item["scalar_conditions"],
+        [np.sin(year_phase), np.cos(year_phase), 1, 1],
+        rtol=1e-5,
+    )
+
+    # Training patches: with drop_prob = 1, the dataset replaces tcwv and sp by
+    # their climatological mean (zero) and sets their presence flags to zero
+    train_ds = CorrDiffConusDataset(dict(params, patch_shape=[4, 4]), train=True)
+    assert len(train_ds) == 2
+    item = train_ds[1]
+    assert item["state"].shape == (2, 4, 4)
+    assert item["background"].shape == (7, 4, 4)
+    assert np.all(item["background"][1:3] == 0)
+    np.testing.assert_array_equal(item["scalar_conditions"][2:], [0, 0])
+
+
+# =============================================================================
+# XarrayDataset tests, using the files written by write_example_files: arrays
+# "hrrr" (t2m, u10, v10) and "era5" (msl, tcwv), hourly from 2020-01-01, with
+# invariants "orography" and "land_sea_mask" and a static mask.
+XARRAY_STATE = {"hrrr": {"channels": None, "time_steps": [1]}}
+XARRAY_BACKGROUND = {
+    "hrrr": {"channels": ["v10", "t2m"], "time_steps": [-1, 0]},
+    "era5": {"channels": None, "time_steps": [1]},
+}
+
+
+@pytest.fixture
+def xarray_files(tmp_path: Path) -> dict:
+    """Write the default example files for XarrayDataset."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: XarrayDataset tests are run with 1 process.")
+    return write_example_files(str(tmp_path / "data"))
+
+
+def _read_collated(
+    files: dict, access_patterns: dict, time: np.datetime64
+) -> tuple[np.ndarray, np.ndarray]:
+    """Collate a sample directly from the files, independently of XarrayDataset.
+
+    Returns the sample in physical units and normalized."""
+    with open(files["stats_path"]) as f:
+        stats = json.load(f)
+    datasets = [xr.load_dataset(path) for path in files["data_paths"]]
+    data = xr.concat(datasets, dim="time")
+    time_step = np.timedelta64(files["time_step_seconds"], "s")
+    (raw, normalized) = ([], [])
+    for array, pattern in access_patterns.items():
+        channels = pattern["channels"] or list(data[f"{array}_channel"].values)
+        mean = np.array([stats[array][ch]["mean"] for ch in channels])[:, None, None]
+        std = np.array([stats[array][ch]["std"] for ch in channels])[:, None, None]
+        for step in pattern["time_steps"]:
+            x = data[array].sel(
+                {"time": time + step * time_step, f"{array}_channel": channels}
+            )
+            raw.append(x.values)
+            normalized.append((x.values - mean) / std)
+    return (np.concatenate(raw), np.concatenate(normalized))
+
+
+@pytest.mark.parametrize(
+    "file_format, cache_location",
+    [("zarr", None), ("zarr", "memory"), ("zarr", "directory"), ("netcdf", None)],
+)
+def test_xarray_dataset_samples(
+    tmp_path: Path, *, file_format: str, cache_location: str | None
+):
+    """Samples match the data collated and normalized directly from the files."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: XarrayDataset tests are run with 1 process.")
+    if file_format == "netcdf":
+        pytest.importorskip("netCDF4")
+    files = write_example_files(str(tmp_path / "data"), file_format=file_format)
+    if cache_location == "directory":
+        cache_location = str(tmp_path / "cache")
+    params = {
+        **files,
+        "state_access_patterns": XARRAY_STATE,
+        "background_access_patterns": XARRAY_BACKGROUND,
+        "cache_location": cache_location,
+    }
+    dataset = XarrayDataset(params, train=True)
+
+    assert len(dataset) == 46  # 48 times, minus one at each end for steps -1 and 1
+    assert dataset.state_channels() == ["t2m_t+1", "u10_t+1", "v10_t+1"]
+    assert dataset.background_channels() == [
+        "v10_t-1",
+        "t2m_t-1",
+        "v10_t+0",
+        "t2m_t+0",
+        "msl_t+1",
+        "tcwv_t+1",
+    ]
+    with xr.open_dataset(files["invariants_path"]) as ds:
+        static_mask = ds["mask"].values[None]
+    invariants = dataset.get_invariants()
+    np.testing.assert_allclose(invariants.mean(axis=(1, 2)), 0.0, atol=1e-5)
+    np.testing.assert_allclose(invariants.std(axis=(1, 2)), 1.0, atol=1e-5)
+
+    # first and last sample, which are in different files, then the first again,
+    # which is read from the cache if enabled
+    for idx in (0, len(dataset) - 1, 0):
+        sample = dataset[idx]
+        time = dataset.times[idx]
+        for key, patterns, normalize in (
+            ("state", XARRAY_STATE, dataset.normalize_state),
+            ("background", XARRAY_BACKGROUND, dataset.normalize_background),
+        ):
+            (raw, expected) = _read_collated(files, patterns, time)
+            np.testing.assert_allclose(sample[key], expected, rtol=1e-5, atol=1e-5)
+            np.testing.assert_allclose(normalize(raw), expected, rtol=1e-5, atol=1e-5)
+        np.testing.assert_array_equal(sample["mask"], static_mask)
+
+    if cache_location == str(tmp_path / "cache"):
+        assert len(os.listdir(cache_location)) == len(files["data_paths"])
+
+
+def test_xarray_dataset_time_selection(tmp_path: Path):
+    """Sample times respect validity, exclusions, time ranges and access patterns."""
+    if DistributedManager().world_size > 1:
+        pytest.skip("Skipping: XarrayDataset tests are run with 1 process.")
+    files = write_example_files(
+        str(tmp_path / "data"), num_files=3, invariant_variables=[]
+    )
+    hour = np.timedelta64(1, "h")
+    start = np.datetime64("2020-01-01T00:00:00")
+    times = start + hour * np.arange(72)
+    zarr.open_array(os.path.join(files["data_paths"][1], "valid"), mode="r+")[5] = False
+    invalid = times[24 + 5]
+    excluded = times[10]
+
+    params = {
+        **files,
+        "time_step_seconds": None,  # inferred from the data
+        "state_access_patterns": {"hrrr": {"channels": None, "time_steps": [0]}},
+        "background_access_patterns": {
+            "era5": {"channels": None, "time_steps": [-2, -1]}
+        },
+        "exclude_times": [str(excluded)],
+        "time_range_train": [str(times[3]), str(times[48])],
+        "time_range_valid": [str(times[48]), str(start + 72 * hour)],
+    }
+    for train_split, (start_idx, end_idx) in ((True, (3, 48)), (False, (48, 72))):
+        in_range = set(times[start_idx:end_idx]) - {invalid, excluded}
+        expected = sorted(
+            t for t in in_range if all(t + s * hour in in_range for s in (-2, -1, 0))
+        )
+        dataset = XarrayDataset(params, train=train_split)
+        np.testing.assert_array_equal(dataset.times, np.array(expected))
+
+
+def test_xarray_dataset_solar_angles(xarray_files: dict):
+    """Solar angles are computed in access-pattern order without normalization, and
+    may be at times that are not in the data."""
+    background = {
+        "era5": {"channels": ["msl"], "time_steps": [1]},
+        "solar_angles": {
+            "channels": ["sin_azimuth", "cos_zenith"],
+            "time_steps": [0, 1],
+        },
+        "hrrr": {"channels": ["t2m"], "time_steps": [0]},
+    }
+    params = {
+        **xarray_files,
+        "state_access_patterns": XARRAY_STATE,
+        "background_access_patterns": background,
+    }
+    dataset = XarrayDataset(params, train=True)
+    assert len(dataset) == 47  # 48 times, minus the last one for step 1
+    assert dataset.background_channels() == [
+        "msl_t+1",
+        "sin_azimuth_t+0",
+        "cos_zenith_t+0",
+        "sin_azimuth_t+1",
+        "cos_zenith_t+1",
+        "t2m_t+0",
+    ]
+
+    with xr.open_dataset(xarray_files["invariants_path"]) as ds:
+        (lat, lon) = (ds["lat"].values, ds["lon"].values)
+    time_step = np.timedelta64(xarray_files["time_step_seconds"], "s")
+    idx = 5
+    sample = dataset[idx]["background"]
+    for k, step in enumerate((0, 1)):
+        time = dataset.times[idx] + step * time_step
+        timestamp = (time - np.datetime64(0, "s")) / np.timedelta64(1, "s")
+        (_, cos_zenith, sin_azimuth, _) = zenith_azimuth_angles_from_timestamp(
+            timestamp, lon, lat
+        )
+        np.testing.assert_allclose(sample[1 + 2 * k], sin_azimuth, atol=1e-6)
+        np.testing.assert_allclose(sample[2 + 2 * k], cos_zenith, atol=1e-6)
+    np.testing.assert_array_equal(
+        dataset.normalize_background(sample)[1:5], sample[1:5]
+    )
+    # the data channels around the solar angles are still read and normalized
+    for c, array in ((0, "era5"), (5, "hrrr")):
+        (_, expected) = _read_collated(
+            xarray_files, {array: background[array]}, dataset.times[idx]
+        )
+        np.testing.assert_allclose(sample[c], expected[0], rtol=1e-5, atol=1e-5)
+
+    # solar angles only, all channels, at a time far outside the data
+    params["background_access_patterns"] = {
+        "solar_angles": {"channels": None, "time_steps": [-100]}
+    }
+    dataset = XarrayDataset(params, train=True)
+    assert len(dataset) == 47
+    assert dataset.background_channels() == [
+        f"{angle}_t-100" for angle in SOLAR_ANGLE_CHANNELS
+    ]
+    sample = dataset[0]["background"]
+    assert sample.shape == (4, *dataset.image_shape())
+    assert np.all(np.abs(sample) <= 1.0)
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        (
+            {
+                "background_access_patterns": {
+                    "solar_angles": {"channels": ["zenith"], "time_steps": [0]}
+                }
+            },
+            "not found",
+        ),
+        (
+            {
+                "background_access_patterns": {
+                    "solar_angles": {"channels": None, "time_steps": [0]}
+                },
+                "lat_lon_variables": None,
+            },
+            "lat_lon_variables must be set",
+        ),
+        (
+            {
+                "state_access_patterns": {
+                    "solar_angles": {"channels": None, "time_steps": [0]}
+                }
+            },
+            "only be used in the background",
+        ),
+    ],
+)
+def test_xarray_dataset_solar_angles_errors(
+    xarray_files: dict, overrides: dict, match: str
+):
+    """Invalid solar angle configurations raise an error."""
+    params = {**xarray_files, "state_access_patterns": XARRAY_STATE, **overrides}
+    with pytest.raises(ValueError, match=match):
+        XarrayDataset(params, train=True)
+
+
+def test_xarray_dataset_nan_mask_and_crop(xarray_files: dict):
+    """NaNs are zeroed and masked out, combined with the cropped static mask."""
+    zarr.open_array(os.path.join(xarray_files["data_paths"][0], "hrrr"), mode="r+")[
+        3, 1, 10, 12
+    ] = np.nan
+    params = {
+        **xarray_files,
+        "state_access_patterns": {"hrrr": {"channels": None, "time_steps": [0]}},
+        "crop_window": [[4, 20], [8, 32]],
+        "nan_mask": True,
+    }
+    dataset = XarrayDataset(params, train=True)
+    with xr.open_dataset(xarray_files["invariants_path"]) as ds:
+        static_mask = ds["mask"].values[None, 4:20, 8:32]
+
+    sample = dataset[3]
+    assert sample["state"].shape == (3, 16, 24)
+    assert np.isfinite(sample["state"]).all()
+    assert sample["state"][1, 6, 4] == 0
+    expected_mask = static_mask.copy()
+    expected_mask[0, 6, 4] = False
+    np.testing.assert_array_equal(sample["mask"], expected_mask)
+    # the static mask must not be modified by the NaN mask of a previous sample
+    np.testing.assert_array_equal(dataset[4]["mask"], static_mask)
+
+
+@pytest.mark.parametrize(
+    "params, match",
+    [
+        (
+            {
+                "state_access_patterns": {
+                    "hrrr": {"channels": ["q2"], "time_steps": [0]}
+                }
+            },
+            r"Channels \{'q2'\} of 'hrrr' in .* not found",
+        ),
+        (
+            {"state_access_patterns": {"gfs": {"channels": None, "time_steps": [0]}}},
+            r"Arrays \['gfs'\] not found",
+        ),
+        (
+            {
+                "state_access_patterns": {
+                    "hrrr": {"channels": None, "time_steps": [0, 0]}
+                }
+            },
+            "must not contain duplicates",
+        ),
+        ({"time_range_train": ["2030-01-01", "2031-01-01"]}, "No samples left"),
+        ({"invariant_variables": ["lat"]}, "statistics for 'invariant' are missing"),
+        ({"invariants_path": None}, "invariants_path must be set"),
+    ],
+    ids=[
+        "unknown_channel",
+        "missing_array",
+        "duplicate_steps",
+        "no_samples",
+        "stats",
+        "no_invariants_path",
+    ],
+)
+def test_xarray_dataset_invalid_config(xarray_files: dict, params: dict, match: str):
+    """Configuration errors are reported at construction with a clear message."""
+    state = {"hrrr": {"channels": None, "time_steps": [0]}}
+    with pytest.raises(ValueError, match=match):
+        XarrayDataset(
+            {**xarray_files, "state_access_patterns": state, **params}, train=True
+        )
+
+
+def test_xarray_dataset_training(
+    tmp_path: Path, xarray_files: dict, cfg_diffusion_unet: DictConfig
+):
+    """Train end to end through the trainer with XarrayDataset."""
+    rundir = _setup_rundir(tmp_path, 1)
+    cfg = cfg_diffusion_unet.copy()
+    cfg.training.rundir = rundir
+    cfg.training.validation_plot_variables = ["t2m_t+1"]
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+    cfg.dataset = OmegaConf.create(
+        {
+            "name": "xarray.XarrayDataset",
+            "loader": {"backend": "torch"},
+            **xarray_files,
+            "state_access_patterns": XARRAY_STATE,
+            "background_access_patterns": XARRAY_BACKGROUND,
+        }
+    )
 
     train.main(cfg)
 

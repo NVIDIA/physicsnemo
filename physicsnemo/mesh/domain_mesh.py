@@ -23,9 +23,14 @@ import torch
 from jaxtyping import Bool, Float
 from tensordict import TensorClass, TensorDict
 
-from physicsnemo.mesh.mesh import Mesh, _requested_dtype
+from physicsnemo.mesh.mesh import (
+    Mesh,
+    _requested_dtype,
+    _set_subclass_fields,
+)
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
+from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -84,12 +89,16 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         Reynolds number, angle of attack, Mach number). If a ``dict`` is
         provided, it is automatically converted to a :class:`TensorDict`.
         Defaults to an empty collection.
+    **fields
+        Values for the fields that a subclass of ``DomainMesh`` declares, so
+        that such a subclass needs no ``__init__`` of its own.
 
     Raises
     ------
     TypeError
-        If ``interior`` is not a :class:`Mesh`, or if any value in
-        ``boundaries`` is not a :class:`Mesh`.
+        If ``interior`` is not a :class:`Mesh`, if any value in
+        ``boundaries`` is not a :class:`Mesh`, or if a keyword argument names
+        no field of the class.
     ValueError
         If any boundary mesh has a different ``n_spatial_dims`` than
         ``interior``.
@@ -128,6 +137,11 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     Move everything to GPU:
 
     >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
+
+    References
+    ----------
+    - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI
+      <https://arxiv.org/abs/2610.39072>`__
     """
 
     interior: Mesh
@@ -139,10 +153,13 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         interior: Mesh,
         boundaries: dict[str, Mesh] | TensorDict | None = None,
         global_data: dict[str, torch.Tensor] | TensorDict | None = None,
+        **fields: Any,
     ) -> None:
         self.interior = interior
         self.boundaries = boundaries  # normalized by __post_init__
         self.global_data = global_data  # normalized by __post_init__
+        if fields:
+            _set_subclass_fields(self, DomainMesh, fields)
         # tensorclass only auto-calls __post_init__ from the *generated* __init__
         # (same semantics as dataclasses). Since we define a custom __init__,
         # we must call it explicitly. During load(), tensorclass calls it
@@ -162,12 +179,13 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             self.boundaries = TensorDict(self.boundaries, batch_size=[])
         elif self.boundaries is None:
             self.boundaries = TensorDict({}, batch_size=[])
-        else:
+        elif self.boundaries.batch_size:
             self.boundaries.batch_size = torch.Size([])
 
         ### global_data: coerce dict -> TensorDict, None -> empty TensorDict
         if isinstance(self.global_data, TensorDict):
-            self.global_data.batch_size = torch.Size([])
+            if self.global_data.batch_size:
+                self.global_data.batch_size = torch.Size([])
         else:
             self.global_data = TensorDict(
                 {} if self.global_data is None else dict(self.global_data),
@@ -175,7 +193,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             )
 
         ### Validate types and dimensional consistency
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if not isinstance(self.interior, Mesh):
                 raise TypeError(
                     f"`interior` must be a Mesh, got {type(self.interior).__name__}."
@@ -247,60 +265,121 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             self,
             interior=fn(self.interior) if interior else self.interior.clone(),
             boundaries=(
-                self.boundaries.apply(fn, call_on_nested=True)
+                # device=None keeps each result on the device fn put it on,
+                # rather than casting it back to the container's device.
+                self.boundaries.apply(fn, call_on_nested=True, device=None)
                 if boundaries
                 else self.boundaries.clone()
             ),
             global_data=self.global_data.clone(),
         )
 
+    def __repr__(self) -> str:
+        """Format a readable summary of the domain mesh."""
+        lines = ["DomainMesh("]
+
+        ### Interior - indent data fields one level under "interior:"
+        interior_repr = format_mesh_repr(self.interior)
+        first, *rest = interior_repr.split("\n")
+        lines.append(f"    interior: {first}")
+        lines.extend(f"    {line}" for line in rest)
+
+        ### Boundaries - indent data fields one level under each boundary key
+        bc_names = self.boundary_names
+        if not bc_names:
+            lines.append("    boundaries: {}")
+        else:
+            lines.append("    boundaries:")
+            max_bc_len = max(len(n) for n in bc_names)
+            for name in bc_names:
+                bc_mesh = self.boundaries[name]
+                bc_repr = format_mesh_repr(bc_mesh)
+                first, *rest = bc_repr.split("\n")
+                lines.append(f"        {name.ljust(max_bc_len)}: {first}")
+                lines.extend(f"        {line}" for line in rest)
+
+        ### Global data (only if non-empty); nested leaves print as "a.b: shape"
+        gd_items = sorted(
+            (".".join(k) if isinstance(k, tuple) else k, tuple(v.shape))
+            for k, v in self.global_data.items(include_nested=True, leaves_only=True)
+        )
+        if gd_items:
+            items = ", ".join(f"{k}: {shape}" for k, shape in gd_items)
+            lines.append(f"    global_data: {{{items}}}")
+
+        lines.append(")")
+        return "\n".join(lines)
+
+    def to(self, *args: Any, **kwargs: Any) -> Self:
+        """Move domain and all attached data to specified device/dtype.
+
+        All tensors in ``interior``, every mesh in ``boundaries``, and
+        ``global_data`` are moved together.
+
+        Parameters
+        ----------
+        *args : Any
+            Positional arguments passed to the tensorclass ``to``
+            method.  Common usage: ``dm.to("cuda")`` or
+            ``dm.to(torch.float32)``.
+        **kwargs : Any
+            Keyword arguments passed to the tensorclass ``to`` method.
+
+        Keyword Arguments
+        -----------------
+        device : torch.device, optional
+            The desired device.
+        dtype : torch.dtype, optional
+            The desired floating-point or complex dtype.
+        non_blocking : bool, optional
+            Whether the transfer should be non-blocking.
+
+        Returns
+        -------
+        DomainMesh
+            A new DomainMesh on the target device and dtype. Tensors that
+            need no change are shared with this domain, not copied.
+
+        Raises
+        ------
+        TypeError
+            If ``dtype`` is neither floating-point nor complex. Coordinates
+            must stay real- or complex-valued, and the cast would also be
+            applied to each component mesh's integer ``cells``.
+
+        Examples
+        --------
+        >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
+        >>> dm_cpu = dm.to(device="cpu")  # doctest: +SKIP
+        """
+        cast_dtype = _requested_dtype(args, kwargs)
+        if cast_dtype is not None and not (
+            cast_dtype.is_floating_point or cast_dtype.is_complex
+        ):
+            raise TypeError(
+                "Mesh coordinates must remain floating point or complex; "
+                f"cannot convert a DomainMesh to {cast_dtype}."
+            )
+        if cast_dtype is None:
+            return super().to(*args, **kwargs)
+
+        # The tensorclass ``to`` would also cast the integer ``cells`` of every
+        # component mesh. Resolve the target device with a zero-length probe, move
+        # all leaves without a dtype conversion, then cast every floating leaf in one
+        # recursive pass. This preserves concrete DomainMesh / Mesh subtypes and their
+        # additional fields.
+        probe = self.interior.points[:0].to(*args, **kwargs)
+        transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
+        transfer_kwargs["device"] = probe.device
+        moved = super().to(**transfer_kwargs)
+
+        def _cast(t: torch.Tensor) -> torch.Tensor:
+            return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+
+        return moved.apply(_cast)
+
     if TYPE_CHECKING:
-
-        def to(self, *args: Any, **kwargs: Any) -> Self:
-            """Move domain and all attached data to specified device/dtype.
-
-            All tensors in ``interior``, every mesh in ``boundaries``, and
-            ``global_data`` are moved together.
-
-            Parameters
-            ----------
-            *args : Any
-                Positional arguments passed to the underlying tensorclass
-                ``to`` method.  Common usage: ``dm.to("cuda")`` or
-                ``dm.to(torch.float32)``.
-            **kwargs : Any
-                Keyword arguments passed to the underlying tensorclass
-                ``to`` method.
-
-            Keyword Arguments
-            -----------------
-            device : torch.device, optional
-                The desired device.
-            dtype : torch.dtype, optional
-                The desired floating-point or complex dtype.
-            non_blocking : bool, optional
-                Whether the transfer should be non-blocking.
-
-            Returns
-            -------
-            DomainMesh
-                A new DomainMesh on the target device/dtype, or the same
-                instance if no changes were required.
-
-            Raises
-            ------
-            TypeError
-                If ``dtype`` is neither floating-point nor complex. Coordinates
-                must stay real- or complex-valued, and the cast would also be
-                applied to each component mesh's integer ``cells``.
-
-            Examples
-            --------
-            >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
-            >>> dm_cpu = dm.to(device="cpu")  # doctest: +SKIP
-            """
-            ...
-
+        # Type stubs for methods that TensorClass adds to the class.
         def clone(self) -> Self:
             """Return a deep clone of this DomainMesh.
 
@@ -416,6 +495,17 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         """
         return self.apply_to_meshes(lambda m: m.translate(offset=offset))
 
+    def _widest_points_dtype(self) -> torch.dtype:
+        """Widest points dtype of the components, to build shared matrices in.
+
+        Each component casts the matrix to its own points dtype, which loses
+        no precision from a matrix built in this dtype.
+        """
+        dtype = self.interior.points.dtype
+        for name in self.boundary_names:
+            dtype = torch.promote_types(dtype, self.boundaries[name].points.dtype)
+        return dtype
+
     def rotate(
         self,
         angle: float,
@@ -467,7 +557,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
         if center is not None:
             c = to_device(
-                center, self.interior.points.device, self.interior.points.dtype
+                center, self.interior.points.device, self._widest_points_dtype()
             )
             return (
                 self.translate(-c)
@@ -488,7 +578,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             axis=axis,
             n_spatial_dims=self.interior.n_spatial_dims,
             device=self.interior.points.device,
-            dtype=self.interior.points.dtype,
+            dtype=self._widest_points_dtype(),
             assume_valid_axis=assume_valid_axis,
         )
         return self.transform(
@@ -546,7 +636,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
         if center is not None:
             c = to_device(
-                center, self.interior.points.device, self.interior.points.dtype
+                center, self.interior.points.device, self._widest_points_dtype()
             )
             return (
                 self.translate(-c)
@@ -565,7 +655,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             factor=factor,
             n_spatial_dims=self.interior.n_spatial_dims,
             device=self.interior.points.device,
-            dtype=self.interior.points.dtype,
+            dtype=self._widest_points_dtype(),
         )
         is_invertible, is_similarity = _scale_assumptions(
             factor, self.interior.n_spatial_dims
@@ -599,7 +689,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         Parameters
         ----------
         matrix : torch.Tensor
-            Transformation matrix, shape :math:`(S', S)`.
+            Transformation matrix, shape :math:`(S', S)`. Each mesh applies
+            it in the dtype of its own points.
         transform_point_data : bool or TensorDict
             Controls transformation of ``point_data`` fields. ``True``
             transforms all compatible fields; a ``TensorDict`` (or
@@ -621,7 +712,9 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         """
         result = self.apply_to_meshes(
             lambda m: m.transform(
-                matrix=matrix,
+                # Components may differ in float dtype (float64 interior, float32
+                # boundaries): give each the matrix in its own dtype.
+                matrix=matrix.to(m.points.dtype),
                 transform_point_data=transform_point_data,
                 transform_cell_data=transform_cell_data,
                 transform_global_data=transform_global_data,
@@ -1651,84 +1744,3 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
                 **boundary_defaults,
             )
         return canvas
-
-    ### Repr is defined after the class body (see below) because
-    ### TensorClass overwrites __repr__ even when defined inline.
-
-
-### Override the TensorClass __repr__ with custom formatting.
-# Must be done after class definition because TensorClass overrides __repr__
-# even when defined inside the class body (same pattern as Mesh).
-def _domain_mesh_repr(self: DomainMesh) -> str:
-    """Format a readable summary of the domain mesh."""
-    lines = ["DomainMesh("]
-
-    ### Interior - indent data fields one level under "interior:"
-    interior_repr = format_mesh_repr(self.interior)
-    first, *rest = interior_repr.split("\n")
-    lines.append(f"    interior: {first}")
-    lines.extend(f"    {line}" for line in rest)
-
-    ### Boundaries - indent data fields one level under each boundary key
-    bc_names = self.boundary_names
-    if not bc_names:
-        lines.append("    boundaries: {}")
-    else:
-        lines.append("    boundaries:")
-        max_bc_len = max(len(n) for n in bc_names)
-        for name in bc_names:
-            bc_mesh = self.boundaries[name]
-            bc_repr = format_mesh_repr(bc_mesh)
-            first, *rest = bc_repr.split("\n")
-            lines.append(f"        {name.ljust(max_bc_len)}: {first}")
-            lines.extend(f"        {line}" for line in rest)
-
-    ### Global data (only if non-empty); nested leaves print as "a.b: shape"
-    gd_items = sorted(
-        (".".join(k) if isinstance(k, tuple) else k, tuple(v.shape))
-        for k, v in self.global_data.items(include_nested=True, leaves_only=True)
-    )
-    if gd_items:
-        items = ", ".join(f"{k}: {shape}" for k, shape in gd_items)
-        lines.append(f"    global_data: {{{items}}}")
-
-    lines.append(")")
-    return "\n".join(lines)
-
-
-DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
-
-
-### Override the TensorClass ``to`` for the same reason as ``Mesh.to``: a floating/
-# complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
-# boundary meshes and casts their integer ``cells`` to a float dtype, which fails
-# ``Mesh.__post_init__``. Only an explicitly requested floating/complex dtype takes the
-# recursive floating-leaf cast path. Device-only moves are delegated unchanged.
-def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
-    cast_dtype = _requested_dtype(args, kwargs)
-    if cast_dtype is not None and not (
-        cast_dtype.is_floating_point or cast_dtype.is_complex
-    ):
-        raise TypeError(
-            "Mesh coordinates must remain floating point or complex; "
-            f"cannot convert a DomainMesh to {cast_dtype}."
-        )
-    if cast_dtype is None:
-        return _tensorclass_domain_to(self, *args, **kwargs)
-
-    # Resolve the target device with a zero-length probe, move all leaves without a
-    # dtype conversion, then cast every floating leaf in one recursive pass. This
-    # preserves concrete DomainMesh / Mesh subtypes and their additional fields.
-    probe = self.interior.points[:0].to(*args, **kwargs)
-    transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
-    transfer_kwargs["device"] = probe.device
-    moved = _tensorclass_domain_to(self, **transfer_kwargs)
-
-    def _cast(t: torch.Tensor) -> torch.Tensor:
-        return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
-
-    return moved.apply(_cast)
-
-
-_tensorclass_domain_to = DomainMesh.to  # the generated tensorclass ``to``
-DomainMesh.to = _domain_mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]

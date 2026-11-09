@@ -59,6 +59,8 @@ __all__ = [
 # ``build_axial_rope_cos_sin_2d_continuous``.
 RopeTables = Tuple[torch.Tensor, torch.Tensor]
 
+_MAX_CONV_ELEMENTS = 2**31 - 1
+
 
 def _as_kernel_triple(
     attn_kernel: Union[int, Tuple[int, int, int]],
@@ -534,6 +536,7 @@ def _apply_conv2d(
     padding,
     dilation,
     padding_mode,
+    padding_repeated_twice,
 ) -> torch.Tensor:
     r"""Apply a single-sample 2D convolution (helper for :func:`torch.vmap`).
 
@@ -545,11 +548,15 @@ def _apply_conv2d(
         Convolution weight of shape :math:`(C, 1, k_h, k_w)`.
     bias : torch.Tensor
         Bias of shape :math:`(C,)`.
-    stride, padding, dilation : tuple
+    stride, dilation : tuple
         Standard convolution parameters.
+    padding : tuple | str
+        Symmetric padding widths or a Conv2d string padding mode.
     padding_mode : str
         Padding mode; non-``"zeros"`` modes are applied explicitly with
         :func:`torch.nn.functional.pad`.
+    padding_repeated_twice : tuple
+        Resolved left, right, top, and bottom widths for explicit padding.
 
     Returns
     -------
@@ -560,15 +567,19 @@ def _apply_conv2d(
     w = weight.unsqueeze(0)
     bias = bias.unsqueeze(0)
     if padding_mode != "zeros":
-        pad_h, pad_w = padding
-        x = torch.nn.functional.pad(x, (pad_w, pad_w, pad_h, pad_h), mode=padding_mode)
+        x = torch.nn.functional.pad(x, padding_repeated_twice, mode=padding_mode)
         padding = (0, 0)
     return torch.nn.functional.conv2d(
         x, w, bias=bias, stride=stride, padding=padding, dilation=dilation
     )[0]
 
 
-def _build_chunked_depthwise_conv(conv: nn.Conv2d, chunk_size: int = 4):
+def _build_chunked_depthwise_conv(
+    conv: nn.Conv2d,
+    chunk_size: int | None = 4,
+    *,
+    batch_chunk_size: int | None = None,
+):
     r"""Build a chunked ``torch.vmap`` depthwise convolution callable.
 
     The returned callable takes ``(x, weight, bias)`` explicitly and captures
@@ -582,8 +593,12 @@ def _build_chunked_depthwise_conv(conv: nn.Conv2d, chunk_size: int = 4):
     conv : torch.nn.Conv2d
         A depthwise convolution (``groups == out_channels``); used only to read
         its static configuration.
-    chunk_size : int, optional, default=4
-        Channel chunk size for the inner :func:`torch.vmap`.
+    chunk_size : int | None, optional, default=4
+        Channel chunk size for the inner :func:`torch.vmap`; ``None`` maps all
+        channels together.
+    batch_chunk_size : int | None, optional, default=None
+        Batch chunk size for the outer :func:`torch.vmap`; ``None`` maps the
+        entire batch together.
 
     Returns
     -------
@@ -605,10 +620,11 @@ def _build_chunked_depthwise_conv(conv: nn.Conv2d, chunk_size: int = 4):
             padding=conv.padding,
             dilation=conv.dilation,
             padding_mode=conv.padding_mode,
+            padding_repeated_twice=conv._reversed_padding_repeated_twice,
         ),
         chunk_size=chunk_size,
     )
-    return torch.vmap(per_sample, in_dims=(0, None, None))
+    return torch.vmap(per_sample, in_dims=(0, None, None), chunk_size=batch_chunk_size)
 
 
 class DepthwiseConv(torch.nn.Conv2d):
@@ -617,9 +633,10 @@ class DepthwiseConv(torch.nn.Conv2d):
     A :class:`torch.nn.Conv2d` with ``groups == channels``. When ``chunk_size``
     is provided, the forward pass uses a chunked :func:`torch.vmap`
     implementation (see :func:`_build_chunked_depthwise_conv`) that avoids the
-    conv2d element-count limit for very large tensors; otherwise it falls back
-    to the standard convolution and warns if a single chunk would exceed the
-    limit.
+    conv2d element-count limit for very large tensors. ``chunk_size="auto"``
+    selects the largest index-safe batch and channel chunks from the input,
+    explicit padding, and output sizes. ``None`` falls back to the standard
+    convolution and warns if a single chunk would exceed the limit.
 
     Parameters
     ----------
@@ -628,9 +645,12 @@ class DepthwiseConv(torch.nn.Conv2d):
     *args
         Positional arguments forwarded to :class:`torch.nn.Conv2d` (e.g.
         ``kernel_size``).
-    chunk_size : int, optional, default=None
-        Channel chunk size for the ``torch.vmap`` path. If ``None``, the
-        standard convolution is used.
+    chunk_size : int | Literal["auto"] | None, optional, default=None
+        Channel chunk size for the ``torch.vmap`` path. ``"auto"`` chooses
+        index-safe batch and channel chunks at each forward pass, mapping an
+        entire dimension together when it fits. If ``None``, the standard
+        convolution is used. Changing input shapes in automatic mode may
+        trigger recompilation under :func:`torch.compile`.
     **kwargs
         Keyword arguments forwarded to :class:`torch.nn.Conv2d`. A ``groups``
         argument is rejected (the convolution is always depthwise).
@@ -646,7 +666,13 @@ class DepthwiseConv(torch.nn.Conv2d):
         Output tensor of shape :math:`(B, C, H', W')`.
     """
 
-    def __init__(self, channels: int, *args, chunk_size: int | None = None, **kwargs):
+    def __init__(
+        self,
+        channels: int,
+        *args,
+        chunk_size: int | Literal["auto"] | None = None,
+        **kwargs,
+    ):
         if "groups" in kwargs:
             raise ValueError("DepthwiseConv does not accept a groups argument")
         super().__init__(channels, channels, *args, **kwargs, groups=channels)
@@ -658,20 +684,49 @@ class DepthwiseConv(torch.nn.Conv2d):
         # binding a ``self``-capturing closure to ``self.forward``.
         self._chunked_conv = (
             _build_chunked_depthwise_conv(self, chunk_size)
-            if chunk_size is not None
+            if chunk_size is not None and chunk_size != "auto"
             else None
         )
 
     def forward(self, x, *args, **kwargs):
-        if self._chunked_conv is not None:
+        chunked_conv = self._chunked_conv
+        if self.chunk_size == "auto":
+            if x.shape[0] == 0:
+                return super().forward(x, *args, **kwargs)
+            h, w = x.shape[-2:]
+            left, right, top, bottom = self._reversed_padding_repeated_twice
+            ph, pw = h + top + bottom, w + left + right
+            oh = (ph - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[
+                0
+            ] + 1
+            ow = (pw - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[
+                1
+            ] + 1
+            # String "same" padding can materialize a padded input inside conv2d.
+            explicit_padding = self.padding_mode != "zeros" or self.padding == "same"
+            area = max(h * w, oh * ow, ph * pw if explicit_padding else 0)
+            batch_chunk = min(
+                x.shape[0], max(1, _MAX_CONV_ELEMENTS // (x.shape[1] * area))
+            )
+            channel_chunk = min(x.shape[1], _MAX_CONV_ELEMENTS // (batch_chunk * area))
+            if channel_chunk < 1:
+                raise ValueError("one spatial plane exceeds the 32-bit indexing limit")
+            chunked_conv = _build_chunked_depthwise_conv(
+                self,
+                channel_chunk if channel_chunk < x.shape[1] else None,
+                batch_chunk_size=batch_chunk if batch_chunk < x.shape[0] else None,
+            )
+        if chunked_conv is not None:
             # Chunked path: read parameters live so a deep-copied module uses its
             # own (possibly relocated / re-initialized) weights, not the source's.
             bias = self.bias
             if bias is None:
                 bias = torch.zeros(
-                    self.out_channels, device=self.weight.device, dtype=self.weight.dtype
+                    self.out_channels,
+                    device=self.weight.device,
+                    dtype=self.weight.dtype,
                 )
-            return self._chunked_conv(x, self.weight, bias)
+            return chunked_conv(x, self.weight, bias)
 
         # Standard (non-chunked) path: warn if conv2d would exceed its 32-bit
         # indexing limit (INT_MAX elements), then defer to nn.Conv2d. The limit is
@@ -748,8 +803,9 @@ class StrataPixel3DBlock(nn.Module):
         NATTEN backend forwarded to :class:`Natten3DSelfAttention`.
     adaln_mode : Literal["pixel_proj", "bilinear_dw"], optional, default="pixel_proj"
         How per-pixel modulation parameters are produced from ``backbone_cond``.
-    chunk_size_grouped_conv : int, optional, default=2
-        ``torch.vmap`` chunk size for the depthwise conv (``"bilinear_dw"`` only).
+    chunk_size_grouped_conv : int | Literal["auto"], optional, default="auto"
+        Channel chunk size for the depthwise conv (``"bilinear_dw"`` only).
+        ``"auto"`` chooses index-safe batch and channel chunks from the input.
     use_chunked_depthwise_conv : bool, optional, default=True
         Whether the ``"bilinear_dw"`` depthwise conv uses the chunked
         :class:`DepthwiseConv`; if ``False``, a plain grouped
@@ -794,7 +850,7 @@ class StrataPixel3DBlock(nn.Module):
         gated_attention: bool = False,
         na3d_backend: Optional[str] = None,
         adaln_mode: Literal["pixel_proj", "bilinear_dw"] = "pixel_proj",
-        chunk_size_grouped_conv: int = 2,
+        chunk_size_grouped_conv: int | Literal["auto"] = "auto",
         use_chunked_depthwise_conv: bool = True,
     ):
         super().__init__()
@@ -969,7 +1025,9 @@ class StrataPixel3DBlock(nn.Module):
             )
             return rearrange(s_pix, "(b sd) c h w -> b sd c h w", sd=sd)
         # Depth upsampled (pixel depth > backbone depth): 3D trilinear over (D,H,W).
-        s_sp = rearrange(backbone_cond, "b (sd sh sw) c -> b c sd sh sw", sd=sd, sh=sh, sw=sw)
+        s_sp = rearrange(
+            backbone_cond, "b (sd sh sw) c -> b c sd sh sw", sd=sd, sh=sh, sw=sw
+        )
         s_pix = F.interpolate(
             s_sp, size=(d, h, w), mode="trilinear", align_corners=False
         )

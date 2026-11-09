@@ -17,6 +17,7 @@
 """Spatial acceleration structures for efficient queries on large meshes.
 
 This module provides data structures and algorithms for fast spatial queries:
+
 - BVH (Bounding Volume Hierarchy) for point-in-cell queries
 - ClusterTree for dual-tree Barnes-Hut acceleration of kernel/attention operators
 - Signed distance field (:func:`signed_distance_field`) over a triangle

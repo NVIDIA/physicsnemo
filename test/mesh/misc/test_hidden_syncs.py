@@ -32,13 +32,17 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.boundaries import extract_candidate_facets
 from physicsnemo.mesh.boundaries._topology import _check_3d_vertex_manifold
 from physicsnemo.mesh.calculus._exterior_derivative import exterior_derivative_1
+from physicsnemo.mesh.neighbors import Adjacency
 from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.mesh.primitives.volumes import cube_volume
 from physicsnemo.mesh.repair import remove_degenerate_cells
 from physicsnemo.mesh.repair._cleaning import remove_duplicate_cells
 from physicsnemo.mesh.smoothing import smooth_laplacian
-from physicsnemo.mesh.validation.quality import _compute_simplex_altitudes
+from physicsnemo.mesh.validation.quality import (
+    _compute_min_simplex_altitudes,
+    compute_cell_edge_lengths,
+)
 from test.mesh.mesh.test_slicing_sync import _cuda_sync_budget
 
 requires_cuda = pytest.mark.skipif(
@@ -129,8 +133,8 @@ def test_remove_degenerate_cells_counts_and_keeps(device):
 
 
 @pytest.mark.parametrize("n_manifold_dims", [2, 3, 4])
-def test_simplex_altitudes_match_volume_over_facet(n_manifold_dims, device):
-    """Altitude opposite vertex k is n * volume / (measure of the facet without k)."""
+def test_min_simplex_altitude_matches_volume_over_facet(n_manifold_dims, device):
+    """The altitude opposite vertex k is n * volume / (measure of the facet without k)."""
     generator = torch.Generator().manual_seed(n_manifold_dims)
     n_verts = n_manifold_dims + 1
     points = torch.randn(10 * n_verts, n_manifold_dims, generator=generator).double()
@@ -138,14 +142,18 @@ def test_simplex_altitudes_match_volume_over_facet(n_manifold_dims, device):
         points=points.to(device),
         cells=torch.arange(10 * n_verts, device=device).reshape(10, n_verts),
     )
-    altitudes = _compute_simplex_altitudes(mesh, mesh.cell_areas)
+    min_altitudes = _compute_min_simplex_altitudes(
+        mesh, mesh.cell_areas, compute_cell_edge_lengths(mesh)
+    )
 
+    altitudes = []
     for k in range(n_verts):
         others = [i for i in range(n_verts) if i != k]
         facet = Mesh(points=mesh.points, cells=mesh.cells[:, others])
-        torch.testing.assert_close(
-            altitudes[:, k], n_manifold_dims * mesh.cell_areas / facet.cell_areas
-        )
+        altitudes.append(n_manifold_dims * mesh.cell_areas / facet.cell_areas)
+    torch.testing.assert_close(
+        min_altitudes, torch.stack(altitudes, dim=1).min(dim=1).values
+    )
 
 
 def test_exterior_derivative_1_matches_explicit_edge_orientation(device):
@@ -252,3 +260,20 @@ def test_vertex_manifold_check_synchronizations_are_bounded():
     assert _check_3d_vertex_manifold(mesh)  # also caches the adjacency
     # The remaining syncs come from boolean masks, union-find and the result
     assert _count_cuda_syncs(lambda: _check_3d_vertex_manifold(mesh)) <= 10
+
+
+@requires_cuda
+def test_rebuilding_cached_adjacencies_is_sync_free():
+    """Moving or cloning a mesh rebuilds its cached ``Adjacency`` objects without
+    rerunning their validation, which reads offsets back to the host."""
+    adjacency = Adjacency(
+        offsets=torch.tensor([0, 2, 3], device="cuda"),
+        indices=torch.tensor([1, 2, 0], device="cuda"),
+    )
+    assert _count_cuda_syncs(adjacency.clone) == 0
+
+    mesh = MESHES["triangles_3d"]("cuda")
+    mesh.get_point_to_points_adjacency()
+    mesh.get_cell_to_cells_adjacency()
+    assert _count_cuda_syncs(mesh.clone) == 0
+    assert _count_cuda_syncs(lambda: mesh.to(torch.float64)) == 0

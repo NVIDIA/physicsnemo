@@ -255,6 +255,32 @@ class TestClosedCurveAngleSums:
             curvature_2d, torch.ones_like(curvature_2d), rtol=0, atol=1e-3
         )
 
+    @pytest.mark.parametrize("n_spatial_dims", [2, 3])
+    def test_unoriented_boundary_curve(self, device, n_spatial_dims):
+        """The boundary of a triangle has the triangle's angles at its corners,
+        though get_boundary_mesh gives two edges that both start at vertex 0."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], device=device)
+        points = torch.nn.functional.pad(points, (0, n_spatial_dims - 2))
+        triangle = Mesh(points=points, cells=torch.tensor([[0, 1, 2]], device=device))
+        curve = triangle.get_boundary_mesh()
+        assert curve.cells.tolist() == [[0, 1], [0, 2], [1, 2]]
+
+        angle_sums = compute_angles_at_vertices(curve)
+        expected = torch.tensor([2.0, 1.0, 1.0], device=device) * torch.pi / 4
+        torch.testing.assert_close(angle_sums, expected)
+
+        # Discrete Gauss-Bonnet for a closed convex curve: sum K |*v| = 2 pi,
+        # where |*v| is half the length of the two edges at each vertex
+        dual_lengths = torch.tensor([2.0, 1 + 2**0.5, 1 + 2**0.5], device=device)
+        curvature = curve.gaussian_curvature_vertices
+        torch.testing.assert_close(
+            curvature[0], torch.tensor(torch.pi / 2, device=device)
+        )
+        torch.testing.assert_close(
+            (curvature * dual_lengths / 2).sum(),
+            torch.tensor(2 * torch.pi, device=device),
+        )
+
     def test_straight_polyline_in_3d_is_flat(self, device):
         """A straight polyline in 3D has zero curvature at its interior vertex."""
         mesh = Mesh(

@@ -388,6 +388,19 @@ def test_mesh_lsq_gradient_ragged_neighborhoods_match_per_entity_lstsq(device: s
         torch.testing.assert_close(output[i].cpu(), expected)
 
 
+# Validate that the torch backend returns empty gradients for zero entities.
+@pytest.mark.parametrize("value_shape", [(), (2,), (2, 4)])
+def test_mesh_lsq_gradient_torch_no_entities(device: str, value_shape):
+    output = MeshLSQGradient.dispatch(
+        torch.empty(0, 3, device=device),
+        torch.empty(0, *value_shape, device=device),
+        torch.zeros(1, dtype=torch.int64, device=device),
+        torch.empty(0, dtype=torch.int64, device=device),
+        implementation="torch",
+    )
+    assert output.shape == (0, 3, *value_shape)
+
+
 # Validate warp backend input validation paths mirror torch behavior.
 @requires_module("warp")
 def test_mesh_lsq_gradient_error_handling_warp(device: str):
@@ -586,6 +599,7 @@ def test_mesh_lsq_gradient_torch_rank_deficient_stencils(
     )
     output = _torch_impl.mesh_lsq_gradient_torch(points, values, offsets, indices)
     with monkeypatch.context() as patch:
+        patch.setattr(_torch_impl, "_uses_normal_equations", lambda *_: False)
         patch.setattr(_torch_impl, "batched_lstsq", _lstsq_reference)
         reference = _torch_impl.mesh_lsq_gradient_torch(
             points, values, offsets, indices
@@ -635,3 +649,74 @@ def test_small_lstsq_bfloat16(device: str, solver: str):
 
     assert solution.dtype == torch.bfloat16
     assert (solution.float() > 0.5).all()
+
+
+@pytest.mark.parametrize(
+    "dtype, n_unknowns",
+    [
+        (torch.float32, 2),  # normal equations
+        (torch.float32, 3),
+        (torch.float64, 3),  # small_lstsq
+        (torch.float32, 4),
+        (torch.bfloat16, 3),  # normal equations in float32
+    ],
+)
+def test_lstsq_solver_matches_batched_lstsq(
+    device: str, dtype: torch.dtype, n_unknowns: int
+):
+    """One solver of ``A`` serves right-hand sides of any width, bit for bit as
+    ``batched_lstsq``, also with rank-deficient systems in the batch."""
+    from physicsnemo.utils._small_linalg import _lstsq_solver, batched_lstsq
+
+    generator = torch.Generator().manual_seed(0)
+    A = torch.randn(300, 8, n_unknowns, generator=generator)
+    A[:100, :, -1] = A[:100, :, 0]  # rank-deficient
+    A[100:110] = 0.0
+    A = A.to(device=device, dtype=dtype)
+    solve = _lstsq_solver(A)
+    for n_rhs in (1, 3, 1, 4):
+        B = torch.randn(300, 8, n_rhs, generator=generator).to(device, dtype)
+        assert torch.equal(solve(B), batched_lstsq(A, B))
+
+
+@pytest.mark.parametrize(
+    "dtype, n_unknowns",
+    [(torch.float32, 1), (torch.float32, 2), (torch.float32, 3), (torch.bfloat16, 3)],
+)
+def test_segment_lstsq_solver_matches_batched_lstsq(
+    device: str, dtype: torch.dtype, n_unknowns: int
+):
+    """Systems of 0 to 9 rows, assembled from consecutive rows and solved at
+    once, get the solutions of ``batched_lstsq`` of the systems of each size,
+    also when rank-deficient or zero, up to the rounding of their float64
+    moments, which are summed in another order."""
+    from physicsnemo.utils._small_linalg import _segment_lstsq_solver, batched_lstsq
+
+    generator = torch.Generator().manual_seed(0)
+    counts = torch.arange(10).repeat_interleave(30)
+    counts = counts[torch.randperm(len(counts), generator=generator)]
+    offsets = torch.cat([torch.zeros(1, dtype=torch.int64), counts.cumsum(0)])
+    A = torch.randn(int(offsets[-1]), n_unknowns, generator=generator)
+    if n_unknowns > 1:
+        A[: len(A) // 3, -1] = A[: len(A) // 3, 0]  # rank-deficient
+    A[len(A) // 3 : len(A) // 2] = 0.0
+    A = A.to(device=device, dtype=dtype)
+    counts, offsets = counts.to(device), offsets.to(device)
+    solve = _segment_lstsq_solver(A, offsets)
+
+    for n_rhs in (1, 3):
+        B = torch.randn(len(A), n_rhs, generator=generator).to(device, dtype)
+        X = solve(B)
+        assert X.shape == (len(counts), n_unknowns, n_rhs)
+        assert (X[counts == 0] == 0).all()
+        for k in range(1, 10):
+            systems = (counts == k).nonzero()[:, 0]
+            rows = (offsets[systems, None] + torch.arange(k, device=device)).flatten()
+            expected = batched_lstsq(
+                A[rows].view(-1, k, n_unknowns), B[rows].view(-1, k, n_rhs)
+            )
+            # Identical on the GPUs and CPUs tested, but another order of the
+            # float64 sums could flip a last bit
+            scale = expected.float().abs().max().item()
+            atol = (1e-7 if dtype == torch.float32 else 1e-2) * scale
+            torch.testing.assert_close(X[systems], expected, rtol=0, atol=atol)

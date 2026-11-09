@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.mesh.utilities._gather import gather_rows
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.utils._small_linalg import (
     best_base_first,
@@ -146,89 +147,47 @@ def _compute_meyer_mixed_voronoi_areas(
     *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
     §3.3 (Equation 7) and §3.4 (Figure 4).
     """
-    from physicsnemo.mesh.geometry._angles import compute_triangle_angles
+    from physicsnemo.mesh.geometry._angles import stable_angle_between_vectors
 
-    n_cells = cell_vertices.shape[0]
-    device = cell_vertices.device
-    dtype = cell_vertices.dtype
+    ### Edge vectors e_k = v_{k+1} - v_k, each computed once
+    # The edges from vertex k are e_k (to the next vertex) and v_{k+2} - v_k,
+    # which is exactly -e_{k+2} in IEEE arithmetic, with the same squared length.
+    vertices = [cell_vertices[:, k, :] for k in range(3)]
+    edges = [vertices[(k + 1) % 3] - vertices[k] for k in range(3)]
+    edges_sq = [(edge**2).sum(dim=-1) for edge in edges]  # (n_cells,) each
 
-    ### Compute all 3 angles in a single vectorized call (E6 optimization)
-    # Stack the 3 vertex permutations so compute_triangle_angles is called once
-    # instead of three times. Each permutation computes the angle at a different
-    # vertex of the triangle.
-    #   Permutation 0: angle at vertex 0 -> (v0, v1, v2)
-    #   Permutation 1: angle at vertex 1 -> (v1, v2, v0)
-    #   Permutation 2: angle at vertex 2 -> (v2, v0, v1)
-    stacked_p0 = torch.cat(
-        [
-            cell_vertices[:, 0, :],
-            cell_vertices[:, 1, :],
-            cell_vertices[:, 2, :],
-        ],
-        dim=0,
-    )  # (3 * n_cells, n_spatial_dims)
-    stacked_p1 = torch.cat(
-        [
-            cell_vertices[:, 1, :],
-            cell_vertices[:, 2, :],
-            cell_vertices[:, 0, :],
-        ],
-        dim=0,
-    )  # (3 * n_cells, n_spatial_dims)
-    stacked_p2 = torch.cat(
-        [
-            cell_vertices[:, 2, :],
-            cell_vertices[:, 0, :],
-            cell_vertices[:, 1, :],
-        ],
-        dim=0,
-    )  # (3 * n_cells, n_spatial_dims)
-
-    stacked_angles = compute_triangle_angles(
-        stacked_p0, stacked_p1, stacked_p2
-    )  # (3 * n_cells,)
-
-    # Unstack into (n_cells, 3) where column j = angle at local vertex j
-    all_angles = stacked_angles.reshape(3, n_cells).T  # (n_cells, 3)
+    ### Angle at each local vertex: (3, n_cells), row j = angle at vertex j
+    all_angles = torch.stack(
+        [stable_angle_between_vectors(edges[k], -edges[(k + 2) % 3]) for k in range(3)]
+    )
 
     # Check if triangle is obtuse (any angle > pi/2)
-    is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
+    is_obtuse = torch.any(all_angles > torch.pi / 2, dim=0)  # (n_cells,)
 
     ### Branchless computation of mixed Voronoi areas
     # Computes both acute (Eq. 7) and obtuse (Fig. 4) formulas for all cells,
     # then selects per-cell via torch.where. This avoids data-dependent branching
     # that would break torch.compile.
     eps = safe_eps(all_angles.dtype)
-    voronoi_per_vertex = torch.zeros(n_cells, 3, dtype=dtype, device=device)
+    # One contiguous row at a time: vectorized and scalar cos and sin can round
+    # differently, so the elements keep their positions in each kernel call.
+    cot = [
+        torch.cos(angles) / torch.sin(angles).clamp(min=eps) for angles in all_angles
+    ]  # (n_cells,) each
 
+    voronoi_per_vertex = []
     for local_v_idx in range(3):
         next_idx = (local_v_idx + 1) % 3
         prev_idx = (local_v_idx + 2) % 3
 
         ### Voronoi contribution (Eq. 7) - computed for ALL cells
-        edge_to_next = (
-            cell_vertices[:, next_idx, :] - cell_vertices[:, local_v_idx, :]
-        )  # (n_cells, n_spatial_dims)
-        edge_to_prev = (
-            cell_vertices[:, prev_idx, :] - cell_vertices[:, local_v_idx, :]
-        )  # (n_cells, n_spatial_dims)
-
-        edge_to_next_sq = (edge_to_next**2).sum(dim=-1)  # (n_cells,)
-        edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)  # (n_cells,)
-
-        cot_prev = torch.cos(all_angles[:, prev_idx]) / torch.sin(
-            all_angles[:, prev_idx]
-        ).clamp(min=eps)
-        cot_next = torch.cos(all_angles[:, next_idx]) / torch.sin(
-            all_angles[:, next_idx]
-        ).clamp(min=eps)
-
+        # |edge to next|^2 * cot(angle at prev) + |edge to prev|^2 * cot(angle at next)
         voronoi_contribution = (
-            edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
+            edges_sq[local_v_idx] * cot[prev_idx] + edges_sq[prev_idx] * cot[next_idx]
         ) / 8.0  # (n_cells,)
 
         ### Mixed-area contribution (Figure 4) - computed for ALL cells
-        is_obtuse_at_vertex = all_angles[:, local_v_idx] > torch.pi / 2
+        is_obtuse_at_vertex = all_angles[local_v_idx] > torch.pi / 2
         mixed_contribution = torch.where(
             is_obtuse_at_vertex,
             cell_areas / 2.0,
@@ -236,11 +195,11 @@ def _compute_meyer_mixed_voronoi_areas(
         )  # (n_cells,)
 
         ### Select per cell: Voronoi for acute, mixed for obtuse
-        voronoi_per_vertex[:, local_v_idx] = torch.where(
-            is_obtuse, mixed_contribution, voronoi_contribution
+        voronoi_per_vertex.append(
+            torch.where(is_obtuse, mixed_contribution, voronoi_contribution)
         )
 
-    return voronoi_per_vertex.reshape(-1)  # (n_cells * 3,)
+    return torch.stack(voronoi_per_vertex, dim=1).reshape(-1)  # (n_cells * 3,)
 
 
 def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
@@ -377,7 +336,8 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
 
     elif n_manifold_dims == 2:
         ### 2D: Meyer et al. (2003) mixed Voronoi area (see docstring Notes)
-        cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
+        # (n_cells, 3, n_spatial_dims)
+        cell_vertices = gather_rows(mesh.points, mesh.cells)
         voronoi_areas = _compute_meyer_mixed_voronoi_areas(
             cell_vertices, cell_volumes
         )  # (n_cells * 3,)
@@ -413,21 +373,28 @@ def _compute_triangle_circumcenters_3d(vertices: torch.Tensor) -> torch.Tensor:
     edge_02 = vertices_64[:, 2, :] - p0
 
     normal = torch.linalg.cross(edge_01, edge_02, dim=-1)
-    normal_norm_sq = (
-        (normal * normal)
-        .sum(dim=-1, keepdim=True)
-        .clamp_min(torch.finfo(torch.float64).eps)
-    )
+    normal_norm_sq = (normal * normal).sum(dim=-1, keepdim=True)
 
     edge_01_sq = (edge_01 * edge_01).sum(dim=-1, keepdim=True)
     edge_02_sq = (edge_02 * edge_02).sum(dim=-1, keepdim=True)
+
+    # Scale-free degeneracy test: |normal|^2 / (|e01|^2 |e02|^2) = sin^2 of the
+    # angle at p0, against the (n * eps)^2 of normalized_gram_inverse.
+    # Degenerate cells return their centroid, like the general path.
+    is_degenerate = ~(
+        normal_norm_sq
+        > (2 * torch.finfo(torch.float64).eps) ** 2 * edge_01_sq * edge_02_sq
+    )
+    normal_norm_sq = torch.where(is_degenerate, 1.0, normal_norm_sq)
 
     offset = (
         edge_01_sq * torch.linalg.cross(edge_02, normal, dim=-1)
         + edge_02_sq * torch.linalg.cross(normal, edge_01, dim=-1)
     ) / (2.0 * normal_norm_sq)
 
-    return (p0 + offset).to(dtype=output_dtype)
+    return torch.where(is_degenerate, vertices_64.mean(dim=1), p0 + offset).to(
+        dtype=output_dtype
+    )
 
 
 def compute_circumcenters(
@@ -638,7 +605,9 @@ def compute_cotan_weights_fem(
     # do: from the tip of a needle, a well-shaped cell would look degenerate.
     # cell_vertices: (n_cells, n_verts_per_cell, n_spatial_dims), rotated so
     # that vertex i is vertex (i + base) % n_verts_per_cell of mesh.cells
-    cell_vertices, base = best_base_first(mesh.points[mesh.cells].to(compute_dtype))
+    cell_vertices, base = best_base_first(
+        gather_rows(mesh.points, mesh.cells).to(compute_dtype)
+    )
     # E: (n_cells, n_manifold_dims, n_spatial_dims) - rows are e_k = v_k - v_0
     E = cell_vertices[:, 1:, :] - cell_vertices[:, :1, :]
 
@@ -770,11 +739,9 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_point
     Float[torch.Tensor, " n_points"]
         Dual volumes for vertices, shape ``(n_points,)``.
     """
-    cached = mesh._cache.get(("point", "dual_volumes_0"), None)
-    if cached is None:
-        cached = compute_dual_volumes_0(mesh)
-        mesh._cache["point", "dual_volumes_0"] = cached
-    return cached
+    return mesh._cached(
+        ("point", "dual_volumes_0"), lambda: compute_dual_volumes_0(mesh)
+    )
 
 
 def get_or_compute_circumcenters(
@@ -792,9 +759,7 @@ def get_or_compute_circumcenters(
     Float[torch.Tensor, "n_cells n_spatial_dims"]
         Circumcenters for all cells, shape ``(n_cells, n_spatial_dims)``.
     """
-    cached = mesh._cache.get(("cell", "circumcenters"), None)
-    if cached is None:
-        parent_cell_vertices = mesh.points[mesh.cells]
-        cached = compute_circumcenters(parent_cell_vertices)
-        mesh._cache["cell", "circumcenters"] = cached
-    return cached
+    return mesh._cached(
+        ("cell", "circumcenters"),
+        lambda: compute_circumcenters(gather_rows(mesh.points, mesh.cells)),
+    )

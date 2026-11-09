@@ -108,28 +108,29 @@ def interpolate_point_data_to_edges(
 
 def propagate_cell_data_to_children(
     cell_data: TensorDict,
-    parent_indices: Int[torch.Tensor, " n_children"],
-    n_total_children: int,
+    n_children_per_parent: int,
+    device: torch.device,
 ) -> TensorDict:
     """Propagate cell_data from parent cells to child cells.
 
-    Each child cell inherits its parent's data values unchanged.
-    Uses scatter operations for efficient vectorized propagation.
+    Each child cell inherits its parent's data values unchanged. Children are
+    laid out parent by parent, as :func:`generate_child_cells` returns them, so
+    each parent row is repeated ``n_children_per_parent`` times.
 
     Parameters
     ----------
     cell_data : TensorDict
         Original cell data, batch_size=(n_parent_cells,)
-    parent_indices : torch.Tensor
-        Parent cell index for each child, shape (n_total_children,)
-    n_total_children : int
-        Total number of child cells
+    n_children_per_parent : int
+        Number of children each parent cell splits into
+    device : torch.device
+        Device of the child cells, used when cell_data is empty
 
     Returns
     -------
     TensorDict
-        New cell_data with batch_size=(n_total_children,) where each child
-        has the same data values as its parent.
+        New cell_data with batch_size=(n_parent_cells * n_children_per_parent,)
+        where each child has the same data values as its parent.
 
     Examples
     --------
@@ -137,21 +138,22 @@ def propagate_cell_data_to_children(
     >>> from tensordict import TensorDict
     >>> # 2 parent cells, each splits into 4 children -> 8 total
     >>> cell_data = TensorDict({"pressure": torch.tensor([100.0, 200.0])}, batch_size=[2])
-    >>> parent_indices = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
-    >>> new_data = propagate_cell_data_to_children(cell_data, parent_indices, 8)
+    >>> new_data = propagate_cell_data_to_children(cell_data, 4, torch.device("cpu"))
     >>> # new_data["pressure"] = [100, 100, 100, 100, 200, 200, 200, 200]
     """
+    n_total_children = cell_data.batch_size[0] * n_children_per_parent
     if len(cell_data.keys()) == 0:
         # No data to propagate
         return TensorDict(
             {},
             batch_size=torch.Size([n_total_children]),
-            device=parent_indices.device,
+            device=device,
         )
 
     ### Propagate all fields using TensorDict.apply()
-    # Each child simply inherits its parent's value via indexing
+    # Each child simply inherits its parent's value; repeat_interleave needs no
+    # (n_total_children,) index tensor, unlike a gather by parent index
     return cell_data.apply(
-        lambda tensor: tensor[parent_indices],
+        lambda tensor: tensor.repeat_interleave(n_children_per_parent, dim=0),
         batch_size=torch.Size([n_total_children]),
     )

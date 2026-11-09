@@ -20,6 +20,7 @@ Tests validate visualization across different mesh configurations, spatial dimen
 and visualization backends (matplotlib, PyVista).
 """
 
+import numpy as np
 import pytest
 import torch
 
@@ -697,6 +698,212 @@ def test_draw_with_autograd_tracked_scalars_does_not_crash():
     ax = mesh.draw(backend="matplotlib", point_scalars="pred", show=False)
     assert ax is not None
     plt.close("all")
+
+
+def _recording_plotter():
+    """Off-screen Plotter whose add_mesh records its calls without rendering."""
+    plotter = pv.Plotter(off_screen=True)
+    calls = []
+    plotter.add_mesh = lambda pv_mesh, **kwargs: calls.append((pv_mesh, kwargs))
+    return plotter, calls
+
+
+def test_draw_1d_in_2d_colors_lines_and_points():
+    """A curve in 2D draws colored line segments, and colored points."""
+    from matplotlib.collections import LineCollection, PathCollection
+
+    points = torch.tensor([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0], [3.0, 1.0]])
+    cells = torch.tensor([[0, 1], [1, 2], [2, 3]])
+    mesh = Mesh(points=points, cells=cells)
+    viridis = matplotlib.colormaps["viridis"]
+
+    ax = mesh.draw(
+        show=False,
+        backend="matplotlib",
+        cell_scalars=torch.tensor([0.0, 0.5, 1.0]),
+        vmin=0.0,
+        vmax=1.0,
+    )
+    (lines,) = [c for c in ax.collections if isinstance(c, LineCollection)]
+    np.testing.assert_allclose(lines.get_colors(), viridis([0.0, 0.5, 1.0]))
+    plt.close("all")
+
+    ax = mesh.draw(
+        show=False,
+        backend="matplotlib",
+        point_scalars=torch.tensor([0.0, 0.25, 0.75, 1.0]),
+        vmin=0.0,
+        vmax=1.0,
+    )
+    (markers,) = [c for c in ax.collections if isinstance(c, PathCollection)]
+    np.testing.assert_allclose(
+        markers.get_facecolors(), viridis([0.0, 0.25, 0.75, 1.0])
+    )
+    plt.close("all")
+
+
+def test_draw_2d_alpha_edges_independent_of_alpha_cells():
+    """In 2D, edges use alpha_edges and faces use alpha_cells."""
+    from matplotlib.collections import PolyCollection
+
+    mesh = create_2d_triangle_mesh()
+    ax = mesh.draw(
+        show=False,
+        backend="matplotlib",
+        alpha_cells=0.3,
+        alpha_edges=0.7,
+        show_edges=True,
+    )
+    (polys,) = [c for c in ax.collections if isinstance(c, PolyCollection)]
+    np.testing.assert_allclose(polys.get_facecolor()[:, 3], 0.3)
+    np.testing.assert_allclose(polys.get_edgecolor()[:, 3], 0.7)
+    plt.close("all")
+
+
+def test_draw_1d_space_fits_view_without_points():
+    """With points hidden, the view still fits the line segments."""
+    points = torch.tensor([[10.0], [15.0], [20.0]])
+    cells = torch.tensor([[0, 1], [1, 2]])
+    mesh = Mesh(points=points, cells=cells)
+
+    ax = mesh.draw(show=False, backend="matplotlib", alpha_points=0.0)
+    xmin, xmax = ax.get_xlim()
+    assert xmin <= 10.0 and xmax >= 20.0
+    plt.close("all")
+
+    # Limits the caller fixed are kept.
+    _, ax = plt.subplots()
+    ax.set_xlim(0.0, 5.0)
+    mesh.draw(show=False, backend="matplotlib", alpha_points=0.0, ax=ax)
+    assert ax.get_xlim() == (0.0, 5.0)
+    plt.close("all")
+
+
+@pytest.mark.parametrize("n_spatial_dims", [2, 3])
+def test_draw_overlay_fits_all_meshes(n_spatial_dims):
+    """Meshes drawn on one ax stay in view, at any distance from the origin."""
+    ### Two unit triangles, 10 apart along x, both far from the origin
+    points = torch.eye(3)[:, :n_spatial_dims] + 1000.0
+    first = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+    second = first.translate(torch.tensor([10.0] + [0.0] * (n_spatial_dims - 1)))
+
+    ax = first.draw(show=False, backend="matplotlib")
+    second.draw(show=False, backend="matplotlib", ax=ax)
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+    assert xmin <= 1000.0 and xmax >= 1011.0
+    assert ymin <= 1000.0 and ymax >= 1001.0
+    # The view hugs the meshes: the margins are a fraction of their extent
+    assert xmax - xmin < 2 * 11.0
+    plt.close("all")
+
+
+def test_draw_2d_keeps_fixed_limits():
+    """Limits the caller fixed are kept."""
+    mesh = Mesh(points=torch.eye(3)[:, :2], cells=torch.tensor([[0, 1, 2]]))
+    _, ax = plt.subplots()
+    ax.set_xlim(-20.0, 20.0)
+    ax.set_ylim(-20.0, 20.0)
+    mesh.draw(show=False, backend="matplotlib", ax=ax)
+    assert ax.get_xlim() == (-20.0, 20.0)
+    assert ax.get_ylim() == (-20.0, 20.0)
+    plt.close("all")
+
+
+def test_draw_3d_equal_aspect_survives_later_artists():
+    """An artist added after draw keeps the 3D view an equal-aspect cube."""
+    from physicsnemo.mesh.primitives.surfaces import torus
+
+    mesh = torus.load()
+    ax = mesh.draw(show=False, backend="matplotlib")
+    points = mesh.points.numpy()
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2])
+    ax.figure.canvas.draw()
+    spans = [hi - lo for lo, hi in (ax.get_xlim(), ax.get_ylim(), ax.get_zlim())]
+    assert spans == pytest.approx([spans[0]] * 3)
+    plt.close("all")
+
+
+@pytest.mark.parametrize("n_spatial_dims", [0, 1, 2, 3])
+def test_draw_vertex_cells_with_cell_scalars(n_spatial_dims):
+    """Vertex cells draw as markers colored by their cell scalars."""
+    from matplotlib.collections import PathCollection
+
+    points = torch.zeros(3, n_spatial_dims)
+    if n_spatial_dims > 0:
+        points[:, 0] = torch.tensor([0.0, 1.0, 2.0])
+    mesh = Mesh(points=points, cells=torch.tensor([[0], [2]]))
+
+    ax = mesh.draw(
+        show=False,
+        backend="matplotlib",
+        cell_scalars=torch.tensor([5.0, 7.0]),
+        alpha_points=0.0,
+    )
+    ax.figure.canvas.draw()  # 3D collections set their colors when drawn
+    (markers,) = [
+        c
+        for c in ax.collections
+        if isinstance(c, PathCollection) and len(c.get_offsets()) == 2
+    ]
+    np.testing.assert_allclose(
+        markers.get_facecolors()[:, :3],
+        matplotlib.colormaps["viridis"]([0.0, 1.0])[:, :3],
+    )
+    plt.close("all")
+
+
+@pytest.mark.parametrize("as_key", [False, True])
+def test_integer_vector_scalars_are_normed(as_key):
+    """Integer vector scalars are L2-normed like floating ones."""
+    from tensordict import TensorDict
+
+    from physicsnemo.mesh.visualization._scalar_utils import process_scalars
+
+    values = torch.tensor([[3, 4], [0, 1]])
+    data = TensorDict({"v": values}, batch_size=[2])
+    scalar_tensor, _source, _label = process_scalars(
+        "v" if as_key else values, data, n_expected=2, name="point"
+    )
+    torch.testing.assert_close(scalar_tensor, torch.tensor([5.0, 1.0]))
+
+
+def test_pyvista_backend_options_override_defaults():
+    """backend_options override the defaults draw passes to add_mesh."""
+    mesh = create_3d_surface_mesh()
+    plotter, calls = _recording_plotter()
+    options = {
+        "line_width": 3.0,
+        "edge_color": "red",
+        "scalar_bar_args": {"title": "p"},
+    }
+    mesh.draw(
+        show=False,
+        backend="pyvista",
+        ax=plotter,
+        alpha_points=0.0,
+        backend_options=options,
+    )
+    (_pv_mesh, kwargs) = calls[0]
+    assert {k: kwargs[k] for k in options} == options
+    plotter.close()
+
+
+def test_pyvista_vertex_cells_with_cell_scalars():
+    """Vertex cells carry cell scalars into the PyVista mesh."""
+    mesh = Mesh(points=torch.rand(4, 3), cells=torch.tensor([[2], [0]]))
+    plotter, calls = _recording_plotter()
+    mesh.draw(
+        show=False,
+        backend="pyvista",
+        ax=plotter,
+        alpha_points=0.0,
+        cell_scalars=torch.tensor([5.0, 7.0]),
+    )
+    (pv_mesh, kwargs) = calls[0]
+    assert pv_mesh.n_cells == 2
+    np.testing.assert_array_equal(pv_mesh.cell_data[kwargs["scalars"]], [5.0, 7.0])
+    plotter.close()
 
 
 if __name__ == "__main__":

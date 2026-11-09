@@ -96,6 +96,17 @@ class TestKnnMatchesBruteForce:
 
         assert torch.equal(idx_knn, idx_brute)
 
+    def test_empty_queries(self, device):
+        """An empty query set gives empty results on every device."""
+        m = plane.load(subdivisions=2).to(device)
+        query = torch.empty(0, 3, device=device)
+
+        idx, projected = find_nearest_cells(m, query)
+
+        assert idx.shape == (0,)
+        assert projected.shape == (0, 3)
+        assert idx.device == projected.device == m.points.device
+
 
 ### Exact centroid queries ###
 
