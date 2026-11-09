@@ -1460,8 +1460,6 @@ class Mesh(
         if not is_tracing():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
-            elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
-                return meshes[0].clone()
             if not all(isinstance(m, Mesh) for m in meshes):
                 raise TypeError(
                     f"All objects must be Mesh types. Got:\n"
@@ -2896,7 +2894,10 @@ class Mesh(
         Padding uses null/degenerate elements that don't affect computations:
 
         - Points: Additional points at the last existing point (preserves bounding box)
-        - cells: Degenerate cells with all vertices at the last existing point (zero area)
+        - cells: Degenerate cells with all vertices at the first padding point
+          (zero area). With cells-only padding there is no padding point, so the
+          cells sit at the last existing point; then only measure-weighted
+          computations are unaffected.
         - cell data: NaN-valued padding for all cell data fields (default)
         - explicit effective measures: zero, so padding adds nothing to integrals
 
@@ -2993,7 +2994,12 @@ class Mesh(
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
             cells=_pad_with_value(
-                self.cells, target_n_cells, max(self.n_points - 1, 0)
+                self.cells,
+                target_n_cells,
+                # The first padding point, if any, keeps padding cells off real points
+                self.n_points
+                if target_n_points > self.n_points
+                else max(self.n_points - 1, 0),
             ),
             point_data=_pad_fields(self.point_data, target_n_points),
             cell_data=_pad_fields(self.cell_data, target_n_cells),
@@ -3039,7 +3045,9 @@ class Mesh(
         -------
         Mesh
             A new Mesh with padded points and cells arrays. The padding uses
-            null elements that don't affect geometric computations.
+            null elements that don't affect geometric computations. If only
+            cells need padding, the padding cells sit at the last existing
+            point; then only measure-weighted computations are unaffected.
 
         Raises
         ------

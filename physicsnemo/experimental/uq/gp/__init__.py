@@ -14,17 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Defaults
-defaults:
-  - diffusion
+"""Scalar and field variational Gaussian-process heads.
 
-# Minimal training config with frequent printouts and checkpoint saving.
-# Can be used to test that training runs without errors.
-# Do not use for real training runs.
+Importing the heads does not require ``gpytorch``. Constructing a head without
+it raises an ``ImportError`` with installation instructions.
+"""
 
-training:
-  print_progress_freq: 5 # How often to print progress, measured in number of training steps
-  checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
-  validation_freq: 5 # how often to record the validation loss, measured in number of training steps
-  batch_size: 2
-  total_train_steps: 20
+from .field_variational_gp_head import (
+    FieldVariationalGPHead,
+    FieldVariationalGPPrediction,
+)
+from .variational_gp_head import GPPrediction, VariationalGPHead
+
+__all__ = [
+    "FieldVariationalGPHead",
+    "FieldVariationalGPPrediction",
+    "GPPrediction",
+    "VariationalGPHead",
+]

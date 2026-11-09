@@ -229,8 +229,7 @@ The diagram is simplified. Follow the links below for the public surfaces.
   including distributed FFTs;
   and the [model lifecycle core](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/core).
 
-Cross-cutting [deployment helpers](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/deploy)
-cover ONNX export and runtime. [Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
+[Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
 incubate models such as [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe)
 and [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa),
 alongside uncertainty quantification, guardrails, parameter-efficient fine-tuning

@@ -154,8 +154,9 @@ def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
 
     Averages the intrinsic vertex-based Gaussian curvature (angle defect)
     over each cell's vertices. This gives a cell-centered curvature field
-    that is consistent with the vertex-based curvature and inherits its
-    mathematical properties (intrinsic, satisfies discrete Gauss-Bonnet).
+    that is consistent with the vertex-based curvature and, like it,
+    intrinsic. Its area-weighted sum satisfies discrete Gauss-Bonnet only
+    approximately.
 
     Parameters
     ----------

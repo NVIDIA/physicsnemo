@@ -439,8 +439,8 @@ examples/reservoir_simulation/
 # EXAMPLES - Structural Mechanics
 # ==============================================================================
 
-examples/structural_mechanics/
-examples/structural_mechanics/crash/ @coreyjadams
+examples/structural_mechanics/ @mnabian
+examples/structural_mechanics/crash/ @mnabian
 examples/structural_mechanics/jet_engine_bracket/ @sgtkeum
 examples/structural_mechanics/deforming_plate/
 
@@ -457,7 +457,7 @@ examples/weather/fcn_afno/
 examples/weather/flood_modeling/
 examples/weather/graphcast/ @mnabian
 examples/weather/mixture_of_experts/
-examples/weather/pangu_weather/ @dallasfoster
+examples/weather/pangu_weather/ @dallasfoster @pzharrington
 examples/weather/regen/
 examples/weather/regional_weather_diffusion/
 examples/weather/temporal_interpolation/
