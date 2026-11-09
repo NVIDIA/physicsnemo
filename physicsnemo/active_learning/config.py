@@ -64,6 +64,14 @@ class OptimizerConfig:
         scheduler will be configured.
     scheduler_kwargs: dict
         Keyword arguments to pass to the scheduler constructor.
+    rebuild_scheduler_per_phase: bool
+        If True, the ``Driver`` builds a fresh scheduler at the start of every
+        training phase instead of reusing one across active-learning steps.
+        A ``total_steps`` argument (e.g. ``OneCycleLR``) is set to that
+        phase's epochs x batches, which change as the pool grows; with
+        ``fine_tuning_lr`` set, later phases use it as ``max_lr`` (first param
+        group) or as the starting lr. A phase resumed from a checkpoint gets a
+        fresh schedule sized to its remaining epochs. Defaults to False.
 
     See Also
     --------
@@ -75,6 +83,7 @@ class OptimizerConfig:
     optimizer_kwargs: dict[str, Any] = field(default_factory=lambda: {"lr": 1e-4})
     scheduler_cls: type[_LRScheduler] | None = None
     scheduler_kwargs: dict[str, Any] = field(default_factory=dict)
+    rebuild_scheduler_per_phase: bool = False
 
     def __post_init__(self) -> None:
         """Validate optimizer configuration."""
@@ -119,6 +128,7 @@ class OptimizerConfig:
             "optimizer_kwargs": self.optimizer_kwargs,
             "scheduler_cls": scheduler,
             "scheduler_kwargs": self.scheduler_kwargs,
+            "rebuild_scheduler_per_phase": self.rebuild_scheduler_per_phase,
         }
 
     @classmethod
@@ -152,6 +162,7 @@ class OptimizerConfig:
             optimizer_kwargs=data["optimizer_kwargs"],
             scheduler_cls=scheduler_cls,
             scheduler_kwargs=data["scheduler_kwargs"],
+            rebuild_scheduler_per_phase=data.get("rebuild_scheduler_per_phase", False),
         )
 
 
