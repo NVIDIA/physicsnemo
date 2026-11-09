@@ -72,6 +72,15 @@ class OptimizerConfig:
         ``fine_tuning_lr`` set, later phases use it as ``max_lr`` (first param
         group) or as the starting lr. A phase resumed from a checkpoint gets a
         fresh schedule sized to its remaining epochs. Defaults to False.
+    fine_tuning_scheduler_kwargs: dict
+        Merged over ``scheduler_kwargs`` from the second active-learning step
+        on, e.g. ``{"pct_start": 0.1}`` for a different warm-up when
+        fine-tuning. Requires ``rebuild_scheduler_per_phase``.
+    fine_tuning_constant_lr: bool
+        If True, steps after the first train without a scheduler, at each
+        param group's peak lr (``max_lr`` if the scheduler takes one, with
+        ``fine_tuning_lr`` for the first group). Requires
+        ``rebuild_scheduler_per_phase``. Defaults to False.
 
     See Also
     --------
@@ -84,6 +93,8 @@ class OptimizerConfig:
     scheduler_cls: type[_LRScheduler] | None = None
     scheduler_kwargs: dict[str, Any] = field(default_factory=dict)
     rebuild_scheduler_per_phase: bool = False
+    fine_tuning_scheduler_kwargs: dict[str, Any] = field(default_factory=dict)
+    fine_tuning_constant_lr: bool = False
 
     def __post_init__(self) -> None:
         """Validate optimizer configuration."""
@@ -98,6 +109,13 @@ class OptimizerConfig:
             raise ValueError(
                 "scheduler_kwargs provided but scheduler_cls is None. "
                 "Provide a scheduler_cls or remove scheduler_kwargs."
+            )
+        if (self.fine_tuning_scheduler_kwargs or self.fine_tuning_constant_lr) and not (
+            self.rebuild_scheduler_per_phase and self.scheduler_cls
+        ):
+            raise ValueError(
+                "fine_tuning_scheduler_kwargs / fine_tuning_constant_lr need "
+                "scheduler_cls and rebuild_scheduler_per_phase=True."
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,6 +147,8 @@ class OptimizerConfig:
             "scheduler_cls": scheduler,
             "scheduler_kwargs": self.scheduler_kwargs,
             "rebuild_scheduler_per_phase": self.rebuild_scheduler_per_phase,
+            "fine_tuning_scheduler_kwargs": self.fine_tuning_scheduler_kwargs,
+            "fine_tuning_constant_lr": self.fine_tuning_constant_lr,
         }
 
     @classmethod
@@ -163,6 +183,8 @@ class OptimizerConfig:
             scheduler_cls=scheduler_cls,
             scheduler_kwargs=data["scheduler_kwargs"],
             rebuild_scheduler_per_phase=data.get("rebuild_scheduler_per_phase", False),
+            fine_tuning_scheduler_kwargs=data.get("fine_tuning_scheduler_kwargs", {}),
+            fine_tuning_constant_lr=data.get("fine_tuning_constant_lr", False),
         )
 
 

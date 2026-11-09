@@ -455,10 +455,13 @@ class Driver(p.DriverProtocol):
 
         Used with ``OptimizerConfig.rebuild_scheduler_per_phase``. Each param
         group's lr is first reset to its ``initial_lr``, undoing the previous
-        phase's decay. A ``total_steps`` argument is set to ``total_steps``.
-        From the second active-learning step on, ``fine_tuning_lr`` replaces
-        the first group's ``max_lr`` when the scheduler takes one, and is the
-        first group's starting lr otherwise.
+        phase's decay. From the second active-learning step on,
+        ``fine_tuning_scheduler_kwargs`` are merged over ``scheduler_kwargs``
+        and ``fine_tuning_lr`` replaces the first group's ``max_lr`` when the
+        scheduler takes one (otherwise it is the first group's starting lr).
+        A ``total_steps`` argument is set to ``total_steps``. With
+        ``fine_tuning_constant_lr``, later steps get no scheduler and train at
+        each group's peak lr (its ``max_lr`` if given).
 
         Parameters
         ----------
@@ -466,20 +469,32 @@ class Driver(p.DriverProtocol):
             Optimizer steps in this phase (epochs x batches).
         """
         opt_cfg = self.training_config.optimizer_config
+        fine_tuning = self.active_learning_step_idx > 0
         params = inspect.signature(opt_cfg.scheduler_cls).parameters
         kwargs = dict(opt_cfg.scheduler_kwargs)
+        if fine_tuning:
+            kwargs.update(opt_cfg.fine_tuning_scheduler_kwargs)
         if "total_steps" in params:
             kwargs["total_steps"] = max(int(total_steps), 1)
-        for group in self.optimizer.param_groups:
+        groups = self.optimizer.param_groups
+        for group in groups:
             group["lr"] = group.pop("initial_lr", group["lr"])
+        max_lr = kwargs.get("max_lr") if "max_lr" in params else None
+        if max_lr is not None and not isinstance(max_lr, (list, tuple)):
+            max_lr = [max_lr] * len(groups)
         ft_lr = self.config.fine_tuning_lr
-        if ft_lr is not None and self.active_learning_step_idx > 0:
-            self.optimizer.param_groups[0]["lr"] = ft_lr
-            if "max_lr" in params and "max_lr" in kwargs:
-                max_lr = kwargs["max_lr"]
-                if not isinstance(max_lr, (list, tuple)):
-                    max_lr = [max_lr] * len(self.optimizer.param_groups)
-                kwargs["max_lr"] = [ft_lr, *max_lr[1:]]
+        if fine_tuning and ft_lr is not None:
+            groups[0]["lr"] = ft_lr
+            if max_lr is not None:
+                max_lr = [ft_lr, *max_lr[1:]]
+        if max_lr is not None:
+            kwargs["max_lr"] = list(max_lr)
+        if fine_tuning and opt_cfg.fine_tuning_constant_lr:
+            if max_lr is not None:
+                for group, lr in zip(groups, max_lr):
+                    group["lr"] = lr
+            self.lr_scheduler = None
+            return
         self.lr_scheduler = opt_cfg.scheduler_cls(self.optimizer, **kwargs)
 
     def attach_strategies(self) -> None:
@@ -1296,7 +1311,11 @@ class Driver(p.DriverProtocol):
                 )
 
             opt_cfg = self.training_config.optimizer_config
-            if opt_cfg.rebuild_scheduler_per_phase and self.is_lr_scheduler_configured:
+            # Not is_lr_scheduler_configured: a constant-lr phase leaves it None.
+            if (
+                opt_cfg.rebuild_scheduler_per_phase
+                and opt_cfg.scheduler_cls is not None
+            ):
                 self._rebuild_lr_scheduler(epochs_to_train * len(train_loader))
 
             self.train_loop_fn(
