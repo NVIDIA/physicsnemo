@@ -348,6 +348,22 @@ def test_select_negative_dim_on_shard_dim_rejected(distributed_mesh):
 
 
 @pytest.mark.multigpu_static
+def test_select_out_of_range_dim_raises(distributed_mesh):
+    r"""An out-of-range ``dim`` raises ``IndexError`` as on a plain tensor,
+    instead of wrapping around to another dim."""
+    dm = DistributedManager()
+    full = torch.randn(2, 3, 8 * distributed_mesh.size(0), 5, 4, device=dm.device)
+    st = scatter_tensor(full, 0, distributed_mesh, (Shard(2),))
+    out = scatter_tensor(full.select(0, 1), 0, distributed_mesh, (Shard(1),))
+
+    with torch._C.DisableTorchFunctionSubclass():
+        with pytest.raises(IndexError, match="Dimension out of range"):
+            torch.ops.aten.select.int(st, 5, 1)
+        with pytest.raises(IndexError, match="Dimension out of range"):
+            torch.ops.aten.select_backward.default(out, list(full.shape), 5, 1)
+
+
+@pytest.mark.multigpu_static
 def test_compiled_stack_backward_keeps_shard_dim(distributed_mesh):
     r"""``torch.stack(..., dim=-1)`` (RoPE's rotate-half) under compile: its
     backward selects with ``dim=-1``; the input grad must stay ``Shard(2)``."""
