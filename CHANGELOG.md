@@ -184,6 +184,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"grp.v"` now raises a `KeyError` that names the wrong fields.
 - GLOBE returns nested output fields in sorted key order, such as
   `("flow", "nut")` before `("flow", "u")`.
+- The GLOBE DrivAerML example now trains for 450 epochs on one node, with the
+  model and training configuration of the GLOBE paper's DrivAerML results.
+  `--n-epochs` and `--lr-decay-epochs` replace `--patience-steps`, and
+  checkpoints from earlier versions of the example do not resume.
 - `ClusterTree.compute_source_aggregates` packs its source data with
   `TensorDict.pack`, so source data with leaves of several dtypes now raises
   a `TypeError` instead of being promoted.
