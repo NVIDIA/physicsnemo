@@ -20,8 +20,10 @@ Run: torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_mo
 The simulated field is analytic so results can be checked independently.
 """
 
+import argparse
+
 import torch
-from torch.distributed.tensor import Replicate, Shard
+from torch.distributed.tensor import Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor
@@ -30,13 +32,22 @@ from physicsnemo.metrics.general.ensemble_metrics import Mean, Variance
 
 def main():
     """Preserve spatial partitions while reducing distinct statistical axes."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--member-groups", type=int, choices=(1, 2), default=2)
+    args = parser.parse_args()
     DistributedManager.initialize()
     dm = DistributedManager()
-    if dm.world_size != 4:
-        raise ValueError("Run with four GPUs for a 2 x 2 mesh")
-    mesh = dm.initialize_mesh([2, 2], ["simulation", "space"])
+    space_groups = dm.world_size // args.member_groups
+    if dm.world_size not in (2, 4) or space_groups not in (1, 2):
+        raise ValueError(
+            "Use two GPUs (one or two member groups), or four GPUs (two groups)"
+        )
+    mesh = dm.initialize_mesh(
+        [args.member_groups, space_groups], ["simulation", "space"]
+    )
     simulation_rank, space_rank = mesh.get_coordinate()
-    simulation_sizes, space_sizes = [3, 2], [3, 7]
+    simulation_sizes = [5] if args.member_groups == 1 else [3, 2]
+    space_sizes = [10] if space_groups == 1 else [3, 7]
     ns, nx = simulation_sizes[simulation_rank], space_sizes[space_rank]
     simulation_start = sum(simulation_sizes[:simulation_rank])
     space_start = sum(space_sizes[:space_rank])
@@ -64,10 +75,7 @@ def main():
         spatial_mean = field.sum(1) / sum(space_sizes)
         observable.update(spatial_mean, dim=0)  # Completes pending spatial sum.
         # RMS across simulations and space at each time.
-        rms = (
-            field.square().sum().redistribute(placements=[Replicate(), Replicate()])
-            / (sum(simulation_sizes) * sum(space_sizes))
-        ).sqrt()
+        rms = (field.square().sum() / field.numel()).sqrt()
         if dm.rank == 0:
             print("time", time, "RMS", rms.to_local().item())
 

@@ -20,7 +20,17 @@ not calibrated coverage or OOD detection quality.
 
 ## Statistical axes determine communication
 
-The distributed example uses independently sharded simulations and space.
+The distributed examples use a 2 x 2 member/space mesh on four GPUs.
+They also run on two GPUs: the default distributes members (2 x 1), while
+`--member-groups 1` distributes space (1 x 2). For example:
+
+```bash
+torchrun --standalone --nproc-per-node=2 examples/minimal/uq/distributed_moments.py
+torchrun --standalone --nproc-per-node=2 \
+  examples/minimal/uq/distributed_moments.py --member-groups 1
+```
+
+The four-GPU example uses independently sharded simulations and space.
 It computes RMS over simulations/space at each time and pointwise variance over
 simulations/time. The direct path reduces simulations on each update and keeps
 one spatial field of statistics. The compound path retains separate time
@@ -57,7 +67,10 @@ Run from the repo root:
 torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_calibration.py
 ```
 
-This example gathers the final mean and total variance for each complete case,
+A small synthetic-case iterator keeps data construction separate from calibration.
+Its full arrays supply independent test references; production data loading should
+supply aligned local predictions and targets. This example gathers only the final
+mean and total variance with `full_tensor()` on all ranks for each complete case,
 then fits on rank zero. It compares Pointwise, FunctionalBand, and RiskControl
 calibrators against direct inputs and checks their existing save/load APIs.
 Targets must use the same output units and point ordering as the predictions.
@@ -106,4 +119,19 @@ Run the weighted-mean example tests with:
 
 ```bash
 python -m pytest -o addopts="" examples/minimal/uq/test_weighted_mean.py
+```
+
+## Distributed regression tests
+
+The library tests reuse the session's `distributed_mesh_2d` fixture. On two GPUs,
+they swap the member/space roles to exercise both communication paths in CI;
+on four GPUs, they also cover simultaneous member and spatial distribution.
+Uneven and empty partitions, GP mixtures, weighted statistics, and state ownership
+are checked against direct tensor references.
+
+```bash
+torchrun --standalone --nproc-per-node=2 -m pytest -o addopts="" \
+  test/domain_parallel/test_streaming_moments.py --multigpu-static -k cuda
+torchrun --standalone --nproc-per-node=4 -m pytest -o addopts="" \
+  test/domain_parallel/test_streaming_moments.py --multigpu-static -k cuda
 ```
