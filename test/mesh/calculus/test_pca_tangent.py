@@ -386,3 +386,43 @@ class TestPCAEdgeCases:
 
         assert not torch.any(torch.isnan(tangent_basis))
         assert not torch.any(torch.isnan(normal_basis))
+
+    @pytest.mark.parametrize(
+        "points, cells",
+        [
+            ([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], [[0, 1]]),
+            ([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], [[0, 1], [1, 2]]),
+            (
+                [[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+                [[0, 1, 2]],
+            ),
+        ],
+        ids=["edge", "straight-polyline", "right-triangle-in-4d"],
+    )
+    def test_gradients_where_eigenvalues_tie(self, device, points, cells):
+        """Flat neighborhoods tie their zero normal eigenvalues, and the right
+        angle of the triangle its tangent ones: the tangent and normal
+        projectors still have the gradients of finite differences."""
+        cells = torch.tensor(cells, device=device)
+
+        def projectors(points):
+            mesh = Mesh(points=points, cells=cells)
+            tangents, normals = estimate_tangent_space_pca(mesh)
+            return tangents.mT @ tangents, normals.mT @ normals
+
+        points = torch.tensor(points, dtype=torch.float64, device=device)
+        assert torch.autograd.gradcheck(projectors, points.requires_grad_())
+
+    def test_gradients_where_tangent_space_is_undefined(self, device):
+        """At a right-angle corner with equal edges, a tangent and a normal
+        eigenvalue tie: the bases and their gradients stay finite."""
+        points = torch.tensor(
+            [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device=device
+        ).requires_grad_()
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1], [1, 2]], device=device))
+
+        tangent_basis, normal_basis = estimate_tangent_space_pca(mesh)
+        (tangent_basis.sum() + normal_basis.sum()).backward()
+
+        assert tangent_basis.isfinite().all() and normal_basis.isfinite().all()
+        assert points.grad.isfinite().all()

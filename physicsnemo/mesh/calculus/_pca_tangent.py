@@ -76,6 +76,10 @@ def estimate_tangent_space_pca(
     6. First ``n_manifold_dims`` eigenvectors span the tangent space.
     7. Remaining eigenvectors span the normal space.
 
+    Derivatives of the bases are those of the tangent and normal spaces: each
+    basis turns only into the other space, so the derivatives stay finite where
+    eigenvalues within one space tie. Only first derivatives are exact.
+
     Examples
     --------
     >>> from physicsnemo.mesh.primitives.curves import helix_3d
@@ -149,11 +153,11 @@ def estimate_tangent_space_pca(
             / n_neighbors
         )
 
-        ### Batch eigen-decomposition
-        eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrices)
+        ### Batch eigen-decomposition, without derivatives (see below)
+        eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrices.detach())
 
         ### Sort eigenvectors by eigenvalue (descending)
-        sorted_indices = torch.argsort(eigenvalues, dim=1, descending=True)
+        eigenvalues, sorted_indices = eigenvalues.sort(dim=1, descending=True)
         sorted_idx_expanded = sorted_indices.unsqueeze(1).expand_as(eigenvectors)
         eigenvectors_sorted = torch.gather(
             eigenvectors, dim=2, index=sorted_idx_expanded
@@ -161,9 +165,30 @@ def estimate_tangent_space_pca(
 
         ### Extract tangent and normal bases
         tangent_vecs = eigenvectors_sorted[:, :, :n_manifold_dims]
-        tangent_basis[point_indices] = tangent_vecs.transpose(1, 2).to(dtype)
-
         normal_vecs = eigenvectors_sorted[:, :, n_manifold_dims:]
+
+        ### Derivatives of the tangent and normal spaces
+        # eigh's backward divides by every eigenvalue gap, so it is NaN or wrong
+        # where eigenvalues tie, such as the zero normal eigenvalues of a flat
+        # neighborhood. The spaces depend only on the gaps between tangent and
+        # normal eigenvalues: to first order, a change of the matrix turns each
+        # space into the other by this rotation, which is zero in value (so only
+        # first derivatives are exact). Where such a gap is zero, the tangent
+        # space is undefined and gets no derivative.
+        gaps = (
+            eigenvalues[:, None, :n_manifold_dims]
+            - eigenvalues[:, n_manifold_dims:, None]
+        )  # (n_group, codimension, n_manifold_dims)
+        d_cov = cov_matrices - cov_matrices.detach()
+        rotation = (
+            normal_vecs.mT @ d_cov @ tangent_vecs / gaps.where(gaps > 0, torch.inf)
+        )
+        tangent_vecs, normal_vecs = (
+            tangent_vecs + normal_vecs @ rotation,
+            normal_vecs - tangent_vecs @ rotation.mT,
+        )
+
+        tangent_basis[point_indices] = tangent_vecs.transpose(1, 2).to(dtype)
         normal_basis[point_indices] = normal_vecs.transpose(1, 2).to(dtype)
 
     return tangent_basis, normal_basis

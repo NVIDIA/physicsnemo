@@ -503,6 +503,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result. On surfaces in four or more dimensions they are now correct at points
   with two neighbors, and DEC intrinsic gradients of curves in 3D are now
   correct at their endpoints.
+- Derivatives of intrinsic gradients with respect to the points are no longer
+  NaN on straight curves in 3D, or flat surfaces in 4D, that lie along the axes.
+  On curves in 3D and surfaces in 4D, only first derivatives are exact.
 - DEC gradients of planar triangle meshes are no longer NaN at the vertices of
   zero-area triangles, such as those `Mesh.pad` adds. DEC divergences are now
   correct on float32 meshes a few millimetres across in metres.
