@@ -220,7 +220,7 @@ def test_actual_pipeline_forward_backward_checkpoint_and_chunking(
     from datasets import find_normalizer
     from metrics import MetricCalculator
 
-    normalizer = find_normalizer([ds])
+    normalizer = find_normalizer([ds]).to(device)
     prediction = normalize_output_to_tensordict(output, targets, "tensors")
     before = batch["targets"].clone()
     measured = MetricCalculator(targets, metrics=["l2"], normalizer=normalizer)(
