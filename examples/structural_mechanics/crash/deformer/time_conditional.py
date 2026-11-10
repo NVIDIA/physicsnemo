@@ -29,13 +29,13 @@ features and a time code to the deformed positions:
   neighbourhood attention in the DeFormer recipe), FiLM-conditioned on the
   mesh context: a pre-processor before the backbone and two post stages after
   it. Stage A feeds a zero-initialised coarse head (the provisional shape,
-  supervised with ``training.coarse_loss_weight``); stage B is an independent,
+  supervised with ``training.auxiliary_loss_weight``); stage B is an independent,
   re-initialised copy of stage A whose gated correction gives the final shape.
 * There is no recurrent state and no BPTT: training samples independent
   (case, time) pairs, evaluation queries every future frame from the initial
   mesh and returns the trajectory ``[N, T, 3]``.
 
-The evaluation-time rigid-wall clamp (:mod:`shape_corrections`) is available
+The evaluation-time rigid-wall clamp (:mod:`deformer.shape_corrections`) is available
 and off by default. The checkpoint format is the base model's
 (``physicsnemo.Module.from_checkpoint``).
 """
@@ -47,19 +47,20 @@ from typing import NamedTuple
 
 import torch
 from rollout import TimeEmbedding, global_tokens
-from shape_corrections import RigidWallClamp, correct_shape
 from torch import nn
 
 from physicsnemo.experimental.models.deformer import DeFormer
 
+from .shape_corrections import RigidWallClamp, correct_shape
+
 
 class TimeConditionalOutput(NamedTuple):
-    """Training output of a time-conditional model: the final and the provisional
-    (coarse) position, both normalized ``[N, 3]`` (or ``[N, 2, 3]`` for a frame
-    pair)."""
+    """Training output of a time-conditional model: the final position and the
+    auxiliary (provisional) position of stage A, both normalized ``[N, 3]``; the
+    trainer supervises the auxiliary one with ``training.auxiliary_loss_weight``."""
 
     prediction: torch.Tensor
-    coarse_prediction: torch.Tensor
+    auxiliary_prediction: torch.Tensor
 
 
 class DeFormerTimeConditional(DeFormer):
@@ -86,13 +87,15 @@ class DeFormerTimeConditional(DeFormer):
         never integrates in time.
     clamp_to_wall, wall_axis, wall_sign
         Evaluation-time rigid-wall clamp of the prediction (see
-        :class:`shape_corrections.RigidWallClamp`); needs ``graph.rigid_wall``
+        :class:`deformer.shape_corrections.RigidWallClamp`); needs ``graph.rigid_wall``
         from ``datapipe.rigid_wall_position``.
     **kwargs
         :class:`~physicsnemo.experimental.models.deformer.DeFormer`
         settings (backbone, local operator, context fusion, activation
         checkpointing). ``out_dim`` must be 3 and ``use_te`` false.
     """
+
+    input_kind = "graph"
 
     def __init__(
         self,

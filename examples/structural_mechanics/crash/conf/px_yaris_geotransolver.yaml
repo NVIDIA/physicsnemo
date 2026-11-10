@@ -29,7 +29,7 @@ defaults:
 experiment_name: PX-Yaris-GeoTransolver
 
 training:
-  coarse_loss_weight: 0.0   # the point model has no provisional head
+  auxiliary_loss_weight: 0.0   # the point model has no provisional head
 
 datapipe:
   # the kNN neighbourhoods are a datapipe product shared with the DeFormer

@@ -13,8 +13,8 @@ VTP data and `bumper_*` the bumper beam.
 
 | Recipe | Model | What it trains |
 | --- | --- | --- |
-| `px_yaris_deformer` | `model/deformer_time_conditional.yaml` (`time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
-| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`residual_model.ResidualTimeConditional` around `deformer_corrector.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
+| `px_yaris_deformer` | `model/deformer_time_conditional.yaml` (`deformer.time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
+| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`deformer.residual.ResidualTimeConditional` around `deformer.corrector.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
 | `px_yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
 
 `px_yaris_deformer` is self-contained (reader `px_yaris_full`, datapipe `px_yaris_full`,
@@ -27,7 +27,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | --- | --- | --- |
 | `yaris.data_root`, `yaris.split_manifest`, `yaris.outlier_mask`, `yaris.work_dir` | required | stores, `splits.csv`, `outlier_nodes.npz` (or `null`), run directory |
 | `yaris.stride` | 5 | every fifth 1 ms frame (5 ms); `model.dt` and `reader.raw_dt * stride` must agree |
-| `training.trainer_class` | `yaris_full_trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
+| `training.trainer_class` | `px_yaris.trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
 | `training.num_training_samples` / `num_validation_samples` | 69 / 20 | the manifest's split sizes |
 | `training.num_time_steps` | 31 | frame bound per case (`ceil(152 / 5)`); the time label `k / 30` is normalized by it |
 | `training.optimizer`, `muon_min_dim` | `muon`, 9 | Muon for matrices, AdamW for vectors and matrices narrower than 9 |
@@ -36,7 +36,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `training.amp`, `amp_dtype`, `manual_gradient_allreduce` | true, bfloat16, true | bf16 autocast; gradients averaged after backward |
 | `training.seed`, `sampler_seed`, `reproducible_sampling` | 42, 0, true | paired seeds: `training.seed=43 training.sampler_seed=1` |
 | `training.loss`, `loss_space`, `loss_scale_mm` | `mse`, `physical`, 10 | MSE of the position error in millimetres over one 10 mm scale (`training.loss=relative_l2` is the documented alternative) |
-| `training.coarse_loss_weight` | 0.1 | weight of the position loss on the provisional head |
+| `training.auxiliary_loss_weight` | 0.1 | weight of the position loss on the provisional head |
 | `training.validation_freq`, `save_checkpoint_freq` | 5, 5 | epochs |
 | `datapipe.sample_type` | `one_time_step` | one (case, future frame) pair per sample, from the initial frame |
 | `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | from the model, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash |
@@ -77,14 +77,14 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | `model.final_clamp_to_wall`, `wall_axis`, `wall_sign` | true (recipe), 0, 1 | wall clamp of the corrected shape at evaluation |
 | `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | true, true, 100 | shell facets and exclusions, mesh edges, the Yaris barrier plane |
 | `training.epochs`, `lr_warmup_epochs`, `validation_freq`, `save_checkpoint_freq` | 30, 1, 2, 1 | the corrector's budget |
-| `training.coarse_loss_weight` | 0 | no provisional head |
+| `training.auxiliary_loss_weight` | 0 | no provisional head |
 | `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm | target-relative penetration metrics in the validation record |
 
 `px_yaris_geotransolver` sets the point model's time code, width and memory policy
 to the network's and the datapipe's neighbourhood keys explicitly (the point
 model has none); it ignores the neighbourhoods.
 
-### Evaluation keys (`evaluate_yaris_tc.py`)
+### Evaluation keys (`evaluate_px_yaris.py`)
 
 | Override | Effect |
 | --- | --- |
@@ -107,7 +107,7 @@ The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
 | `training.num_training_samples`, `num_validation_samples` | 69, 20 | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
 
 Re-running a training command resumes from `<work_dir>/checkpoints`.
-`yaris_full_prepare.py` reads the environment variable `YARIS_STATS_WORKERS`
+`px_yaris_prepare.py` reads the environment variable `YARIS_STATS_WORKERS`
 (default 8) for its statistics workers.
 
 ## Body-in-white Yaris (VTP) recipes (`biw_yaris_*`)
@@ -124,7 +124,7 @@ plus its own keys); the required paths are `training.raw_data_dir` and
 change the neighbourhood metric and size; the datapipe builds the matching
 neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
 
-`evaluate_biw_tc.py` scores a body-in-white time-conditional checkpoint with
+`evaluate_biw.py` scores a body-in-white time-conditional checkpoint with
 the PX Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
 ++datapipe.rigid_wall_position=-29.8`).
 

@@ -15,16 +15,16 @@
 # limitations under the License.
 """DeFormer: a frozen time-conditional network followed by its corrector.
 
-The teacher is a finished :class:`time_conditional.DeFormerTimeConditional`,
+The teacher is a finished :class:`deformer.time_conditional.DeFormerTimeConditional`,
 loaded from its checkpoint and frozen; the student is a
-:class:`deformer_corrector.DeFormerCorrector` trained on top of it. The teacher's
+:class:`deformer.corrector.DeFormerCorrector` trained on top of it. The teacher's
 prediction at the queried time is recomputed on the fly and handed to the
 student, which adds its correction; the trainings are decoupled (the teacher
 never receives a gradient) and no prediction files are stored. Inference is
 the teacher followed by the student.
 
 ``final_clamp_to_wall`` applies the evaluation-time rigid-wall clamp of
-:mod:`shape_corrections` to the corrected shape (the teacher's own prediction
+:mod:`deformer.shape_corrections` to the corrected shape (the teacher's own prediction
 stays as the student was trained on).
 """
 
@@ -33,12 +33,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-from deformer_corrector import DeFormerCorrector
-from shape_corrections import RigidWallClamp, correct_shape
 from torch import nn
 from utils import load_warm_start
 
 import physicsnemo
+
+from .corrector import DeFormerCorrector
+from .shape_corrections import RigidWallClamp, correct_shape
 
 
 class ResidualTimeConditional(physicsnemo.Module):
@@ -54,10 +55,10 @@ class ResidualTimeConditional(physicsnemo.Module):
         ``.mdlus`` (or state-dict ``.pt``) file of the teacher, loaded strictly.
     final_clamp_to_wall, wall_axis, wall_sign
         Evaluation-time rigid-wall clamp of the corrected shape
-        (:class:`shape_corrections.RigidWallClamp`); needs
+        (:class:`deformer.shape_corrections.RigidWallClamp`); needs
         ``datapipe.rigid_wall_position``.
     **student_kwargs
-        Constructor arguments of :class:`deformer_corrector.DeFormerCorrector`;
+        Constructor arguments of :class:`deformer.corrector.DeFormerCorrector`;
         its ``functional_dim`` counts the three teacher-displacement channels.
 
     A saved corrector (``.mdlus``) records ``teacher_weights`` as given at
@@ -66,6 +67,8 @@ class ResidualTimeConditional(physicsnemo.Module):
     the teacher's weights are part of the corrector's state dict, the file is
     only needed to build the teacher.
     """
+
+    input_kind = "graph"
 
     # The teacher path is the one argument a saved corrector lets the loader override.
     _overridable_args = {"teacher_weights"}

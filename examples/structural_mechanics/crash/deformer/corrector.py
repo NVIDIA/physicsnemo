@@ -34,7 +34,7 @@ mesh:
 
 There is no global block, so the receptive field is ``processor_size`` hops.
 The decoder is zero-initialised, so the corrector starts exactly at the
-teacher. One forward corrects one frame; :class:`residual_model.ResidualTimeConditional`
+teacher. One forward corrects one frame; :class:`deformer.residual.ResidualTimeConditional`
 runs the teacher, serves its fields and loops over frames.
 """
 
@@ -45,7 +45,6 @@ import math
 import torch
 from local_neighborhoods import mesh_edge_features
 from rollout import TimeEmbedding
-from time_conditional import TimeConditionalOutput
 from torch import nn
 
 import physicsnemo
@@ -58,6 +57,8 @@ from physicsnemo.experimental.nn.shell_contact import (
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
 from physicsnemo.nn.module.gnn_layers.graph_types import PyGData
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
+
+from .time_conditional import TimeConditionalOutput
 
 EPS = 1.0e-8
 MESH_EDGE_INPUT_DIM = 12

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import hydra
 from hydra.utils import instantiate
-from yaris_full import STATS_FILE, atomic_json, file_sha256
+from px_yaris.dataset import STATS_FILE, atomic_json, file_sha256
 
 
 @hydra.main(

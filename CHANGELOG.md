@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stages and a fused kernel).
 - Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
   the time-conditional network, the contact-aware corrector
-  (`deformer_corrector.DeFormerCorrector`), the three full-vehicle Yaris
+  (`deformer.corrector.DeFormerCorrector`), the three full-vehicle Yaris
   recipes (`px_yaris_deformer`, `px_yaris_deformer_corrector`,
   `px_yaris_geotransolver`), the body-in-white recipe `biw_yaris_deformer`
   and target-relative penetration metrics.

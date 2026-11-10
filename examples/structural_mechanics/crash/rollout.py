@@ -103,6 +103,8 @@ def _oneshot_add_coords(pred: torch.Tensor, coords: torch.Tensor) -> torch.Tenso
 class GeoTransolverOneShot(GeoTransolver):
     """GeoTransolver model with one-shot training."""
 
+    input_kind = "points"
+
     def __init__(self, *args, **kwargs):
         self.rollout_steps = _oneshot_init(kwargs, "out_dim")
         super().__init__(*args, **kwargs)
@@ -168,6 +170,8 @@ class GeoTransolverOneShot(GeoTransolver):
 class TransolverOneShot(Transolver):
     """Transolver model with one-shot training."""
 
+    input_kind = "points"
+
     def __init__(self, *args, **kwargs):
         self.rollout_steps = _oneshot_init(kwargs, "out_dim")
         super().__init__(*args, **kwargs)
@@ -182,6 +186,8 @@ class TransolverOneShot(Transolver):
 
 class MeshGraphNetOneShot(MeshGraphNet):
     """MeshGraphNet model with one-shot training."""
+
+    input_kind = "graph"
 
     def __init__(self, *args, **kwargs):
         self.rollout_steps = _oneshot_init(kwargs, "output_dim")
@@ -201,6 +207,8 @@ class MeshGraphNetOneShot(MeshGraphNet):
 
 class FIGConvUNetOneShot(FIGConvUNet):
     """FIGConvUNet model with one-shot training."""
+
+    input_kind = "points"
 
     def __init__(self, *args, **kwargs):
         self.rollout_steps = _oneshot_init(kwargs, "out_channels")
@@ -231,6 +239,8 @@ class GeoTransolverAutoregressiveRolloutTraining(GeoTransolver):
     Predicts sequence by autoregressively updating velocity and position
     using predicted accelerations. Supports gradient checkpointing during training.
     """
+
+    input_kind = "points"
 
     def __init__(self, *args, **kwargs):
         self.dt: float = kwargs.pop("dt")
@@ -355,6 +365,8 @@ class GeoTransolverTimeConditional(GeoTransolver):
     and ``time_as_global=True`` additionally feeds that code as a global token
     (``global_dim`` must equal ``time_dim`` plus any dataset global features).
     """
+
+    input_kind = "points"
 
     def __init__(
         self,
@@ -488,6 +500,8 @@ class GeoTransolverOneStepRollout(GeoTransolver):
       - Training: teacher forcing (uses GT for each step, but first step needs backstep)
       - Inference: autoregressive (uses predictions)
     """
+
+    input_kind = "points"
 
     def __init__(self, *args, **kwargs):
         self.dt: float = kwargs.pop("dt", 5e-3)

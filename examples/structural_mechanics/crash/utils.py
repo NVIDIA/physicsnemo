@@ -14,12 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared helpers of the crash recipes: global features, optimizers, warm starts."""
+"""Shared helpers of the crash recipes: global features, optimizers, warm starts,
+distributed dataset startup and per-rank random state."""
 
 import json
+import math
 import os
+import random
+from datetime import timedelta
 
+import numpy as np
 import torch
+import torch.distributed as dist
 
 from physicsnemo.optim import CombinedOptimizer
 
@@ -159,3 +165,118 @@ def load_warm_start(model: torch.nn.Module, path) -> dict[str, list[str]]:
             f"{sorted(result.missing_keys)[:8]}"
         )
     return {"loaded": sorted(state.keys())}
+
+
+# ----- distributed dataset startup (rank zero publishes, the others load) -----
+
+
+def initialize_datasets(build, timeout_seconds=3600):
+    """Run ``build(stats_mode)`` on every rank, publishing rank-zero data first.
+
+    ``build`` must initialize BOTH training and validation datasets. Rank zero
+    alone publishes normalization files and warms shared geometry caches. All
+    ranks finish before returning to any GPU collectives. CPU failure messages
+    are propagated collectively; a process crash is bounded by the Gloo timeout.
+    This does not increase the training process group's NCCL timeout.
+    """
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("Dataset startup timeout must be finite and positive")
+    if not dist.is_initialized() or dist.get_world_size() == 1:
+        return build("compute")
+    group = dist.new_group(backend="gloo", timeout=timedelta(seconds=timeout_seconds))
+    result = None
+    try:
+        status = [None]
+        if dist.get_rank() == 0:
+            try:
+                result = build("compute")
+            except Exception as error:
+                status[0] = f"{type(error).__name__}: {error}"
+        dist.broadcast_object_list(status, src=0, group=group)
+        if status[0] is not None:
+            raise RuntimeError(f"Rank-zero dataset startup failed: {status[0]}")
+        failure = None
+        if dist.get_rank() != 0:
+            try:
+                result = build("load")
+            except Exception as error:
+                failure = f"rank {dist.get_rank()}: {type(error).__name__}: {error}"
+        failures = [None] * dist.get_world_size()
+        dist.all_gather_object(failures, failure, group=group)
+        if any(failures):
+            raise RuntimeError(f"Dataset startup failed: {failures}")
+        return result
+    finally:
+        dist.destroy_process_group(group)
+
+
+# ----- per-rank random state for reproducible epoch-boundary restarts -----
+
+
+def configure_deterministic_training(enabled):
+    """Configure before CUDA initialization; fail closed on unsupported kernels.
+
+    Saving RNG state is insufficient for CUDA scatter/attention reductions. Keep
+    this opt-in; the released recipes train without it.
+    """
+    if not enabled:
+        return
+    workspace = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+    if workspace is None:
+        if torch.cuda.is_initialized():
+            raise RuntimeError("Set CUBLAS_WORKSPACE_CONFIG before CUDA initialization")
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    elif workspace not in {":4096:8", ":16:8"}:
+        raise ValueError("Unsupported deterministic CUBLAS_WORKSPACE_CONFIG")
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
+def capture_rng_state(generators=None):
+    """Capture Python, NumPy, Torch, CUDA, and named loader RNG states."""
+    numpy_state = np.random.get_state()
+    return {
+        "python": random.getstate(),
+        "numpy": (numpy_state[0], numpy_state[1].tolist(), *numpy_state[2:]),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+        "generators": {
+            name: gen.get_state() for name, gen in (generators or {}).items()
+        },
+    }
+
+
+def restore_rng_state(state, generators=None):
+    """Restore checkpoint RNG states and require matching loader generators."""
+    random.setstate(state["python"])
+    numpy_state = state["numpy"]
+    np.random.set_state(
+        (numpy_state[0], np.asarray(numpy_state[1], dtype=np.uint32), *numpy_state[2:])
+    )
+    torch.set_rng_state(state["torch"].cpu())
+    if state["cuda"] is not None:
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA RNG checkpoint requires a CUDA device")
+        torch.cuda.set_rng_state(state["cuda"].cpu())
+    if set(state["generators"]) != set(generators or {}):
+        raise ValueError("DataLoader generator contract changed at restart")
+    for name, generator in (generators or {}).items():
+        generator.set_state(state["generators"][name].cpu())
+
+
+def gather_rng_states(generators=None):
+    """Every rank must call, before rank zero writes the shared checkpoint."""
+    local = capture_rng_state(generators)
+    if not torch.distributed.is_initialized():
+        return [local]
+    states = [None] * torch.distributed.get_world_size()
+    torch.distributed.all_gather_object(states, local)
+    return states
+
+
+def restore_rank_rng(states, rank, world_size, generators=None):
+    """Restore this rank only after checking the saved distributed world size."""
+    if len(states) != world_size or not 0 <= rank < world_size:
+        raise ValueError("RNG checkpoint world size does not match this restart")
+    restore_rng_state(states[rank], generators)

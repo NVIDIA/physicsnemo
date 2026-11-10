@@ -14,14 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# DeFormer corrector: residual_model.ResidualTimeConditional (frozen teacher
-# recomputed on the fly) around deformer_corrector.DeFormerCorrector (message
+# DeFormer corrector: deformer.residual.ResidualTimeConditional (frozen teacher
+# recomputed on the fly) around deformer.corrector.DeFormerCorrector (message
 # passing on the shell mesh edges and on contact edges discovered on the
 # teacher's predicted shape). The recipe adds model.teacher (the teacher's
 # architecture) and model.teacher_weights (its checkpoint). dt, local_knn_k
 # and local_neighborhood describe the teacher's datapipe (the datapipe config
 # interpolates them).
-_target_: residual_model.ResidualTimeConditional
+_target_: deformer.residual.ResidualTimeConditional
 _convert_: all
 teacher_weights: ???
 num_time_steps: ${training.num_time_steps}

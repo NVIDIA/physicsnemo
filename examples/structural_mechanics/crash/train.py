@@ -18,12 +18,14 @@
 
 ``Trainer`` builds the datasets, the model and the optimizer from a Hydra
 recipe, runs one optimizer step per ``SimSample`` and validates with the pooled
-normalized MSE; ``yaris_full_trainer.YarisFullTrainer`` extends it with the
-exact full-mesh validation of the Yaris recipes. Every model family is served
-through the same ``model(sample=..., data_stats=...)`` call: one-shot models
-return ``[N, T, F]``, time-conditional models one frame ``[N, 3]`` in training (a
-``TimeConditionalOutput`` with the provisional position when asked) and the
-trajectory ``[N, T, 3]`` in evaluation.
+normalized MSE; a ``Trainer`` subclass named by ``training.trainer_class`` may
+extend the validation (the PX Yaris recipes do). The loop knows no model or
+dataset by name: every model family is served through the same
+``model(sample=..., data_stats=...)`` call (one-shot models return ``[N, T, F]``,
+time-conditional models one frame ``[N, 3]`` in training, optionally as a tuple
+with an ``auxiliary_prediction``, and the trajectory ``[N, T, 3]`` in
+evaluation), and model wrappers declare the sample kind they consume
+(``input_kind``) while datapipes declare the kinds they serve (``sample_kinds``).
 """
 
 import logging
@@ -56,16 +58,17 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 _tabulate = OptionalImport("tabulate")
 _torchinfo = OptionalImport("torchinfo")
 
-from data_startup import initialize_datasets
 from datapipe import SimSample, simsample_collate
 from losses import PositionLoss
 from omegaconf import open_dict
-from training_state import (
+from utils import (
+    build_muon_optimizer,
     configure_deterministic_training,
     gather_rng_states,
+    initialize_datasets,
+    load_warm_start,
     restore_rank_rng,
 )
-from utils import build_muon_optimizer, load_warm_start
 
 
 class ValidationEarlyStopping:
@@ -185,8 +188,8 @@ class Trainer:
 
     Training options read from ``cfg.training`` beyond the defaults of
     ``conf/training/default.yaml``: ``loss`` / ``loss_space`` / ``loss_scale_mm``
-    (:class:`losses.PositionLoss`), ``coarse_loss_weight`` (provisional head of
-    the time-conditional DeFormer), ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
+    (:class:`losses.PositionLoss`), ``auxiliary_loss_weight`` (position loss on a
+    model's ``auxiliary_prediction``), ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
     run's weights), ``manual_gradient_allreduce``, ``reproducible_sampling`` /
     ``sampler_seed``, ``deterministic`` and ``early_stopping_*``.
     """
@@ -221,43 +224,31 @@ class Trainer:
                 "manual_gradient_allreduce currently requires bfloat16 or fp32"
             )
         self.last_loss_components: dict[str, torch.Tensor] = {}
-        # Time-conditional DeFormer: auxiliary supervision of the provisional
-        # (coarse) position head, weight 0 for every other recipe.
-        self.coarse_loss_weight = float(cfg.training.get("coarse_loss_weight", 0.0))
-        if self.coarse_loss_weight < 0.0:
-            raise ValueError("training.coarse_loss_weight cannot be negative")
+        # Models may return an auxiliary prediction next to the final one (for
+        # example a provisional position head); its position loss enters with
+        # this weight, 0 by default.
+        self.auxiliary_loss_weight = float(
+            cfg.training.get("auxiliary_loss_weight", 0.0)
+        )
+        if self.auxiliary_loss_weight < 0.0:
+            raise ValueError("training.auxiliary_loss_weight cannot be negative")
 
         # --- Consistency check between model and datapipe ---
-        model_name = cfg.model._target_
-        datapipe_name = cfg.datapipe._target_
-        graph_model_markers = (
-            "MeshGraphNet",
-            "DeFormer",
-            "ResidualTimeConditional",
-        )
-        is_graph_model = any(marker in model_name for marker in graph_model_markers)
-
-        if is_graph_model and "GraphDataset" not in datapipe_name:
-            raise ValueError(
-                f"Model {model_name} requires a graph datapipe, "
-                f"but you selected {datapipe_name}."
-            )
-        # The Yaris full-mesh dataset serves point models too: they read the
-        # coordinates, features and time label and ignore its graph.
+        # Model wrappers declare the sample kind they consume (``input_kind``:
+        # "graph" or "points") and datapipes the kinds they serve
+        # (``sample_kinds``); classes without the attributes are not checked.
+        model_class = get_class(cfg.model._target_)
+        datapipe_class = get_class(cfg.datapipe._target_)
+        input_kind = getattr(model_class, "input_kind", None)
+        sample_kinds = getattr(datapipe_class, "sample_kinds", None)
         if (
-            not is_graph_model
-            and "Transolver" in model_name
-            and "PointCloudDataset" not in datapipe_name
-            and "YarisFull" not in datapipe_name
+            input_kind is not None
+            and sample_kinds is not None
+            and input_kind not in sample_kinds
         ):
             raise ValueError(
-                f"Model {model_name} requires a point-cloud datapipe, "
-                f"but you selected {datapipe_name}."
-            )
-        if "FIGConvUNet" in model_name and "PointCloudDataset" not in datapipe_name:
-            raise ValueError(
-                f"Model {model_name} requires a point-cloud datapipe, "
-                f"but you selected {datapipe_name}."
+                f"Model {cfg.model._target_} consumes {input_kind!r} samples, but "
+                f"the datapipe {cfg.datapipe._target_} serves {list(sample_kinds)}."
             )
 
         # Dataset
@@ -609,27 +600,28 @@ class Trainer:
         """The training loss of one sample (every model family)."""
         with autocast(device_type="cuda", enabled=self.amp, dtype=self.amp_dtype):
             model_kwargs = {}
-            if self.coarse_loss_weight > 0.0:
+            if self.auxiliary_loss_weight > 0.0:
                 model_kwargs["return_auxiliary"] = True
             model_output = self.model(
                 sample=sample, data_stats=self.data_stats, **model_kwargs
             )
             target = sample.node_target
-            if hasattr(model_output, "coarse_prediction"):
-                # Time-conditional model: final position plus the provisional head.
+            if hasattr(model_output, "auxiliary_prediction"):
+                # The model also returned an auxiliary prediction (for example a
+                # provisional position): supervise it with the configured weight.
                 prediction_loss = self._supervised_position_loss(
                     model_output.prediction, target, sample
                 )
-                coarse_loss = self.position_loss(
-                    model_output.coarse_prediction,
+                auxiliary_loss = self.position_loss(
+                    model_output.auxiliary_prediction,
                     target,
                     reference=self._loss_reference(sample),
                 )
                 self.last_loss_components = {
                     "trajectory": prediction_loss.detach(),
-                    "coarse": coarse_loss.detach(),
+                    "auxiliary": auxiliary_loss.detach(),
                 }
-                return prediction_loss + self.coarse_loss_weight * coarse_loss
+                return prediction_loss + self.auxiliary_loss_weight * auxiliary_loss
             trajectory_loss = self._supervised_position_loss(
                 model_output, target, sample
             )

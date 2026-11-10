@@ -15,7 +15,7 @@
 # limitations under the License.
 """Score a Yaris checkpoint with the exact held-out validation suite.
 
-Runs the validation of :class:`yaris_full_trainer.YarisFullTrainer` on a
+Runs the validation of :class:`px_yaris.trainer.YarisFullTrainer` on a
 trained checkpoint, inside the training environment and sharded over GPUs
 like training: pooled and per-frame vector RMSE in millimetres, per-case and
 per-region breakdowns, the target-relative penetration statistics of the
@@ -23,7 +23,7 @@ prediction and the ground truth (shell surface and, with
 ``datapipe.rigid_wall_position``, the rigid wall) and optionally node-error
 maps::
 
-    torchrun --standalone --nproc_per_node=4 evaluate_yaris_tc.py \\
+    torchrun --standalone --nproc_per_node=4 evaluate_px_yaris.py \\
         --config-name px_yaris_deformer \\
         yaris.data_root=... yaris.split_manifest=... yaris.outlier_mask=... \\
         yaris.work_dir=... training.ckpt_path=<run>/checkpoints \\

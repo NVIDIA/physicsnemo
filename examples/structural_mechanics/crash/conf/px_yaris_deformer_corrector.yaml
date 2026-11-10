@@ -48,7 +48,7 @@ training:
   lr_warmup_epochs: 1
   validation_freq: 2
   save_checkpoint_freq: 1
-  coarse_loss_weight: 0.0   # no provisional head
+  auxiliary_loss_weight: 0.0   # no provisional head
   validation_penetration:
     enabled: true
     tolerance_mm: 0.5

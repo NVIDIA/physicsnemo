@@ -60,7 +60,7 @@ Definitions (physical millimetres, per held-out case and future frame):
 
 Validation diagnostic only: any failure disables the metrics and zeroes them,
 it never fails validation. Results are written under ``penetration`` in the
-validation JSON by :class:`yaris_full_trainer.YarisFullTrainer`.
+validation JSON by :class:`px_yaris.trainer.YarisFullTrainer`.
 """
 
 from __future__ import annotations

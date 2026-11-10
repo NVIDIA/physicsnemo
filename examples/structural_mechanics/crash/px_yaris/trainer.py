@@ -31,11 +31,12 @@ from pathlib import Path
 
 import torch
 from datapipe import EPS, simsample_collate
+from deformer.penetration_metrics import PenetrationMetrics
 from hydra.utils import instantiate
-from penetration_metrics import PenetrationMetrics
 from torch.utils.data import DataLoader, Sampler
 from train import Trainer
-from yaris_full import atomic_json
+
+from .dataset import atomic_json
 
 
 class ExactShardSampler(Sampler):
@@ -76,7 +77,7 @@ def accumulate_validation(
     columns 0-2 hold the summed squared normalized error per channel, column 3
     the number of nodes contributing at that step, column 4 the summed squared
     physical error (mm^2, all three channels), plus the list of case names seen.
-    An optional :class:`penetration_metrics.PenetrationMetrics` accumulates its own statistics, and an
+    An optional :class:`deformer.penetration_metrics.PenetrationMetrics` accumulates its own statistics, and an
     optional ``node_errors`` tensor ``[N, 2]`` (float64) accumulates per node the
     summed squared physical error (mm^2, all channels) and the frame count.
     Optional ``regions`` = ``(masks [R, N] bool, totals [T, R, 6] float64)``

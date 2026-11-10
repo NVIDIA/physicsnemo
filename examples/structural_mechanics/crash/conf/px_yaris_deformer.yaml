@@ -23,7 +23,7 @@
 # scale for all three axes, plus 0.1 x the same loss on the provisional head.
 # Muon/AdamW, cosine 2e-4 -> 1e-6 over 60 epochs, bf16 autocast, 16 GPUs.
 # Validation every 5 epochs on the 20 held-out designs (exact, horizon-aware).
-# Prepare the statistics and caches first: python yaris_full_prepare.py
+# Prepare the statistics and caches first: python px_yaris_prepare.py
 # --config-name px_yaris_deformer yaris.data_root=... (see README.md).
 defaults:
   - reader: px_yaris_full
@@ -49,7 +49,7 @@ hydra:
     dir: ${yaris.work_dir}
 
 training:
-  trainer_class: yaris_full_trainer.YarisFullTrainer  # exact, horizon-aware validation
+  trainer_class: px_yaris.trainer.YarisFullTrainer  # exact, horizon-aware validation
   raw_data_dir: ${yaris.data_root}
   raw_data_dir_validation: ${yaris.data_root}
   global_features_filepath: null
@@ -74,12 +74,12 @@ training:
   validation_freq: 5
   save_checkpoint_freq: 5
   early_stopping_patience: 0
-  coarse_loss_weight: 0.1
+  auxiliary_loss_weight: 0.1
   loss: mse
   loss_space: physical
   loss_scale_mm: 10.0
 
 # inference.py reads VTP sequences only; Yaris predictions come from
-# evaluate_yaris_tc.py.
+# evaluate_px_yaris.py.
 inference:
   raw_data_dir_test: null

@@ -22,7 +22,7 @@
 # checkpointing (one forward per update fits without it), no fixed frame
 # interval. Loss: normalized MSE plus 0.1 x the same loss on the provisional
 # head. Muon/AdamW, cosine 2e-4 -> 1e-6 over 100 epochs, bf16 autocast,
-# validation every 5 epochs. evaluate_biw_tc.py scores a checkpoint with the
+# validation every 5 epochs. evaluate_biw.py scores a checkpoint with the
 # PX Yaris validation suite.
 hydra:
   job:
@@ -61,7 +61,7 @@ training:
   validation_freq: 5
   save_checkpoint_freq: 5
   early_stopping_patience: 0
-  coarse_loss_weight: 0.1
+  auxiliary_loss_weight: 0.1
 
 inference:
   raw_data_dir_test: ???

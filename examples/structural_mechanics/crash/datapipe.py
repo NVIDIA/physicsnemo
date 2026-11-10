@@ -735,6 +735,8 @@ class CrashGraphDataset(CrashBaseDataset):
       - Returns SimSample with graph, global_features, and target_series (parity with point-cloud).
     """
 
+    sample_kinds = ("graph",)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -993,6 +995,8 @@ class CrashPointCloudDataset(CrashBaseDataset):
       - Returns SimSample with node_features, node_target
       - Provides empty edge_stats dict for compatibility
     """
+
+    sample_kinds = ("points",)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

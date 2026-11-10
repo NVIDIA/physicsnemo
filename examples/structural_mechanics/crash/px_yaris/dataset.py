@@ -549,6 +549,8 @@ class YarisFullGraphDataset(Dataset):
         operator expects it (empty under the Euclidean metric).
     """
 
+    sample_kinds = ("graph", "points")  # point models read its node features
+
     def __init__(
         self,
         reader,

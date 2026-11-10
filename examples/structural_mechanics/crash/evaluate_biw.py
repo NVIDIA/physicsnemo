@@ -18,16 +18,16 @@ the evaluation suite of the PX Yaris recipes.
 
 The body-in-white recipes train with the generic :class:`train.Trainer`, whose validation
 is the pooled normalized MSE only. This script applies the suite that
-:class:`yaris_full_trainer.YarisFullTrainer` wires into its validation to a body-in-white
+:class:`px_yaris.trainer.YarisFullTrainer` wires into its validation to a body-in-white
 checkpoint: the exact held-out validation (every case once on any rank count)
 with the pooled and per-time vector RMSE in millimetres, per-case and
 per-region breakdowns, node-error maps and percentiles, the target-relative
-penetration metrics (:class:`penetration_metrics.PenetrationMetrics`: shell
+penetration metrics (:class:`deformer.penetration_metrics.PenetrationMetrics`: shell
 surface and, with ``datapipe.rigid_wall_position``, the rigid wall). Runs
 inside the training
 environment, sharded over GPUs like training::
 
-    torchrun --standalone --nproc_per_node=4 evaluate_biw_tc.py \\
+    torchrun --standalone --nproc_per_node=4 evaluate_biw.py \\
         --config-name biw_yaris_deformer \\
         training.raw_data_dir=<train> training.raw_data_dir_validation=<validation> \\
         reader.cache_dir=<vtp cache with cells> ++reader.include_contact_topology=true \\
@@ -66,16 +66,16 @@ import hydra
 import numpy as np
 import torch
 from datapipe import EPS, simsample_collate
+from deformer.penetration_metrics import PenetrationMetrics
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf, open_dict
-from penetration_metrics import PenetrationMetrics
-from torch.utils.data import DataLoader, Dataset
-from yaris_full_trainer import (
+from px_yaris.trainer import (
     ExactShardSampler,
     accumulate_validation,
     summarize_cases,
     summarize_validation,
 )
+from torch.utils.data import DataLoader, Dataset
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint
@@ -201,7 +201,7 @@ def region_names(bounds) -> list[str]:
 
 def region_summary(masks, totals, per_case, bounds, horizon) -> dict:
     """Translational share of the error per reference-x region (JSON-ready), as
-    :meth:`yaris_full_trainer.YarisFullTrainer._region_summary`."""
+    :meth:`px_yaris.trainer.YarisFullTrainer._region_summary`."""
     totals = totals[:horizon].cpu()
     names = region_names(bounds)
     out = {"per_case_mean_error_mm": sorted(per_case, key=lambda r: r["case"])}
