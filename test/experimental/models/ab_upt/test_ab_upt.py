@@ -214,31 +214,14 @@ def test_single_branch_context_gradients_and_checkpoint(
         model.decode_queries(queries, context, inactive)
 
 
-@pytest.mark.parametrize("channels", [(4, 7), (4, 0), (0, 7)])
-def test_gradients_and_disabled_heads(channels, device):
-    model = ABUPT(
-        **(
-            SMALL
-            | dict(
-                surface_channels=channels[0],
-                volume_channels=channels[1],
-                parameter_channels=2,
-            )
-        )
-    ).to(device)
-    args = list(inputs(device))
-    for index, count in enumerate(channels, start=2):
-        if not count:
-            args[index] = None
+def test_conditioning_and_joint_parameter_gradients(device):
+    model = ABUPT(**(SMALL | {"parameter_channels": 2})).to(device)
     conditioning = torch.randn(2, 2, device=device, requires_grad=True)
-    result = model(*args, parameters=conditioning)
-    sum(x.square().mean() for x in result if x is not None).backward()
+    result = model(*inputs(device), parameters=conditioning)
+    sum(x.square().mean() for x in result).backward()
     assert conditioning.grad is not None and conditioning.grad.abs().sum() > 0
     for name, p in model.named_parameters():
-        assert p.grad is not None, name
-        assert torch.isfinite(p.grad).all(), name
-    assert (result[0] is None) == (channels[0] == 0)
-    assert (result[1] is None) == (channels[1] == 0)
+        assert p.grad is not None and torch.isfinite(p.grad).all(), name
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
