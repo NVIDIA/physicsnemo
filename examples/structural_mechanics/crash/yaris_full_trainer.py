@@ -506,10 +506,8 @@ class YarisFullTrainer(Trainer):
             if self.dist.rank == 0:
                 reader = self.validation_dataset.reader
                 dt_ms = reader.dt * 1000.0
-                # The targets start `history` frames after the first observed one.
-                history = int(
-                    getattr(self.validation_dataset, "initial_history_steps", 1)
-                )
+                # The targets start one frame after the observed initial one.
+                history = 1
                 horizon = int(stats["nodes_w_time"].numel())
                 atomic_json(
                     self.validation_dir / f"epoch_{epoch + 1:04d}.json",

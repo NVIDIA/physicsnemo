@@ -33,8 +33,8 @@ environment, sharded over GPUs like training::
         training.raw_data_dir=<train> training.raw_data_dir_validation=<validation> \\
         reader.cache_dir=<vtp cache with cells> ++reader.include_contact_topology=true \\
         ++datapipe.local_knn_cache_dir=<knn cache> datapipe.stats_dir=<run>/stats \\
-        ++datapipe.contact_surface=true ++datapipe.contact_surface_exclusion=reference_geodesic \\
-        ++datapipe.contact_geodesic_cache_dir=<geodesic cache> ++datapipe.rigid_wall_position=-29.8 \\
+        ++datapipe.contact_surface=true ++datapipe.contact_surface_exclusion=one_ring \\
+        ++datapipe.rigid_wall_position=-29.8 \\
         training.ckpt_path=<run>/checkpoints +training.load_epoch=100 \\
         +training.validation_output_dir=<out> hydra.run.dir=<out>
 
@@ -419,7 +419,7 @@ def run_suite(
     if errors is not None:
         percentiles, node_rmse = node_error_percentiles(errors)
     dt_ms = float(getattr(dataset, "dt", 5e-3)) * 1000.0
-    history = int(getattr(dataset, "initial_history_steps", 1))
+    history = 1  # the targets start one frame after the observed initial one
     record = dict(
         penetration=penetration,
         regions=(
@@ -510,9 +510,7 @@ def main(cfg: DictConfig) -> None:
     dataset = build_validation(cfg, logger0)
     names = case_names(cfg.training.raw_data_dir_validation, len(dataset))
     data_stats = data_stats_of(dataset, dist.device)
-    rollout_steps = int(cfg.training.num_time_steps) - int(
-        getattr(dataset, "initial_history_steps", 1)
-    )
+    rollout_steps = int(cfg.training.num_time_steps) - 1
 
     model = instantiate(cfg.model).to(dist.device)
     warm_start = cfg.training.get("warm_start_model")

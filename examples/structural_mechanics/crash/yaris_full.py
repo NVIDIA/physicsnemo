@@ -531,15 +531,9 @@ class YarisFullGraphDataset(Dataset):
         Compute the statistics from the training split (rank zero) or load them.
     logger : logging.Logger, optional
         Logger for startup messages.
-    sample_type : {"random_time_window", "one_time_step", "all_time_steps"}
-        One rollout window per access (autoregressive training), one
-        (case, future frame) pair per access (time-conditional training) or
-        the complete trajectory (validation and inference).
-    initial_history_steps : int
-        Observed frames: 1 for time-conditional samples, 2 for rollouts.
-    rollout_window_steps, windows_per_sample, window_seed
-        Rollout window length, windows per case and epoch and the stateless
-        draw seed of ``random_time_window``.
+    sample_type : {"one_time_step", "all_time_steps"}
+        One (case, future frame) pair per access (time-conditional training)
+        or the complete trajectory (validation and inference).
     dt : float
         Frame interval in seconds (must equal ``stride * raw_dt`` of the reader).
     static_features, dynamic_features, dynamic_targets, global_features,
@@ -582,9 +576,7 @@ class YarisFullGraphDataset(Dataset):
         stats_dir="stats",
         stats_mode="load",
         logger=None,
-        sample_type="random_time_window",
-        initial_history_steps=2,
-        rollout_window_steps=4,
+        sample_type="one_time_step",
         dt=0.005,
         static_features=("thickness",),
         dynamic_features=(),
@@ -594,8 +586,6 @@ class YarisFullGraphDataset(Dataset):
         local_knn_k=32,
         local_knn_metric="euclidean",
         local_knn_cache_dir=None,
-        window_seed=42,
-        windows_per_sample=1,
         stats_workers=None,
         contact_surface=False,
         rigid_wall_position=None,
@@ -622,18 +612,8 @@ class YarisFullGraphDataset(Dataset):
             )
         if not math.isclose(float(dt), reader.dt, rel_tol=0, abs_tol=1e-12):
             raise ValueError("Datapipe dt must equal stride * raw frame dt")
-        if sample_type == "one_time_step":
-            if int(initial_history_steps) != 1:
-                raise ValueError("one_time_step predicts from the initial frame only")
-        elif sample_type == "random_time_window" and int(initial_history_steps) != 2:
-            raise ValueError("Two observed frames initialize the velocity")
-        elif int(initial_history_steps) not in (1, 2):
-            raise ValueError("initial_history_steps must be 1 or 2")
-        self.initial_history_steps = int(initial_history_steps)
-        if sample_type not in ("random_time_window", "all_time_steps", "one_time_step"):
-            raise ValueError(
-                "sample_type must be random_time_window, one_time_step or all_time_steps"
-            )
+        if sample_type not in ("all_time_steps", "one_time_step"):
+            raise ValueError("sample_type must be one_time_step or all_time_steps")
         if split != "train" and sample_type != "all_time_steps":
             raise ValueError("Validation/test must cover complete selected histories")
         if stats_mode not in ("compute", "load"):
@@ -644,15 +624,7 @@ class YarisFullGraphDataset(Dataset):
             raise ValueError("local_knn_k must be a positive integer")
         self.dt, self.sample_type = float(dt), sample_type
         self.num_steps = int(num_steps)
-        self.rollout_window_steps = int(rollout_window_steps)
-        if not 1 <= self.rollout_window_steps <= self.num_steps - 2:
-            raise ValueError("rollout_window_steps must be in [1, num_steps - 2]")
-        self.windows_per_sample = int(windows_per_sample)
-        if self.windows_per_sample < 1:
-            raise ValueError("windows_per_sample must be positive")
-        self.window_seed = None if window_seed is None else int(window_seed)
         self.local_knn_k, self.local_knn_metric = int(local_knn_k), local_knn_metric
-        self.epoch = 0
         self.paths = reader.paths(data_dir, split, num_samples)
         self.num_samples = len(self.paths)
         self.reader.open(self.paths[0])  # establishes the shared reference geometry
@@ -883,7 +855,7 @@ class YarisFullGraphDataset(Dataset):
     def __len__(self):
         if self.sample_type == "one_time_step":
             return self.num_pairs
-        return self.num_samples * self.windows_per_sample
+        return self.num_samples
 
     def _pair(self, index):
         """Map a flat one_time_step index to (case index, future frame offset k)."""
@@ -892,59 +864,31 @@ class YarisFullGraphDataset(Dataset):
         case = bisect.bisect_right(self.case_offsets, index) - 1
         return case, index - self.case_offsets[case]
 
-    def set_epoch(self, epoch):
-        """Epoch counter of the stateless window draws."""
-        self.epoch = int(epoch)
-
-    def _window_start(self, sample_idx, num_frames):
-        """Same stateless draw as the crash datapipe (seed, epoch, sample slot)."""
-        window = self.rollout_window_steps + 2
-        upper = num_frames - window  # inclusive upper bound for the first frame
-        if self.window_seed is None:
-            return int(torch.randint(0, upper + 1, (1,)).item())
-        key = f"crash-window-v2:{self.window_seed}:{self.epoch}:{sample_idx}".encode()
-        seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
-        generator = torch.Generator().manual_seed(seed)
-        return int(torch.randint(0, upper + 1, (1,), generator=generator).item())
-
     def __getitem__(self, index):
         if not 0 <= index < len(self):
             raise IndexError(index)
         if self.sample_type == "one_time_step":
             return self._time_step_sample(index)
-        path = self.paths[index % self.num_samples]
+        path = self.paths[index]
         store = self.reader.open(path)
         frames = self.reader.frames(store)
-        minimum = (
-            self.rollout_window_steps + 2
-            if self.sample_type == "random_time_window"
-            else self.initial_history_steps + 1
-        )
-        if len(frames) > self.num_steps or len(frames) < minimum:
+        if len(frames) > self.num_steps or len(frames) < 2:
             raise ValueError(
                 f"{path.stem}: {len(frames)} selected frames outside the configured "
-                f"[{minimum}, {self.num_steps}] range"
+                f"[2, {self.num_steps}] range"
             )
-        if self.split == "train" and self.sample_type == "random_time_window":
-            start = self._window_start(index, len(frames))
-            frames = frames[start : start + self.rollout_window_steps + 2]
         pos = torch.from_numpy(self.reader.coordinates(store, frames))
         pos = (pos - self.node_stats["pos_mean"]) / (self.node_stats["pos_std"] + EPS)
         features = self._node_feature_tensor(store)
-        # One observed frame (time-conditional evaluation) or two (velocity
-        # initialization of the autoregressive rollout); targets follow.
-        history = self.initial_history_steps
-        node_features = dict(coords=pos[history - 1], features=features)
-        if history == 2:
-            node_features["previous_coords"] = pos[0]
+        # The initial frame is observed; every later frame is a target.
         sample = SimSample(
-            node_features=node_features,
-            node_target=pos[history:].transpose(0, 1).contiguous(),
+            node_features=dict(coords=pos[0], features=features),
+            node_target=pos[1:].transpose(0, 1).contiguous(),
             graph=self.graph,
             global_features=None,
         )
         sample.yaris_case_name = path.stem
-        sample.yaris_target_frames = frames[history:].tolist()
+        sample.yaris_target_frames = frames[1:].tolist()
         return sample
 
     def _time_step_sample(self, index):

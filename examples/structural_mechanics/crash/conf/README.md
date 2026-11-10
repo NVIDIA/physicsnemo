@@ -34,7 +34,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `training.loss`, `loss_space`, `loss_scale_mm` | `mse`, `physical`, 10 | MSE of the position error in millimetres over one 10 mm scale (`training.loss=relative_l2` is the documented alternative) |
 | `training.coarse_loss_weight` | 0.1 | weight of the position loss on the provisional head |
 | `training.validation_freq`, `save_checkpoint_freq` | 5, 5 | epochs |
-| `datapipe.sample_type`, `initial_history_steps` | `one_time_step`, 1 | one (case, future frame) pair per sample, from the initial frame |
+| `datapipe.sample_type` | `one_time_step` | one (case, future frame) pair per sample, from the initial frame |
 | `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | from the model, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash |
 | `datapipe.contact_surface`, `mesh_edges`, `frame_pairs`, `rigid_wall_position` | false, false, false, null | graph attachments the corrector and the metrics need (see below) |
 

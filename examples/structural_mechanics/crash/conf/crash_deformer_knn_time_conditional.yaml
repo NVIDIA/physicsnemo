@@ -61,7 +61,6 @@ training:
   validation_freq: 5
   save_checkpoint_freq: 5
   early_stopping_patience: 0
-  acceleration_loss_weight: 0.0
   coarse_loss_weight: 0.1
 
 inference:
@@ -72,7 +71,6 @@ datapipe:
   dynamic_targets: []
   global_features: null
   sample_type: one_time_step
-  initial_history_steps: 1
   # static reference kNN neighbourhoods of the local attention (built once, cached)
   local_knn_k: ${model.local_knn_k}
   local_knn_metric: ${model.local_neighborhood}

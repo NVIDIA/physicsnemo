@@ -22,7 +22,6 @@ dt: ${model.dt}
 stats_dir: ${yaris.work_dir}/stats
 # one (case, future frame) pair per sample, predicted from the initial frame
 sample_type: one_time_step
-initial_history_steps: 1
 static_features: [thickness]
 dynamic_features: []
 dynamic_targets: []

@@ -7,7 +7,7 @@ Automotive crashworthiness assessment is a critical step in vehicle design. Trad
 
 Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling rapid prediction of deformation histories across thousands of design candidates.
 
-In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, FIGConvUNet, MeshTransolver, MeshGeoTransolver, and MeshGeoFLARE architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
+In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, and FIGConvUNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
 For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). DeFormer, described next, adds local neighbourhood stages around a geometry-aware FLARE backbone and a contact-aware corrector, and predicts every frame of a full-vehicle crash independently from the initial mesh.
 
@@ -217,8 +217,7 @@ torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name crash_deformer_knn_t
 
 `evaluate_biw_tc.py` scores a body-in-white checkpoint with the Yaris
 validation suite; the command in its docstring turns on the shell facets and
-the reference-geodesic exclusions of the penetration metrics (see
-[SURFACE_CONTACT_REFERENCE_GEODESIC.md](SURFACE_CONTACT_REFERENCE_GEODESIC.md)).
+the one-ring exclusions that the penetration metrics need.
 
 ### Body-in-White Crash Modeling
 

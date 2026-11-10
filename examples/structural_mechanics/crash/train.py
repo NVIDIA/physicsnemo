@@ -21,8 +21,7 @@ recipe, runs one optimizer step per ``SimSample`` and validates with the pooled
 normalized MSE; ``yaris_full_trainer.YarisFullTrainer`` extends it with the
 exact full-mesh validation of the Yaris recipes. Every model family is served
 through the same ``model(sample=..., data_stats=...)`` call: one-shot models
-return ``[N, T, F]``, autoregressive models an ``AutoregressiveRolloutOutput``,
-time-conditional models one frame ``[N, 3]`` in training (a
+return ``[N, T, F]``, time-conditional models one frame ``[N, 3]`` in training (a
 ``TimeConditionalOutput`` with the provisional position when asked) and the
 trajectory ``[N, T, 3]`` in evaluation.
 """
@@ -34,7 +33,6 @@ import random
 import sys
 import time
 from copy import deepcopy
-from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -114,66 +112,6 @@ class ValidationEarlyStopping:
             self.stale_evaluations += 1
         should_stop = self.enabled and self.stale_evaluations >= self.patience
         return should_stop, improved
-
-
-@dataclass(frozen=True)
-class LinearTeacherForcingSchedule:
-    """Linear transition-level teacher-forcing schedule for rollout training."""
-
-    warmup_epochs: int = 0
-    decay_epochs: int = 0
-    start_probability: float = 1.0
-    end_probability: float = 1.0
-
-    def __post_init__(self) -> None:
-        if self.warmup_epochs < 0:
-            raise ValueError("teacher-forcing warmup_epochs cannot be negative")
-        if self.decay_epochs < 0:
-            raise ValueError("teacher-forcing decay_epochs cannot be negative")
-        for name, value in (
-            ("start_probability", self.start_probability),
-            ("end_probability", self.end_probability),
-        ):
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"teacher-forcing {name} must be in [0, 1]")
-
-    def probability(self, epoch: int) -> float:
-        """Return the teacher-forcing probability for a zero-based epoch."""
-        if epoch < 0:
-            raise ValueError("epoch cannot be negative")
-        if epoch < self.warmup_epochs:
-            return self.start_probability
-        if self.decay_epochs == 0:
-            return self.end_probability
-        progress = min((epoch - self.warmup_epochs) / self.decay_epochs, 1.0)
-        return self.start_probability + progress * (
-            self.end_probability - self.start_probability
-        )
-
-
-def masked_acceleration_mse(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-    supervision_mask: torch.Tensor,
-) -> torch.Tensor:
-    """MSE over transitions whose input state came from the reference trajectory."""
-
-    if (
-        prediction.shape != target.shape
-        or prediction.ndim != 3
-        or prediction.shape[-1] != 3
-    ):
-        raise ValueError(
-            "Acceleration prediction and target must have matching [N, T, 3] shapes"
-        )
-    if supervision_mask.shape != (prediction.shape[1],):
-        raise ValueError("Acceleration supervision mask must have shape [T]")
-    # Accumulate in fp32: a bumper graph has enough nodes for an fp16 element
-    # count to overflow before division.
-    squared_error = torch.square(prediction.float() - target.float())
-    selected = supervision_mask.to(dtype=squared_error.dtype).view(1, -1, 1)
-    denominator = selected.sum() * prediction.shape[0] * prediction.shape[2]
-    return torch.sum(squared_error * selected) / denominator.clamp_min(1.0)
 
 
 def average_model_gradients(model: torch.nn.Module, world_size: int) -> None:
@@ -264,8 +202,7 @@ class Trainer:
     ``conf/training/default.yaml``: ``loss`` / ``loss_space`` / ``loss_scale_mm``
     (:class:`losses.PositionLoss`), ``coarse_loss_weight`` (provisional head of
     the time-conditional DeFormer), ``increment_loss_weight`` (frame pairs),
-    ``acceleration_loss_weight`` and ``teacher_forcing_schedule`` (autoregressive
-    models), ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
+    ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
     run's weights), ``manual_gradient_allreduce``, ``reproducible_sampling`` /
     ``sampler_seed``, ``deterministic``, ``early_stopping_*``,
     ``max_epochs_this_run`` and ``memory_diagnostics``.
@@ -278,12 +215,9 @@ class Trainer:
             )
         self.dist = DistributedManager()
         self.cfg = cfg
-        initial_history_steps = int(cfg.datapipe.get("initial_history_steps", 1))
-        self.rollout_steps = cfg.training.num_time_steps - initial_history_steps
+        self.rollout_steps = cfg.training.num_time_steps - 1
         if self.rollout_steps < 1:
-            raise ValueError(
-                "training.num_time_steps must exceed datapipe.initial_history_steps"
-            )
+            raise ValueError("training.num_time_steps must be at least 2")
         self.amp = cfg.training.amp
         amp_dtype_name = cfg.training.get("amp_dtype", "float16")
         amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
@@ -303,22 +237,6 @@ class Trainer:
             raise ValueError(
                 "manual_gradient_allreduce currently requires bfloat16 or fp32"
             )
-        self.acceleration_loss_weight = float(
-            cfg.training.get("acceleration_loss_weight", 0.0)
-        )
-        if self.acceleration_loss_weight < 0.0:
-            raise ValueError("training.acceleration_loss_weight cannot be negative")
-        schedule_cfg = cfg.training.get("teacher_forcing_schedule")
-        self.teacher_forcing_schedule = (
-            None
-            if schedule_cfg is None
-            else LinearTeacherForcingSchedule(
-                warmup_epochs=int(schedule_cfg.get("warmup_epochs", 0)),
-                decay_epochs=int(schedule_cfg.get("decay_epochs", 0)),
-                start_probability=float(schedule_cfg.get("start_probability", 1.0)),
-                end_probability=float(schedule_cfg.get("end_probability", 1.0)),
-            )
-        )
         self.last_loss_components: dict[str, torch.Tensor] = {}
         # Time-conditional DeFormer: auxiliary supervision of the provisional
         # (coarse) position head, weight 0 for every other recipe.
@@ -740,11 +658,7 @@ class Trainer:
         """The training loss of one sample (every model family)."""
         with autocast(device_type="cuda", enabled=self.amp, dtype=self.amp_dtype):
             model_kwargs = {}
-            if self.teacher_forcing_schedule is not None:
-                model_kwargs["teacher_forcing_probability"] = (
-                    self.teacher_forcing_schedule.probability(epoch)
-                )
-            if self.acceleration_loss_weight > 0.0 or self.coarse_loss_weight > 0.0:
+            if self.coarse_loss_weight > 0.0:
                 model_kwargs["return_auxiliary"] = True
             model_output = self.model(
                 sample=sample, data_stats=self.data_stats, **model_kwargs
@@ -770,37 +684,6 @@ class Trainer:
                     self.last_loss_components["increment"] = increment.detach()
                     total = total + increment
                 return total
-            is_autoregressive_output = all(
-                hasattr(model_output, field)
-                for field in (
-                    "trajectory",
-                    "normalized_acceleration",
-                    "target_normalized_acceleration",
-                    "acceleration_supervision_mask",
-                )
-            )
-            if is_autoregressive_output:
-                trajectory_loss = self._supervised_position_loss(
-                    model_output.trajectory, target, sample
-                )
-                acceleration_loss = masked_acceleration_mse(
-                    model_output.normalized_acceleration,
-                    model_output.target_normalized_acceleration,
-                    model_output.acceleration_supervision_mask,
-                )
-                total_loss = trajectory_loss + (
-                    self.acceleration_loss_weight * acceleration_loss
-                )
-                self.last_loss_components = {
-                    "trajectory": trajectory_loss.detach(),
-                    "acceleration": acceleration_loss.detach(),
-                }
-                return total_loss
-            if self.acceleration_loss_weight > 0.0:
-                raise TypeError(
-                    "Acceleration loss requires an autoregressive model that returns "
-                    "AutoregressiveRolloutOutput"
-                )
             trajectory_loss = self._supervised_position_loss(
                 model_output, target, sample
             )
@@ -932,7 +815,6 @@ def main(cfg: DictConfig) -> None:
     for epoch in range(trainer.epoch_init, end_epoch):
         if trainer.sampler is not None:
             trainer.sampler.set_epoch(epoch)
-        trainer.dataloader.dataset.set_epoch(epoch)
 
         total_loss = 0.0
         component_totals: dict[str, float] = {}
@@ -992,12 +874,6 @@ def main(cfg: DictConfig) -> None:
 
         if dist.rank == 0:
             trainer.writer.add_scalar("loss", avg_loss, epoch)
-            if trainer.teacher_forcing_schedule is not None:
-                trainer.writer.add_scalar(
-                    "teacher_forcing_probability",
-                    trainer.teacher_forcing_schedule.probability(epoch),
-                    epoch,
-                )
             for component, total in component_totals.items():
                 trainer.writer.add_scalar(
                     f"loss/{component}", total / max(num_batches, 1), epoch

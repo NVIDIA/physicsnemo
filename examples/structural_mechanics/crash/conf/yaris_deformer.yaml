@@ -74,7 +74,6 @@ training:
   validation_freq: 5
   save_checkpoint_freq: 5
   early_stopping_patience: 0
-  acceleration_loss_weight: 0.0
   coarse_loss_weight: 0.1
   loss: mse
   loss_space: physical

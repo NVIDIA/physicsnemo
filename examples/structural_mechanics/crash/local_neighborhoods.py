@@ -112,8 +112,8 @@ class LocalNeighborhoodCache:
     The key covers the physical initial coordinates, the structural edge list
     (geodesic only), ``k``, the metric, the cache schema and the functional's
     source hash. Entries are checksummed and validated on load; corrupt entries
-    fail closed. Process-local hits return the same tensors. Mirrors the
-    surface-geodesic exclusion cache so distributed startup can warm it once.
+    fail closed. Process-local hits return the same tensors, and distributed
+    startup warms the cache once on rank zero.
     """
 
     def __init__(self, directory=None, *, logger=None, timeout_seconds=3600):

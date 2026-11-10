@@ -227,8 +227,7 @@ class InferenceWorker:
         self.out_exact_root = cfg.inference.get("output_dir_exact", "./exact_vtps")
 
         # How many timesteps to roll out
-        initial_history_steps = int(cfg.datapipe.get("initial_history_steps", 1))
-        self.T = cfg.training.num_time_steps - initial_history_steps
+        self.T = cfg.training.num_time_steps - 1
         # Fo (features per timestep) is computed from the first sample in run_on_single_run
         # to support both position-only (Fo=3) and dynamic targets (Fo=3+sum(C_k))
 
@@ -351,7 +350,7 @@ class InferenceWorker:
                     prefix=self.vtp_prefix,
                     extra_fields=pred_extra or None,
                     exact_extra_fields=exact_extra or None,
-                    frame_offset=int(self.cfg.datapipe.get("initial_history_steps", 1)),
+                    frame_offset=1,
                 )
                 if pred_extra:
                     self.logger.info(

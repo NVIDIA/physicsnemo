@@ -151,18 +151,8 @@ class CrashBaseDataset:
         stats_dir: str = "stats",
         stats_mode: str = "compute",
         sample_type: str = "all_time_steps",
-        initial_history_steps: int = 1,
-        rollout_window_steps: Optional[int] = None,
-        windows_per_sample: int = 1,
-        window_seed: int | None = None,
-        contact_require_elements: bool = False,
         contact_surface: bool = False,
         contact_surface_exclusion: str = "incidence",
-        contact_geodesic_distance_scale: float = 2.0**0.5,
-        contact_geodesic_gap_scale: float = 1.0,
-        contact_geodesic_gap_min: float = 0.0,
-        contact_geodesic_max_pairs: int = 16_000_000,
-        contact_geodesic_cache_dir: Optional[str] = None,
         local_knn_k: int | None = None,
         local_knn_metric: str = "geodesic",
         local_knn_cache_dir: Optional[str] = None,
@@ -183,14 +173,6 @@ class CrashBaseDataset:
         self.logger = logger or PythonLogger()
         self.dt = dt
         self.sample_type = sample_type
-        self.initial_history_steps = int(initial_history_steps)
-        self.rollout_window_steps = (
-            None if rollout_window_steps is None else int(rollout_window_steps)
-        )
-        self.windows_per_sample = int(windows_per_sample)
-        self.window_seed = window_seed
-        self.epoch = 0
-        self.contact_require_elements = bool(contact_require_elements)
         self.contact_surface = bool(contact_surface)
         # Static reference neighborhoods for DeFormer's neighborhood attention.
         # ``None`` keeps the validated MeshGraphNet recipes byte-for-byte.
@@ -205,26 +187,11 @@ class CrashBaseDataset:
         self.local_knn_k = local_knn_k
         self.local_knn_metric = local_knn_metric
         self.local_knn_cache_dir = local_knn_cache_dir
-        if contact_surface_exclusion not in (
-            "incidence",
-            "one_ring",
-            "reference_geodesic",
-        ):
-            raise ValueError(
-                "contact_surface_exclusion must be incidence, one_ring or reference_geodesic"
-            )
+        if contact_surface_exclusion not in ("incidence", "one_ring"):
+            raise ValueError("contact_surface_exclusion must be incidence or one_ring")
         if not contact_surface and contact_surface_exclusion != "incidence":
             raise ValueError("surface exclusions require contact_surface=True")
         self.contact_surface_exclusion = contact_surface_exclusion
-        self.contact_geodesic_options = dict(
-            distance_scale=contact_geodesic_distance_scale,
-            gap_scale=contact_geodesic_gap_scale,
-            gap_min=contact_geodesic_gap_min,
-            max_pairs=contact_geodesic_max_pairs,
-        )
-        self.contact_geodesic_cache_dir = contact_geodesic_cache_dir
-        if contact_require_elements and not contact_surface:
-            raise ValueError("contact_require_elements requires contact_surface=True")
         if stats_mode not in {"compute", "load"}:
             raise ValueError("stats_mode must be either 'compute' or 'load'")
         self.stats_mode = stats_mode
@@ -239,45 +206,20 @@ class CrashBaseDataset:
             None if rigid_wall_position is None else float(rigid_wall_position)
         )
 
-        valid_sample_types = {
-            "all_time_steps",
-            "one_time_step",
-            "random_time_window",
-        }
+        valid_sample_types = {"all_time_steps", "one_time_step"}
         if sample_type not in valid_sample_types:
             raise ValueError(
                 f"Invalid sample type: {sample_type}. Expected one of "
                 f"{sorted(valid_sample_types)}"
             )
-        if not 1 <= self.initial_history_steps < num_steps:
-            raise ValueError(
-                "initial_history_steps must be in [1, num_steps); got "
-                f"{self.initial_history_steps} for num_steps={num_steps}"
-            )
-        if self.initial_history_steps > 2:
-            raise ValueError(
-                "Only one- and two-frame initialization are currently supported"
-            )
-        if self.windows_per_sample <= 0:
-            raise ValueError("windows_per_sample must be positive")
+        if num_steps < 2:
+            raise ValueError(f"num_steps must be at least 2, got {num_steps}")
 
         # Precompute batch_idx logic
-        rollout_steps = num_steps - self.initial_history_steps
+        rollout_steps = num_steps - 1
         if sample_type == "one_time_step":
             self._max_idx = num_samples * rollout_steps
             self._resolve_idx = lambda idx: (idx // rollout_steps, idx % rollout_steps)
-        elif sample_type == "random_time_window":
-            if self.rollout_window_steps is None:
-                raise ValueError(
-                    "rollout_window_steps is required for random_time_window"
-                )
-            if not 1 <= self.rollout_window_steps <= rollout_steps:
-                raise ValueError(
-                    "rollout_window_steps must be in [1, "
-                    f"{rollout_steps}], got {self.rollout_window_steps}"
-                )
-            self._max_idx = num_samples * self.windows_per_sample
-            self._resolve_idx = lambda idx: (idx % num_samples, None)
         else:
             self._max_idx = num_samples
             self._resolve_idx = lambda idx: (idx, None)
@@ -323,7 +265,7 @@ class CrashBaseDataset:
         reference_cells = None
         for record in point_data:
             cells = record.get("mesh_cells")
-            if (contact_require_elements or contact_surface) and cells is None:
+            if contact_surface and cells is None:
                 raise ValueError(
                     "Contact requires element connectivity; enable reader.include_contact_topology"
                 )
@@ -394,12 +336,9 @@ class CrashBaseDataset:
             if not (coords_np.ndim == 3 and coords_np.shape[-1] == 3):
                 raise ValueError(f"coords must be [T,N,3], got {coords_np.shape}")
             self.mesh_pos_seq.append(torch.as_tensor(coords_np, dtype=torch.float32))
-            if (
-                self.contact_surface_exclusion == "reference_geodesic"
-                or self.local_knn_k is not None
-            ):
-                # Freeze physical INITIAL geometry before normalization. Neither
-                # the sampled window start nor future ground truth defines d0.
+            if self.local_knn_k is not None:
+                # Freeze the physical initial geometry before normalization; the
+                # reference neighbourhoods are built on it.
                 self.contact_reference_positions.append(
                     self.mesh_pos_seq[-1][0].clone()
                 )
@@ -528,17 +467,10 @@ class CrashBaseDataset:
         return self._max_idx
 
     # Common x/y construction
-    def set_epoch(self, epoch: int):
-        """Set before constructing each epoch's (non-persistent) worker iterator."""
-        self.epoch = int(epoch)
-
-    def build_xy(
-        self, batch_idx: int, time_idx: int | None, sample_idx: int | None = None
-    ):
+    def build_xy(self, batch_idx: int, time_idx: int | None):
         """
         x: dict with:
-            - 'coords': [N, 3] at the current state
-            - optional 'previous_coords': [N, 3] for two-frame initialization
+            - 'coords': [N, 3] at t0
             - 'features': [N, F] concatenated (static + flattened dynamic)
         y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
@@ -554,34 +486,10 @@ class CrashBaseDataset:
         T, N, _ = pos_seq.shape
         F = feats.shape[1]
 
-        current_idx = self.initial_history_steps - 1
-        target_start = self.initial_history_steps
-        target_end = T
-        if self.sample_type == "random_time_window":
-            window_steps = self.rollout_window_steps
-            if window_steps is None:
-                raise RuntimeError(
-                    "random_time_window was not initialized with a window length"
-                )
-            max_current_idx = T - window_steps - 1
-            current_idx = int(
-                torch.randint(
-                    self.initial_history_steps - 1,
-                    max_current_idx + 1,
-                    (1,),
-                    generator=self._window_generator(
-                        batch_idx if sample_idx is None else sample_idx
-                    ),
-                ).item()
-            )
-            target_start = current_idx + 1
-            target_end = target_start + window_steps
+        x = {"coords": pos_seq[0], "features": feats}
 
-        x = {"coords": pos_seq[current_idx], "features": feats}
-        if self.initial_history_steps == 2:
-            x["previous_coords"] = pos_seq[current_idx - 1]
-
-        pos_rollout = pos_seq[target_start:target_end]
+        # pos_seq[1:]: [T-1, N, 3]
+        pos_rollout = pos_seq[1:]
 
         if len(self.dynamic_targets) > 0:
             # Collect dynamic targets [T-1, N, C_k] for each target
@@ -595,7 +503,8 @@ class CrashBaseDataset:
                 series = ts_rec[k]  # Tensor [T,N] or [T,N,C]
                 if series.ndim == 2:
                     series = series.unsqueeze(-1)  # [T,N,1]
-                series_rollout = series[target_start:target_end]
+                # keep steps 1..T-1 to match rollout_steps
+                series_rollout = series[1:]  # [T-1,N,C]
                 dyn_list.append(series_rollout)
 
             # Concatenate along feature dim per timestep: [T-1, N, 3+sum(C_k)]
@@ -607,9 +516,7 @@ class CrashBaseDataset:
         y = y_per_t.transpose(0, 1)  # [N, T-1, Fo]
 
         if time_idx is not None:
-            x["time"] = torch.tensor(
-                time_idx / (self.num_steps - self.initial_history_steps)
-            )
+            x["time"] = torch.tensor(time_idx / (self.num_steps - 1))
             y = y[:, time_idx]
 
             Fo = y.shape[-1]
@@ -633,16 +540,6 @@ class CrashBaseDataset:
                     f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
                 )
         return x, y
-
-    def _window_generator(self, sample_idx):
-        """Stateless draw keyed by seed, epoch and sample/window slot, not rank/RNG."""
-        import hashlib
-
-        if getattr(self, "window_seed", None) is None:
-            return None  # Explicit legacy sampling, for old recipes/checkpoints.
-        key = f"crash-window-v2:{self.window_seed}:{self.epoch}:{sample_idx}".encode()
-        seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
-        return torch.Generator().manual_seed(seed)
 
     # ---- stats helpers ----
     def _compute_autoreg_node_stats(self):
@@ -863,13 +760,6 @@ class CrashGraphDataset(CrashBaseDataset):
             self.local_knn_cache = LocalNeighborhoodCache(
                 self.local_knn_cache_dir, logger=self.logger
             )
-        self.geodesic_cache = None
-        if self.contact_surface_exclusion == "reference_geodesic":
-            from surface_geodesic_cache import SurfaceGeodesicCache
-
-            self.geodesic_cache = SurfaceGeodesicCache(
-                self.contact_geodesic_cache_dir, logger=self.logger
-            )
         for i in range(self.num_samples):
             num_nodes = int(self.mesh_pos_seq[i][0].shape[0])
             shares_reference_topology = (
@@ -932,13 +822,6 @@ class CrashGraphDataset(CrashBaseDataset):
                         g.contact_surface_exclusions = surface_one_ring_exclusions(
                             g.contact_faces, num_nodes
                         )
-            if self.contact_surface_exclusion == "reference_geodesic":
-                g.contact_surface_exclusions = self.geodesic_cache.get(
-                    self.contact_reference_positions[i],
-                    g.contact_faces,
-                    g.shell_thickness,
-                    self.contact_geodesic_options,
-                )
             if self.local_knn_k is not None:
                 g = self._attach_local_neighborhood(g, i, pos0)
             self.graphs.append(g)
@@ -997,14 +880,10 @@ class CrashGraphDataset(CrashBaseDataset):
             raise ValueError(f"Index {idx} out of range")
         batch_idx, time_idx = self._resolve_idx(idx)
         g = self.graphs[batch_idx]
-        x, y = self.build_xy(batch_idx, time_idx, sample_idx=idx)
+        x, y = self.build_xy(batch_idx, time_idx)
         gf = self._normalized_global_features(batch_idx)
-        # Truncated training samples do not need the full target series on device.
-        ts = (
-            None
-            if time_idx is not None or self.sample_type == "random_time_window"
-            else self.target_series_data[batch_idx]
-        )
+        # One-frame training samples do not need the full target series on device.
+        ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
             node_target=y,
@@ -1164,14 +1043,10 @@ class CrashPointCloudDataset(CrashBaseDataset):
         if not (0 <= idx < self._max_idx):
             raise ValueError(f"Index {idx} out of range")
         batch_idx, time_idx = self._resolve_idx(idx)
-        x, y = self.build_xy(batch_idx, time_idx, sample_idx=idx)
+        x, y = self.build_xy(batch_idx, time_idx)
         gf = self._normalized_global_features(batch_idx)
-        # Truncated training samples do not need the full target series on device.
-        ts = (
-            None
-            if time_idx is not None or self.sample_type == "random_time_window"
-            else self.target_series_data[batch_idx]
-        )
+        # One-frame training samples do not need the full target series on device.
+        ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
             node_target=y,
