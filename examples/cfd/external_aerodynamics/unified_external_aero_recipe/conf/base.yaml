@@ -28,6 +28,14 @@ profile: false
 augment: false
 benchmark_io: false
 
+# -- Loss and metric weighting -------------------------------------------------
+# Weight each target point by its cell's measure (area on a surface, volume
+# in a volume) in the training loss and the metrics, so they approximate
+# integrals over the domain. Applies only when the dataset carries the
+# measure, that is when its targets sit at cell centroids; native point
+# clouds are unaffected. `false` counts every target point alike.
+measure_weighted: true
+
 # -- Training fundamentals (the constants every loop needs, regardless
 #     of schedule) -----------------------------------------------------------
 training:

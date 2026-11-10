@@ -225,6 +225,44 @@ def align_scalar_shapes(
     return p, t
 
 
+def align_target_measure(
+    target_measure: torch.Tensor | None,
+    reference: torch.Tensor,
+    field_type: FieldType,
+) -> torch.Tensor | None:
+    """Check and cast a per-point measure for one target field.
+
+    Scalar fields have shape ``(..., N)`` and vector fields ``(..., N, D)``;
+    in both cases the measure must have exactly one value per target point,
+    shape ``(..., N)``. Requiring an exact shape keeps a stale or reordered
+    measure from silently broadcasting across a field.
+    """
+    if target_measure is None:
+        return None
+    expected_shape = reference.shape if field_type == "scalar" else reference.shape[:-1]
+    if target_measure.shape != expected_shape:
+        raise ValueError(
+            "target_measure must have one value per target point: expected "
+            f"shape {tuple(expected_shape)} for a {field_type} field with "
+            f"shape {tuple(reference.shape)}, got {tuple(target_measure.shape)}."
+        )
+    return target_measure.to(device=reference.device, dtype=reference.dtype)
+
+
+def normalize_target_measure(target_measure: torch.Tensor) -> torch.Tensor:
+    """Scale per-point measures to mean one over the point axis.
+
+    The relative-error kernels add a fixed ``eps`` to their reduced target
+    norm; mean-one weights keep that ``eps`` independent of the measure's
+    units, and equal measures reproduce the unweighted result.
+    """
+    mean_measure = target_measure.mean(dim=-1, keepdim=True)
+    safe_mean = torch.where(
+        mean_measure > 0, mean_measure, torch.ones_like(mean_measure)
+    )
+    return target_measure / safe_mean
+
+
 def validate_field_coverage(
     target_config: dict[str, FieldType],
     pred: TensorDict,

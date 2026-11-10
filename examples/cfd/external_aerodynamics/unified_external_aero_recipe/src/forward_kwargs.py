@@ -57,6 +57,7 @@ from utils import FieldType
 
 from physicsnemo.datapipes.keys import as_nested_key, format_leaf_keys
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, point_measures
 
 ### ---------------------------------------------------------------------------
 ### Path walking
@@ -331,3 +332,15 @@ def extract_targets(
             f"(available: {format_leaf_keys(source_td)!r})."
         )
     return source_td.select(*keys)
+
+
+def extract_target_measure(domain: DomainMesh | Mesh) -> torch.Tensor | None:
+    """Return the per-point measure of the target points, or ``None``.
+
+    Targets at cell centroids carry each source cell's measure (its area on
+    a surface, its volume in a volume) in ``interior.point_data``; see
+    ``MeshToDomainMesh(interior_points="cell_centroids")``. A native point
+    cloud has no measure, so its points count alike.
+    """
+    mesh = domain.interior if isinstance(domain, DomainMesh) else domain
+    return point_measures(mesh) if EFFECTIVE_MEASURE_KEY in mesh.point_data else None

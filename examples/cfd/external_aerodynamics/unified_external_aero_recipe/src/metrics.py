@@ -25,8 +25,11 @@ named target field declared in ``target_config`` produces:
   (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate values over all
   components jointly (``"<prefix>/<name>_<metric>"``).
 
-Metrics are reported unweighted -- per-field weighting belongs in the
-loss, not in diagnostic summaries.
+Per-field loss weights (``field_weights``) do not apply to metrics. With
+``measure_weighted=True`` (default) and a ``target_measure`` passed to the
+call, each sum or mean over target points is weighted by the point's
+measure (its cell's area on a surface, its volume in a volume), so the
+metrics do not depend on how finely the mesh resolves each region.
 """
 
 from __future__ import annotations
@@ -38,7 +41,13 @@ import torch
 from jaxtyping import Float
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
-from utils import FieldType, align_scalar_shapes, validate_field_coverage
+from utils import (
+    FieldType,
+    align_scalar_shapes,
+    align_target_measure,
+    normalize_target_measure,
+    validate_field_coverage,
+)
 
 from physicsnemo.datapipes.keys import as_nested_key
 
@@ -51,38 +60,70 @@ MetricName: TypeAlias = Literal["mae", "l1", "l2"]
 ### ---------------------------------------------------------------------------
 
 
+### Each kernel takes an optional ``weights``: mean-one per-point weights
+### (``measure / mean(measure)``) of shape ``(..., N)``. Equal measures give
+### weights of one, so the weighted result equals the unweighted one.
+
+
 def _mean_absolute_error(
-    pred: torch.Tensor, target: torch.Tensor
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    weights: torch.Tensor | None = None,
 ) -> Float[torch.Tensor, ""]:
     """Mean absolute error over all elements."""
-    return torch.mean(torch.abs(pred - target))
+    abs_diff = torch.abs(pred - target)
+    if weights is None or pred.ndim == 0:
+        return torch.mean(abs_diff)
+    return torch.mean(torch.mean(abs_diff * weights, dim=-1))
 
 
 def _relative_l1(
-    pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    weights: torch.Tensor | None = None,
+    eps: float = 1e-8,
 ) -> Float[torch.Tensor, ""]:
     """``sum|pred - target| / sum|target|``, computed over the spatial axis."""
     abs_diff = torch.abs(pred - target)
     if pred.ndim == 0:
         return abs_diff / (torch.abs(target) + eps)
+    abs_target = torch.abs(target)
+    if weights is not None:
+        abs_diff, abs_target = abs_diff * weights, abs_target * weights
     ### Sum over the spatial axis (treat all leading dims as batch).
     spatial_axis = -1
     num = torch.sum(abs_diff, dim=spatial_axis)
-    denom = torch.sum(torch.abs(target), dim=spatial_axis)
+    denom = torch.sum(abs_target, dim=spatial_axis)
     return torch.mean(num / (denom + eps))
 
 
 def _relative_l2(
-    pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    weights: torch.Tensor | None = None,
+    eps: float = 1e-8,
 ) -> Float[torch.Tensor, ""]:
     """``sqrt(sum diff^2) / sqrt(sum target^2)``, over the spatial axis."""
     diff_sq = (pred - target) ** 2
     if pred.ndim == 0:
         return torch.sqrt(diff_sq) / (torch.sqrt(target**2) + eps)
+    target_sq = target**2
+    if weights is not None:
+        diff_sq, target_sq = diff_sq * weights, target_sq * weights
     spatial_axis = -1
     num = torch.sqrt(torch.sum(diff_sq, dim=spatial_axis))
-    denom = torch.sqrt(torch.sum(target**2, dim=spatial_axis))
+    denom = torch.sqrt(torch.sum(target_sq, dim=spatial_axis))
     return torch.mean(num / (denom + eps))
+
+
+def _point_weights(
+    target_measure: torch.Tensor | None,
+    reference: torch.Tensor,
+    field_type: FieldType,
+) -> torch.Tensor | None:
+    """Mean-one per-point weights for one field, or ``None`` without a measure."""
+    measure = align_target_measure(target_measure, reference, field_type)
+    return None if measure is None else normalize_target_measure(measure)
 
 
 METRIC_FUNCTIONS: dict[MetricName, Callable[..., torch.Tensor]] = {
@@ -150,6 +191,9 @@ class MetricCalculator:
         metrics: Names of metrics to compute. Subset of
             ``METRIC_FUNCTIONS``. Defaults to :data:`DEFAULT_METRICS`.
         prefix: Optional prefix on the returned metric keys.
+        measure_weighted: When ``True`` (default), weight each target point
+            by the ``target_measure`` passed to the call, if any. When
+            ``False``, ignore it and count every point alike.
     """
 
     def __init__(
@@ -158,6 +202,7 @@ class MetricCalculator:
         n_spatial_dims: int = 3,
         metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
+        measure_weighted: bool = True,
     ) -> None:
         ### `target_config` values are required to be lowercase per the
         ### `FieldType` contract; copy verbatim so callers can mutate their
@@ -168,6 +213,7 @@ class MetricCalculator:
             list(metrics) if metrics is not None else list(DEFAULT_METRICS)
         )
         self.prefix = prefix
+        self.measure_weighted = measure_weighted
 
         for m in self.metric_names:
             if m not in METRIC_FUNCTIONS:
@@ -212,10 +258,14 @@ class MetricCalculator:
         return keys
 
     def _metrics_for_tensor(
-        self, pred: torch.Tensor, target: torch.Tensor, name_parts: tuple[str, ...]
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        name_parts: tuple[str, ...],
+        weights: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         return {
-            self._make_key(*name_parts, m): METRIC_FUNCTIONS[m](pred, target)
+            self._make_key(*name_parts, m): METRIC_FUNCTIONS[m](pred, target, weights)
             for m in self.metric_names
         }
 
@@ -223,12 +273,16 @@ class MetricCalculator:
         self,
         pred: TensorDict,
         target: TensorDict,
+        target_measure: torch.Tensor | None = None,
     ) -> TensorDict:
         """Compute per-field metrics over a TensorDict pred / target pair.
 
         Args:
             pred: TensorDict of predictions, one leaf per target field.
             target: TensorDict of the same structure as ``pred``.
+            target_measure: Optional per-point measure, shape ``(..., N)``,
+                aligned with the target points. Ignored when the calculator
+                was built with ``measure_weighted=False``.
 
         Returns:
             0-D ``TensorDict`` (``batch_size=[]``) keyed by
@@ -241,6 +295,8 @@ class MetricCalculator:
             explicitly invokes ``flatten_keys("/")``.
         """
         validate_field_coverage(self.target_config, pred, target)
+        if not self.measure_weighted:
+            target_measure = None
 
         ### Build the per-field bag as a plain dict during the loop so
         ### the inner ``out.update(...)`` calls stay simple, then wrap
@@ -254,8 +310,10 @@ class MetricCalculator:
                 p, t = pred[key], target[key]
                 if field_type == "scalar":
                     p, t = align_scalar_shapes(p, t)
-                    out.update(self._metrics_for_tensor(p, t, (name,)))
+                    weights = _point_weights(target_measure, p, field_type)
+                    out.update(self._metrics_for_tensor(p, t, (name,), weights))
                 else:  # vector
+                    weights = _point_weights(target_measure, p, field_type)
                     n_components = p.shape[-1]
                     ### Per-component metrics.
                     for i in range(n_components):
@@ -265,14 +323,21 @@ class MetricCalculator:
                             else str(i)
                         )
                         out.update(
-                            self._metrics_for_tensor(p[..., i], t[..., i], (name, comp))
+                            self._metrics_for_tensor(
+                                p[..., i], t[..., i], (name, comp), weights
+                            )
                         )
                     ### Aggregate vector metric under the bare field name:
                     ### all components jointly, flattened so the relative
                     ### norms reduce over the whole field (Frobenius for
                     ### l2) and direction errors count.
+                    ### The weights repeat per component, staying mean-one.
+                    if weights is not None:
+                        weights = weights.unsqueeze(-1).expand_as(p).flatten(-2)
                     out.update(
-                        self._metrics_for_tensor(p.flatten(-2), t.flatten(-2), (name,))
+                        self._metrics_for_tensor(
+                            p.flatten(-2), t.flatten(-2), (name,), weights
+                        )
                     )
 
         return TensorDict(out)
@@ -281,5 +346,6 @@ class MetricCalculator:
         fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
         return (
             f"MetricCalculator(fields=[{fields_str}], "
-            f"metrics={self.metric_names}, prefix='{self.prefix}')"
+            f"metrics={self.metric_names}, prefix='{self.prefix}', "
+            f"measure_weighted={self.measure_weighted})"
         )

@@ -534,7 +534,9 @@ def main(cfg: DictConfig) -> None:
 
     # -- Metrics ----------------------------------------------------------------
     metric_calculator = MetricCalculator(
-        target_config=target_config, metrics=resolve_metrics(cfg)
+        target_config=target_config,
+        metrics=resolve_metrics(cfg),
+        measure_weighted=bool(cfg.get("measure_weighted", True)),
     )
 
     if is_rank0:
@@ -581,7 +583,12 @@ def main(cfg: DictConfig) -> None:
 
         ### Metrics in training space (matches the validation numbers); pull the
         ### whole TensorDict host-side once so each .item() is a free CPU index.
-        metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
+        target_measure = batch.get("target_measure")
+        metric_td = metric_calculator(
+            pred_td.float(),
+            batch["targets"].float(),
+            None if target_measure is None else target_measure.float(),
+        )
         sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
         for k, v in sample_metrics.items():
             totals[k] += v

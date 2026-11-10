@@ -241,7 +241,8 @@ def forward_pass(
 
     Args:
         batch: ``{"forward_kwargs": ..., "targets": TensorDict}`` produced
-            by the collate function. ``"targets"`` is a TensorDict with
+            by the collate function, plus ``"target_measure"`` when the
+            dataset provides one. ``"targets"`` is a TensorDict with
             batch_size ``[N]`` (mesh-input mode) or ``[1, N]``
             (tensor-input mode).
         model: Model whose ``forward`` accepts the resolved
@@ -278,10 +279,13 @@ def forward_pass(
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
     target_f32 = targets.float()
+    target_measure = batch.get("target_measure")
+    if target_measure is not None:
+        target_measure = target_measure.float()
 
-    loss, loss_td = loss_calculator(pred_f32, target_f32)
+    loss, loss_td = loss_calculator(pred_f32, target_f32, target_measure)
     with torch.no_grad():
-        metric_td = metric_calculator(pred_f32, target_f32)
+        metric_td = metric_calculator(pred_f32, target_f32, target_measure)
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
@@ -929,15 +933,18 @@ def main(cfg: DictConfig) -> None:
     metrics_list = resolve_metrics(cfg)
 
     field_weights = resolve_dict(cfg, "training.field_weights")
+    measure_weighted = bool(cfg.get("measure_weighted", True))
 
     metric_calculator = MetricCalculator(
         target_config=target_config,
         metrics=metrics_list,
+        measure_weighted=measure_weighted,
     )
     loss_calculator = LossCalculator(
         target_config=target_config,
         loss_type=cfg.training.get("loss_type", "huber"),
         field_weights=field_weights,
+        measure_weighted=measure_weighted,
     )
     output_type = require_output_type(cfg)
     logger.info(f"Loss: {loss_calculator}")

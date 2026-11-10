@@ -31,6 +31,11 @@ Per-field weights (``field_weights``) multiply each per-field loss
 When ``normalize_by_channels=True`` the total is divided by the total
 channel count (``sum(per_field_dims)``) so the total scale is invariant
 to how many channels each field contributes.
+
+With ``measure_weighted=True`` (default) and a ``target_measure`` passed to
+the call, each mean over target points is weighted by the point's measure
+(its cell's area on a surface, its volume in a volume), so the loss
+approximates an integral over the domain rather than a per-point average.
 """
 
 from __future__ import annotations
@@ -43,7 +48,14 @@ import torch
 import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
-from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
+from utils import (
+    FieldType,
+    align_scalar_shapes,
+    align_target_measure,
+    field_dim,
+    normalize_target_measure,
+    validate_field_coverage,
+)
 
 from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.metrics.general.relative_error import relative_mse
@@ -65,11 +77,21 @@ _VALID_LOSS_TYPES = ("huber", "mse", "relative_mse", "rmse")
 ### ---------------------------------------------------------------------------
 
 
+def _weighted_query_mean(
+    values: torch.Tensor,
+    target_measure: torch.Tensor,
+) -> Float[torch.Tensor, ""]:
+    """Measure-weighted mean over the point axis, averaged over leading axes."""
+    denominator = target_measure.sum(dim=-1).clamp_min(torch.finfo(values.dtype).tiny)
+    return ((values * target_measure).sum(dim=-1) / denominator).mean()
+
+
 def _scalar_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
     loss_type: LossType,
     delta: float,
+    target_measure: torch.Tensor | None = None,
     eps: float = 1e-8,
 ) -> Float[torch.Tensor, ""]:
     """Element-wise loss reduced to a scalar.
@@ -86,6 +108,16 @@ def _scalar_loss(
             f"{tuple(pred.shape)} vs {tuple(target.shape)}; check that the "
             f"target_config field type matches the actual tensor rank."
         )
+    if target_measure is not None:
+        if loss_type == "huber":
+            values = F.huber_loss(pred, target, reduction="none", delta=delta)
+            return _weighted_query_mean(values, target_measure)
+        if loss_type == "mse":
+            return _weighted_query_mean((pred - target) ** 2, target_measure)
+        if loss_type == "relative_mse":
+            weights = normalize_target_measure(target_measure)
+            dim = -1 if pred.ndim > 0 else None
+            return relative_mse(pred, target, dim=dim, weights=weights, eps=eps).mean()
     if loss_type == "huber":
         return F.huber_loss(pred, target, reduction="mean", delta=delta)
     if loss_type == "mse":
@@ -100,6 +132,7 @@ def _vector_loss(
     target: Float[torch.Tensor, "*batch d"],
     loss_type: LossType,
     delta: float,
+    target_measure: torch.Tensor | None = None,
     eps: float = 1e-8,
 ) -> Float[torch.Tensor, ""]:
     """Per-component scalar loss summed across components.
@@ -118,6 +151,10 @@ def _vector_loss(
     ### Relative MSE: each component normalized by its own target energy
     ### (reduce over every axis but the last), then summed across components.
     if loss_type == "relative_mse":
+        if target_measure is not None:
+            weights = normalize_target_measure(target_measure).unsqueeze(-1)
+            per_component = relative_mse(pred, target, dim=-2, weights=weights, eps=eps)
+            return per_component.sum(dim=-1).mean()
         return torch.sum(
             relative_mse(pred, target, dim=tuple(range(pred.ndim - 1)), eps=eps)
         )
@@ -125,7 +162,9 @@ def _vector_loss(
     total = torch.zeros((), device=pred.device, dtype=pred.dtype)
     for i in range(n_components):
         p, t = pred[..., i], target[..., i]
-        if loss_type == "huber":
+        if target_measure is not None:
+            total = total + _scalar_loss(p, t, loss_type, delta, target_measure)
+        elif loss_type == "huber":
             total = total + F.huber_loss(p, t, reduction="mean", delta=delta)
         elif loss_type == "mse":
             total = total + torch.mean((p - t) ** 2)
@@ -160,6 +199,9 @@ class LossCalculator:
         normalize_by_channels: When ``True`` (default), divide the
             (weighted) total loss by ``sum(per_field_dims)`` so the total
             is invariant to how many channels each field contributes.
+        measure_weighted: When ``True`` (default), weight each target point
+            by the ``target_measure`` passed to the call, if any. When
+            ``False``, ignore it and count every point alike.
 
     The returned loss dict contains one entry per field
     (``"loss/[prefix/]<name>"``) plus ``"loss/total"`` (or
@@ -175,6 +217,7 @@ class LossCalculator:
         prefix: str = "",
         normalize_by_channels: bool = True,
         delta: float = DEFAULT_HUBER_DELTA,
+        measure_weighted: bool = True,
     ) -> None:
         if loss_type not in _VALID_LOSS_TYPES:
             raise ValueError(
@@ -205,6 +248,7 @@ class LossCalculator:
         self.prefix = prefix
         self.normalize_by_channels = normalize_by_channels
         self.delta = delta
+        self.measure_weighted = measure_weighted
 
         ### Per-field tensors are looked up by name in the input TensorDict,
         ### so we just need a per-field dim count for total_channels.
@@ -255,6 +299,7 @@ class LossCalculator:
         self,
         pred: TensorDict,
         target: TensorDict,
+        target_measure: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, TensorDict]:
         """Compute per-field losses and a (weighted) total.
 
@@ -264,6 +309,9 @@ class LossCalculator:
                 are ``(..., N, D)``. Leading batch dims are arbitrary; the loss
                 kernels reduce over them.
             target: TensorDict of the same structure as ``pred``.
+            target_measure: Optional per-point measure, shape ``(..., N)``,
+                aligned with the target points. Ignored when the calculator
+                was built with ``measure_weighted=False``.
 
         Returns:
             ``(total_loss, loss_td)``. ``loss_td`` is a 0-D ``TensorDict`` keyed
@@ -273,6 +321,8 @@ class LossCalculator:
             ``flatten_keys("/")``.
         """
         validate_field_coverage(self.target_config, pred, target)
+        if not self.measure_weighted:
+            target_measure = None
 
         ### Find a leaf tensor (descending into nested groups) to seed the
         ### accumulator's dtype/device.
@@ -293,9 +343,11 @@ class LossCalculator:
                 ### Caller may pass scalar fields as (..., 1) or (...);
                 ### normalize to a single shape so the loss is shape-agnostic.
                 p, t = align_scalar_shapes(p, t)
-                field_loss = _scalar_loss(p, t, self.loss_type, self.delta)
+                measure = align_target_measure(target_measure, p, field_type)
+                field_loss = _scalar_loss(p, t, self.loss_type, self.delta, measure)
             else:  # vector
-                field_loss = _vector_loss(p, t, self.loss_type, self.delta)
+                measure = align_target_measure(target_measure, p, field_type)
+                field_loss = _vector_loss(p, t, self.loss_type, self.delta, measure)
 
             weighted = field_loss * self.field_weights[name]
             loss_dict[self._make_key(name)] = weighted
@@ -313,7 +365,11 @@ class LossCalculator:
         weights_str = ", ".join(
             f"{name}={w}" for name, w in self.field_weights.items() if w != 1.0
         )
-        parts = [f"fields=[{fields_str}]", f"loss_type='{self.loss_type}'"]
+        parts = [
+            f"fields=[{fields_str}]",
+            f"loss_type='{self.loss_type}'",
+            f"measure_weighted={self.measure_weighted}",
+        ]
         if weights_str:
             parts.append(f"field_weights={{{weights_str}}}")
         if self.prefix:
