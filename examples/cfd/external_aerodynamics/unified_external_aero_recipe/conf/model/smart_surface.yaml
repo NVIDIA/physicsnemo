@@ -40,7 +40,6 @@ forward_kwargs:
   query_features: boundaries.vehicle.cell_data.query_normals
   parameters: global_data.parameters
   frame_center: global_data.geometry_center
-  geometry_seed: global_data.geometry_seed
 model:
   _target_: physicsnemo.experimental.models.smart.SMART
   field: surface

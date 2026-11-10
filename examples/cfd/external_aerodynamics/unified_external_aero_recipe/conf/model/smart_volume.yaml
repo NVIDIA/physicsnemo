@@ -42,7 +42,6 @@ forward_kwargs:
   - interior.point_data.sdf_normals
   parameters: global_data.parameters
   frame_center: global_data.geometry_center
-  geometry_seed: global_data.geometry_seed
 model:
   _target_: physicsnemo.experimental.models.smart.SMART
   field: volume

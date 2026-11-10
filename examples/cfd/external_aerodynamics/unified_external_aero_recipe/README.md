@@ -627,8 +627,10 @@ vehicle-cell centroid cloud as geometry, without CAD or STL inputs.
 - `sampling_resolution=200000` controls field queries independently. Surface
   coordinates, normals, targets, and integration areas stay aligned. Volume reads
   use cyclic blocks, so a spatially shuffled on-disk order is preferable.
-- Reader-derived case/epoch seeds separate geometry and query randomness.
-  Validation uses separate readers to keep its samples fixed.
+- Training uses the datapipe RNG for field queries and PyTorch RNG for geometry.
+  Validation uses separate readers and fixed geometry sampling. Surface query
+  samples can vary between validation passes. Checkpoint resume restores training
+  state, but does not replay the exact random samples of an uninterrupted run.
 
 Surface features are native normals. Volume features are unsigned physical CFD
 boundary distances and closest-surface directions. Keep `coordinate_scale` equal

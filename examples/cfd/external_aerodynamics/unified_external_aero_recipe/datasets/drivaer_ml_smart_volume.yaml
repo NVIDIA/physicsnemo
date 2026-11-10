@@ -22,7 +22,6 @@ pipeline:
   augmentation_before: ${dp:CaptureGeometry}
   reader:
     _target_: ${dp:DomainMeshReader}
-    seed_fields: [query_seed, geometry_seed]
     path: ${train_datadir}
     pattern: run_*/domain_*.pdmsh
     subsample_n_points: ${sampling_resolution}

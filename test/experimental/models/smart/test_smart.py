@@ -124,9 +124,9 @@ def test_geometry_sampling_uses_full_pool_without_dense_embeddings():
     hook = model.position.register_forward_pre_hook(
         lambda _module, args: embedded.append(args[0].detach().clone())
     )
-    before = torch.random.get_rng_state().clone()
-    output = model(points, queries, geometry_seed=torch.tensor(0))
-    assert torch.equal(before, torch.random.get_rng_state())
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        model(points, queries)
     hook.remove()
     assert [x.shape[1] for x in embedded] == [8, 64, 64, 11]
     assert model.num_latents == 8
@@ -139,8 +139,6 @@ def test_geometry_sampling_uses_full_pool_without_dense_embeddings():
         indices = (sample[0, :, 0] * 200).round().long()
         torch.testing.assert_close(sample, points[:, indices], rtol=0, atol=0)
     assert not torch.equal(embedded[1], embedded[2])
-    repeat = model(points, queries, geometry_seed=torch.tensor(0))
-    assert torch.equal(output, repeat)
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])

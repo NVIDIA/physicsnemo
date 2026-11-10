@@ -45,7 +45,6 @@ def cfd_surface():
         points=points,
         cells=torch.tensor([[0, 1, 2], [0, 3, 4], [0, 2, 5]]),
         cell_data={"pressure": torch.arange(3.0).unsqueeze(-1)},
-        global_data={"query_seed": torch.tensor(27)},
     )
 
 
@@ -53,7 +52,7 @@ def cfd_surface():
 def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
     """Query sampling transfers aligned inverse-inclusion areas to the targets."""
     captured = CaptureGeometry()(cfd_surface)
-    sampled = SubsampleMesh(n_cells=query_count, seed_field="query_seed")(captured)
+    sampled = SubsampleMesh(n_cells=query_count)(captured)
     domain = MeshToDomainMesh(cell_data_targets=["pressure"], copy_boundary=True)(
         sampled
     )

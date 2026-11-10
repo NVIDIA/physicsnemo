@@ -46,7 +46,6 @@ def _inputs():
         query_features=torch.randn(1, 7, 3),
         parameters=None,
         frame_center=torch.randn(1, 1, 3),
-        geometry_seed=torch.tensor([[[42]]]),
     )
 
 
@@ -68,7 +67,12 @@ def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
     for training in (True, False):
         model.train(training)
         reference.train(training)
-        torch.testing.assert_close(model(**inputs), reference(**normalized))
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(42)
+            actual = model(**inputs)
+            torch.manual_seed(42)
+            expected = reference(**normalized)
+        torch.testing.assert_close(actual, expected)
         for key in original:
             torch.testing.assert_close(inputs[key], original[key], rtol=0, atol=0)
     path = tmp_path / "field.mdlus"

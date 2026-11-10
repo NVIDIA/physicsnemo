@@ -22,7 +22,6 @@ pipeline:
   augmentation_before: ${dp:CaptureGeometry}
   reader:
     _target_: ${dp:MeshReaderWithGlobalData}
-    seed_fields: [query_seed, geometry_seed]
     path: ${train_datadir}
     pattern: run_*/*.pdmsh/_tensordict/boundaries/vehicle
     subsample_n_cells: null
@@ -80,7 +79,6 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
-      seed_field: query_seed
     - _target_: ${dp:MeshToDomainMesh}
       interior_points: cell_centroids
       copy_boundary: true

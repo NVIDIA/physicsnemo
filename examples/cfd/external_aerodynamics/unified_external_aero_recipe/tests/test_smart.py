@@ -122,23 +122,15 @@ def model_cfg(field):
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
-def test_pipeline_geometry_alignment_rng_and_resume(native_cases, field):
-    """Keep full geometry and aligned targets reproducible across resumed epochs."""
+def test_pipeline_geometry_alignment(native_cases, field):
+    """Keep full geometry and aligned targets through query sampling."""
     cfg = dataset_cfg(native_cases, field)
     ds = build_dataset(cfg, device="cpu", num_workers=1)
     ds.set_generator(torch.Generator().manual_seed(42))
     ds.set_epoch(3)
     sample, _ = ds[0]
-    again, _ = ds[0]
     assert sample.interior.n_points == 4
     assert sample.global_data["geometry_points"].shape[0] == 8
-    for key in sample.interior.point_data.keys():
-        torch.testing.assert_close(
-            sample.interior.point_data[key],
-            again.interior.point_data[key],
-            rtol=0,
-            atol=0,
-        )
     # Sampling selects coordinates and target rows together.
     if field == "surface":
         torch.testing.assert_close(
@@ -164,25 +156,7 @@ def test_pipeline_geometry_alignment_rng_and_resume(native_cases, field):
         sample.global_data["parameters"], torch.tensor([1.205, 30.0])
     )
     torch.testing.assert_close(sample.global_data["U_inf"], raw.global_data["U_inf"])
-    before_seed = sample.global_data["geometry_seed"].clone()
-    ds.set_epoch(4)
-    changed, _ = ds[0]
-    assert changed.global_data["geometry_seed"] != before_seed
-    ds.set_epoch(3)
-    restored, _ = ds[0]
-    torch.testing.assert_close(
-        restored.interior.points, sample.interior.points, rtol=0, atol=0
-    )
-    # Reconstructing directly at epoch three gives the same result as resume.
-    fresh = build_dataset(cfg, device="cpu", num_workers=1)
-    fresh.set_generator(torch.Generator().manual_seed(42))
-    fresh.set_epoch(3)
-    resumed, _ = fresh[0]
-    torch.testing.assert_close(
-        resumed.interior.points, sample.interior.points, rtol=0, atol=0
-    )
     ds.close()
-    fresh.close()
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
@@ -206,13 +180,8 @@ def test_actual_pipeline_forward_backward_checkpoint_and_chunking(
     batch = recursive_to_device(collate([sample]), device)
     inputs = batch["forward_kwargs"]
     model = hydra.utils.instantiate(cfg.model).to(device)
-    state = torch.get_rng_state().clone()
     output = model(**inputs)
-    torch.testing.assert_close(torch.get_rng_state(), state, rtol=0, atol=0)
     assert output.shape == (1, 4, sum(field_dim(t) for t in targets.values()))
-    # Replaying a case/epoch is independent of global RNG consumption.
-    torch.rand(23)
-    torch.testing.assert_close(output, model(**inputs), rtol=0, atol=0)
     loss = LossCalculator(target_config=targets, loss_type="mse")
     result = loss(
         normalize_output_to_tensordict(output, targets, "tensors"), batch["targets"]
@@ -251,7 +220,7 @@ def test_actual_pipeline_forward_backward_checkpoint_and_chunking(
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
 def test_full_query_mode_and_sampling_budgets(native_cases, field):
-    """Changing the query budget preserves full geometry and its RNG seed."""
+    """Changing the query budget preserves full geometry."""
     small = build_dataset(
         dataset_cfg(native_cases, field, 3), device="cpu", num_workers=1
     )
@@ -268,7 +237,6 @@ def test_full_query_mode_and_sampling_budgets(native_cases, field):
         == b.global_data["geometry_points"].shape[0]
         == 8
     )
-    assert a.global_data["geometry_seed"] == b.global_data["geometry_seed"]
     torch.testing.assert_close(
         a.global_data["geometry_points"],
         b.global_data["geometry_points"],
@@ -280,7 +248,7 @@ def test_full_query_mode_and_sampling_budgets(native_cases, field):
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
-def test_loader_validation_is_fixed_across_epochs(native_cases, field, monkeypatch):
+def test_loader_validation_is_independent_of_training(native_cases, field, monkeypatch):
     """Manifest readers must not share mutable sampling epochs across splits."""
     import json
     from types import SimpleNamespace
@@ -315,8 +283,10 @@ def test_loader_validation_is_fixed_across_epochs(native_cases, field, monkeypat
     train.set_epoch(8)
     for _ in train:
         pass
+    assert train.dataset.reader._epoch == 8
+    assert val.dataset.reader._epoch == 0
     second = next(iter(val))
-    for key in first["forward_kwargs"]:
+    for key in ("geometry", "parameters", "frame_center"):
         torch.testing.assert_close(
             first["forward_kwargs"][key], second["forward_kwargs"][key], rtol=0, atol=0
         )

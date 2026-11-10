@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float
 from torch import Tensor, nn
 from torch.nn import functional as F
 
@@ -232,10 +232,6 @@ class SMART(Module):
         Conditions of shape :math:`(B,P)` or :math:`(B,1,P)`.
     query_features : torch.Tensor or None, optional, default=None
         Aligned features of shape :math:`(B,M,C)` in the caller's physical units.
-    geometry_seed : torch.Tensor or None, optional, default=None
-        One integer training seed, independent of other random operations.
-        Evaluation uses ``eval_seed``. Without a training seed, sampling uses
-        the active RNG.
     frame_center : torch.Tensor or None, optional, default=None
         Origin of shape :math:`(B,3)` or :math:`(B,1,3)`. ``None`` uses zero.
 
@@ -610,10 +606,12 @@ class SMART(Module):
         *,
         query_features: Float[Tensor, "batch query_points feature_channels"]
         | None = None,
-        geometry_seed: Int[Tensor, "..."] | None = None,
         frame_center: Float[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "batch query_points out_dim"]:
         r"""Encode geometry once and predict the configured field at query points.
+
+        Training samples geometry using the active PyTorch RNG. Evaluation uses
+        ``eval_seed`` to keep geometry sampling fixed across query chunks.
 
         Parameters
         ----------
@@ -623,9 +621,6 @@ class SMART(Module):
             Conditions of shape :math:`(B,P)` or :math:`(B,1,P)`.
         query_features : torch.Tensor or None, optional, default=None
             Aligned features of shape :math:`(B,M,C)`.
-        geometry_seed : torch.Tensor or None, optional, default=None
-            One integer seed for the training batch. Evaluation uses ``eval_seed``.
-            When omitted during training, sampling uses the active generator.
         frame_center : torch.Tensor or None, optional, default=None
             Coordinate origin of shape :math:`(B,3)` or :math:`(B,1,3)`.
             A three-element tensor broadcasts one origin across the batch.
@@ -662,15 +657,6 @@ class SMART(Module):
                 raise ValueError("query_features are disabled")
             if queries.device != geometry.device:
                 raise ValueError("Queries must be on the geometry device")
-            if geometry_seed is not None and (
-                geometry_seed.numel() != 1
-                or geometry_seed.dtype not in (torch.int32, torch.int64)
-            ):
-                raise ValueError(
-                    "Expected tensor of shape () or singleton dimensions "
-                    f"but got tensor of shape {tuple(geometry_seed.shape)} for geometry_seed. "
-                    f"Expected one int32 or int64 value, got {geometry_seed.dtype}"
-                )
             if frame_center is not None and (
                 frame_center.shape
                 not in ((3,), (1, 3), (1, 1, 3), (batch, 3), (batch, 1, 3))
@@ -703,12 +689,7 @@ class SMART(Module):
         scale = geometry.new_tensor(self.coordinate_scale)
         geometry = geometry / scale
         queries = queries / scale
-        generator = None
-        if self.training and geometry_seed is not None:
-            generator = torch.Generator(device=geometry.device).manual_seed(
-                int(geometry_seed.item())
-            )
-        contexts = self.encode_geometry(geometry, parameters, generator=generator)
+        contexts = self.encode_geometry(geometry, parameters)
         if self.training or queries.shape[1] == 0:
             return self.decode_queries(
                 queries, contexts, parameters, query_features=query_features

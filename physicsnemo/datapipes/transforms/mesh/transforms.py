@@ -290,9 +290,7 @@ class SubsampleMesh(MeshTransform):
     Sampling multiplies explicit effective measures by the stage's inverse
     inclusion probability. Cell measures default to geometric measures;
     point measures remain absent unless supplied explicitly. Point sampling
-    does not correct cell measures for cells removed indirectly. If ``seed_field``
-    names a scalar integer in ``global_data``, each call uses that independent
-    seed instead of advancing the transform generator.
+    does not correct cell measures for cells removed indirectly.
     """
 
     def __init__(
@@ -300,7 +298,6 @@ class SubsampleMesh(MeshTransform):
         n_cells: int | None = None,
         n_points: int | None = None,
         compact: bool = True,
-        seed_field: str | None = None,
     ) -> None:
         super().__init__()
         if n_cells is None and n_points is None:
@@ -308,23 +305,11 @@ class SubsampleMesh(MeshTransform):
         self.n_cells = n_cells
         self.n_points = n_points
         self.compact = compact
-        self.seed_field = as_nested_key(seed_field) if seed_field is not None else None
         self._generator: torch.Generator | None = None
 
-    @property
-    def stochastic(self) -> bool:
-        """Metadata-seeded sampling does not consume the pipeline RNG."""
-        return self.seed_field is None
-
     def _random_indices(
-        self,
-        total: int,
-        k: int,
-        device: torch.device,
-        generator: torch.Generator | None = None,
+        self, total: int, k: int, device: torch.device
     ) -> Int[torch.Tensor, " k"]:
-        if generator is None:
-            generator = self._generator
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
@@ -333,30 +318,20 @@ class SubsampleMesh(MeshTransform):
                 k,
                 strategy="poisson_gap",
                 device=device,
-                generator=generator,
+                generator=self._generator,
             )
         return weighted_multinomial(
             total,
             k,
             strategy="exact",
             device=device,
-            generator=generator,
+            generator=self._generator,
         )
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        generator = self._generator
-        if self.seed_field is not None:
-            seed = mesh.global_data[self.seed_field]
-            if seed.numel() != 1 or seed.dtype not in (torch.int32, torch.int64):
-                raise ValueError("seed_field must contain one integer")
-            generator = torch.Generator(device=mesh.points.device).manual_seed(
-                int(seed.item())
-            )
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
             n_before = mesh.n_cells
-            indices = self._random_indices(
-                n_before, self.n_cells, mesh.cells.device, generator
-            )
+            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
@@ -368,7 +343,7 @@ class SubsampleMesh(MeshTransform):
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(
-                mesh.n_points, self.n_points, mesh.points.device, generator
+                mesh.n_points, self.n_points, mesh.points.device
             )
             n_before = mesh.n_points
             mesh = mesh.slice_points(indices)
