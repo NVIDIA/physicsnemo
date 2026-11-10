@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Recipe 3: adapt the DeepJEB-trained model to SimJEB with LoRA (finetune.py).
+checkpoint: outputs/deepjeb/model.mdlus
+data:
+  root: ???                        # converted SimJEB
+  split: splits/simjeb.json        # adapt on train, monitor on val, report val and test
+  scales: stats/deepjeb_scales.json  # the pre-training scales: the adapted model keeps its output units
+  coordinate_scale_mm: 100.0
+  token_voxel_mm: 2.0
+  num_workers: 4
+  max_designs: null
+lora:
+  rank: 16
+  alpha: null                      # null: alpha = rank (scaling 1)
+training:
+  epochs: 30
+  lr: 1.0e-3                       # AdamW on the adapters
+  warmup_epochs: 1
+  final_lr_ratio: 0.1
+  grad_clip: 1.0
+  precision: bfloat16
+  seed: 20261013
+  val_every: 5
+  log_every: 100
+output_dir: outputs/simjeb_lora    # adapter.lora, state.pt (resume), train_log.jsonl, summary.json
+
+hydra:
+  run:
+    dir: ${output_dir}/hydra
+  output_subdir: null
+  job:
+    chdir: false

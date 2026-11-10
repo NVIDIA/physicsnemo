@@ -1,0 +1,6 @@
+huggingface_hub>=0.30
+matplotlib>=3.8
+pandas>=2.0
+pyvista>=0.43.0
+scikit-learn>=1.4
+scipy>=1.11

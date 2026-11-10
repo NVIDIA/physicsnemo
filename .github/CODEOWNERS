@@ -333,6 +333,10 @@ physicsnemo/experimental/datapipes/healda/ @pzharrington
 physicsnemo/experimental/models/aerojepa/ @mnabian
 physicsnemo/experimental/models/globe/ @peterdsharpe
 physicsnemo/experimental/models/smart/ @mnabian
+physicsnemo/experimental/models/geotransolver_sdf/ @sgtkeum
+test/experimental/models/geotransolver_sdf/ @sgtkeum
+physicsnemo/experimental/nn/sdf_stencil.py @sgtkeum
+physicsnemo/experimental/nn/radius_pooling.py @sgtkeum
 physicsnemo/experimental/peft/ @mnabian
 physicsnemo/experimental/uq/conformal/ @melo-gonzo
 
@@ -437,6 +441,7 @@ examples/reservoir_simulation/
 
 examples/structural_mechanics/ @mnabian
 examples/structural_mechanics/crash/ @mnabian
+examples/structural_mechanics/jet_engine_bracket/ @sgtkeum
 examples/structural_mechanics/deforming_plate/
 
 # ==============================================================================
@@ -509,6 +514,8 @@ test/optim/ @peterdsharpe
 test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
+test/experimental/nn/test_sdf_stencil.py @sgtkeum
+test/experimental/nn/test_radius_pooling.py @sgtkeum
 test/experimental/models/aerojepa/ @mnabian
 test/experimental/models/smart/ @mnabian
 test/experimental/peft/ @mnabian

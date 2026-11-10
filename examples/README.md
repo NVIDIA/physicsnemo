@@ -80,6 +80,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 | --- | --- |
 |[Deforming Plate](./structural_mechanics/deforming_plate/)|MeshGraphNet|
 |[Machine Learning Surrogates for Automotive Crash Dynamics](./structural_mechanics/crash)|Transolver, MeshGraphNet|
+|[Jet Engine Brackets: Training and Transfer Learning](./structural_mechanics/jet_engine_bracket/)|GeoTransolver|
 
 ### Healthcare
 
