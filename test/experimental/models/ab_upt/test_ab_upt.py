@@ -23,8 +23,8 @@ import pytest
 import torch
 
 from physicsnemo import Module
-from physicsnemo.experimental.models.ab_upt import ABUPT
-from physicsnemo.experimental.models.ab_upt.model import _AnchorBlock
+from physicsnemo.experimental.models.ab_upt import ABUPT, ABUPTContext
+from physicsnemo.experimental.models.ab_upt.model import _AnchorBlock, _Coordinates
 from test.common import (
     validate_amp,
     validate_checkpoint,
@@ -74,15 +74,16 @@ CONFIGS = [
 ]
 
 
-def inputs(device="cpu", dtype=torch.float32, parameters=0):
+def inputs(device="cpu", dtype=torch.float32):
     g = torch.linspace(-0.7, 0.9, 2 * 19 * 3, device=device, dtype=dtype).reshape(
         2, 19, 3
     )
-    s = g[:, ::4].contiguous()
+    supernodes = g[:, ::4].contiguous()
+    s = g[:, 1::3].contiguous()
     v = torch.linspace(-0.9, 0.8, 2 * 7 * 3, device=device, dtype=dtype).reshape(
         2, 7, 3
     )
-    return g, s, s, v
+    return g, supernodes, s, v
 
 
 @pytest.fixture(autouse=True)
@@ -365,7 +366,19 @@ def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients(
     model = ABUPT(**(SMALL | {"pooling_message_fp32": pooling_message_fp32})).double()
     args = inputs(dtype=torch.float64)
     g = args[0].clone().requires_grad_()
-    supernodes = args[1].clone().requires_grad_()
+    # Cross both the 128-query and 17-point tile boundaries, with nonuniform
+    # neighborhoods so an incorrect tile offset cannot accidentally agree.
+    supernodes = torch.linspace(-1.2, 1.3, 2 * 200 * 3, dtype=torch.float64)
+    supernodes = supernodes.reshape(2, 200, 3).requires_grad_()
+    delta = g[:, None] - supernodes[:, :, None]
+    distance = delta.norm(dim=-1, keepdim=True)
+    mask = distance < model.pooling_radius
+    messages = model.message(torch.cat((delta, distance), dim=-1))
+    mean = (messages * mask).sum(2) / mask.sum(2).clamp_min(1)
+    dense = model.pool_projection(torch.cat((mean, model.position(supernodes)), dim=-1))
+    torch.testing.assert_close(
+        model._pool(g, supernodes), dense, rtol=1e-12, atol=1e-12
+    )
     variables = (g, supernodes, *model.message.parameters())
     result = model.encode_geometry(g, supernodes)
     gradients = torch.autograd.grad(result.square().mean(), variables)
@@ -450,7 +463,11 @@ def test_reduced_precision_pooling_preserves_dense_neighborhood_mean(
 
 def test_double_precision_torch_pooling_retains_coordinate_separation(device):
     """Float32 rounding must not create edges in an explicit float64 search."""
-    model = ABUPT(**(SMALL | {"pooling_radius": 0.25})).to(device).double()
+    model = (
+        ABUPT(**(SMALL | {"pooling_radius": 0.25, "radius_search_backend": None}))
+        .to(device)
+        .double()
+    )
     model.message = torch.nn.Linear(4, model.hidden_dim).to(device).double()
     with torch.no_grad():
         model.message.weight.zero_()
@@ -474,19 +491,35 @@ def test_vorticity_scaling_against_analytic_polynomial(monkeypatch):
 
     monkeypatch.setattr(model, "decode_queries", polynomial)
     result = model.decode_vorticity(
-        q, None, step=0.01, coordinate_scale=(2, 3, 4), velocity_scale=(5, 6, 7)
+        q,
+        ABUPTContext((), (), None, None, None),
+        step=0.01,
+        coordinate_scale=(2, 3, 4),
+        velocity_scale=(5, 6, 7),
     )
     x, y, z = q.unbind(-1)
     expected = torch.stack((-48 * z, -28 * x, -30 * y), dim=-1)
     torch.testing.assert_close(result, expected, rtol=1e-12, atol=1e-11)
 
 
-def test_model_curl_agrees_with_autograd_and_has_parameter_gradients():
-    model = ABUPT(**SMALL).double()
-    args = inputs(dtype=torch.float64)
-    ctx = model.encode(*args)
-    q = torch.randn(2, 4, 3, dtype=torch.float64, requires_grad=True)
-    pred = model.decode_queries(q, ctx, "volume")[..., 1:4]
+@pytest.mark.parametrize("amp_dtype", [None, torch.float16, torch.bfloat16])
+def test_model_curl_agrees_with_autograd_and_has_parameter_gradients(amp_dtype, device):
+    torch.manual_seed(42)
+    dtype = torch.float64 if amp_dtype is None else torch.float32
+    model = ABUPT(**(SMALL | {"parameter_channels": 2})).to(device, dtype)
+    args = inputs(device, dtype)
+    parameters = torch.randn(2, 2, device=device, dtype=dtype, requires_grad=True)
+    device_type = torch.device(device).type
+    with torch.autocast(device_type, dtype=amp_dtype, enabled=amp_dtype is not None):
+        ctx = model.encode(*args, parameters=parameters)
+    q = torch.randn(2, 4, 3, device=device, dtype=dtype, requires_grad=True)
+    # Differentiate the same (possibly quantized) context in full precision.
+    reference_ctx = replace(
+        ctx,
+        volume=tuple((k.to(dtype), v.to(dtype)) for k, v in ctx.volume),
+        conditioning=ctx.conditioning.to(dtype),
+    )
+    pred = model.decode_queries(q, reference_ctx, "volume")[..., 1:4]
     jac = [
         torch.autograd.grad(pred[..., i].sum(), q, retain_graph=True)[0]
         for i in range(3)
@@ -499,10 +532,21 @@ def test_model_curl_agrees_with_autograd_and_has_parameter_gradients():
         ),
         dim=-1,
     )
-    approx = model.decode_vorticity(q, ctx, step=1e-4)
-    torch.testing.assert_close(approx, exact, rtol=1e-5, atol=1e-7)
+    with torch.autocast(device_type, dtype=amp_dtype, enabled=amp_dtype is not None):
+        approx = model.decode_vorticity(
+            q, ctx, step=1e-4 if amp_dtype is None else 1e-3
+        )
+    assert approx.dtype == dtype
+    torch.testing.assert_close(
+        approx,
+        exact,
+        rtol=1e-5 if amp_dtype is None else 1e-2,
+        atol=1e-7 if amp_dtype is None else 3e-4,
+    )
     approx.square().mean().backward()
     assert model.volume_head.weight.grad.abs().sum() > 0
+    assert parameters.grad.abs().sum() > 0
+    assert next(model.message.parameters()).grad.abs().sum() > 0
 
 
 @pytest.mark.parametrize("helper", [validate_amp, validate_combo_optims])
@@ -556,6 +600,8 @@ def test_bad_context_and_parameters():
     q = torch.rand(2, 3, 3)
     with pytest.raises(ValueError, match="parameters"):
         model(*args, parameters=torch.ones(2, 2))
+    with pytest.raises(ValueError, match="parameters are required"):
+        ABUPT(**(SMALL | {"parameter_channels": 2}))(*args)
     with pytest.raises(ValueError, match="layer contexts"):
         model.decode_queries(q, replace(ctx, surface=ctx.surface[:-1]))
     bad = ((torch.zeros(2, 1, 3, 8), torch.zeros(2, 1, 3, 8)),) + ctx.surface[1:]
@@ -574,14 +620,28 @@ def test_bad_context_and_parameters():
         disabled(*args, surface_queries=q)
 
 
-@pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA is required for Warp GPU comparison"
-)
-def test_cuda_warp_pooling_matches_torch():
-    m = ABUPT(**SMALL).cuda().eval()
-    args = inputs("cuda")
+@pytest.mark.parametrize("pooling_message_fp32", [False, True])
+def test_warp_pooling_matches_torch(pooling_message_fp32, device):
+    m = (
+        ABUPT(**(SMALL | {"pooling_message_fp32": pooling_message_fp32}))
+        .to(device)
+        .eval()
+    )
+    args = inputs(device)
     expected = m(*args)
-    m.radius_search_backend = "warp"
+    m.radius_search_backend = None  # Automatic float32 selection uses Warp.
     actual = m(*args)
     for a, e in zip(actual, expected):
         torch.testing.assert_close(a, e, rtol=1e-4, atol=2e-5)
+
+
+@pytest.mark.parametrize("width", [7, 8, 64])
+def test_coordinates_encode_all_axes_equally(width):
+    encoding = _Coordinates(width).double()
+    origin = encoding(torch.zeros(1, 3, dtype=torch.float64))
+    shifted = encoding(torch.eye(3, dtype=torch.float64))
+    changes = (shifted - origin).square().sum(-1)
+    assert (changes > 0).all()
+    torch.testing.assert_close(changes, changes[0].expand(3), rtol=0, atol=1e-15)
+    assert shifted.shape == (3, width)
+    assert (shifted[..., 6 * (width // 6) :] == 0).all()

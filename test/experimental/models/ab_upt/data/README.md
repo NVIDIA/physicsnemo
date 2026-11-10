@@ -8,4 +8,12 @@ The two configurations in `test_ab_upt.py` use seeds 1729 and 1730, respectively
 Each `.mdlus` contains the untrained model; `_output.pth` contains its forward
 outputs for the standard model-test helper; `_methods.pth` contains inputs and
 reference geometry encodings, anchor contexts, query outputs, and vorticity.
-The fixtures were produced on CPU with PyTorch 2.14.0 in float32.
+Regenerate from the repository root with:
+
+```bash
+python -m test.experimental.models.ab_upt.generate_data
+```
+
+The generator records distinct supernode/surface-anchor sets, 9 surface queries,
+11 volume queries, and a vorticity step of 0.01. These fixtures were produced on
+CPU with PyTorch 2.13.0+cu130 in float32.

@@ -28,7 +28,7 @@ the `SMART paper <https://arxiv.org/abs/2601.18707>`_.
     :members: encode_geometry, decode_queries
 
 AB-UPT (Experimental)
---------------------
+---------------------
 
 AB-UPT uses geometry supernodes and interacting surface/volume anchor streams
 to define a query-independent field. The independent implementation follows

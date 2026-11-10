@@ -25,7 +25,7 @@ outside the operator and make repeated/chunked queries refer to one field.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import torch
@@ -48,9 +48,14 @@ class ABUPTContext:
     ----------
     surface : tuple[tuple[torch.Tensor, torch.Tensor], ...]
         Projected keys and values for each surface layer. Each tensor has
-        shape :math:`(B,H,M,D)`; keys already include rotary position encoding.
+        shape :math:`(B,H,M,D_h)`, with :math:`H` heads, :math:`M` source tokens,
+        and head width :math:`D_h`. Keys already include rotary position
+        encoding. The first pair represents
+        geometry supernodes and is shared by the enabled branches. Later pairs
+        represent that layer's source anchors (the opposite branch for cross
+        attention, the same branch for self-attention).
     volume : tuple[tuple[torch.Tensor, torch.Tensor], ...]
-        Corresponding volume contexts of shape :math:`(B,H,M,D)` per layer.
+        Corresponding volume contexts of shape :math:`(B,H,M,D_h)` per layer.
         Either branch's context is empty when that branch is disabled.
     surface_predictions : torch.Tensor or None
         Predictions at surface anchors, shape :math:`(B,M_s,C_s)`.
@@ -79,18 +84,18 @@ class _Coordinates(nn.Module):
     def __init__(self, width: int):
         super().__init__()
         self.width = width
-        pairs = math.ceil(width / 6)
+        pairs = width // 6
         self.register_buffer("frequencies", 10000.0 ** (-torch.arange(pairs) / pairs))
 
     def forward(self, positions: Tensor) -> Tensor:
         # Preserve phase accuracy under autocast, including large coordinates.
         dtype = torch.float64 if positions.dtype == torch.float64 else torch.float32
         phase = positions.to(dtype).unsqueeze(-1) * self.frequencies.to(dtype)
-        return (
-            torch.stack((phase.sin(), phase.cos()), dim=-1)
-            .flatten(-3)[..., : self.width]
-            .to(positions.dtype)
-        )
+        encoded = torch.stack((phase.sin(), phase.cos()), dim=-1).flatten(-3)
+        # Keep the same frequency bands for all three axes at any token width.
+        if self.width % 6:
+            encoded = F.pad(encoded, (0, self.width % 6))
+        return encoded.to(positions.dtype)
 
 
 class _AnchorBlock(nn.Module):
@@ -111,6 +116,7 @@ class _AnchorBlock(nn.Module):
         self.register_buffer("frequencies", 10000.0 ** (-torch.arange(pairs) / pairs))
 
     def _rotate(self, features: Tensor, positions: Tensor) -> Tensor:
+        r"""Rotate ``(B,H,N,D_h)`` features at ``(B,N,3)`` positions; retain shape."""
         # Allocate equal rotary pairs to x/y/z; leave remaining head channels
         # unchanged when the head width is not divisible by six.
         pairs = self.frequencies.numel()
@@ -183,11 +189,12 @@ class ABUPT(Module):
         Geometry neighborhood radius, in the supplied coordinate units.
     pooling_chunk_size : int, optional, default=4096
         Maximum messages embedded at once. Also bounds reference-point chunks
-        for the CPU radius search fallback.
+        for the PyTorch radius search backend on either CPU or CUDA.
     parameter_channels : int, optional, default=0
         Optional global conditioning channels, broadcast to both branches.
     radius_search_backend : {None, "torch", "warp"}, optional, default=None
-        ``None`` selects Warp on CUDA and PyTorch otherwise. Neighbor search
+        ``None`` selects Warp on CPU and CUDA, except for float64 coordinates,
+        which use PyTorch to preserve precision. Neighbor search
         is discrete; message passing remains differentiable in coordinates.
         Warp searches in float32; the PyTorch backend preserves float64 inputs.
     pooling_message_fp32 : bool, optional, default=False
@@ -240,22 +247,31 @@ class ABUPT(Module):
     they retain geometry encoding and anchor decoding, replace cross-branch
     attention with self-attention, and require no inactive-branch inputs.
 
-    Sampling and normalization belong to the caller. Queries must never be
-    used to resample anchors between chunks. ``encode`` / ``decode_queries``
-    expose this separation, and ``decode_vorticity`` implements the paper's
-    finite-difference curl with normalization corrections. Direct volume
-    output channels are unconstrained unless that helper is explicitly used.
+    Sampling and normalization belong to the caller. All coordinates and
+    ``pooling_radius`` must use the same units. The positional frequencies span
+    approximately 1 to 1e-4; coordinates of order 1000 exercise more frequency
+    bands than unit-scale coordinates. When rescaling coordinates, rescale the
+    radius as well; the default radius is in caller-supplied units.
+
+    Queries must never be used to resample anchors between chunks.
+    :meth:`encode` / :meth:`decode_queries` expose this separation, and
+    :meth:`decode_vorticity` implements the paper's finite-difference curl with
+    normalization corrections. Direct volume outputs are not constrained to
+    equal the curl; the helper computes it separately from predicted velocity.
 
     Examples
     --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.ab_upt import ABUPT
     >>> model = ABUPT(hidden_dim=24, num_heads=3, num_interaction_blocks=1,
     ...               num_shared_layers=0, num_decoder_layers=1)
     >>> geometry = torch.rand(1, 20, 3)
-    >>> surface = geometry[:, :5]
+    >>> supernodes = geometry[:, ::4]
+    >>> surface = geometry[:, 1::3]
     >>> volume = torch.rand(1, 7, 3)
-    >>> pressure, flow = model(geometry, surface, surface, volume)
+    >>> pressure, flow = model(geometry, supernodes, surface, volume)
     >>> pressure.shape, flow.shape
-    (torch.Size([1, 5, 4]), torch.Size([1, 7, 7]))
+    (torch.Size([1, 7, 4]), torch.Size([1, 7, 7]))
     """
 
     def __init__(
@@ -276,7 +292,6 @@ class ABUPT(Module):
     ):
         super().__init__(
             meta=ModelMetaData(
-                name="ABUPT",
                 jit=False,
                 cuda_graphs=False,
                 amp_cpu=True,
@@ -331,6 +346,8 @@ class ABUPT(Module):
         self.geometry_attention = _AnchorBlock(
             hidden_dim, num_heads, mlp_ratio, cross=True
         )
+        # Alternate within-branch and cross-branch blocks, then shared self
+        # attention. Single-branch models use self-attention throughout.
         self.cross_branch = (
             False,
             bool(surface_channels and volume_channels),
@@ -385,10 +402,14 @@ class ABUPT(Module):
             )
 
     def _pool(self, geometry: Tensor, supernodes: Tensor) -> Tensor:
-        # Query/reference tiling bounds the CPU fallback's distance matrix.
+        r"""Pool ``(B,N_g,3)`` geometry at ``(B,S,3)`` supernodes into ``(B,S,d)``.
+
+        Empty neighborhoods contribute zero local messages before projection.
+        """
+        # Query/reference tiling bounds the PyTorch backend's distance matrix.
         # Warp uses a spatial grid and can search the complete cloud directly.
         backend = self.radius_search_backend or (
-            "warp" if geometry.is_cuda else "torch"
+            "torch" if geometry.dtype == torch.float64 else "warp"
         )
         batch, count, _ = supernodes.shape
         # Counts and message sums must not accumulate in fp16/bf16: large
@@ -528,12 +549,16 @@ class ABUPT(Module):
                 elif points is not None:
                     raise ValueError(f"{name} supplied for a disabled branch")
             if self.parameter_channels:
-                if parameters is None or parameters.shape != (
+                if parameters is None:
+                    raise ValueError(
+                        "parameters are required when parameter_channels > 0"
+                    )
+                if parameters.shape != (
                     geometry.shape[0],
                     self.parameter_channels,
                 ):
                     raise ValueError(
-                        f"Expected tensor of shape (B, {self.parameter_channels}) for parameters but got tensor of shape {None if parameters is None else tuple(parameters.shape)}"
+                        f"Expected tensor of shape (B, {self.parameter_channels}) for parameters but got tensor of shape {tuple(parameters.shape)}"
                     )
                 if (
                     parameters.device != geometry.device
@@ -706,7 +731,10 @@ class ABUPT(Module):
         torch.Tensor
             Physical vorticity of shape :math:`(B,Q,3)`. Central differences
             approximate the continuous curl; their error depends on ``step``
-            and precision. Gradients propagate to the model and context.
+            and precision. Offset evaluations disable autocast and use the
+            model's float32 or float64 weight dtype, including cached keys,
+            values, and conditioning. Explicit half-precision weights are not
+            supported. Gradients propagate to the model and context.
         """
         if not math.isfinite(step) or step <= 0:
             raise ValueError("step must be finite and positive")
@@ -729,18 +757,37 @@ class ABUPT(Module):
                 raise ValueError(f"{name} must contain three finite positive values")
         if not torch.compiler.is_compiling():
             self._validate_points(queries, "queries", empty=True)
-        derivatives = []
-        for axis in range(3):
-            offset = queries.new_zeros(3)
-            offset[axis] = step
-            plus = self.decode_queries(queries + offset, context, field="volume")
-            minus = self.decode_queries(queries - offset, context, field="volume")
-            derivative = (
-                plus[..., list(velocity_channels)] - minus[..., list(velocity_channels)]
-            ) / (2 * step)
-            derivatives.append(
-                derivative * queries.new_tensor(velocity_scale) * coordinate_scale[axis]
+        dtype = self.volume_head.weight.dtype
+        if dtype not in (torch.float32, torch.float64):
+            raise ValueError(
+                "decode_vorticity requires float32 or float64 model weights"
             )
+        queries = queries.to(dtype)
+        context = replace(
+            context,
+            volume=tuple((k.to(dtype), v.to(dtype)) for k, v in context.volume),
+            conditioning=(
+                context.conditioning.to(dtype)
+                if context.conditioning is not None
+                else None
+            ),
+        )
+        derivatives = []
+        with torch.autocast(queries.device.type, enabled=False):
+            for axis in range(3):
+                offset = queries.new_zeros(3)
+                offset[axis] = step
+                plus = self.decode_queries(queries + offset, context, field="volume")
+                minus = self.decode_queries(queries - offset, context, field="volume")
+                derivative = (
+                    plus[..., list(velocity_channels)]
+                    - minus[..., list(velocity_channels)]
+                ) / (2 * step)
+                derivatives.append(
+                    derivative
+                    * queries.new_tensor(velocity_scale)
+                    * coordinate_scale[axis]
+                )
         dx, dy, dz = derivatives
         return torch.stack(
             (dy[..., 2] - dz[..., 1], dz[..., 0] - dx[..., 2], dx[..., 1] - dy[..., 0]),
