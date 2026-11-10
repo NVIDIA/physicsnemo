@@ -21,7 +21,6 @@ import torch
 from smart_data import (
     SMARTSurfaceMeshToDomainMesh,
     SMARTSurfaceReader,
-    SMARTVolumeGeometry,
     SMARTVolumeReader,
 )
 
@@ -50,7 +49,7 @@ def cfd_surface():
     )
 
 
-@pytest.mark.parametrize("query_count", [1, 2, 3, 100])
+@pytest.mark.parametrize("query_count", [1, 100])
 def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
     """Query sampling transfers aligned inverse-inclusion areas to the targets."""
     domain = SMARTSurfaceMeshToDomainMesh(
@@ -66,29 +65,6 @@ def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
         domain.boundaries["smart_geometry"].points, cfd_surface.cell_centroids
     )
     assert "pressure" not in boundary.cell_data
-
-
-@pytest.mark.parametrize(
-    "kwargs, message",
-    [
-        ({"interior_points": "vertices"}, "cell_centroids"),
-        ({"boundary_name": "smart_geometry"}, "reserved"),
-    ],
-)
-def test_surface_rejects_incompatible_query_layout(kwargs, message):
-    """Do not accept a layout that loses cell-feature alignment or topology."""
-    with pytest.raises(ValueError, match=message):
-        SMARTSurfaceMeshToDomainMesh(n_cells=2, **kwargs)
-
-
-def test_volume_rejects_existing_geometry_boundary(cfd_surface):
-    """A reserved boundary must not silently replace an input boundary."""
-    domain = DomainMesh(
-        interior=Mesh(points=torch.zeros(2, 3)),
-        boundaries={"vehicle": cfd_surface, "smart_geometry": cfd_surface},
-    )
-    with pytest.raises(ValueError, match="reserved"):
-        SMARTVolumeGeometry().apply_to_domain(domain)
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])

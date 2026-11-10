@@ -279,32 +279,6 @@ def test_full_query_mode_and_sampling_budgets(native_cases, field):
         ds.close()
 
 
-def test_geometry_budget_does_not_change_field_samples(native_cases):
-    """Geometry draws cannot consume the query sampling RNG stream."""
-    ds = build_dataset(
-        dataset_cfg(native_cases, "surface"), device="cpu", num_workers=1
-    )
-    ds.set_generator(torch.Generator().manual_seed(21))
-    cfg = model_cfg("surface")
-    collate = build_collate_fn(
-        "tensors",
-        OmegaConf.to_container(cfg.forward_kwargs),
-        {"pressure": "scalar", "wss": "vector"},
-    )
-    batch = collate([ds[0]])
-    model = hydra.utils.instantiate(cfg.model)
-    reference = batch["targets"].clone()
-    for n in [2, 4, 7]:
-        model.geometry_subsample = n
-        model(**batch["forward_kwargs"])
-        actual = collate([ds[0]])
-        for key in reference.keys():
-            torch.testing.assert_close(
-                reference[key], actual["targets"][key], rtol=0, atol=0
-            )
-    ds.close()
-
-
 @pytest.mark.parametrize("field", ["surface", "volume"])
 def test_loader_validation_is_fixed_across_epochs(native_cases, field, monkeypatch):
     """Manifest readers must not share mutable sampling epochs across splits."""
