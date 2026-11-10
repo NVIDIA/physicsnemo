@@ -467,6 +467,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks whether its own code is being traced, because since torch 2.13
   `torch.compiler.is_compiling()` is True in every thread during a compile,
   which made data-loading threads drop caches and skip validation.
+- `Mesh` geometric properties, curvatures, and the calculus operators give
+  correct gradients when the points require gradients, even after a read under
+  `torch.no_grad()`, and a second `backward()` on the same mesh no longer
+  fails. Such meshes now compute these properties on every access instead of
+  caching them.
 - GraphCast and MeshGraphNet run on graphs partitioned across GPUs again
   (`partition_size > 1`, or a `DistributedGraph` in place of the PyG graph),
   so the distributed shallow-water example works. This broke when the DGL
