@@ -76,7 +76,6 @@ the `shell_contact` functional.
 | `yaris_deformer_corrector` | network + corrector | the contact-aware corrector on the frozen network (30 epochs) |
 | `yaris_geotransolver` | GeoTransolver (FLARE variant) | the point-model baseline under the identical protocol |
 | `crash_deformer_knn_time_conditional` | network | the same network on the body-in-white VTP data (26 frames, 100 epochs) |
-| `crash_geoflare_time_conditional` | GeoTransolver | its baseline on the body-in-white data |
 
 The three Yaris recipes share one data recipe (`conf/reader/yaris_full.yaml`,
 `conf/datapipe/yaris_full.yaml`) and differ only in the model group and the
@@ -204,20 +203,22 @@ directly with
 without the override it looks for the network's weights at the path recorded
 when it was trained.
 
-#### Autoregressive DeFormer (body-in-white data)
+#### The network on the body-in-white data
 
-The autoregressive form of DeFormer, from which the time-conditional network
-grew, stays available for the body-in-white VTP data: `crash_deformer_autoregressive`
-(DeFormer with MeshGraphNet local stages, no contact), `crash_deformer_contact_autoregressive`
-(predictive node-to-face contact inside the network with reference-geodesic
-exclusions, see [SURFACE_CONTACT_REFERENCE_GEODESIC.md](SURFACE_CONTACT_REFERENCE_GEODESIC.md)),
-`crash_deformer_knn_autoregressive` (static kNN neighbourhood attention as the
-local operator) and `crash_deformer_knn_yaris_autoregressive` (the same on the
-Yaris mesh), against the `crash_geoflare_autoregressive` baseline. They roll
-out closed-loop with four-step truncated BPTT from two observed frames. The
-code retains the historical names `MeshGeoFLARE` (reusable model) and
-`MeshGeoFLAREAutoregressive` (rollout wrapper) for checkpoint and Hydra
-compatibility; all recipes select original FLARE (`GALE_FA`).
+`crash_deformer_knn_time_conditional` trains the same network on the
+body-in-white VTP data (26 frames, 127 training and 8 validation cases) with
+geodesic neighbourhoods on the structural edges and without activation
+checkpointing; the recipe is self-contained and needs only the two data paths:
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name crash_deformer_knn_time_conditional \
+  training.raw_data_dir=/data/crash/train training.raw_data_dir_validation=/data/crash/validation
+```
+
+`evaluate_biw_tc.py` scores a body-in-white checkpoint with the Yaris
+validation suite; the command in its docstring turns on the shell facets and
+the reference-geodesic exclusions of the penetration metrics (see
+[SURFACE_CONTACT_REFERENCE_GEODESIC.md](SURFACE_CONTACT_REFERENCE_GEODESIC.md)).
 
 ### Body-in-White Crash Modeling
 
@@ -374,29 +375,41 @@ The main script is `train.py`.
 
 ### Config Structure
 
-The existing bumper and body-in-white one-shot/time-conditional experiments remain
-available. This contribution adds the recipes of the table at the top of this
-README: the three Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,
-`yaris_geotransolver`), the two body-in-white time-conditional recipes
-(`crash_deformer_knn_time_conditional`, `crash_geoflare_time_conditional`) and
-the autoregressive family (`crash_geoflare_autoregressive`,
-`crash_deformer_autoregressive`, `crash_deformer_contact_autoregressive`,
-`crash_deformer_knn_autoregressive`, `crash_deformer_knn_yaris_autoregressive`).
+```
+conf/
+├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
+├── bumper_geotransolver_time_conditional.yaml
+├── crash_geotransolver_oneshot.yaml
+├── bumper_geoflare_oneshot.yaml
+├── crash_geoflare_oneshot.yaml
+├── crash_deformer_knn_time_conditional.yaml  # DeFormer network, body-in-white data
+├── yaris_deformer.yaml                     # DeFormer network, Yaris full mesh
+├── yaris_deformer_corrector.yaml           # DeFormer corrector on the frozen network
+├── yaris_geotransolver.yaml                # GeoTransolver baseline under the same protocol
+├── datapipe/                              # dataset configs (generic defaults)
+│   ├── graph.yaml
+│   ├── point_cloud.yaml
+│   └── yaris_full.yaml
+├── model/                                 # model configs
+│   ├── deformer_time_conditional.yaml
+│   ├── mgn_corrector.yaml
+│   ├── geotransolver_one_shot.yaml
+│   ├── geotransolver_autoregressive_rollout_training.yaml
+│   ├── geotransolver_one_step_rollout.yaml
+│   ├── geotransolver_time_conditional.yaml
+│   ├── transolver_one_shot.yaml
+│   ├── figconvunet_one_shot.yaml
+│   ├── mgn_one_shot.yaml
+│   └── ...
+├── reader/                                # reader configs
+│   ├── vtp.yaml
+│   ├── yaris_full.yaml
+│   └── zarr.yaml
+├── training/default.yaml                  # generic training hyperparameters
+└── inference/default.yaml                 # generic inference options
+```
 
-| Experiment | Model |
-|------------|-------|
-| `crash_geoflare_autoregressive` | GeoTransolver with original point-space FLARE |
-| `crash_deformer_autoregressive` | DeFormer without contact |
-| `crash_deformer_contact_autoregressive` | DeFormer with predictive geodesic-filtered surface contact |
-
-The DeFormer experiment inherits the GeoFLARE data/training recipe and switches to
-a graph datapipe and mesh model. The contact experiment inherits DeFormer and adds
-contact, reproducible sampling, and memory settings. Four model definitions were
-added to `conf/model/` (`deformer_time_conditional`, `mgn_corrector`,
-`deformer_autoregressive`, `geoflare_autoregressive`; the Yaris baseline uses the
-shared `geotransolver_time_conditional`); reader, datapipe, training and
-inference defaults are shared with the existing examples. See
-[configuration layout](conf/README.md) for overrides.
+Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file; `yaris_deformer_corrector` and `yaris_geotransolver` inherit `yaris_deformer` and override its model group. See [configuration layout](conf/README.md) for every key.
 
 ### Launch Training
 
@@ -411,98 +424,6 @@ Multi-GPU (Distributed Data Parallel):
 ```bash
 torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
-
-### DeFormer autoregressive comparison
-
-Run one of the three entry points with your dataset paths:
-
-```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py \
-  --config-name=crash_deformer_contact_autoregressive \
-  training.raw_data_dir=/data/crash/train \
-  training.raw_data_dir_validation=/data/crash/validation
-```
-
-Replace the config name with `crash_deformer_autoregressive` or
-`crash_geoflare_autoregressive` for the baselines. These are fresh model runs,
-not interchangeable checkpoints. Use separate output directories when launching
-comparisons concurrently, for example `hydra.run.dir=./outputs/deformer_contact`.
-
-The reference defaults assume 127 training cases, 8 validation cases, and 26
-frames spaced 5 ms apart. By default, all models use velocity and thickness inputs,
-predict acceleration, and train with random four-transition closed-loop BPTT windows.
-The two initial observed frames initialize velocity; validation and inference
-roll out the remaining 24 transitions. The common budget is 500 epochs with
-Muon, BF16, a cosine learning-rate schedule from `2e-4` to `1e-6`, and no
-teacher forcing or early stopping. Supply sample counts and time-step settings
-appropriate for a different dataset.
-
-DeFormer can optionally include current XYZ alongside velocity and thickness:
-
-```bash
-python train.py --config-name=crash_deformer_contact_autoregressive \
-  model.include_position_features=true \
-  training.raw_data_dir=/data/crash/train \
-  training.raw_data_dir_validation=/data/crash/validation
-```
-
-This switch defaults to `false` and also works with `crash_deformer_autoregressive`.
-When enabled, the input order is **normalized current XYZ, normalized velocity XYZ,
-normalized thickness**. The wrapper automatically expands the input projection
-from four to seven channels; leave `model.functional_dim=4` and
-`model.node_input_mode=velocity` unchanged. XYZ is the observed current position
-at initialization and the model's own predicted position during subsequent
-closed-loop steps, never a future target. Geometry context, physical-unit contact,
-and the residual velocity/position integration are unchanged.
-
-Use the same switch for training and inference, and a separate checkpoint/output
-directory for each mode: four- and seven-channel checkpoints are not interchangeable.
-Legacy explicit `node_input_mode=position_velocity` with `functional_dim=7`
-remains supported with the new switch disabled; do not combine both mechanisms.
-
-The contact recipe requires valid triangle/quad connectivity and nodal shell
-thickness in physical units (mm for the reference data). It rebuilds live
-node-to-face contact from the predicted geometry, uses barycentric surface
-features rather than face centroids, and retains gradients through the selected
-geometry and contact messages. Candidate membership is discrete. The geometry is
-denormalized before contact computation; reference-geodesic exclusions use
-initial physical geometry. This is solver-inspired learned messaging, not a
-contact-force solver or a nonpenetration guarantee.
-
-Optional face-area quadrature (default off) multiplies each active pair's
-activation weight by the face's center-fan area over a reference area, the
-activation-band disk `pi * 5^2` mm^2 unless overridden. It makes the contact
-aggregate and its activation total approximately independent of mesh
-resolution, which matters when training on meshes with different element sizes
-or on coarsened meshes. Enable it with `+model.contact_surface_area_weighting=true`
-(optionally `+model.contact_surface_reference_area=<mm^2>`); it changes the
-learned function, so use a fresh output directory and compare against the
-reference recipe.
-
-The contact recipe additionally enables deterministic sampling, RNG-isolated
-contact initialization, nested contact checkpointing, and activation offloading.
-Those execution/reproducibility settings are explicit; they are not silently
-assumed identical to the historical no-contact recipe.
-
-Small ablations are overrides instead of separate YAML files:
-
-```bash
-# Incidence-only exclusions; keep the same model and training budget.
-python train.py --config-name=crash_deformer_contact_autoregressive \
-  datapipe.contact_surface_exclusion=incidence \
-  training.raw_data_dir=/data/crash/train \
-  training.raw_data_dir_validation=/data/crash/validation
-
-# Print the recipe without starting training.
-python train.py --config-name=crash_deformer_contact_autoregressive --cfg job
-```
-
-Use `model.checkpoint_offloading=false` for an execution-only memory tradeoff.
-Use `model.enable_contact=false` to disable contact messages while retaining the
-contact parameters and initialization. The dedicated no-contact DeFormer
-experiment omits the contact module entirely. See
-[reference-geodesic exclusions](SURFACE_CONTACT_REFERENCE_GEODESIC.md) for filter,
-gap-floor, and cache options.
 
 ## Inference
 
@@ -596,7 +517,7 @@ falls outside the calibrated training envelope.  Warnings do not halt inference.
 
 ## Experiments
 
-Each YAML entry point in `conf/` selects shared component defaults and any experiment-specific overrides. The autoregressive comparison recipes inherit common settings rather than copying them.
+Each experiment is a YAML file in `conf/` that selects the shared component defaults and holds its own settings; the two Yaris recipes derived from `yaris_deformer` inherit it rather than copying it.
 
 ### Anatomy of an experiment config
 
@@ -661,12 +582,6 @@ datapipe:
 | `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
 | `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
-| `crash_geoflare_autoregressive.yaml` | Full-car crash (VTP) | GeoFLARE BPTT-4 baseline | `python train.py --config-name=crash_geoflare_autoregressive` |
-| `crash_deformer_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, no contact | `python train.py --config-name=crash_deformer_autoregressive` |
-| `crash_deformer_contact_autoregressive.yaml` | Full-car crash (VTP) | DeFormer BPTT-4, geodesic surface contact | `python train.py --config-name=crash_deformer_contact_autoregressive` |
-| `crash_deformer_knn_autoregressive.yaml` | Full-car crash (VTP) | Experimental DeFormer BPTT-4, static kNN neighborhood attention instead of MPNNs, no contact | `python train.py --config-name=crash_deformer_knn_autoregressive` |
-| `crash_deformer_knn_yaris_autoregressive.yaml` | Yaris full mesh (Zarr) | DeFormer BPTT-4 with kNN attention, no contact | `python train.py --config-name=crash_deformer_knn_yaris_autoregressive yaris.data_root=...` |
-| `crash_geoflare_time_conditional.yaml` | Full-car crash (VTP) | GeoTransolver time-conditional baseline | `python train.py --config-name=crash_geoflare_time_conditional` |
 | `crash_deformer_knn_time_conditional.yaml` | Full-car crash (VTP) | DeFormer network, time-conditional | `python train.py --config-name=crash_deformer_knn_time_conditional` |
 | `yaris_deformer.yaml` | Yaris full mesh (Zarr) | DeFormer network | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_deformer yaris.data_root=...` |
 | `yaris_deformer_corrector.yaml` | Yaris full mesh (Zarr) | DeFormer corrector on the frozen network | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_deformer_corrector yaris.data_root=... model.teacher_weights=...` |
@@ -674,20 +589,16 @@ datapipe:
 
 ### Choosing a time scheme
 
-Three rollout schemes have premade experiment configurations:
+Two rollout schemes are supported, selected by the experiment config (model + datapipe):
 
 | Scheme | Model | Datapipe `sample_type` | Behavior |
 |--------|-------|------------------------|----------|
 | **One-shot** | `geotransolver_one_shot` | `all_time_steps` | One sample per run. Model predicts the full trajectory `[N, T-1, Fo]` from t0 in a single forward pass. Lower training cost, competitive accuracy. |
 | **Time-conditional** | `geotransolver_time_conditional` | `one_time_step` | One sample per run per timestep. Model predicts a single step `[N, Fo]` conditioned on normalized time `t/(T-1)`. Best accuracy for long horizons; higher training cost. Inference always rolls out the full trajectory. |
-| **Autoregressive** | `geoflare_autoregressive` / `deformer_autoregressive` | `random_time_window` | Closed-loop BPTT during training; full-trajectory validation and inference. The contact experiment additionally rebuilds contact from predicted geometry. |
 
-Use **one-shot** when you need fast iteration or have limited compute. Use
-**time-conditional** when validation quality matters most. Use **autoregressive
-contact** when deployment requires closed-loop dynamics and geometry-dependent
-interactions. Legacy `geotransolver_autoregressive_rollout_training` and
-`geotransolver_one_step_rollout` components also remain available for custom
-experiments. See [Development tips](#development-tips) for the legacy comparison.
+Use **one-shot** when you need fast iteration or have limited compute. Use **time-conditional** when validation quality matters most. See [Development tips](#development-tips) for a comparison table.
+
+Two additional schemes are available in the rollout (`geotransolver_autoregressive_rollout_training`, `geotransolver_one_step_rollout`) but are not provided as premade experiment configs. You can enable them by selecting the corresponding model in `conf/model/` and configuring the datapipe accordingly.
 
 ### Adding a new experiment
 

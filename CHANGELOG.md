@@ -70,9 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
   the time-conditional network, the MeshGraphNet contact corrector, the three
   full-resolution Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,
-  `yaris_geotransolver`), target-relative penetration metrics and a kinematics
-  readout and autoregressive recipes with predictive surface contact, with
-  the API page `docs/api/nn/functionals/shell_contact.rst`.
+  `yaris_geotransolver`) and the body-in-white recipe
+  `crash_deformer_knn_time_conditional`, target-relative penetration metrics
+  and a kinematics readout, with the API page
+  `docs/api/nn/functionals/shell_contact.rst`.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside

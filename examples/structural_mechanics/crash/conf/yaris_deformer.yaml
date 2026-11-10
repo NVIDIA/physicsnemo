@@ -80,10 +80,6 @@ training:
   loss_space: physical
   loss_scale_mm: 10.0
 
-datapipe:
-  sample_type: one_time_step
-  initial_history_steps: 1
-
 # inference.py reads VTP sequences only; Yaris predictions come from
 # evaluate_yaris_tc.py.
 inference:

@@ -27,10 +27,12 @@ sets, element thickness metadata and solver gap options. Maximum facet-vertex
 thickness is an explicit nodal-data approximation. Mesh-size gap corrections,
 tied-contact exclusions, adaptive erosion and friction are not added here.
 
-The `crash_deformer_contact_autoregressive` entry point uses an explicit 5 mm
-gap floor. This is a modeling assumption, not an assertion about the dataset's
-solver. It leaves the independent message-activation band unchanged.
-Use overrides on that entry point for controlled ablations:
+The filter is selected on the body-in-white datapipe with
+`datapipe.contact_surface_exclusion=reference_geodesic` (the `evaluate_biw_tc.py`
+command uses it for the penetration metrics); `datapipe.contact_geodesic_gap_min=5.0`
+sets an explicit 5 mm gap floor, a modeling assumption rather than an assertion
+about the dataset's solver, which leaves the independent message-activation band
+unchanged. Overrides for controlled ablations:
 
 - `datapipe.contact_geodesic_gap_min=0.0`: thickness-based gap only.
 - `datapipe.contact_surface_exclusion=incidence`: omit the optional filter.
@@ -47,9 +49,9 @@ existing BPTT derivatives.
 
 ## Runtime cache and distributed startup
 
-`datapipe.contact_geodesic_cache_dir` enables a persistent CPU mask cache; the
-geodesic recipes default it below the statistics directory. Use the same explicit
-directory across restart phases to avoid recomputation. A content key includes
+`datapipe.contact_geodesic_cache_dir` enables a persistent CPU mask cache; set
+it explicitly (the `evaluate_biw_tc.py` command does) and use the same directory
+across restart phases to avoid recomputation. A content key includes
 the physical initial coordinates, complete topology and raw thickness (including
 shape/dtype), every geodesic option, cache schema and the functional source hash.
 Results are checksummed, shape/range/order checked on load, locked per key and
@@ -63,7 +65,7 @@ publishes training statistics and warms BOTH train and validation masks. Other
 ranks then load these artifacts. All ranks finish data initialization before
 model/NCCL communication begins. Preprocessing exceptions propagate to all ranks;
 process crashes are bounded by the CPU timeout. The training/NCCL timeout, model,
-loss, data split, contact eligibility and 500-epoch LR schedule are unchanged.
+loss, data split, contact eligibility and LR schedule are unchanged.
 
 Bounded Dijkstra does not allocate a dense all-pairs distance matrix. Exclusions
 are canonical, sorted and unique; exceeding the explicit storage safety budget

@@ -118,26 +118,15 @@ Re-running a training command resumes from `<work_dir>/checkpoints`.
 
 | Recipe | Model | Purpose |
 | --- | --- | --- |
-| `crash_geoflare_time_conditional` | GeoTransolver, Fourier time code | time-conditional baseline (26 frames, 100 epochs, Muon) |
-| `crash_deformer_knn_time_conditional` | DeFormer network | the network on the body-in-white data (geodesic neighbourhoods) |
-| `crash_geoflare_autoregressive` | GeoTransolver + original FLARE | autoregressive baseline, BPTT-4, 500 epochs |
-| `crash_deformer_autoregressive` | DeFormer with MeshGraphNet stages | autoregressive, no contact |
-| `crash_deformer_contact_autoregressive` | the same + predictive node-to-face contact with reference-geodesic exclusions | autoregressive with contact |
-| `crash_deformer_knn_autoregressive` | DeFormer with static kNN attention | autoregressive, no contact |
-| `crash_deformer_knn_yaris_autoregressive` | the same on the Yaris mesh | autoregressive on the full mesh |
+| `crash_deformer_knn_time_conditional` | `model/deformer_time_conditional.yaml` with `local_neighborhood=geodesic`, no activation checkpointing and `dt=null` | the DeFormer network on the body-in-white data: 26 frames, 127 training and 8 validation cases, 100 epochs, Muon, normalized MSE with provisional-head loss 0.1 |
 | `crash_geoflare_oneshot`, `crash_geotransolver_oneshot`, `bumper_*` | one-shot and time-conditional point models | the original crash and bumper examples |
 
-Overrides of the autoregressive contact recipe:
-
-| Override | Effect |
-| --- | --- |
-| `model.include_position_features=true` | add normalized current XYZ to DeFormer node inputs (default `false`) |
-| `datapipe.contact_surface_exclusion=incidence` / `one_ring` | replace the geodesic filter |
-| `datapipe.contact_geodesic_gap_min=0.0` | remove the 5 mm gap floor |
-| `model.checkpoint_offloading=false` | disable host-memory activation offloading |
-| `model.enable_contact=false` | disable messages while preserving contact parameters |
-| `+model.contact_surface_area_weighting=true`, `+model.contact_surface_reference_area=78.54` | face-area quadrature on the contact weights |
-| `model.local_neighborhood=geodesic` / `euclidean`, `model.local_knn_k=16` | neighbourhood metric and size of the kNN recipes |
+The recipe is self-contained (reader `vtp`, datapipe `graph`, training defaults
+plus its own keys); the required paths are `training.raw_data_dir` and
+`training.raw_data_dir_validation` (`inference.raw_data_dir_test` for
+`inference.py`). `model.local_neighborhood=euclidean` and `model.local_knn_k=16`
+change the neighbourhood metric and size; the datapipe builds the matching
+neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw_tc.py` scores a body-in-white time-conditional checkpoint with
 the Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
@@ -147,7 +136,7 @@ the Yaris validation suite (penetration metrics with `++datapipe.contact_surface
 
 | Directory | Purpose |
 | --- | --- |
-| `model/` | architecture defaults (`deformer_time_conditional`, `mgn_corrector`, `geotransolver_time_conditional`, the autoregressive and one-shot models) |
+| `model/` | architecture defaults (`deformer_time_conditional`, `mgn_corrector`, `geotransolver_time_conditional`, the one-shot and legacy rollout models) |
 | `datapipe/` | `yaris_full` (Zarr, full mesh), `graph` and `point_cloud` (VTP) |
 | `reader/` | `yaris_full` (Zarr stores with a shared mesh; `include_solid_edges`, `connect_isolated_k` for geodesic neighbourhoods), `vtp`, `zarr` |
 | `training/` | optimizer, schedule and checkpoint defaults |

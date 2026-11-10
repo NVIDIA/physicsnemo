@@ -14,32 +14,71 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Time-conditional DeFormer with static kNN neighborhood attention (second
-# design) before and after FLARE. Same data split, backbone, time code and
-# training budget as crash_geoflare_time_conditional; adds the provisional
-# position loss (weight 0.1) and the structural-graph datapipe with kNN
-# neighborhoods.
-defaults:
-  - crash_geoflare_time_conditional
-  - override datapipe: graph
-  - override model: deformer_time_conditional
-  - _self_
+# DeFormer network on the body-in-white crash data (VTP, 26 frames, 127 training
+# and 8 validation cases): every future frame is predicted independently from
+# the initial mesh by the time-conditional DeFormer of the Yaris recipe
+# (conf/model/deformer_time_conditional.yaml) with the body-in-white settings
+# below: geodesic neighbourhoods on the structural edges, no activation
+# checkpointing (one forward per update fits without it), no fixed frame
+# interval. Loss: normalized MSE plus 0.1 x the same loss on the provisional
+# head. Muon/AdamW, cosine 2e-4 -> 1e-6 over 100 epochs, bf16 autocast,
+# validation every 5 epochs. evaluate_biw_tc.py scores a checkpoint with the
+# Yaris validation suite.
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ./outputs/
 
 experiment_name: Crash-DeFormer-KNNAttention-TimeConditional
 
+defaults:
+  - reader: vtp
+  - datapipe: graph
+  - model: deformer_time_conditional
+  - training: default
+  - inference: default
+  - _self_
+
 training:
+  raw_data_dir: ???
+  raw_data_dir_validation: ???
+  global_features_filepath: null
+  optimizer: muon
+  muon_min_dim: 9
+  amp: true
+  amp_dtype: bfloat16
+  manual_gradient_allreduce: true
+  seed: 42
+  reproducible_sampling: true
+  sampler_seed: 0
+  num_time_steps: 26
+  num_training_samples: 127
+  num_validation_samples: 8
+  epochs: 100
+  start_lr: 2.0e-4
+  end_lr: 1.0e-6
+  validation_freq: 5
+  save_checkpoint_freq: 5
+  early_stopping_patience: 0
+  acceleration_loss_weight: 0.0
   coarse_loss_weight: 0.1
 
+inference:
+  raw_data_dir_test: ???
+
 datapipe:
+  static_features: [thickness]
+  dynamic_targets: []
+  global_features: null
   sample_type: one_time_step
   initial_history_steps: 1
+  # static reference kNN neighbourhoods of the local attention (built once, cached)
   local_knn_k: ${model.local_knn_k}
   local_knn_metric: ${model.local_neighborhood}
   local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
 
 model:
-  # body-in-white meshes: geodesic neighbourhoods on the structural edges, no activation
-  # checkpointing (one forward per update fits without it), no fixed frame interval
   local_neighborhood: geodesic
   dt: null
   activation_checkpointing: false

@@ -20,11 +20,9 @@ num_samples: ${training.num_training_samples}
 num_steps: ${training.num_time_steps}
 dt: ${model.dt}
 stats_dir: ${yaris.work_dir}/stats
-sample_type: random_time_window
-initial_history_steps: 2
-rollout_window_steps: 4
-windows_per_sample: 1
-window_seed: 42
+# one (case, future frame) pair per sample, predicted from the initial frame
+sample_type: one_time_step
+initial_history_steps: 1
 static_features: [thickness]
 dynamic_features: []
 dynamic_targets: []
