@@ -27,7 +27,6 @@ import logging
 import os
 from collections import defaultdict
 from datetime import datetime
-from itertools import count
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
@@ -97,7 +96,7 @@ def main(
         "max-autotune-no-cudagraphs",
     ] = "default",  # max-autotune-no-cudagraphs has a CUDA illegal memory error. Due to buggy triton kernel in no-grad.
     n_prediction_points: int | None = None,
-    learning_rate: float = 1e-2,
+    learning_rate: float = 3e-3,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
     muon_method: Literal["original", "match_rms_adamw"] = "match_rms_adamw",
@@ -105,21 +104,22 @@ def main(
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
-    hidden_layer_sizes: tuple[int, ...] = (256, 256, 256),
-    n_latent_scalars: int = 8,
-    n_latent_vectors: int = 4,
+    hidden_layer_sizes: tuple[int, ...] = (512, 512, 512),
+    n_latent_scalars: int = 16,
+    n_latent_vectors: int = 8,
     n_spherical_harmonics: int = 4,
     theta: float = 1.5,
     leaf_size: int = 1,
     tree_build_device: Literal["cpu", "cuda"] | None = None,
-    n_faces_per_boundary: int = 80_000,
-    patience_steps: int = 1600,
+    n_faces_per_boundary: int = 50_000,
+    n_epochs: int = 450,
+    lr_decay_epochs: int = 200,
     use_profiler: bool = True,
     make_images: bool = False,
     save_every: int = 1,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_DrivAerML",
-    gradient_clip_norm: float | None = 1.0,
+    gradient_clip_norm: float | None = None,
     network_type: Literal["pade", "mlp"] = "pade",
     self_regularization_beta: float | None = 0.01,
     latent_compression_scale: float | None = 100.0,
@@ -136,7 +136,7 @@ def main(
         compile_mode: Compilation mode for ``torch.compile``.
         n_prediction_points: Surface points sampled per training iteration.
             ``None`` (default) uses ``n_faces_per_boundary``.
-        learning_rate: Base learning rate (sqrt-scaled by world size).
+        learning_rate: Initial learning rate (not scaled by world size).
         weight_decay: Weight decay factor.
         use_muon: Use Muon optimizer for 2D parameters (matrix weights).
         muon_method: Muon learning-rate adjustment method.
@@ -156,8 +156,9 @@ def main(
         tree_build_device: Device on which to build cluster trees and run the
             dual-tree Barnes-Hut traversal. ``None`` (default) uses the input's device.
         n_faces_per_boundary: Target boundary mesh face count after decimation.
-        patience_steps: ReduceLROnPlateau patience expressed in gradient
-            steps (world-size independent).  Converted to epochs internally.
+        n_epochs: Number of training epochs.
+        lr_decay_epochs: The learning rate drops by 10x every this many
+            epochs.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
         save_every: Save a checkpoint every this many epochs.
@@ -195,6 +196,11 @@ def main(
     config_settings = locals()
 
     ### [Distributed Training Setup]
+    # The first compile of the training step can take about 20 minutes, and a
+    # recompile on one rank over 10 minutes, while the other ranks wait in the
+    # gradient all-reduce. PyTorch's default collective timeout (10 minutes)
+    # would end the job, so wait up to an hour unless the variable is set.
+    os.environ.setdefault("PHYSICSNEMO_DIST_TIMEOUT_S", "3600")
     DistributedManager.initialize()
     dist = DistributedManager()
     device = dist.device
@@ -313,6 +319,14 @@ def main(
     # (pytorch/pytorch#193194, fixed in 2.15).
     torch._dynamo.config.specialize_float = True
 
+    # Dynamo's DDPOptimizer splits the compiled graph at DDP's gradient-bucket
+    # boundaries. With this model, Inductor then fails on the first training
+    # step ("AssertionError: For 2*s1 + s131, expected [s131] to have been
+    # codegen-ed" on PyTorch 2.13). Compiling the step as one graph avoids it;
+    # DDP then all-reduces the gradients after the backward pass instead of
+    # overlapping the two.
+    torch._dynamo.config.optimize_ddp = False
+
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -331,7 +345,7 @@ def main(
     if use_muon:
         # Muon is designed for matrix-shaped parameters (2D weight tensors
         # of linear layers); biases, norms, and other non-matrix parameters
-        # fall back to RAdam.  This ndim==2 split is the standard Muon
+        # fall back to AdamW.  This ndim==2 split is the standard Muon
         # recommendation.
         optimizer = CombinedOptimizer(
             optimizers=[
@@ -341,11 +355,10 @@ def main(
                     weight_decay=weight_decay,
                     adjust_lr_fn=muon_method,
                 ),
-                torch.optim.RAdam(
+                torch.optim.AdamW(
                     [p for p in model.parameters() if p.ndim != 2],
                     lr=learning_rate,
                     weight_decay=weight_decay,
-                    decoupled_weight_decay=True,
                     foreach=True,
                 ),
             ],
@@ -358,14 +371,8 @@ def main(
             decoupled_weight_decay=True,
             foreach=True,
         )
-    patience_epochs = max(1, patience_steps // len(dataloaders["train"]))
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=0.5,
-        patience=patience_epochs,
-        min_lr=learning_rate / 64,
-        threshold=1e-3,
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=lr_decay_epochs, gamma=0.1
     )
     ### [Checkpoint Save/Load]
     metadata_dict: dict[str, Any] = {}
@@ -386,17 +393,6 @@ def main(
     last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
     last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
     mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
-
-    ### [Scheduler patience normalization]
-    # ReduceLROnPlateau measures patience in epochs.  When world_size
-    # changes, epoch length changes (fewer steps per epoch with more
-    # GPUs), so we recompute patience in epochs from the step-based
-    # target and rescale the bad-epoch counter accordingly.
-    scheduler.patience = patience_epochs
-    loaded_world_size = metadata_dict.get("world_size")
-    if loaded_world_size is not None and loaded_world_size != dist.world_size:
-        ws_ratio = dist.world_size / loaded_world_size
-        scheduler.num_bad_epochs = round(scheduler.num_bad_epochs * ws_ratio)
 
     ### [First-Launch Diagnostics]
     # Verbose diagnostics (torchinfo, GLOBE debug, graph break summary) are
@@ -610,21 +606,21 @@ def main(
                 metadata=checkpoint_metadata(),
             )
 
-        for epoch in count(start=epoch + 1):
+        for epoch in range(epoch + 1, n_epochs + 1):
             loss = {}
             loss_components = {}
             for split in splits:
                 with record_function(f"epoch_{epoch}_{split}"):
                     loss[split], loss_components[split] = run_epoch(split)
 
-            scheduler.step(loss["train"])
+            scheduler.step()
 
             if dist.world_size > 1:
                 barrier()
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
-                if epoch % save_every == 0:
+                if epoch % save_every == 0 or epoch == n_epochs:
                     save_ckpt()
                 if loss["validation"] < best_loss:
                     best_loss = loss["validation"]

@@ -278,6 +278,20 @@ class TestTranslate:
         assert torch.equal(dm2.global_data["Re"], tet_domain.global_data["Re"])
 
 
+def _assert_matches_components(op, interior_dtype, boundary_dtype):
+    """Each component of a mixed-dtype domain is transformed as on its own.
+
+    The float64 component must match exactly: a matrix built in float32 and
+    cast up would round it.
+    """
+    interior = two_tetrahedra.load().to(interior_dtype)
+    wall = single_triangle_3d.load().to(boundary_dtype)
+    dm = op(DomainMesh(interior=interior, boundaries={"wall": wall}))
+    for before, after in [(interior, dm.interior), (wall, dm.boundaries["wall"])]:
+        tol = {"rtol": 0, "atol": 0} if before.points.dtype == torch.float64 else {}
+        torch.testing.assert_close(after.points, op(before).points, **tol)
+
+
 class TestRotate:
     """Tests for DomainMesh.rotate passthrough."""
 
@@ -300,6 +314,17 @@ class TestRotate:
             dm3.interior.points, tet_domain.interior.points, atol=1e-6
         )
 
+    @pytest.mark.parametrize(
+        "interior_dtype,boundary_dtype",
+        [(torch.float64, torch.float32), (torch.float32, torch.float64)],
+    )
+    def test_mixed_float_dtypes(self, interior_dtype, boundary_dtype):
+        _assert_matches_components(
+            lambda m: m.rotate(0.3, axis="z", center=[0.5, 0.25, 0.0]),
+            interior_dtype,
+            boundary_dtype,
+        )
+
 
 class TestScale:
     """Tests for DomainMesh.scale passthrough."""
@@ -317,6 +342,17 @@ class TestScale:
         dm2 = tet_domain.scale(factor=3.0)
         assert torch.equal(dm2.global_data["Re"], tet_domain.global_data["Re"])
 
+    @pytest.mark.parametrize(
+        "interior_dtype,boundary_dtype",
+        [(torch.float64, torch.float32), (torch.float32, torch.float64)],
+    )
+    def test_mixed_float_dtypes(self, interior_dtype, boundary_dtype):
+        _assert_matches_components(
+            lambda m: m.scale([1.1, 3.0, 0.7], center=[0.1, 0.25, 0.3]),
+            interior_dtype,
+            boundary_dtype,
+        )
+
 
 class TestTransform:
     """Tests for DomainMesh.transform passthrough."""
@@ -328,6 +364,21 @@ class TestTransform:
     def test_scale_via_matrix(self, tet_domain):
         dm2 = tet_domain.transform(2.0 * torch.eye(3))
         assert torch.allclose(dm2.interior.points, tet_domain.interior.points * 2.0)
+
+    @pytest.mark.parametrize(
+        "interior_dtype,boundary_dtype",
+        [(torch.float64, torch.float32), (torch.float32, torch.float64)],
+    )
+    def test_mixed_float_dtypes(self, interior_dtype, boundary_dtype):
+        """A user matrix is applied to each component in its own dtype."""
+        interior = two_tetrahedra.load().to(interior_dtype)
+        wall = single_triangle_3d.load().to(boundary_dtype)
+        dm = DomainMesh(interior=interior, boundaries={"wall": wall})
+
+        dm2 = dm.transform(2.0 * torch.eye(3))
+
+        for before, after in [(interior, dm2.interior), (wall, dm2.boundaries["wall"])]:
+            torch.testing.assert_close(after.points, 2.0 * before.points)
 
 
 ### Cleanup / Refinement

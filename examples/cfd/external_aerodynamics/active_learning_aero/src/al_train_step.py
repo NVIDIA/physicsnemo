@@ -33,7 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.experimental.uq import VariationalGPHead
+from physicsnemo.experimental.uq.gp import VariationalGPHead
 
 from utils import cast_precisions, get_autocast_context, loss_fn
 from gp_utils import sync_non_ddp_gradients
