@@ -31,7 +31,6 @@ from .features import (
     CONTACT_FEATURE_DIM,
     KINEMATIC_CONTACT_FEATURE_DIM,
     contact_edge_features,
-    facet_area_quadrature,
     shell_contact_edge_features,
     smooth_contact_cutoff,
 )
@@ -66,7 +65,6 @@ __all__ = [
     "clamp_to_wall",
     "contact_edge_features",
     "crossing_flags",
-    "facet_area_quadrature",
     "facet_side",
     "linear_closest_approach",
     "node_maximum",

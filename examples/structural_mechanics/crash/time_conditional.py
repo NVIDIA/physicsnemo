@@ -239,8 +239,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         self.wall_clamp = RigidWallClamp(
             enabled=clamp_to_wall, axis=wall_axis, sign=wall_sign
         )
-        # The backbone never applies contact; the released model has none.
-        super().__init__(use_contact=False, **kwargs)
+        super().__init__(**kwargs)
         self.rollout_steps = int(num_time_steps) - 1
         self.dt = None if dt is None else float(dt)
         self.time_embed = TimeEmbedding(time_embedding, time_fourier_bands, time_dim)

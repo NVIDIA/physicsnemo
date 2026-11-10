@@ -20,13 +20,9 @@ import torch
 pyg = pytest.importorskip("torch_geometric")
 
 from physicsnemo.experimental.models.meshtransolver import (  # noqa: E402
-    CONTACT_FEATURE_DIM,
-    ContactGraph,
     MeshGeoFLARE,
     MeshGeoTransolver,
     MeshTransolver,
-    SparseContactBlock,
-    SparseContactGraphBuilder,
 )
 from physicsnemo.models.geotransolver import GeoTransolver  # noqa: E402
 from physicsnemo.models.geotransolver.flare_plus_plus import (  # noqa: E402
@@ -459,101 +455,6 @@ def test_meshgeoflare_rejects_invalid_context_fusion(kwargs, message):
             use_te=False,
             **kwargs,
         )
-
-
-def test_sparse_contact_graph_filters_mesh_edges_and_applies_topk():
-    positions = torch.tensor(
-        [
-            [0.0, 0.0, 0.0],
-            [0.4, 0.0, 0.0],
-            [0.0, 0.5, 0.0],
-            [0.0, 0.0, 0.6],
-        ]
-    )
-    structural = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
-    builder = SparseContactGraphBuilder(
-        search_radius=1.0,
-        max_neighbors=1,
-        candidate_neighbors=8,
-    )
-
-    contact_graph = builder(positions, structural_edge_index=structural)
-    contact_graph.validate(positions.shape[0], CONTACT_FEATURE_DIM)
-
-    source, destination = contact_graph.edge_index
-    codes = source * positions.shape[0] + destination
-    structural_codes = structural[0] * positions.shape[0] + structural[1]
-    assert not torch.isin(codes, structural_codes).any()
-    assert torch.bincount(destination, minlength=positions.shape[0]).max() <= 1
-    assert torch.isfinite(contact_graph.edge_features).all()
-
-
-def test_sparse_contact_graph_uses_shell_gap_and_component_filter():
-    positions = torch.tensor([[0.0, 0.0, 0.0], [1.1, 0.0, 0.0]])
-    thickness = torch.tensor([0.2, 0.2])
-    builder = SparseContactGraphBuilder(
-        search_radius=1.0,
-        max_neighbors=2,
-        exclude_same_component=True,
-    )
-
-    contact_graph = builder(
-        positions,
-        shell_thickness=thickness,
-        component_ids=torch.tensor([0, 1]),
-    )
-
-    assert contact_graph.edge_index.shape == (2, 2)
-    torch.testing.assert_close(contact_graph.edge_features[:, 4], torch.full((2,), 0.9))
-
-
-def test_sparse_contact_block_zero_gate_is_identity_and_masks_inactive_nodes():
-    torch.manual_seed(19)
-    latent = torch.randn(4, 16, requires_grad=True)
-    contact_graph = ContactGraph(
-        edge_index=torch.tensor([[0], [1]], dtype=torch.long),
-        edge_features=torch.randn(1, CONTACT_FEATURE_DIM),
-        obstacle_mask=torch.tensor([False]),
-    )
-    block = SparseContactBlock(hidden_dim=16)
-
-    identity = block(latent, contact_graph)
-    torch.testing.assert_close(identity, latent)
-    identity.sum().backward()
-    assert block.gate.grad is not None
-
-    block.gate.data.fill_(1.0)
-    updated = block(latent.detach(), contact_graph)
-    torch.testing.assert_close(updated[[0, 2, 3]], latent.detach()[[0, 2, 3]])
-    assert not torch.allclose(updated[1], latent.detach()[1])
-
-
-def test_contact_enabled_model_requires_and_consumes_contact_graph():
-    graph = _graph(7)
-    model = MeshTransolver(
-        input_dim_nodes=6,
-        input_dim_edges=4,
-        output_dim=5,
-        hidden_dim=32,
-        num_heads=4,
-        slice_num=8,
-        num_pre_processor_layers=1,
-        num_attention_layers=1,
-        num_post_processor_layers=1,
-        use_contact=True,
-        contact_gate_init=0.1,
-        use_te=False,
-    )
-    with pytest.raises(ValueError, match="contact_graph is required"):
-        model(graph.x, graph.edge_attr, graph)
-
-    contact_graph = ContactGraph(
-        edge_index=torch.tensor([[0, 2], [1, 1]], dtype=torch.long),
-        edge_features=torch.randn(2, CONTACT_FEATURE_DIM),
-        obstacle_mask=torch.tensor([False, True]),
-    )
-    output = model(graph.x, graph.edge_attr, graph, contact_graph=contact_graph)
-    assert output.shape == (7, 5)
 
 
 @pytest.mark.parametrize("model_cls", [MeshTransolver, MeshGeoTransolver, MeshGeoFLARE])

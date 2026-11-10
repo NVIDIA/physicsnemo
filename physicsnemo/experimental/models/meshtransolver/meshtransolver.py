@@ -16,16 +16,17 @@
 
 r"""Hybrid structural-mesh and geometry-aware attention architectures.
 
-``MeshGeoFLARE`` implements DeFormer: a structural MPNN processes the native
-GeoTransolver node latent, optional contact messages augment that latent, and
-geometry-aware FLARE communicates globally. A post-MPNN refines physical outputs.
-The crash reference recipe selects point-space FLARE (``GALE_FA``), geometry
-conditioning before and after attention, and predictive node-to-face contact.
+``MeshGeoFLARE`` implements DeFormer's network: a local processor (MeshGraphNet
+message passing or static kNN neighbourhood attention) refines the native
+GeoTransolver node latent, geometry-aware FLARE communicates globally, and a
+second local processor refines the physical outputs. The crash reference recipe
+selects point-space FLARE (``GALE_FA``) and geometry conditioning before and
+after attention.
 
 The broader mesh-attention family is inspired by ``arXiv:2605.11784``; DeFormer's
-latent integration and predictive surface-contact mechanism are independent
-extensions, not a claim of exact reproduction. Historical class names and
-constructor options are retained for checkpoint/configuration compatibility.
+latent integration is an independent extension, not a claim of exact
+reproduction. Historical class names and constructor options are retained for
+checkpoint/configuration compatibility.
 """
 
 from dataclasses import dataclass
@@ -34,7 +35,6 @@ from typing import Any, Literal, NamedTuple
 import torch
 import torch.nn as nn
 from jaxtyping import Float
-from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -46,7 +46,6 @@ from physicsnemo.nn.module.gnn_layers.graph_types import PYG_AVAILABLE
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
-from .contact import CONTACT_FEATURE_DIM, ContactGraph, SparseContactBlock
 from .local_attention import LocalNeighborhood, NeighborhoodAttentionProcessor
 
 if PYG_AVAILABLE:
@@ -305,15 +304,6 @@ class MeshAttentionHybrid(Module):
         How the GALE blocks blend self- and cross-attention: ``"weighted"``
         (learnable sigmoid gate) or ``"concat_project"``. Default is
         ``"weighted"``.
-    use_contact : bool, optional
-        Add a :class:`SparseContactBlock` after the pre-processor; forward then
-        requires ``contact_graph``. Default is ``False``.
-    contact_dim : int, optional
-        Contact edge feature width. Default is ``CONTACT_FEATURE_DIM`` (8).
-    contact_gate_init : float, optional
-        Initial value of the contact block's output gate. Default is 0.0.
-    contact_aggregation : {"sum", "mean"}, optional
-        Contact message aggregation per destination node. Default is ``"mean"``.
 
     Forward
     -------
@@ -327,8 +317,6 @@ class MeshAttentionHybrid(Module):
         Geometry context aligned with flattened nodes, shape ``[N, D_geometry]``.
     global_embedding : torch.Tensor | None
         Per-graph global tokens, shape ``[B, N_global, D_global]``.
-    contact_graph : ContactGraph | None
-        Sparse contact graph, required when ``use_contact=True``.
 
     Returns
     -------
@@ -375,10 +363,6 @@ class MeshAttentionHybrid(Module):
         checkpoint_offloading: bool = False,
         recompute_activation: bool = False,
         state_mixing_mode: str = "weighted",
-        use_contact: bool = False,
-        contact_dim: int = CONTACT_FEATURE_DIM,
-        contact_gate_init: float = 0.0,
-        contact_aggregation: Literal["sum", "mean"] = "mean",
     ) -> None:
         super().__init__(meta=MeshAttentionMetaData())
 
@@ -427,8 +411,6 @@ class MeshAttentionHybrid(Module):
         self.num_pre_processor_layers = num_pre_processor_layers
         self.num_attention_layers = num_attention_layers
         self.num_post_processor_layers = num_post_processor_layers
-        self.use_contact = use_contact
-        self.contact_dim = contact_dim
 
         mesh_activation_fn = get_activation(mesh_activation)
         self.node_encoder = MeshGraphMLP(
@@ -479,16 +461,6 @@ class MeshAttentionHybrid(Module):
             processor_size=num_post_processor_layers,
             num_processor_checkpoint_segments=num_post_processor_checkpoint_segments,
             **processor_kwargs,
-        )
-        self.contact_block = (
-            SparseContactBlock(
-                hidden_dim=hidden_dim,
-                contact_dim=contact_dim,
-                gate_init=contact_gate_init,
-                aggregation=contact_aggregation,
-            )
-            if use_contact
-            else None
         )
 
         self.context_builder: GlobalContextBuilder | None = None
@@ -680,7 +652,6 @@ class MeshAttentionHybrid(Module):
         global_embedding: (
             Float[torch.Tensor, "*global_shape global_dim"] | None
         ) = None,
-        contact_graph: ContactGraph | None = None,
     ) -> Float[torch.Tensor, "num_nodes output_dim"]:
         r"""Run mesh encoding, global attention, and mesh refinement."""
 
@@ -744,12 +715,6 @@ class MeshAttentionHybrid(Module):
         node_latent = self.node_encoder(node_features)
         edge_latent = self.edge_encoder(edge_features)
         node_latent = self.pre_processor(node_latent, edge_latent, graph)
-        if self.contact_block is not None:
-            if contact_graph is None:
-                raise ValueError("contact_graph is required when use_contact=True")
-            node_latent = self.contact_block(node_latent, contact_graph)
-        elif contact_graph is not None:
-            raise ValueError("contact_graph was provided but use_contact=False")
         node_latent = self._apply_attention(
             node_latent,
             batch,
@@ -843,15 +808,11 @@ class MeshGeoFLARE(GeoTransolver):
     pre-mesh processor operates on the native ``n_hidden`` node embedding after
     GeoTransolver's input projection and before local-feature concatenation and
     FLARE attention. A second mesh processor refines the final physical outputs.
-    With contact disabled, setting both mesh residual gates to zero recovers the
-    matching GeoFLARE function. The latent pre-processor avoids a
+    Setting both mesh residual gates to zero recovers the matching GeoFLARE
+    function. The latent pre-processor avoids a
     decode-to-input/re-encode bottleneck. Consequently, every
     fixed-query GeoFLARE parameter is present with the same shape and
     MeshGeoFLARE always has strictly more parameters for a matching configuration.
-
-    ``checkpoint_contact=True`` recomputes the contact residual during backward
-    instead of retaining its edge-wide MLP activations alongside later attention
-    and structural blocks. It changes neither parameters nor contact selection.
 
     ``local_processor`` selects the local operator run before and after the
     FLARE blocks. ``"mpnn"`` (the reference recipe) runs MeshGraphNet processors
@@ -868,8 +829,8 @@ class MeshGeoFLARE(GeoTransolver):
     the graph; ``local_neighborhood`` names the metric those neighborhoods were
     built with and is checked against ``knn_metric``. Structural
     ``edge_features`` are ignored in the kNN modes. The residual gates, FiLM
-    conditioning, contact block and backbone are unchanged, so the model is
-    still exactly GeoFLARE at zero gates. The kNN modes are experimental
+    conditioning and backbone are unchanged, so the model is still exactly
+    GeoFLARE at zero gates. The kNN modes are experimental
     options; they do not change the validated MPNN reference recipe.
 
     ``input_dim_nodes``, ``output_dim``, ``hidden_dim``, ``num_heads``, and
@@ -952,26 +913,6 @@ class MeshGeoFLARE(GeoTransolver):
     mesh_context_use_global : bool, optional
         Also feed the global embedding into that mesh context. Requires
         ``global_dim`` and mesh context fusion. Default is ``False``.
-    use_contact : bool, optional
-        Add a :class:`SparseContactBlock` on the pre-processor latent; forward
-        then requires ``contact_graph``. Default is ``False``.
-    contact_dim : int, optional
-        Contact edge feature width. Default is ``CONTACT_FEATURE_DIM`` (8).
-    contact_gate_init : float, optional
-        Initial value of the contact block's output gate. Default is 0.0.
-    contact_aggregation : {"sum", "mean"}, optional
-        Contact message aggregation per destination node. Default is ``"mean"``.
-    checkpoint_contact : bool, optional
-        Recompute the contact residual during backward instead of storing its
-        edge-wide MLP activations; parameters and contact selection are
-        unchanged. Default is ``False``.
-    contact_isolate_rng : bool, optional
-        Initialisation-order isolation for seed-matched ablations: draw the
-        contact block's parameters from a dedicated RNG substream derived from
-        the current state and restore that state afterwards, so a contact and a
-        no-contact model built from one seed share every other initial
-        parameter (the autoregressive contact recipe sets it). Default is
-        ``False`` (plain initialisation order).
     input_dim_nodes, output_dim, hidden_dim, num_heads, num_attention_layers : int, optional
         Compatibility aliases of ``functional_dim``, ``out_dim``, ``n_hidden``,
         ``n_head`` and ``n_layers``; a conflicting pair raises. Default is
@@ -1056,12 +997,6 @@ class MeshGeoFLARE(GeoTransolver):
         mesh_post_residual_gate_init: float = 1.0,
         mesh_context_fusion: MeshContextFusionStage = "none",
         mesh_context_use_global: bool = False,
-        use_contact: bool = False,
-        contact_dim: int = CONTACT_FEATURE_DIM,
-        contact_gate_init: float = 0.0,
-        contact_aggregation: Literal["sum", "mean"] = "mean",
-        checkpoint_contact: bool = False,
-        contact_isolate_rng: bool = False,
         input_dim_nodes: int | None = None,
         output_dim: int | None = None,
         hidden_dim: int | None = None,
@@ -1221,9 +1156,6 @@ class MeshGeoFLARE(GeoTransolver):
         )
         self.mesh_context_fusion = mesh_context_fusion
         self.mesh_context_use_global = mesh_context_use_global
-        self.use_contact = use_contact
-        self.contact_dim = contact_dim
-        self.checkpoint_contact = bool(checkpoint_contact)
 
         self.local_processor = local_processor
         self.local_knn_k = int(local_knn_k)
@@ -1337,38 +1269,6 @@ class MeshGeoFLARE(GeoTransolver):
             self.post_processor = self.make_local_processor(
                 num_post_processor_layers, num_post_processor_checkpoint_segments
             )
-        # Keep all shared backbone/context tensors and the outer RNG stream
-        # identical to no-contact initialization. Legacy checkpoints retain their
-        # old constructor behavior unless this versioned option is enabled.
-        contact_rng_state = torch.get_rng_state() if contact_isolate_rng else None
-        try:
-            if contact_rng_state is not None:
-                import hashlib
-
-                # A dedicated deterministic substream also avoids reusing the
-                # same random values for contact and the following context MLP.
-                seed = int.from_bytes(
-                    hashlib.blake2b(
-                        contact_rng_state.numpy().tobytes(),
-                        digest_size=8,
-                        person=b"deformer-contact",
-                    ).digest(),
-                    "little",
-                )
-                torch.set_rng_state(torch.Generator().manual_seed(seed).get_state())
-            self.contact_block = (
-                SparseContactBlock(
-                    hidden_dim=mesh_hidden_dim,
-                    contact_dim=contact_dim,
-                    gate_init=contact_gate_init,
-                    aggregation=contact_aggregation,
-                )
-                if use_contact
-                else None
-            )
-        finally:
-            if contact_rng_state is not None:
-                torch.set_rng_state(contact_rng_state)
         if mesh_context_fusion == "none":
             self.mesh_context_encoder = None
             self.pre_context_film = None
@@ -1416,7 +1316,6 @@ class MeshGeoFLARE(GeoTransolver):
         local_positions: (
             Float[torch.Tensor, "*position_nodes spatial_dim"] | None
         ) = None,
-        contact_graph: ContactGraph | None = None,
         return_backbone: bool = False,
     ) -> Float[torch.Tensor, "num_nodes output_dim"] | BackboneState:
         r"""Apply latent pre-MPNN, FLARE backbone, and output-space post-MPNN.
@@ -1573,33 +1472,6 @@ class MeshGeoFLARE(GeoTransolver):
             + self.mesh_pre_residual_gate
             * self.pre_latent_output(pre_latent - pre_seed)
         )
-        if self.contact_block is not None:
-            if contact_graph is None:
-                raise ValueError("contact_graph is required when use_contact=True")
-            if self.checkpoint_contact and self.training and torch.is_grad_enabled():
-                # Pass every differentiable feature explicitly. Nested
-                # checkpointing keeps contact's large gathered/message tensors
-                # out of the outer rollout recomputation's saved activations.
-                contact_delta = checkpoint(
-                    self._contact_residual,
-                    pre_latent,
-                    contact_graph.edge_index,
-                    contact_graph.edge_features,
-                    contact_graph.obstacle_mask,
-                    contact_graph.edge_weights,
-                    contact_graph.source_nodes,
-                    contact_graph.source_weights,
-                    use_reentrant=False,
-                )
-            else:
-                contact_delta = self.contact_block(
-                    pre_latent, contact_graph, return_correction=True
-                )
-            # Contact has its own gate. Do not multiply it by the structural
-            # pre-MPNN gate, which starts at zero and would suppress its training.
-            mesh_latent = mesh_latent + self.pre_latent_output(contact_delta)
-        elif contact_graph is not None:
-            raise ValueError("contact_graph was provided but use_contact=False")
 
         core_output = None
         point_features = None
@@ -1742,27 +1614,3 @@ class MeshGeoFLARE(GeoTransolver):
                 "install torch_geometric and torch_scatter (physicsnemo[gnns])."
             )
         return PyGData(edge_index=edge_index, num_nodes=num_nodes), slot_features
-
-    def _contact_residual(
-        self,
-        node_latent: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_features: torch.Tensor,
-        obstacle_mask: torch.Tensor,
-        edge_weights: torch.Tensor | None,
-        source_nodes: torch.Tensor | None = None,
-        source_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Pure tensor-input contact stage for nested activation checkpointing."""
-        return self.contact_block(
-            node_latent,
-            ContactGraph(
-                edge_index,
-                edge_features,
-                obstacle_mask,
-                edge_weights,
-                source_nodes,
-                source_weights,
-            ),
-            return_correction=True,
-        )

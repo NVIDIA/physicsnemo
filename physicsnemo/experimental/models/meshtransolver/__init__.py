@@ -20,16 +20,6 @@ The models in this package combine local MeshGraphNet processing with one of
 PhysicsNeMo's global physics-attention processors.
 """
 
-from .contact import (
-    CONTACT_FEATURE_DIM,
-    KINEMATIC_CONTACT_FEATURE_DIM,
-    ContactGraph,
-    SparseContactBlock,
-    SparseContactGraphBuilder,
-    contact_edge_features,
-    merge_contact_graphs,
-    smooth_contact_cutoff,
-)
 from .local_attention import (
     LocalNeighborhood,
     NeighborhoodAttentionBlock,
@@ -43,7 +33,6 @@ from .meshtransolver import (
     MeshGeoTransolver,
     MeshTransolver,
 )
-from .surface_contact import SurfaceContactGraphBuilder
 
 __all__ = [
     "MeshAttentionHybrid",
@@ -52,16 +41,7 @@ __all__ = [
     "MeshTransolver",
     "MeshGeoTransolver",
     "MeshGeoFLARE",
-    "CONTACT_FEATURE_DIM",
-    "KINEMATIC_CONTACT_FEATURE_DIM",
     "LocalNeighborhood",
     "NeighborhoodAttentionBlock",
     "NeighborhoodAttentionProcessor",
-    "SurfaceContactGraphBuilder",
-    "smooth_contact_cutoff",
-    "ContactGraph",
-    "SparseContactBlock",
-    "SparseContactGraphBuilder",
-    "contact_edge_features",
-    "merge_contact_graphs",
 ]

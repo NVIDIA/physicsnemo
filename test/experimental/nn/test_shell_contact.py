@@ -26,7 +26,6 @@ from physicsnemo.experimental.nn.shell_contact import (
     ShellContactSearch,
     clamp_to_wall,
     contact_edge_features,
-    facet_area_quadrature,
     node_maximum,
     project_shell_penetrations,
     shell_contact_edge_features,
@@ -427,7 +426,7 @@ def test_projection_moves_nodes_onto_the_envelope():
         )
 
 
-def test_taper_features_and_area_quadrature_helpers():
+def test_taper_and_feature_helpers():
     gaps = torch.tensor([-1.0, 0.0, 2.5, 5.0, 7.0])
     weights = smooth_contact_cutoff(gaps, 5.0)
     torch.testing.assert_close(weights, torch.tensor([1.0, 1.0, 0.5625, 0.0, 0.0]))
@@ -441,15 +440,6 @@ def test_taper_features_and_area_quadrature_helpers():
     torch.testing.assert_close(features[0, 3], torch.tensor(0.2))
     with pytest.raises(ValueError, match="feature_scale"):
         contact_edge_features(relative, torch.tensor([1.0]), 0.0)
-    geometry = torch.tensor(
-        [[0.0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0], [5, 0, 0], [7, 0, 0], [5, 3, 0]]
-    )
-    faces = torch.tensor([[0, 1, 2, 3], [4, 5, 6, 6]])
-    factor = facet_area_quadrature(
-        geometry, faces, torch.tensor([0, 1, 1]), reference_area=2.0
-    )
-    torch.testing.assert_close(factor, torch.tensor([2.0, 1.5, 1.5]))
-    assert not factor.requires_grad
 
 
 def test_narrow_phase_selection():
