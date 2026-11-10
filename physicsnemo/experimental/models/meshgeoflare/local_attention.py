@@ -27,7 +27,7 @@ an irregular edge scatter. Neighbor order is irrelevant; masked slots have no
 influence. In the reference path keys and values are materialized per neighbor,
 so peak memory per block scales as :math:`O(N K D)`; use checkpoint segments for
 long rollouts. ``fused=True`` selects
-:func:`~physicsnemo.experimental.models.meshtransolver.fused_neighborhood_attention.neighborhood_attention`,
+:func:`~physicsnemo.experimental.models.meshgeoflare.fused_neighborhood_attention.neighborhood_attention`,
 which computes the same map while reading neighbor keys and values on the fly
 and keeps the extra activation memory at :math:`O(N (H + D))`.
 """

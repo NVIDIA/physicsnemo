@@ -19,67 +19,51 @@ import torch
 
 pyg = pytest.importorskip("torch_geometric")
 
-from physicsnemo.experimental.models.meshtransolver import (  # noqa: E402
-    MeshGeoFLARE,
-    MeshGeoTransolver,
-    MeshTransolver,
-)
+from physicsnemo.experimental.models.meshgeoflare import MeshGeoFLARE  # noqa: E402
+from physicsnemo.experimental.nn.static_knn import geodesic_knn  # noqa: E402
 from physicsnemo.models.geotransolver import GeoTransolver  # noqa: E402
 from physicsnemo.models.geotransolver.flare_plus_plus import (  # noqa: E402
     _FLAREPlusPlusAttention,
 )
 
+K = 4
 
-def _graph(num_nodes: int, node_dim: int = 6, edge_dim: int = 4):
+
+class _KnnData(pyg.data.Data):
+    """PyG data whose per-node neighbourhood tensors batch like node tensors."""
+
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == "knn_index":
+            return self.num_nodes
+        return super().__inc__(key, value, *args, **kwargs)
+
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key in ("knn_index", "knn_mask", "knn_edge_attr"):
+            return 0
+        return super().__cat_dim__(key, value, *args, **kwargs)
+
+
+def _graph(num_nodes: int = 9, node_dim: int = 6):
+    """A chain mesh with its static geodesic neighbourhoods attached."""
+    pos = torch.cumsum(torch.rand(num_nodes, 3) + 0.1, dim=0)
     src = torch.arange(num_nodes - 1)
-    dst = src + 1
-    edge_index = torch.stack([torch.cat((src, dst)), torch.cat((dst, src))], dim=0)
-    return pyg.data.Data(
-        x=torch.randn(num_nodes, node_dim),
-        edge_index=edge_index,
-        edge_attr=torch.randn(edge_index.shape[1], edge_dim),
-        num_nodes=num_nodes,
+    edge_index = torch.stack((torch.cat((src, src + 1)), torch.cat((src + 1, src))))
+    knn = geodesic_knn(pos, edge_index, K)
+    own = torch.arange(num_nodes)[:, None]
+    index = torch.cat((own, knn.index), dim=1)
+    mask = torch.cat((torch.ones_like(own, dtype=torch.bool), knn.mask), dim=1)
+    displacement = pos[index] - pos[:, None]
+    edge_attr = torch.cat((displacement, displacement.norm(dim=-1, keepdim=True)), -1)
+    graph = _KnnData(
+        x=torch.randn(num_nodes, node_dim), edge_index=edge_index, num_nodes=num_nodes
     )
+    graph.knn_index, graph.knn_mask, graph.knn_edge_attr = index, mask, edge_attr
+    graph.knn_metric = "geodesic"
+    return graph
 
 
-def _model(model_cls):
-    if model_cls is MeshGeoFLARE:
-        return MeshGeoFLARE(
-            functional_dim=6,
-            out_dim=5,
-            input_dim_edges=4,
-            geometry_dim=3,
-            global_dim=2,
-            n_hidden=32,
-            n_head=4,
-            n_layers=2,
-            slice_num=8,
-            num_pre_processor_layers=1,
-            num_post_processor_layers=1,
-            local_processor="mpnn",
-            use_te=False,
-        )
+def _model(**overrides):
     kwargs = dict(
-        input_dim_nodes=6,
-        input_dim_edges=4,
-        output_dim=5,
-        hidden_dim=32,
-        num_heads=4,
-        slice_num=8,
-        num_pre_processor_layers=1,
-        num_attention_layers=2,
-        num_post_processor_layers=1,
-        use_te=False,
-    )
-    if model_cls is not MeshTransolver:
-        kwargs.update(geometry_dim=3, global_dim=2)
-    return model_cls(**kwargs)
-
-
-def _meshgeoflare(
-    mesh_context_fusion: str = "none", mesh_context_use_global: bool = False
-):
-    return MeshGeoFLARE(
         functional_dim=6,
         out_dim=5,
         input_dim_edges=4,
@@ -91,51 +75,41 @@ def _meshgeoflare(
         slice_num=8,
         num_pre_processor_layers=1,
         num_post_processor_layers=1,
-        local_processor="mpnn",
-        mesh_context_fusion=mesh_context_fusion,
-        mesh_context_use_global=mesh_context_use_global,
+        local_knn_k=K,
+        local_neighborhood="geodesic",
+        local_edge_dim=8,
         use_te=False,
     )
+    kwargs.update(overrides)
+    return MeshGeoFLARE(**kwargs)
 
 
 def _forward(model, graph, global_embedding=None):
-    kwargs = {}
-    if not isinstance(model, MeshTransolver):
-        kwargs.update(
-            geometry=graph.x[:, :3],
-            global_embedding=global_embedding,
-        )
     return model(
         node_features=graph.x,
-        edge_features=graph.edge_attr,
         graph=graph,
-        **kwargs,
+        geometry=graph.x[:, :3],
+        global_embedding=global_embedding,
     )
 
 
-@pytest.mark.parametrize("model_cls", [MeshTransolver, MeshGeoTransolver, MeshGeoFLARE])
-def test_mesh_attention_hybrid_forward_backward(model_cls):
+def test_forward_backward():
     torch.manual_seed(7)
     graph = _graph(9)
-    model = _model(model_cls)
-    global_embedding = torch.randn(1, 1, 2)
-
-    output = _forward(model, graph, global_embedding)
+    model = _model()
+    output = _forward(model, graph, torch.randn(1, 1, 2))
     output.square().mean().backward()
-
     assert output.shape == (9, 5)
     assert torch.isfinite(output).all()
     assert any(parameter.grad is not None for parameter in model.parameters())
 
 
-@pytest.mark.parametrize("model_cls", [MeshTransolver, MeshGeoTransolver, MeshGeoFLARE])
-def test_variable_graph_batch_matches_independent_forwards(model_cls):
+def test_variable_graph_batch_matches_independent_forwards():
     torch.manual_seed(11)
     graphs = [_graph(5), _graph(8)]
     batch = pyg.data.Batch.from_data_list(graphs)
-    model = _model(model_cls).eval()
+    model = _model().eval()
     global_embedding = torch.randn(2, 1, 2)
-
     with torch.no_grad():
         rng_state = torch.random.get_rng_state()
         batch_output = _forward(model, batch, global_embedding)
@@ -146,55 +120,26 @@ def test_variable_graph_batch_matches_independent_forwards(model_cls):
             _forward(model, graph, global_embedding[index])
             for index, graph in enumerate(graphs)
         ]
-
     torch.testing.assert_close(batch_output, torch.cat(separate_outputs, dim=0))
 
 
-@pytest.mark.parametrize("model_cls", [MeshGeoTransolver, MeshGeoFLARE])
-def test_geometry_context_is_required(model_cls):
+def test_geometry_context_is_required():
     graph = _graph(6)
-    model = _model(model_cls)
-
     with pytest.raises(ValueError, match="geometry is required"):
-        model(
-            node_features=graph.x,
-            edge_features=graph.edge_attr,
-            graph=graph,
-            global_embedding=torch.randn(1, 1, 2),
+        _model()(
+            node_features=graph.x, graph=graph, global_embedding=torch.randn(1, 1, 2)
         )
 
 
-@pytest.mark.parametrize("model_cls", [MeshGeoTransolver, MeshGeoFLARE])
-def test_global_context_is_required_when_configured(model_cls):
+def test_global_context_is_required_when_configured():
     graph = _graph(6)
-    model = _model(model_cls)
-
     with pytest.raises(ValueError, match="global_embedding is required"):
-        model(
-            node_features=graph.x,
-            edge_features=graph.edge_attr,
-            graph=graph,
-            geometry=graph.x[:, :3],
-        )
-
-
-def test_constructor_rejects_incompatible_hidden_and_head_dimensions():
-    with pytest.raises(ValueError, match="divisible by num_heads"):
-        MeshTransolver(
-            input_dim_nodes=6,
-            input_dim_edges=4,
-            output_dim=5,
-            hidden_dim=30,
-            num_heads=8,
-            use_te=False,
-        )
+        _model()(node_features=graph.x, graph=graph, geometry=graph.x[:, :3])
 
 
 @pytest.mark.parametrize("attention_type", ["GALE_FA", "GALE_FPP"])
-def test_meshgeoflare_retains_full_geoflare_backbone_and_adds_parameters(
-    attention_type,
-):
-    """Each mesh variant retains its own upstream attention backend."""
+def test_retains_full_geoflare_backbone_and_adds_parameters(attention_type):
+    """MeshGeoFLARE keeps every GeoTransolver parameter and its attention backend."""
     common = dict(
         functional_dim=6,
         out_dim=5,
@@ -208,52 +153,35 @@ def test_meshgeoflare_retains_full_geoflare_backbone_and_adds_parameters(
         attention_type=attention_type,
     )
     backbone = GeoTransolver(**common)
-    hybrid = MeshGeoFLARE(
-        **common,
-        local_processor="mpnn",
-        input_dim_edges=4,
-        num_pre_processor_layers=1,
-        num_post_processor_layers=1,
-    )
-    hybrid_state = hybrid.state_dict()
+    model = _model(**common)
+    state = model.state_dict()
     for name, parameter in backbone.state_dict().items():
-        assert name in hybrid_state
-        assert hybrid_state[name].shape == parameter.shape
-    assert sum(p.numel() for p in hybrid.parameters()) > sum(
+        assert name in state
+        assert state[name].shape == parameter.shape
+    assert sum(p.numel() for p in model.parameters()) > sum(
         p.numel() for p in backbone.parameters()
     )
-    assert isinstance(hybrid, GeoTransolver)
-    for mesh_block, base_block in zip(hybrid.blocks, backbone.blocks, strict=True):
+    assert isinstance(model, GeoTransolver)
+    for mesh_block, base_block in zip(model.blocks, backbone.blocks, strict=True):
         assert type(mesh_block.Attn) is type(base_block.Attn)
     if attention_type == "GALE_FPP":
         assert all(
-            isinstance(block.Attn, _FLAREPlusPlusAttention) for block in hybrid.blocks
+            isinstance(block.Attn, _FLAREPlusPlusAttention) for block in model.blocks
         )
 
 
 @pytest.mark.parametrize(
     "components", [("blocks",), ("context", "preprocess", "blocks", "output")]
 )
-def test_meshgeoflare_upstream_checkpointing_preserves_outputs_and_gradients(
-    components,
-):
+def test_upstream_checkpointing_preserves_outputs_and_gradients(components):
     """The hidden-state seam honors upstream component checkpointing."""
     common = dict(
-        functional_dim=6,
-        out_dim=5,
-        geometry_dim=3,
-        global_dim=2,
-        n_hidden=32,
-        n_head=4,
-        n_layers=2,
-        slice_num=8,
         attention_type="GALE_FA",
         mesh_context_fusion="pre_post",
         mesh_context_use_global=True,
-        local_processor="mpnn",
     )
-    plain = MeshGeoFLARE(**common).train()
-    checkpointed = MeshGeoFLARE(
+    plain = _model(**common).train()
+    checkpointed = _model(
         **common,
         activation_checkpointing=True,
         activation_checkpointing_components=components,
@@ -291,13 +219,9 @@ def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():
         attention_type="GALE_FA",
     )
     geoflare = GeoTransolver(**common).eval()
-    meshgeoflare = MeshGeoFLARE(
+    meshgeoflare = _model(
         **common,
-        local_processor="mpnn",
-        input_dim_edges=4,
         mesh_hidden_dim=32,
-        num_pre_processor_layers=1,
-        num_post_processor_layers=1,
         mesh_pre_residual_gate_init=0.0,
         mesh_post_residual_gate_init=0.0,
     ).eval()
@@ -305,7 +229,6 @@ def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():
     assert incompatible.unexpected_keys == []
     assert "mesh_pre_residual_gate" in incompatible.missing_keys
     assert "mesh_post_residual_gate" in incompatible.missing_keys
-
     with torch.no_grad():
         expected = geoflare(
             local_embedding=graph.x.unsqueeze(0),
@@ -315,20 +238,18 @@ def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():
         ).squeeze(0)
         actual = meshgeoflare(
             node_features=graph.x,
-            edge_features=graph.edge_attr,
             graph=graph,
             geometry=graph.x,
             local_positions=graph.x,
             global_embedding=global_embedding,
         )
-
     torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
 
 
-def test_meshgeoflare_pre_mpnn_consumes_encoded_geoflare_latent():
+def test_pre_processor_consumes_encoded_geoflare_latent():
     torch.manual_seed(27)
     graph = _graph(9, node_dim=6)
-    model = _meshgeoflare("pre_post", True).eval()
+    model = _model(mesh_context_fusion="pre_post", mesh_context_use_global=True).eval()
     observed = {}
 
     def capture_processor_input(_module, inputs):
@@ -340,32 +261,16 @@ def test_meshgeoflare_pre_mpnn_consumes_encoded_geoflare_latent():
             _forward(model, graph, torch.randn(1, 1, 2))
     finally:
         handle.remove()
-
-    # Raw functional features have width 6; the mesh stage must instead receive
+    # Raw functional features have width 6; the local stage must instead receive
     # GeoFLARE's 32-channel encoded node representation.
     assert observed["shape"] == (9, 32)
     assert not hasattr(model, "pre_node_decoder")
 
 
-def test_meshgeoflare_latent_adapters_support_distinct_mesh_width():
+def test_latent_adapters_support_distinct_mesh_width():
     torch.manual_seed(28)
     graph = _graph(9, node_dim=6)
-    model = MeshGeoFLARE(
-        functional_dim=6,
-        out_dim=5,
-        input_dim_edges=4,
-        geometry_dim=3,
-        global_dim=2,
-        n_hidden=32,
-        mesh_hidden_dim=24,
-        n_head=4,
-        n_layers=2,
-        slice_num=8,
-        num_pre_processor_layers=1,
-        num_post_processor_layers=1,
-        local_processor="mpnn",
-        use_te=False,
-    ).eval()
+    model = _model(mesh_hidden_dim=24).eval()
     observed = {}
 
     def capture_processor_input(_module, inputs):
@@ -377,7 +282,6 @@ def test_meshgeoflare_latent_adapters_support_distinct_mesh_width():
             output = _forward(model, graph, torch.randn(1, 1, 2))
     finally:
         handle.remove()
-
     assert observed["shape"] == (9, 24)
     assert output.shape == (9, 5)
     assert model.pre_latent_output.bias is None
@@ -387,26 +291,22 @@ def test_meshgeoflare_latent_adapters_support_distinct_mesh_width():
     ("fusion_stage", "use_global"),
     [("post", False), ("pre_post", False), ("pre_post", True)],
 )
-def test_meshgeoflare_context_fusion_is_zero_initialized_identity(
-    fusion_stage, use_global
-):
+def test_context_fusion_is_zero_initialized_identity(fusion_stage, use_global):
     torch.manual_seed(29)
     graph = _graph(9)
     global_embedding = torch.randn(1, 1, 2)
-
     torch.manual_seed(31)
-    baseline = _meshgeoflare().eval()
+    baseline = _model().eval()
     torch.manual_seed(31)
-    fused = _meshgeoflare(fusion_stage, use_global).eval()
-
+    fused = _model(
+        mesh_context_fusion=fusion_stage, mesh_context_use_global=use_global
+    ).eval()
     with torch.no_grad():
         rng_state = torch.random.get_rng_state()
         expected = _forward(baseline, graph, global_embedding)
         torch.random.set_rng_state(rng_state)
         actual = _forward(fused, graph, global_embedding)
-
     torch.testing.assert_close(actual, expected)
-
     fused.train()
     torch.random.set_rng_state(rng_state)
     loss = _forward(fused, graph, global_embedding).square().mean()
@@ -422,15 +322,14 @@ def test_meshgeoflare_context_fusion_is_zero_initialized_identity(
     ("fusion_stage", "use_global"),
     [("post", False), ("pre_post", False), ("pre_post", True)],
 )
-def test_meshgeoflare_context_fusion_variable_batch_matches_independent(
-    fusion_stage, use_global
-):
+def test_context_fusion_variable_batch_matches_independent(fusion_stage, use_global):
     torch.manual_seed(37)
     graphs = [_graph(5), _graph(8)]
     batch = pyg.data.Batch.from_data_list(graphs)
-    model = _meshgeoflare(fusion_stage, use_global).eval()
+    model = _model(
+        mesh_context_fusion=fusion_stage, mesh_context_use_global=use_global
+    ).eval()
     global_embedding = torch.randn(2, 1, 2)
-
     with torch.no_grad():
         rng_state = torch.random.get_rng_state()
         batch_output = _forward(model, batch, global_embedding)
@@ -439,16 +338,15 @@ def test_meshgeoflare_context_fusion_variable_batch_matches_independent(
             _forward(model, graph, global_embedding[index])
             for index, graph in enumerate(graphs)
         ]
-
     torch.testing.assert_close(batch_output, torch.cat(separate_outputs, dim=0))
 
 
-def test_meshgeoflare_context_fusion_parameter_ordering():
+def test_context_fusion_parameter_ordering():
     models = [
-        _meshgeoflare(),
-        _meshgeoflare("post"),
-        _meshgeoflare("pre_post"),
-        _meshgeoflare("pre_post", True),
+        _model(),
+        _model(mesh_context_fusion="post"),
+        _model(mesh_context_fusion="pre_post"),
+        _model(mesh_context_fusion="pre_post", mesh_context_use_global=True),
     ]
     parameter_counts = [sum(p.numel() for p in model.parameters()) for model in models]
     assert parameter_counts == sorted(parameter_counts)
@@ -462,47 +360,29 @@ def test_meshgeoflare_context_fusion_parameter_ordering():
         ({"mesh_context_use_global": True}, "requires mesh context fusion"),
     ],
 )
-def test_meshgeoflare_rejects_invalid_context_fusion(kwargs, message):
+def test_rejects_invalid_context_fusion(kwargs, message):
     with pytest.raises(ValueError, match=message):
-        MeshGeoFLARE(
-            functional_dim=6,
-            out_dim=5,
-            input_dim_edges=4,
-            geometry_dim=3,
-            global_dim=2,
-            n_hidden=32,
-            n_head=4,
-            n_layers=1,
-            local_processor="mpnn",
-            use_te=False,
-            **kwargs,
-        )
+        _model(n_layers=1, **kwargs)
 
 
-@pytest.mark.parametrize("model_cls", [MeshTransolver, MeshGeoTransolver, MeshGeoFLARE])
-def test_checkpoint_roundtrip(model_cls, tmp_path):
-    model = _model(model_cls)
-    checkpoint = tmp_path / f"{model_cls.__name__}.mdlus"
-
+def test_checkpoint_roundtrip(tmp_path):
+    model = _model()
+    checkpoint = tmp_path / "MeshGeoFLARE.mdlus"
     model.save(checkpoint)
-    restored = model_cls.from_checkpoint(checkpoint)
-
-    assert type(restored) is model_cls
+    restored = MeshGeoFLARE.from_checkpoint(checkpoint)
+    assert type(restored) is MeshGeoFLARE
     for expected, actual in zip(model.parameters(), restored.parameters()):
         torch.testing.assert_close(expected, actual)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-@pytest.mark.parametrize("model_cls", [MeshTransolver, MeshGeoTransolver, MeshGeoFLARE])
-def test_bfloat16_amp_forward_backward(model_cls):
+def test_bfloat16_amp_forward_backward():
     graph = _graph(9).cuda()
-    model = _model(model_cls).cuda()
+    model = _model().cuda()
     global_embedding = torch.randn(1, 1, 2, device="cuda")
-
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         output = _forward(model, graph, global_embedding)
         loss = output.square().mean()
     loss.backward()
-
     assert output.shape == (9, 5)
     assert torch.isfinite(output).all()

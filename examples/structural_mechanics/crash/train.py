@@ -232,8 +232,6 @@ class Trainer:
         datapipe_name = cfg.datapipe._target_
         graph_model_markers = (
             "MeshGraphNet",
-            "MeshTransolver",
-            "MeshGeoTransolver",
             "MeshGeoFLARE",
             "ResidualTimeConditional",
         )

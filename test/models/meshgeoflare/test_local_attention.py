@@ -22,7 +22,7 @@ import torch
 
 pyg = pytest.importorskip("torch_geometric")
 
-from physicsnemo.experimental.models.meshtransolver import (  # noqa: E402
+from physicsnemo.experimental.models.meshgeoflare import (  # noqa: E402
     LocalNeighborhood,
     MeshGeoFLARE,
     NeighborhoodAttentionProcessor,
@@ -78,7 +78,6 @@ def _model(**overrides):
         mesh_context_fusion="pre_post",
         mesh_pre_residual_gate_init=0.3,
         mesh_post_residual_gate_init=0.2,
-        local_processor="knn_attention",
         local_knn_k=4,
         local_neighborhood="geodesic",
         local_edge_dim=8,
@@ -90,7 +89,6 @@ def _model(**overrides):
 def _forward(model, graph, global_embedding):
     return model(
         node_features=graph.x,
-        edge_features=graph.edge_attr,
         graph=graph,
         geometry=graph.x[:, :3],
         global_embedding=global_embedding,
@@ -161,7 +159,6 @@ def test_knn_mode_is_geoflare_at_zero_gates_and_trains_otherwise():
     frozen = _model(
         mesh_pre_residual_gate_init=0.0, mesh_post_residual_gate_init=0.0
     ).eval()
-    assert frozen.edge_encoder is None
     baseline = _forward(frozen, graph, global_embedding)
     perturbed = graph.clone()
     perturbed.knn_edge_attr = torch.randn_like(graph.knn_edge_attr)
@@ -206,7 +203,7 @@ def test_knn_mode_checkpoint_segments_and_state_dict_round_trip():
     )
 
 
-def test_knn_mode_rejects_mismatched_neighborhoods_and_mpnn_ignores_them():
+def test_rejects_mismatched_neighborhoods_and_invalid_settings():
     torch.manual_seed(5)
     graph = _graph()
     global_embedding = torch.randn(1, 1, 2)
@@ -226,14 +223,6 @@ def test_knn_mode_rejects_mismatched_neighborhoods_and_mpnn_ignores_them():
     )
     with pytest.raises(ValueError, match="knn_index"):
         _forward(model, bare, global_embedding)
-    # The validated MPNN path neither needs nor reads neighborhood tensors.
-    mpnn = _model(local_processor="mpnn").eval()
-    assert mpnn.edge_encoder is not None
-    torch.testing.assert_close(
-        _forward(mpnn, graph, global_embedding), _forward(mpnn, bare, global_embedding)
-    )
-    with pytest.raises(ValueError, match="local_processor"):
-        _model(local_processor="gat")
     with pytest.raises(ValueError, match="local_neighborhood"):
         _model(local_neighborhood="hops")
     with pytest.raises(ValueError, match="local_knn_k"):
@@ -246,11 +235,11 @@ def test_knn_mode_rejects_mismatched_neighborhoods_and_mpnn_ignores_them():
 # Fused neighborhood attention (no gathered [N, K, H, dh] tensors).           #
 # --------------------------------------------------------------------------- #
 
-from physicsnemo.experimental.models.meshtransolver.fused_neighborhood_attention import (  # noqa: E402
+from physicsnemo.experimental.models.meshgeoflare.fused_neighborhood_attention import (  # noqa: E402
     neighborhood_attention,
     triton_available,
 )
-from physicsnemo.experimental.models.meshtransolver.local_attention import (  # noqa: E402
+from physicsnemo.experimental.models.meshgeoflare.local_attention import (  # noqa: E402
     NeighborhoodAttentionBlock,
 )
 

@@ -50,7 +50,7 @@ from rollout import TimeEmbedding, global_tokens
 from shape_corrections import RigidWallClamp, correct_shape
 from torch import nn
 
-from physicsnemo.experimental.models.meshtransolver.meshtransolver import MeshGeoFLARE
+from physicsnemo.experimental.models.meshgeoflare import MeshGeoFLARE
 
 
 class TimeConditionalOutput(NamedTuple):
@@ -89,7 +89,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         :class:`shape_corrections.RigidWallClamp`); needs ``graph.rigid_wall``
         from ``datapipe.rigid_wall_position``.
     **kwargs
-        :class:`~physicsnemo.experimental.models.meshtransolver.MeshGeoFLARE`
+        :class:`~physicsnemo.experimental.models.meshgeoflare.MeshGeoFLARE`
         settings (backbone, local operator, context fusion, activation
         checkpointing). ``out_dim`` must be 3 and ``use_te`` false.
     """
@@ -187,7 +187,6 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         state = MeshGeoFLARE.forward(
             self,
             node_features=nodes,
-            edge_features=getattr(sample.graph, "edge_attr", None),
             graph=sample.graph,
             geometry=coords,
             global_embedding=global_embedding,
@@ -198,11 +197,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         if self.post_context_film is not None:
             latent = self.post_context_film(latent, state.mesh_context)
         latent = self._run_local_processor(
-            self.post_processor,
-            latent,
-            state.edge_latent,
-            state.graph,
-            state.neighborhood,
+            self.post_processor, latent, state.neighborhood
         )
         coarse = coords + self.coarse_decoder(latent).to(coords.dtype)
         return coarse, latent, state
@@ -212,11 +207,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         if self.refinement_context_film is not None:
             latent = self.refinement_context_film(latent, state.mesh_context)
         latent = self._run_local_processor(
-            self.refinement_processor,
-            latent,
-            state.edge_latent,
-            state.graph,
-            state.neighborhood,
+            self.refinement_processor, latent, state.neighborhood
         )
         return self.mesh_post_residual_gate * self.post_node_decoder(latent)
 

@@ -51,7 +51,6 @@ mesh_pre_residual_gate_init: 0.0
 mesh_post_residual_gate_init: 1.0
 mesh_context_fusion: pre_post
 mesh_context_use_global: false
-local_processor: knn_attention
 local_neighborhood: euclidean  # the Yaris store edges cover shells only
 local_knn_k: 32
 local_num_heads: 8

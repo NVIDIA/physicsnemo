@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Hybrid mesh-attention models for irregular simulation meshes.
+r"""MeshGeoFLARE, the DeFormer network, and its neighbourhood-attention processor.
 
-The models in this package combine local MeshGraphNet processing with one of
-PhysicsNeMo's global physics-attention processors.
+A GeoTransolver/FLARE backbone with static kNN neighbourhood-attention stages
+before and after it, FiLM-conditioned on a mesh context.
 """
 
 from .local_attention import (
@@ -25,21 +25,11 @@ from .local_attention import (
     NeighborhoodAttentionBlock,
     NeighborhoodAttentionProcessor,
 )
-from .meshtransolver import (
-    MeshAttentionHybrid,
-    MeshContextFiLM,
-    MeshGeoFLARE,
-    MeshGeometryContextEncoder,
-    MeshGeoTransolver,
-    MeshTransolver,
-)
+from .meshgeoflare import MeshContextFiLM, MeshGeoFLARE, MeshGeometryContextEncoder
 
 __all__ = [
-    "MeshAttentionHybrid",
     "MeshGeometryContextEncoder",
     "MeshContextFiLM",
-    "MeshTransolver",
-    "MeshGeoTransolver",
     "MeshGeoFLARE",
     "LocalNeighborhood",
     "NeighborhoodAttentionBlock",

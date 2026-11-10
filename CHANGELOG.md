@@ -62,8 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   features and tapers, penetration depths and rigid-wall clamp), and
   `physicsnemo.experimental.nn.static_knn`
   (reference geodesic or Euclidean k-nearest neighbourhoods of a mesh).
-- Adds, in `physicsnemo.experimental.models.meshtransolver`, the MeshGeoFLARE
-  mesh/attention hybrids with a fused neighbourhood-attention kernel.
+- Adds `physicsnemo.experimental.models.meshgeoflare`: MeshGeoFLARE, the DeFormer
+  network (a GeoTransolver/FLARE backbone with static kNN neighbourhood-attention
+  stages and a fused kernel).
 - Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
   the time-conditional network, the MeshGraphNet contact corrector, the three
   full-resolution Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,

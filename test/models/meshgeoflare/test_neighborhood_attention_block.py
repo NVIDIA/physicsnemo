@@ -18,10 +18,10 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.meshtransolver.fused_neighborhood_attention import (
+from physicsnemo.experimental.models.meshgeoflare.fused_neighborhood_attention import (
     neighborhood_attention,
 )
-from physicsnemo.experimental.models.meshtransolver.local_attention import (
+from physicsnemo.experimental.models.meshgeoflare.local_attention import (
     LocalNeighborhood,
     NeighborhoodAttentionBlock,
     NeighborhoodAttentionProcessor,

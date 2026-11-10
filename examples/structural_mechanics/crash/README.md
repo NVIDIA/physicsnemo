@@ -35,7 +35,7 @@ The network (`time_conditional.MeshGeoFLARETimeConditional`,
   (8 bands, 32 channels) that enters every node's input and the global token;
 * local stages of static kNN neighbourhood attention over the undeformed mesh
   (k = 32 Euclidean neighbours, the fused Triton kernel of
-  `physicsnemo.experimental.models.meshtransolver`): a pre-processor before the
+  `physicsnemo.experimental.models.meshgeoflare`): a pre-processor before the
   backbone and a two-stage decoder after it, where stage A emits a provisional
   shape through a zero-initialised head and stage B, an independent copy of
   stage A, adds a gated correction;
@@ -701,9 +701,8 @@ global_dim: 3   # must match len(datapipe.global_features)
 ```
 
 If `global_features` is `null`, `sample.global_features` is `None` and the selected
-model must support unconditioned execution. GeoTransolver and the geometry-aware
-mesh hybrids consume the global token directly; the mesh-attention crash wrappers
-also broadcast configured global values into their node inputs.
+model must support unconditioned execution; GeoTransolver and MeshGeoFLARE consume
+the global token directly.
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
