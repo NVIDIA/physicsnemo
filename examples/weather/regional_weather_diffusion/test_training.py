@@ -111,7 +111,8 @@ def test_distribute_model_syncs_before_sharding(monkeypatch):
     helper.use_shard_tensor = True
     domain_mesh = object()
     ddp_mesh = object()
-    helper.mesh = {"domain": domain_mesh, "ddp": ddp_mesh}
+    helper.domain_mesh = domain_mesh
+    helper.ddp_mesh = ddp_mesh
     model = torch.nn.Linear(2, 2)
     calls = []
 
