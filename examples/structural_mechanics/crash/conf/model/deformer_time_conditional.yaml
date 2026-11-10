@@ -60,11 +60,6 @@ local_edge_dim: 32
 local_activation: gelu
 local_attention_fused: true
 local_attention_backend: auto
-local_value_norm: false
-local_difference_values: true
-local_update: concat_mlp
-local_bias_fp32: true
-local_split_key_value: true
 # memory policy of the 1.48M-node forward: FLARE blocks and the geometry context
 # are activation-checkpointed and each local processor is one segment
 activation_checkpointing: true
@@ -73,17 +68,8 @@ activation_checkpointing_components: [blocks, context]
 num_pre_processor_checkpoint_segments: 1
 num_post_processor_checkpoint_segments: 1
 checkpoint_offloading: false
-# evaluation-time geometric corrections (off: the released network is
-# evaluated as predicted; the corrector recipe applies the wall clamp)
+# evaluation-time rigid-wall clamp (off: the released network is evaluated as
+# predicted; the corrector recipe applies the clamp)
 clamp_to_wall: false
 wall_axis: 0
 wall_sign: 1.0
-penetration_projection_iterations: 0
-penetration_projection_tolerance_mm: 0.0
-penetration_projection_damping: 1.0
-penetration_projection_band_mm: 5.0
-penetration_projection_clearance_mm: 10.0
-penetration_projection_crossed_only: false
-penetration_projection_side_symmetric: false
-penetration_projection_implementation: warp
-penetration_projection_max_pairs: 8000000

@@ -27,7 +27,6 @@ from physicsnemo.experimental.nn.shell_contact import (
     clamp_to_wall,
     contact_edge_features,
     node_maximum,
-    project_shell_penetrations,
     shell_contact_edge_features,
     shell_contact_pairs,
     shell_penetration_depths,
@@ -356,74 +355,6 @@ def test_wall_depths_and_clamp():
         clamp_to_wall(positions, 1.0, axis=3)
     with pytest.raises(ValueError, match="sign"):
         wall_penetration_depths(positions, thickness, 1.0, sign=0.5)
-
-
-def test_projection_moves_nodes_onto_the_envelope():
-    reference, current, faces = _crossing_scene()
-    current = current.clone()
-    current[3, 2] = 0.6  # overlap without crossing: gap -0.4
-    current[4, 2] = -0.5  # crossed: gap -1.5
-    thickness = torch.ones(5)
-    search = ShellContactSearch(side_from_reference=True, **TORCH)
-    projected = project_shell_penetrations(
-        current, faces, thickness, reference, search=search, iterations=1
-    )
-    # Both nodes end on the envelope (one half-thickness sum above the shell),
-    # the crossed node pulled back through the shell to its original side.
-    torch.testing.assert_close(projected[3], torch.tensor([2.0, 2.0, 1.0]))
-    torch.testing.assert_close(projected[4], torch.tensor([3.0, 2.0, 1.0]))
-    torch.testing.assert_close(projected[:3], current[:3])
-    assert torch.equal(current[4], torch.tensor([3.0, 2.0, -0.5]))  # input untouched
-    damped = project_shell_penetrations(
-        current, faces, thickness, reference, search=search, iterations=1, damping=0.5
-    )
-    torch.testing.assert_close(damped[4, 2], torch.tensor(0.25))
-    torch.testing.assert_close(damped[3, 2], torch.tensor(0.8))
-    crossed_only = project_shell_penetrations(
-        current,
-        faces,
-        thickness,
-        reference,
-        search=search,
-        iterations=1,
-        crossed_only=True,
-    )
-    torch.testing.assert_close(crossed_only[3], current[3])
-    torch.testing.assert_close(crossed_only[4, 2], torch.tensor(1.0))
-    tolerant = project_shell_penetrations(
-        current, faces, thickness, reference, search=search, iterations=3, tolerance=2.0
-    )
-    torch.testing.assert_close(tolerant, current)
-    assert torch.equal(
-        project_shell_penetrations(
-            current, faces, thickness, reference, search=search, iterations=0
-        ),
-        current,
-    )
-    # A second iteration finds nothing left to move.
-    twice = project_shell_penetrations(
-        current, faces, thickness, reference, search=search, iterations=2
-    )
-    torch.testing.assert_close(twice, projected)
-    with pytest.raises(ValueError, match="side_from_reference"):
-        project_shell_penetrations(
-            current,
-            faces,
-            thickness,
-            reference,
-            search=ShellContactSearch(**TORCH),
-            iterations=1,
-        )
-    with pytest.raises(ValueError, match="damping"):
-        project_shell_penetrations(
-            current,
-            faces,
-            thickness,
-            reference,
-            search=search,
-            iterations=1,
-            damping=0.0,
-        )
 
 
 def test_taper_and_feature_helpers():

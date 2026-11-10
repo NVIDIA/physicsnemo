@@ -30,9 +30,6 @@ local_knn_k: 32
 local_neighborhood: euclidean
 # node inputs: coords (3) + thickness (1) + fourier time code (time_dim) + teacher displacement (3)
 functional_dim: 39
-# teacher_window: true also feeds the teacher's displacement one frame earlier
-# and one frame later (as backward and forward differences; functional_dim + 6)
-teacher_window: false
 time_embedding: fourier
 time_fourier_bands: 8
 time_dim: 32
@@ -56,16 +53,8 @@ contact_side_symmetric: false
 contact_crossing_radius: null
 contact_clearance_approach_only: false
 contact_bidirectional: true
-# evaluation-time geometric corrections of the corrected shape: the rigid-wall
-# clamp (needs datapipe.rigid_wall_position; on in the Yaris recipe) and the
-# damped envelope projection (off: it removes true crossings as well)
+# evaluation-time rigid-wall clamp of the corrected shape (needs
+# datapipe.rigid_wall_position; on in the Yaris recipe)
 final_clamp_to_wall: false
 wall_axis: 0
 wall_sign: 1.0
-final_projection_iterations: 0
-final_projection_damping: 0.5
-final_projection_side_symmetric: true
-final_projection_crossed_only: false
-final_projection_tolerance_mm: 0.0
-final_projection_band_mm: 5.0
-final_projection_clearance_mm: 10.0

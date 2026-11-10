@@ -30,10 +30,6 @@ bit-for-bit (``kind="mse"``, ``space="normalized"``) and adds:
   reference coordinates (the Transolver/GeoTransolver training objective,
   scale-free); it needs the reference frame, so ``space="physical"`` and the
   trainer passes ``node_features["coords"]``.
-
-:func:`increment_loss` is the position loss of the change between the two
-frames of a frame-pair sample (one frame of velocity), the temporal term the
-corrector recipes can add with ``training.increment_loss_weight``.
 """
 
 from __future__ import annotations
@@ -165,25 +161,3 @@ class PositionLoss:
         if self.kind == "relative_l2":
             return self.relative_l2_per_frame(prediction, target, reference).mean()
         return self.elementwise(prediction, target).mean()
-
-
-def increment_loss(
-    position_loss: PositionLoss, prediction: torch.Tensor, target: torch.Tensor
-):
-    """Position loss on the change between two consecutive frames.
-
-    ``prediction`` and ``target`` are frame pairs ``[N, 2, C]`` with the earlier
-    frame first (``datapipe.frame_pairs``). The configured :class:`PositionLoss`
-    is applied to the predicted and the true increment, so the term shares the
-    main loss's kind and millimetre scaling: an increment error of one scale
-    unit costs as much as a position error of one scale unit.
-    """
-    for name, value in (("prediction", prediction), ("target", target)):
-        if value.ndim != 3 or value.shape[1] != 2:
-            raise ValueError(
-                "the increment loss needs frame pairs [N, 2, C] (datapipe.frame_pairs="
-                f"true), got {name} of shape {tuple(value.shape)}"
-            )
-    return position_loss(
-        prediction[:, 1] - prediction[:, 0], target[:, 1] - target[:, 0]
-    )

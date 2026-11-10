@@ -59,8 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `physicsnemo.experimental.nn.shell_contact`: shell contact as pure
   functions over tensors (node-to-facet pair search with a Warp BVH broad
   phase and fused Warp narrow phase, crossing-aware signed gaps, edge
-  features and tapers, penetration depths, envelope projection and
-  rigid-wall clamp), and `physicsnemo.experimental.nn.static_knn`
+  features and tapers, penetration depths and rigid-wall clamp), and
+  `physicsnemo.experimental.nn.static_knn`
   (reference geodesic or Euclidean k-nearest neighbourhoods of a mesh).
 - Adds, in `physicsnemo.experimental.models.meshtransolver`, the MeshGeoFLARE
   mesh/attention hybrids with a fused neighbourhood-attention kernel.
@@ -68,8 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the time-conditional network, the MeshGraphNet contact corrector, the three
   full-resolution Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,
   `yaris_geotransolver`) and the body-in-white recipe
-  `crash_deformer_knn_time_conditional`, target-relative penetration metrics
-  and a kinematics readout.
+  `crash_deformer_knn_time_conditional` and target-relative penetration
+  metrics.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside

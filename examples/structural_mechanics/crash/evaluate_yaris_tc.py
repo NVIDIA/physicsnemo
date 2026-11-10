@@ -20,8 +20,8 @@ trained checkpoint, inside the training environment and sharded over GPUs
 like training: pooled and per-frame vector RMSE in millimetres, per-case and
 per-region breakdowns, the target-relative penetration statistics of the
 prediction and the ground truth (shell surface and, with
-``datapipe.rigid_wall_position``, the rigid wall), optionally node-error maps
-and the kinematics readout::
+``datapipe.rigid_wall_position``, the rigid wall) and optionally node-error
+maps::
 
     torchrun --standalone --nproc_per_node=4 evaluate_yaris_tc.py \\
         --config-name yaris_deformer \\
@@ -29,7 +29,7 @@ and the kinematics readout::
         yaris.work_dir=... training.ckpt_path=<run>/checkpoints \\
         +training.validation_output_dir=<out> hydra.run.dir=<out> \\
         datapipe.contact_surface=true [+training.load_epoch=30] \\
-        [+training.validation_node_errors=true +training.validation_kinematics=true]
+        [+training.validation_node_errors=true]
 
 The run's own validation records are untouched: the JSON goes to
 ``<out>/epoch_<E>.json`` where ``E`` is the loaded checkpoint's epoch.

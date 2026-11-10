@@ -69,7 +69,6 @@ def accumulate_validation(
     node_errors=None,
     regions=None,
     per_case=None,
-    kinematics=None,
 ):
     """Sum squared errors per rollout step over this rank's held-out cases.
 
@@ -113,9 +112,6 @@ def accumulate_validation(
             raise ValueError(
                 f"Case has {steps} target steps but rollout_steps={totals.shape[0]}"
             )
-        if kinematics is not None:
-            # Temporal smoothness and per-part kinematics (kinematics_readout.py).
-            kinematics.accumulate(prediction, target, sample, data_stats)
         error = (prediction.float() - target.float()).double()  # [N, T, 3]
         physical_sq = torch.square(error * pos_std.double()).sum(dim=(0, 2))  # [T]
         totals[:steps, :3] += torch.square(error).sum(dim=0)
@@ -227,12 +223,6 @@ class YarisFullTrainer(Trainer):
         self.validation_node_errors = bool(
             cfg.training.get("validation_node_errors", False)
         )
-        # Temporal smoothness and per-part kinematic readouts of the validated
-        # trajectories (kinematics_readout.py), written under `kinematics` in
-        # the validation JSON with the part trajectories in a .npz next to it.
-        self.validation_kinematics = bool(
-            cfg.training.get("validation_kinematics", False)
-        )
         # Reference-x bounds splitting the mesh into regions (rear, ..., front)
         # for the translational-error breakdown written with the node errors.
         self.validation_region_bounds = [
@@ -300,28 +290,6 @@ class YarisFullTrainer(Trainer):
                 translational_rmse_mm_per_time=(t[:, 0] / frames).sqrt().tolist(),
             )
         return out
-
-    def _kinematics_readout(self):
-        """The per-part kinematics accumulator for this validation, or None."""
-        if not self.validation_kinematics:
-            return None
-        import numpy as np
-        from kinematics_readout import KinematicsReadout
-
-        dataset = self.validation_dataset
-        ids = dataset.reader.part_ids(dataset.reader.open(dataset.paths[0]))
-        part_ids, inverse = np.unique(ids, return_inverse=True)
-        part_index = torch.from_numpy(inverse.astype(np.int64).reshape(-1))
-        return KinematicsReadout(
-            part_index,
-            part_ids,
-            torch.from_numpy(np.asarray(dataset.reader.reference, dtype=np.float64)),
-            dataset.reader.dt,
-            self.validation_region_bounds,
-            int(self.rollout_steps),
-            self.dist.device,
-            logger=self.logger0,
-        )
 
     def _save_node_errors(self, epoch, node_errors):
         """Per-node RMSE (mm) over every validated frame, plus node metadata once.
@@ -392,7 +360,6 @@ class YarisFullTrainer(Trainer):
                 logger=self.logger0,
                 region_bounds=self.validation_region_bounds,
             )
-        kinematics = self._kinematics_readout()
         node_errors = None
         regions = None
         if self.validation_node_errors:
@@ -434,12 +401,9 @@ class YarisFullTrainer(Trainer):
                 node_errors=node_errors,
                 regions=regions,
                 per_case=case_records,
-                kinematics=kinematics,
             )
             if probe is not None:
                 probe.reduce(self.dist.world_size)
-            if kinematics is not None:
-                kinematics.reduce(self.dist.world_size)
             if node_errors is not None and self.dist.world_size > 1:
                 torch.distributed.all_reduce(node_errors)
                 torch.distributed.all_reduce(regions[1])
@@ -489,17 +453,6 @@ class YarisFullTrainer(Trainer):
                 if regions is None
                 else self._region_summary(regions, stats["nodes_w_time"].numel())
             )
-            kinematics_summary = None if kinematics is None else kinematics.summary()
-            if kinematics_summary is not None:
-                self.logger0.info(
-                    f"Validation epoch {epoch + 1}: kinematics "
-                    + kinematics.log_line(kinematics_summary)
-                )
-                if self.dist.rank == 0:
-                    self.validation_dir.mkdir(parents=True, exist_ok=True)
-                    kinematics.save(
-                        self.validation_dir / f"kinematics_epoch_{epoch + 1:04d}.npz"
-                    )
             node_percentiles = None
             if self.dist.rank == 0 and node_errors is not None:
                 node_percentiles = self._save_node_errors(epoch, node_errors)
@@ -514,7 +467,6 @@ class YarisFullTrainer(Trainer):
                     dict(
                         penetration=penetration,
                         regions=region_summary,
-                        kinematics=kinematics_summary,
                         node_error_percentiles=node_percentiles,
                         epoch=epoch + 1,
                         cases=sorted(seen),

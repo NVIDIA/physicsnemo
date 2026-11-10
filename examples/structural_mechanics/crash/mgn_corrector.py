@@ -30,8 +30,7 @@ mesh:
   vertex and the direction sign: the "world edges" of MeshGraphNet collision
   models;
 * the node inputs are the coordinates, the static features, the time code
-  and the teacher's displacement (and, with ``teacher_window``, the teacher's
-  motion around the queried frame as backward and forward differences).
+  and the teacher's displacement.
 
 There is no global block, so the receptive field is ``processor_size`` hops.
 The decoder is zero-initialised, so the corrector starts exactly at the
@@ -77,8 +76,7 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         frames, labelled ``k / (num_time_steps - 1)`` as in the teacher).
     functional_dim : int
         Width of the node inputs: coords (3) + static features + time code
-        (``time_dim``) + the teacher's displacement (3), + 6 with
-        ``teacher_window``.
+        (``time_dim``) + the teacher's displacement (3).
     hidden_dim, processor_size, aggregation
         MeshGraphNet width, number of message-passing layers and message
         aggregation (``"sum"`` or ``"mean"``).
@@ -93,11 +91,6 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         Contact edges from the crossing-aware surface search on the predicted
         shape; needs ``graph.contact_faces``, ``contact_surface_exclusions``
         and ``shell_thickness`` (``datapipe.contact_surface=true``).
-    teacher_window : bool
-        Expect the teacher's displacement one frame earlier and one frame
-        later (``teacher_window`` argument of :meth:`forward`) and add the
-        backward and forward differences, scaled by the number of future
-        frames, to the node inputs.
     contact_search_implementation, contact_surface_max_pairs,
     contact_activation_distance, node_contact_radius, contact_normal_epsilon,
     contact_surface_material_fan, contact_side_from_reference,
@@ -131,7 +124,6 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         time_dim: int = 32,
         dt: float | None = None,
         use_contact: bool = True,
-        teacher_window: bool = False,
         contact_search_implementation: str = "warp",
         contact_surface_max_pairs: int = 8_000_000,
         contact_activation_distance: float = 5.0,
@@ -202,7 +194,6 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         nn.init.zeros_(self.decoder[-1].weight)
         nn.init.zeros_(self.decoder[-1].bias)
         self.use_contact = bool(use_contact)
-        self.teacher_window = bool(teacher_window)
         self.contact_bidirectional = bool(contact_bidirectional)
         self.contact_feature_scale = float(node_contact_radius)
         self.contact_normal_epsilon = float(contact_normal_epsilon)
@@ -310,7 +301,6 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         sample,
         data_stats,
         teacher_displacement: torch.Tensor,
-        teacher_window: torch.Tensor | None = None,
         return_auxiliary: bool = False,
     ):
         """Correct the teacher's prediction at the sample's time label.
@@ -324,9 +314,6 @@ class MeshGraphNetCorrector(physicsnemo.Module):
             Normalization statistics of the datapipe.
         teacher_displacement : torch.Tensor
             ``[N, 3]`` the teacher's normalized displacement at this time.
-        teacher_window : torch.Tensor, optional
-            ``[N, 2, 3]`` the teacher's displacement one frame earlier and one
-            frame later (required with ``teacher_window=True``).
         return_auxiliary : bool
             Return a :class:`TimeConditionalOutput` (whose provisional position
             is the final one) instead of the position tensor.
@@ -348,27 +335,12 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         prior = teacher_displacement.to(coords.dtype)
         static = features.get("features", coords.new_zeros((n, 0)))
         code = self.time_embed(features["time"]).to(coords.dtype).expand(n, -1)
-        inputs = [coords, static, code, prior]
-        if self.teacher_window:
-            if teacher_window is None or tuple(teacher_window.shape) != (n, 2, 3):
-                raise ValueError(
-                    "teacher_window=True needs the teacher's displacement one frame "
-                    "earlier and one frame later as a [N, 2, 3] tensor"
-                )
-            window = teacher_window.to(coords.dtype)
-            # Backward and forward differences of the teacher's displacement,
-            # scaled by the number of future frames so that a steady per-frame
-            # change is of the prior's magnitude: the teacher's velocity before
-            # and after the queried time, in normalized positions per unit label.
-            scale = float(self.rollout_steps)
-            inputs.append((prior - window[:, 0]) * scale)
-            inputs.append((window[:, 1] - prior) * scale)
-        node_in = torch.cat(inputs, dim=-1)
+        node_in = torch.cat([coords, static, code, prior], dim=-1)
         if node_in.shape[1] != self.functional_dim:
             raise ValueError(
                 f"node inputs are {node_in.shape[1]} wide; functional_dim="
                 f"{self.functional_dim} must count coords, static features, the "
-                "time code, the teacher displacement and the window differences if any"
+                "time code and the teacher displacement"
             )
         edge_index = getattr(graph, "mesh_edge_index", None)
         if edge_index is None:

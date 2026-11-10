@@ -918,13 +918,10 @@ class MeshGeoFLARE(GeoTransolver):
     local_attention_backend : {"auto", "triton", "torch"}, optional
         Backend of the fused kernel; ``"auto"`` picks Triton on CUDA. Default
         is ``"auto"``.
-    local_value_norm, local_difference_values, local_update, local_bias_fp32, local_split_key_value, local_dropout, local_concrete_dropout
+    local_dropout, local_concrete_dropout
         Forwarded to every
         :class:`~physicsnemo.experimental.models.meshtransolver.local_attention.NeighborhoodAttentionBlock`
-        as ``value_norm``, ``difference_values``, ``update``, ``bias_fp32``,
-        ``split_key_value``, ``dropout`` and ``concrete_dropout``; the defaults
-        (``False``, ``True``, ``"concat_mlp"``, ``True``, ``True``, 0.0,
-        ``False``) are the DeFormer block.
+        as ``dropout`` and ``concrete_dropout``.
     """
 
     def __init__(
@@ -984,11 +981,6 @@ class MeshGeoFLARE(GeoTransolver):
         local_activation: str = "gelu",
         local_attention_fused: bool = True,
         local_attention_backend: str = "auto",
-        local_value_norm: bool = False,
-        local_difference_values: bool = True,
-        local_update: str = "concat_mlp",
-        local_bias_fp32: bool = True,
-        local_split_key_value: bool = True,
         local_dropout: float = 0.0,
         local_concrete_dropout: bool = False,
     ) -> None:
@@ -1198,11 +1190,6 @@ class MeshGeoFLARE(GeoTransolver):
                 checkpoint_offloading=checkpoint_offloading,
                 fused_attention=local_attention_fused,
                 fused_backend=local_attention_backend,
-                value_norm=local_value_norm,
-                difference_values=local_difference_values,
-                update=local_update,
-                bias_fp32=local_bias_fp32,
-                split_key_value=local_split_key_value,
                 dropout=local_dropout,
                 concrete_dropout=local_concrete_dropout,
             )

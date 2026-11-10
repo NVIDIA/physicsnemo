@@ -35,9 +35,8 @@ features and a time code to the deformed positions:
   (case, time) pairs, evaluation queries every future frame from the initial
   mesh and returns the trajectory ``[N, T, 3]``.
 
-Evaluation-time geometric corrections (:mod:`shape_corrections`) are
-available but off by default: the envelope projection of penetrating nodes and
-the rigid-wall clamp. The checkpoint format is the base model's
+The evaluation-time rigid-wall clamp (:mod:`shape_corrections`) is available
+and off by default. The checkpoint format is the base model's
 (``physicsnemo.Module.from_checkpoint``).
 """
 
@@ -48,7 +47,7 @@ from typing import NamedTuple
 
 import torch
 from rollout import TimeEmbedding, global_tokens
-from shape_corrections import PenetrationProjection, RigidWallClamp, correct_shape
+from shape_corrections import RigidWallClamp, correct_shape
 from torch import nn
 
 from physicsnemo.experimental.models.meshtransolver.meshtransolver import MeshGeoFLARE
@@ -89,14 +88,6 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         Evaluation-time rigid-wall clamp of the prediction (see
         :class:`shape_corrections.RigidWallClamp`); needs ``graph.rigid_wall``
         from ``datapipe.rigid_wall_position``.
-    penetration_projection_iterations, penetration_projection_tolerance_mm,
-    penetration_projection_damping, penetration_projection_band_mm,
-    penetration_projection_clearance_mm, penetration_projection_crossed_only,
-    penetration_projection_side_symmetric, penetration_projection_implementation,
-    penetration_projection_max_pairs
-        Evaluation-time envelope projection of penetrating nodes (see
-        :class:`shape_corrections.PenetrationProjection`; 0 iterations = off);
-        needs the shell facets of ``datapipe.contact_surface=true``.
     **kwargs
         :class:`~physicsnemo.experimental.models.meshtransolver.MeshGeoFLARE`
         settings (backbone, local operator, context fusion, activation
@@ -115,15 +106,6 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         clamp_to_wall: bool = False,
         wall_axis: int = 0,
         wall_sign: float = 1.0,
-        penetration_projection_iterations: int = 0,
-        penetration_projection_tolerance_mm: float = 0.0,
-        penetration_projection_damping: float = 1.0,
-        penetration_projection_band_mm: float = 5.0,
-        penetration_projection_clearance_mm: float | None = 10.0,
-        penetration_projection_crossed_only: bool = False,
-        penetration_projection_side_symmetric: bool = False,
-        penetration_projection_implementation: str = "warp",
-        penetration_projection_max_pairs: int = 8_000_000,
         **kwargs,
     ) -> None:
         if num_time_steps < 2:
@@ -134,18 +116,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
             raise ValueError("This recipe predicts positions only (out_dim=3)")
         if kwargs.get("use_te", False):
             raise ValueError("The time-conditional DeFormer requires use_te=False")
-        # Validated settings of the evaluation-time corrections.
-        self.projection = PenetrationProjection(
-            iterations=penetration_projection_iterations,
-            tolerance_mm=penetration_projection_tolerance_mm,
-            damping=penetration_projection_damping,
-            band_mm=penetration_projection_band_mm,
-            clearance_mm=penetration_projection_clearance_mm,
-            crossed_only=penetration_projection_crossed_only,
-            side_symmetric=penetration_projection_side_symmetric,
-            implementation=penetration_projection_implementation,
-            max_pairs=penetration_projection_max_pairs,
-        )
+        # Validated settings of the evaluation-time wall clamp.
         self.wall_clamp = RigidWallClamp(
             enabled=clamp_to_wall, axis=wall_axis, sign=wall_sign
         )
@@ -252,19 +223,13 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
     def predict_frame(self, sample, data_stats) -> TimeConditionalOutput:
         """Final and provisional position at the sample's time label.
 
-        In evaluation mode the final position passes through the enabled
-        geometric corrections (envelope projection, rigid-wall clamp).
+        In evaluation mode the final position passes through the rigid-wall
+        clamp when it is enabled.
         """
         coarse, latent, state = self.coarse(sample)
         shape = coarse + self.refine(latent, state).to(coarse.dtype)
         if not self.training:
-            shape = correct_shape(
-                shape,
-                sample,
-                data_stats,
-                projection=self.projection,
-                clamp=self.wall_clamp,
-            )
+            shape = correct_shape(shape, sample, data_stats, clamp=self.wall_clamp)
         return TimeConditionalOutput(shape, coarse)
 
     # ----- recipe entry point -----

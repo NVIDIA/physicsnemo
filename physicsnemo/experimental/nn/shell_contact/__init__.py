@@ -22,8 +22,7 @@
   the mesh-attention models, :func:`smooth_contact_cutoff` into their taper;
 * :func:`shell_penetration_depths`, :func:`wall_penetration_depths` give
   per-node penetration fields for metrics;
-* :func:`project_shell_penetrations` and :func:`clamp_to_wall` are the
-  evaluation-time geometric corrections of a predicted shape.
+* :func:`clamp_to_wall` caps a predicted shape at an analytic rigid wall.
 """
 
 from ._closest_point import supported_quad_mask
@@ -43,7 +42,6 @@ from .geometry import (
 from .penetration import (
     clamp_to_wall,
     node_maximum,
-    project_shell_penetrations,
     shell_penetration_depths,
     wall_penetration_depths,
 )
@@ -69,7 +67,6 @@ __all__ = [
     "linear_closest_approach",
     "node_maximum",
     "project_onto_facets",
-    "project_shell_penetrations",
     "reference_facet_projection",
     "shell_contact_edge_features",
     "shell_contact_pairs",

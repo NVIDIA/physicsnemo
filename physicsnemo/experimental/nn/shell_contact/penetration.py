@@ -13,22 +13,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Penetration depths, the envelope projection and the rigid-wall clamp.
+"""Penetration depths and the rigid-wall clamp.
 
 These are the evaluation-side consumers of the pair search: per-node depth
-fields for penetration metrics, a geometric post-processing step that moves
-penetrating nodes back onto the shell thickness envelope, and the clamp of
-positions to the admissible side of an analytic rigid wall. None of them
-learns anything; all of them are pure functions of tensors.
+fields for penetration metrics and the clamp of positions to the admissible
+side of an analytic rigid wall. None of them learns anything; all of them are
+pure functions of tensors.
 """
 
 from __future__ import annotations
 
-import math
-
 import torch
-
-from .search import ShellContactSearch, shell_contact_pairs
 
 
 def node_maximum(
@@ -167,127 +162,6 @@ def clamp_to_wall(
     return torch.cat(
         (positions[:, :axis], column.unsqueeze(-1), positions[:, axis + 1 :]), dim=-1
     )
-
-
-@torch.no_grad()
-def project_shell_penetrations(
-    positions: torch.Tensor,
-    faces: torch.Tensor,
-    thickness: torch.Tensor,
-    reference_positions: torch.Tensor,
-    *,
-    search: ShellContactSearch,
-    iterations: int,
-    tolerance: float = 0.0,
-    damping: float = 1.0,
-    crossed_only: bool = False,
-    excluded_pairs: torch.Tensor | None = None,
-    batch: torch.Tensor | None = None,
-) -> torch.Tensor:
-    r"""Move penetrating nodes onto the shell thickness envelope.
-
-    Each iteration discovers the contact pairs of the current positions with
-    ``search`` (which must use the reference side test, so a node that has
-    passed through a shell is moved back through it rather than pushed out
-    the far side), selects every node whose deepest pair violates the
-    envelope by more than ``tolerance``, and moves it along its offset from
-    that facet's closest point to the envelope on the admissible side. A
-    ``damping`` below one applies that fraction of the move per iteration;
-    with 0.5 both sides of a mutual crossing meet at the envelope instead of
-    overshooting. The search is rebuilt every iteration because moved nodes
-    are facet vertices too; the loop stops early once nothing penetrates.
-    Geometry only, no gradient.
-
-    Parameters
-    ----------
-    positions : torch.Tensor
-        ``[N, 3]`` physical node positions to correct.
-    faces : torch.Tensor
-        ``[F, 3|4]`` facet connectivity.
-    thickness : torch.Tensor
-        ``[N]`` nodal shell thickness.
-    reference_positions : torch.Tensor
-        ``[N, 3]`` reference configuration of the side test.
-    search : ShellContactSearch
-        Discovery settings with ``side_from_reference=True``.
-    iterations : int
-        Number of search-and-move passes (0 returns the input unchanged).
-    tolerance : float, optional
-        Envelope violation that is left in place (physical length).
-    damping : float, optional
-        Fraction of the computed move applied per iteration, in ``(0, 1]``.
-    crossed_only : bool, optional
-        Move only nodes whose deepest pair has crossed the shell, leaving
-        envelope overlaps without a crossing to the model.
-    excluded_pairs : torch.Tensor, optional
-        ``[2, X]`` static node/facet exclusions of the search.
-    batch : torch.Tensor, optional
-        ``[N]`` graph index for batched meshes.
-
-    Returns
-    -------
-    torch.Tensor
-        ``[N, 3]`` corrected positions (a new tensor).
-    """
-    if isinstance(iterations, bool) or int(iterations) != iterations or iterations < 0:
-        raise ValueError("iterations must be an integer >= 0")
-    if not math.isfinite(tolerance) or tolerance < 0:
-        raise ValueError("tolerance must be finite and >= 0")
-    if not 0.0 < float(damping) <= 1.0:
-        raise ValueError("damping must be in (0, 1]")
-    if not search.side_from_reference:
-        raise ValueError(
-            "the projection needs the reference side test: side_from_reference=True"
-        )
-    positions = positions.clone()
-    n = positions.shape[0]
-    for _ in range(int(iterations)):
-        pairs = shell_contact_pairs(
-            positions,
-            faces,
-            thickness,
-            reference_positions=reference_positions,
-            excluded_pairs=excluded_pairs,
-            batch=batch,
-            search=search,
-        )
-        gap = pairs.gap
-        query = pairs.query
-        # gap + half is the signed distance to the facet, negative once the
-        # node has crossed it.
-        pair_half = pairs.half_thickness
-        depth = (-gap - tolerance).clamp_min(0.0)
-        if crossed_only:
-            depth = torch.where(gap + pair_half < 0, depth, torch.zeros_like(depth))
-        if not bool((depth > 0).any()):
-            break
-        node_depth = node_maximum(n, query, depth)
-        deepest = (depth > 0) & (depth >= node_depth[query])
-        sentinel = query.numel()
-        chosen = torch.full(
-            (n,), sentinel, device=query.device, dtype=torch.long
-        ).scatter_reduce(
-            0,
-            query[deepest],
-            torch.arange(sentinel, device=query.device)[deepest],
-            reduce="amin",
-            include_self=True,
-        )
-        nodes = (chosen < sentinel).nonzero().flatten()
-        selected = chosen[nodes]
-        relative = pairs.closest[selected] - positions[nodes]
-        closest = positions[nodes] + relative
-        distance = torch.linalg.vector_norm(relative, dim=-1)
-        half = pair_half[selected]
-        # gap + half = (+/-) distance: the sign says which side the node is on.
-        side = torch.sign(gap[selected] + half)
-        side = torch.where(side == 0, torch.ones_like(side), side)
-        movable = distance > 1e-6
-        direction = -relative / distance.clamp_min(1e-6).unsqueeze(-1)
-        moved = closest + (side * half).unsqueeze(-1) * direction
-        moved = positions[nodes] + float(damping) * (moved - positions[nodes])
-        positions[nodes[movable]] = moved[movable]
-    return positions
 
 
 def _check_wall(axis: int, sign: float) -> None:

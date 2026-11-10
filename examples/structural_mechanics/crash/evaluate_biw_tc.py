@@ -23,9 +23,8 @@ checkpoint: the exact held-out validation (every case once on any rank count)
 with the pooled and per-time vector RMSE in millimetres, per-case and
 per-region breakdowns, node-error maps and percentiles, the target-relative
 penetration metrics (:class:`penetration_metrics.PenetrationMetrics`: shell
-surface and, with ``datapipe.rigid_wall_position``, the rigid wall) and the
-temporal-smoothness and per-part kinematics readout
-(:class:`kinematics_readout.KinematicsReadout`). Runs inside the training
+surface and, with ``datapipe.rigid_wall_position``, the rigid wall). Runs
+inside the training
 environment, sharded over GPUs like training::
 
     torchrun --standalone --nproc_per_node=4 evaluate_biw_tc.py \\
@@ -42,22 +41,19 @@ Only the validation split is built; the normalization statistics are loaded
 from ``datapipe.stats_dir`` (the run's ``stats`` directory, written when the
 training split was built), so nothing is ever written next to the run. The
 record goes to ``<out>/epoch_<E>.json`` with the keys of the Yaris validation
-JSON, plus ``node_rmse_epoch_<E>.npy`` and ``kinematics_epoch_<E>.npz``.
+JSON, plus ``node_rmse_epoch_<E>.npy``.
 
 Options (all under ``training``): ``validation_penetration`` (the metric
 settings; ``enabled: false`` skips it), ``validation_region_bounds`` (reference
 ``x`` bounds of the regions, default ``[-3000, -1500]``: the body-in-white mesh spans
 ``x`` from -4045 mm at the rear to -39 mm at the front and crashes into a wall
-at ``x = -29.8``), ``validation_node_errors`` and ``validation_kinematics``
-(default on). The parts of the kinematics readout are the connected
-components of the structural edges. Metrics whose inputs are missing are
-reported as ``null`` with a note: the penetration metrics without shell facets
-(``datapipe.contact_surface=false``), the wall family without a wall, and the
-node maps, regions and kinematics when the held-out cases do not share one
-mesh. Model options such as ``model.penetration_projection_iterations=4
-model.penetration_projection_damping=0.5 model.clamp_to_wall=true`` evaluate a
-checkpoint with the training-free post-processing; never pass ``model.contact_*``
-overrides when scoring a contact model (they change its searcher).
+at ``x = -29.8``) and ``validation_node_errors`` (default on). Metrics whose
+inputs are missing are reported as ``null`` with a note: the penetration
+metrics without shell facets (``datapipe.contact_surface=false``), the wall
+family without a wall, and the node maps and regions when the held-out cases
+do not share one mesh. ``model.clamp_to_wall=true`` evaluates a checkpoint with
+the rigid-wall clamp; never pass ``model.contact_*`` overrides when scoring a
+contact model (they change its searcher).
 """
 
 from __future__ import annotations
@@ -188,16 +184,6 @@ def reference_mm(dataset, index: int = 0) -> torch.Tensor:
     return dataset.mesh_pos_seq[index][0].double() * (std + EPS) + mean
 
 
-def part_structure(dataset):
-    """Part index ``[N]``, labels and the grouping of the kinematics readout:
-    the connected components of the structural edges (the body-in-white VTP files carry no
-    part ids)."""
-    graph = dataset.graphs[0]
-    part_index = graph.component_id.reshape(-1).long()
-    count = int(part_index.max()) + 1
-    return part_index, np.arange(count), "connected components of the structural edges"
-
-
 def region_masks(x: torch.Tensor, bounds) -> torch.Tensor:
     """``[R, N]`` bool: the reference-axis regions and the whole mesh last."""
     edges = [-float("inf"), *[float(b) for b in bounds], float("inf")]
@@ -273,14 +259,13 @@ def run_suite(
     penetration_cfg=None,
     region_bounds=DEFAULT_REGION_BOUNDS,
     node_errors: bool = True,
-    kinematics: bool = True,
     logger=None,
 ) -> dict:
     """Evaluate ``model`` on every case of ``dataset`` (sharded over the ranks).
 
     Returns the JSON-ready record of the suite (identical on every rank after
     the reductions) and the accumulators behind it (``node_rmse`` ``[N]`` in mm
-    or ``None``, the kinematics readout and the penetration probe or ``None``)
+    or ``None`` and the penetration probe or ``None``)
     for the files written next to the record."""
     device = torch.device(device)
     loader = DataLoader(
@@ -295,8 +280,7 @@ def run_suite(
     shared = shared_mesh(dataset)
     if not shared:
         notes["mesh"] = (
-            "held-out cases do not share one mesh: node maps, regions and "
-            "kinematics skipped"
+            "held-out cases do not share one mesh: node maps and regions skipped"
         )
     first = dataset.graphs[0]
     bounds = [float(b) for b in region_bounds]
@@ -335,23 +319,6 @@ def run_suite(
                     "penetration statistics skipped"
                 )
 
-    readout = None
-    part_source = None
-    if kinematics and shared:
-        from kinematics_readout import KinematicsReadout
-
-        part_index, part_ids, part_source = part_structure(dataset)
-        readout = KinematicsReadout(
-            part_index,
-            part_ids,
-            reference_mm(dataset),
-            float(getattr(dataset, "dt", 5e-3)),
-            bounds,
-            int(rollout_steps),
-            device,
-            logger=logger,
-        )
-
     errors = None
     regions = None
     if node_errors and shared:
@@ -382,12 +349,9 @@ def run_suite(
         node_errors=errors,
         regions=regions,
         per_case=case_records,
-        kinematics=readout,
     )
     if probe is not None:
         probe.reduce(world_size)
-    if readout is not None:
-        readout.reduce(world_size)
     if world_size > 1:
         torch.distributed.all_reduce(totals)
         if errors is not None:
@@ -414,7 +378,6 @@ def run_suite(
     horizon = int(stats["nodes_w_time"].numel())
     per_case = summarize_cases(case_records)
     penetration = None if probe is None else probe.summary(stats["nodes_w_time"])
-    kinematics_summary = None if readout is None else readout.summary()
     percentiles, node_rmse = (None, None)
     if errors is not None:
         percentiles, node_rmse = node_error_percentiles(errors)
@@ -427,13 +390,11 @@ def run_suite(
             if regions is None
             else region_summary(regions[0], regions[1], regions[2], bounds, horizon)
         ),
-        kinematics=kinematics_summary,
         node_error_percentiles=percentiles,
         notes=notes,
         cases=sorted(seen),
         kept_nodes=int(first.num_nodes),
         mesh_shared=shared,
-        part_grouping=part_source,
         region_bounds_mm=bounds,
         dt_s=dt_ms / 1000.0,
         metric=(
@@ -452,7 +413,7 @@ def run_suite(
         .reshape(-1)
         .tolist(),
     )
-    return record, dict(node_rmse=node_rmse, kinematics=readout, probe=probe)
+    return record, dict(node_rmse=node_rmse, probe=probe)
 
 
 def log_summary(logger, epoch, record, extras) -> None:
@@ -469,11 +430,6 @@ def log_summary(logger, epoch, record, extras) -> None:
         logger.info(
             f"Validation epoch {epoch}: penetration "
             + extras["probe"].log_line(record["penetration"])
-        )
-    if record["kinematics"] is not None:
-        logger.info(
-            f"Validation epoch {epoch}: kinematics "
-            + extras["kinematics"].log_line(record["kinematics"])
         )
     for key, note in record["notes"].items():
         logger.warning(f"{key}: {note}")
@@ -563,7 +519,6 @@ def main(cfg: DictConfig) -> None:
             penetration_cfg=penetration_cfg,
             region_bounds=bounds,
             node_errors=bool(cfg.training.get("validation_node_errors", True)),
-            kinematics=bool(cfg.training.get("validation_kinematics", True)),
             logger=logger0,
         )
     record["epoch"] = int(epoch)
@@ -578,8 +533,6 @@ def main(cfg: DictConfig) -> None:
                 output_dir / f"node_rmse_epoch_{epoch:04d}.npy",
                 extras["node_rmse"].cpu().numpy().astype(np.float32),
             )
-        if extras["kinematics"] is not None:
-            extras["kinematics"].save(output_dir / f"kinematics_epoch_{epoch:04d}.npz")
         logger0.info(f"Record written to {output_dir / f'epoch_{epoch:04d}.json'}")
 
 

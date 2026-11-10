@@ -103,7 +103,14 @@ class LocalNeighborhood:
 
 
 class NeighborhoodAttentionBlock(nn.Module):
-    r"""Pre-norm attention over a node's static neighbors, then a feed-forward net.
+    r"""Pre-norm attention over a node's static neighbors with a MeshGraphNet-style update.
+
+    Keys come from the normalized latent and values from the raw residual
+    stream; the message is the attention-weighted neighbor difference
+    :math:`\sum_j p_{ij} (v_j - v_i)`; the geometric logit bias is computed in
+    float32; the node update concatenates the normalized latent, the message,
+    the aggregated edge latent and the attention log-sum-exp and applies one
+    MLP with an output LayerNorm, the MeshGraphNet node-update form.
 
     Parameters
     ----------
@@ -124,38 +131,12 @@ class NeighborhoodAttentionBlock(nn.Module):
     fused_backend : {"auto", "triton", "torch"}, optional
         Kernel backend for the fused path. Default is ``"auto"`` (Triton on CUDA
         when available, otherwise the chunked PyTorch implementation).
-    value_norm : bool, optional
-        Project values from the pre-normalized latent (``True``, the original
-        block) or from the raw residual stream (``False``), which lets the block
-        form clean neighbor differences. ``False`` requires ``split_key_value``.
-        Default is ``False``.
-    difference_values : bool, optional
-        Return :math:`\sum_j p_{ij} (v_j - v_i)` instead of :math:`\sum_j p_{ij}
-        v_j`, i.e. attention-weighted neighbor differences. Default is ``True``.
-    update : {"residual", "concat_mlp"}, optional
-        ``"residual"`` adds the projected message to the stream and applies a
-        feed-forward net (original block). ``"concat_mlp"`` concatenates the
-        normalized latent, the aggregated values, the aggregated edge latent and
-        the attention log-sum-exp and applies one MLP with an output LayerNorm,
-        the MeshGraphNet node-update form. Default is ``"concat_mlp"``.
-    bias_fp32 : bool, optional
-        Compute the geometric logit bias in float32 even under autocast or with
-        half-precision parameters (weight and bias are cast with the input), so
-        the only route for geometry into the attention weights is not quantized
-        to bfloat16. The bias is returned in float32 (float64 for float64
-        parameters). Default is ``True``; with ``False`` the bias follows the
-        parameter and autocast dtype.
-    split_key_value : bool, optional
-        Use separate key and value projections instead of one fused ``[2D, D]``
-        matrix (which Muon otherwise orthogonalizes jointly). Default ``True``.
     dropout : float, optional
-        Dropout probability on the block's residual updates (the attention
-        message and the feed-forward output, or the ``concat_mlp`` update).
-        Default is 0.0.
+        Dropout probability on the block's update. Default is 0.0.
     concrete_dropout : bool, optional
         Replace the fixed-rate dropout by a learned-rate
-        :class:`~physicsnemo.nn.ConcreteDropout` shared by the block's update
-        sites, initialised at ``max(dropout, 0.05)``. Default is ``False``.
+        :class:`~physicsnemo.nn.ConcreteDropout` on the block's update,
+        initialised at ``max(dropout, 0.05)``. Default is ``False``.
 
     Forward
     -------
@@ -183,11 +164,6 @@ class NeighborhoodAttentionBlock(nn.Module):
         activation: str = "gelu",
         fused: bool = False,
         fused_backend: Backend = "auto",
-        value_norm: bool = False,
-        difference_values: bool = True,
-        update: str = "concat_mlp",
-        bias_fp32: bool = True,
-        split_key_value: bool = True,
         dropout: float = 0.0,
         concrete_dropout: bool = False,
     ) -> None:
@@ -202,23 +178,14 @@ class NeighborhoodAttentionBlock(nn.Module):
             raise ValueError("mlp_ratio must be positive")
         if fused_backend not in ("auto", "triton", "torch"):
             raise ValueError("fused_backend must be 'auto', 'triton' or 'torch'")
-        if update not in ("residual", "concat_mlp"):
-            raise ValueError("update must be 'residual' or 'concat_mlp'")
-        if not value_norm and not split_key_value:
-            raise ValueError("value_norm=False requires split_key_value=True")
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.edge_dim = edge_dim
         self.fused = bool(fused)
         self.fused_backend = fused_backend
-        self.value_norm = bool(value_norm)
-        self.difference_values = bool(difference_values)
-        self.update = update
-        self.bias_fp32 = bool(bias_fp32)
-        self.split_key_value = bool(split_key_value)
-        # Dropout on the block's residual update(s): standard dropout, or a
-        # learned-rate ConcreteDropout shared by the block's update sites.
+        # Dropout on the block's update: standard dropout or a learned-rate
+        # ConcreteDropout.
         if concrete_dropout:
             self.dropout = ConcreteDropout(
                 in_features=hidden_dim, init_p=max(float(dropout), 0.05)
@@ -229,59 +196,41 @@ class NeighborhoodAttentionBlock(nn.Module):
             self.dropout = nn.Identity()
         self.attention_norm = nn.LayerNorm(hidden_dim)
         self.query = nn.Linear(hidden_dim, hidden_dim)
-        if split_key_value:
-            self.key = nn.Linear(hidden_dim, hidden_dim)
-            self.value = nn.Linear(hidden_dim, hidden_dim)
-        else:
-            self.key_value = nn.Linear(hidden_dim, 2 * hidden_dim)
+        self.key = nn.Linear(hidden_dim, hidden_dim)
+        self.value = nn.Linear(hidden_dim, hidden_dim)
         self.edge_bias = nn.Linear(edge_dim, num_heads)
-        if update == "residual":
-            # Aggregate the low-width edge latent with the attention weights
-            # first, then project: equivalent to per-head edge values without an
-            # N x K x D intermediate.
-            self.edge_value = nn.Linear(num_heads * edge_dim, hidden_dim, bias=False)
-            self.output = nn.Linear(hidden_dim, hidden_dim)
-            self.ffn_norm = nn.LayerNorm(hidden_dim)
-            self.ffn = nn.Sequential(
-                nn.Linear(hidden_dim, mlp_ratio * hidden_dim),
-                get_activation(activation),
-                nn.Linear(mlp_ratio * hidden_dim, hidden_dim),
-            )
-        else:
-            # Node update on [LN(x_i), message_i, edge_message_i, lse_i], the
-            # self-plus-aggregate concatenation of a MeshGraphNet node block.
-            update_in = 2 * hidden_dim + num_heads * edge_dim + num_heads
-            self.update_mlp = nn.Sequential(
-                nn.Linear(update_in, mlp_ratio * hidden_dim),
-                get_activation(activation),
-                nn.Linear(mlp_ratio * hidden_dim, hidden_dim),
-                nn.LayerNorm(hidden_dim),
-            )
+        # Node update on [LN(x_i), message_i, edge_message_i, lse_i], the
+        # self-plus-aggregate concatenation of a MeshGraphNet node block.
+        update_in = 2 * hidden_dim + num_heads * edge_dim + num_heads
+        self.update_mlp = nn.Sequential(
+            nn.Linear(update_in, mlp_ratio * hidden_dim),
+            get_activation(activation),
+            nn.Linear(mlp_ratio * hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+        )
 
     def _projections(self, x):
         normalized = self.attention_norm(x)
         query = self.query(normalized)
-        if self.split_key_value:
-            key = self.key(normalized)
-            value = self.value(normalized if self.value_norm else x)
-        else:
-            key, value = self.key_value(normalized).chunk(2, dim=-1)
+        key = self.key(normalized)
+        # Values from the raw residual stream, so neighbor differences are clean.
+        value = self.value(x)
         return normalized, query, key, value
 
     def _logit_bias(self, edge_latent):
-        if self.bias_fp32:
-            weight, bias = self.edge_bias.weight, self.edge_bias.bias
-            # At least float32, also when the block itself was converted with
-            # .bfloat16()/.half(): cast the weight and bias along with the
-            # input so the matmul never sees mixed dtypes.
-            compute = torch.promote_types(weight.dtype, torch.float32)
-            with torch.autocast(device_type=edge_latent.device.type, enabled=False):
-                return F.linear(
-                    edge_latent.to(compute),
-                    weight.to(compute),
-                    None if bias is None else bias.to(compute),
-                )
-        return self.edge_bias(edge_latent)
+        """The geometric logit bias in at least float32: the only route for
+        geometry into the attention weights is never quantized to bfloat16."""
+        weight, bias = self.edge_bias.weight, self.edge_bias.bias
+        # Also when the block itself was converted with .bfloat16()/.half():
+        # cast the weight and bias along with the input so the matmul never
+        # sees mixed dtypes.
+        compute = torch.promote_types(weight.dtype, torch.float32)
+        with torch.autocast(device_type=edge_latent.device.type, enabled=False):
+            return F.linear(
+                edge_latent.to(compute),
+                weight.to(compute),
+                None if bias is None else bias.to(compute),
+            )
 
     def forward(
         self,
@@ -341,17 +290,11 @@ class NeighborhoodAttentionBlock(nn.Module):
             edge_aggregate = torch.einsum(
                 "nhk,nke->nhe", weights, edge_latent.to(weights.dtype)
             ).reshape(num_nodes, heads * self.edge_dim)
-        if self.difference_values:
-            # sum_j p_ij v_j - v_i = sum_j p_ij (v_j - v_i) since the weights sum
-            # to one over the valid slots.
-            aggregated = aggregated - value.reshape(num_nodes, self.hidden_dim).to(
-                aggregated.dtype
-            )
-        if self.update == "residual":
-            x = x + self.dropout(
-                self.output(aggregated) + self.edge_value(edge_aggregate)
-            )
-            return x + self.dropout(self.ffn(self.ffn_norm(x)))
+        # sum_j p_ij v_j - v_i = sum_j p_ij (v_j - v_i) since the weights sum
+        # to one over the valid slots.
+        aggregated = aggregated - value.reshape(num_nodes, self.hidden_dim).to(
+            aggregated.dtype
+        )
         lse = torch.where(torch.isfinite(lse), lse, torch.zeros_like(lse)).detach()
         features = torch.cat(
             (
@@ -395,12 +338,8 @@ class NeighborhoodAttentionProcessor(nn.Module):
         is ``False`` (reference gather implementation).
     fused_backend : {"auto", "triton", "torch"}, optional
         Backend for the fused kernel. Default is ``"auto"``.
-    value_norm, difference_values, update, bias_fp32, split_key_value, dropout, concrete_dropout
-        Forwarded to every :class:`NeighborhoodAttentionBlock`; the defaults
-        (``False``, ``True``, ``"concat_mlp"``, ``True``, ``True``, 0.0,
-        ``False``) are the DeFormer block. ``value_norm=True,
-        difference_values=False, update="residual", bias_fp32=False,
-        split_key_value=False`` is the original block.
+    dropout, concrete_dropout
+        Forwarded to every :class:`NeighborhoodAttentionBlock`.
 
     Forward
     -------
@@ -428,11 +367,6 @@ class NeighborhoodAttentionProcessor(nn.Module):
         checkpoint_offloading: bool = False,
         fused_attention: bool = False,
         fused_backend: Backend = "auto",
-        value_norm: bool = False,
-        difference_values: bool = True,
-        update: str = "concat_mlp",
-        bias_fp32: bool = True,
-        split_key_value: bool = True,
         dropout: float = 0.0,
         concrete_dropout: bool = False,
     ) -> None:
@@ -463,11 +397,6 @@ class NeighborhoodAttentionProcessor(nn.Module):
                     activation,
                     fused=fused_attention,
                     fused_backend=fused_backend,
-                    value_norm=value_norm,
-                    difference_values=difference_values,
-                    update=update,
-                    bias_fp32=bias_fp32,
-                    split_key_value=split_key_value,
                     dropout=dropout,
                     concrete_dropout=concrete_dropout,
                 )

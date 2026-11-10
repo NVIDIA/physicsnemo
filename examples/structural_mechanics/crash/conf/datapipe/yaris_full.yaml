@@ -37,10 +37,6 @@ contact_surface: false
 # reference features (graph.mesh_edge_index / mesh_edge_attr / mesh_edge_mean /
 # mesh_edge_std), for the MeshGraphNet corrector; edge_index itself is unchanged
 mesh_edges: false
-# frame pairs (one_time_step training samples): the target holds two consecutive
-# future frames [N, 2, 3] (k and k+1; the last frame pairs backwards) under the
-# earlier frame's time label, for training.increment_loss_weight
-frame_pairs: false
 # analytic rigid wall plane x = position in mm (Yaris barrier: 100), for the
 # wall clamp and the wall penetration metrics
 rigid_wall_position: null

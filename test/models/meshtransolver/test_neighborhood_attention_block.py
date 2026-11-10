@@ -27,21 +27,6 @@ from physicsnemo.experimental.models.meshtransolver.local_attention import (
     NeighborhoodAttentionProcessor,
 )
 
-RELEASED = dict(
-    value_norm=False,
-    difference_values=True,
-    update="concat_mlp",
-    bias_fp32=True,
-    split_key_value=True,
-)
-ORIGINAL = dict(
-    value_norm=True,
-    difference_values=False,
-    update="residual",
-    bias_fp32=False,
-    split_key_value=False,
-)
-
 
 def _inputs(n=40, k=6, dim=32, edge_dim=8, seed=0, dtype=torch.float32):
     g = torch.Generator().manual_seed(seed)
@@ -62,41 +47,17 @@ def _block(fused, backend="torch", seed=1, **options):
     )
 
 
-def test_defaults_are_the_released_block_and_the_original_stays_available():
-    released = {name for name, _ in _block(False).named_parameters()}
-    assert released == {
-        name for name, _ in _block(False, **RELEASED).named_parameters()
-    }
-    assert any(name.startswith(("update_mlp", "key.", "value.")) for name in released)
-    assert "key_value.weight" not in released
-    original = {name for name, _ in _block(False, **ORIGINAL).named_parameters()}
-    assert {
-        "key_value.weight",
-        "output.weight",
-        "edge_value.weight",
-        "ffn.0.weight",
-    } <= original
-    assert not any(
-        name.startswith(("update_mlp", "key.", "value.")) for name in original
-    )
-    with pytest.raises(ValueError, match="split_key_value"):
-        _block(False, value_norm=False, split_key_value=False)
-    with pytest.raises(ValueError, match="update must be"):
-        _block(False, update="other")
-
-
-def test_released_block_parameterization_and_shapes():
-    block = _block(False, **RELEASED)
+def test_block_parameterization_and_shapes():
+    block = _block(False)
     names = {name for name, _ in block.named_parameters()}
     assert {
+        "query.weight",
         "key.weight",
         "value.weight",
+        "edge_bias.weight",
         "update_mlp.0.weight",
         "update_mlp.3.weight",
     } <= names
-    assert not any(
-        name.startswith(("key_value", "output", "edge_value", "ffn")) for name in names
-    )
     # update MLP input: LN(x) + message + edge message + lse per head
     assert block.update_mlp[0].in_features == 2 * 32 + 4 * 8 + 4
     x, index, mask, edge_latent = _inputs()
@@ -105,18 +66,16 @@ def test_released_block_parameterization_and_shapes():
     out.square().sum().backward()
     for name, p in block.named_parameters():
         assert p.grad is not None and torch.isfinite(p.grad).all(), name
+    with pytest.raises(ValueError, match="fused_backend"):
+        _block(False, backend="cuda")
 
 
-@pytest.mark.parametrize(
-    "options",
-    [dict(), RELEASED, dict(difference_values=True), dict(update="concat_mlp")],
-)
-def test_fused_torch_backend_matches_gather_path(options):
+def test_fused_torch_backend_matches_gather_path():
     """Both execution paths implement the same block, forward and backward."""
     torch.manual_seed(0)
     x, index, mask, edge_latent = _inputs(dtype=torch.float64)
-    gather = _block(False, **options).double()
-    fused = _block(True, **options).double()
+    gather = _block(False).double()
+    fused = _block(True).double()
     fused.load_state_dict(gather.state_dict())
     x_g = x.clone().requires_grad_()
     x_f = x.clone().requires_grad_()
@@ -135,9 +94,7 @@ def test_fused_torch_backend_matches_gather_path(options):
 
 def test_difference_values_vanish_for_a_constant_field():
     """With identical neighbors the difference message is exactly zero."""
-    block = _block(
-        False, split_key_value=True, value_norm=False, difference_values=True
-    )
+    block = _block(False)
     x, index, mask, edge_latent = _inputs()
     constant = x[:1].expand_as(x).contiguous()
     normalized, query, key, value = block._projections(constant)
@@ -154,33 +111,31 @@ def test_difference_values_vanish_for_a_constant_field():
     )
 
 
-def test_value_projection_sees_the_raw_stream_when_value_norm_is_off():
-    block = _block(False, split_key_value=True, value_norm=False)
+def test_value_projection_sees_the_raw_stream():
+    block = _block(False)
     x = torch.randn(10, 32) * 50 + 3  # far from unit scale
     normalized, _, _, value = block._projections(x)
     torch.testing.assert_close(value, block.value(x))
     assert not torch.allclose(value, block.value(normalized))
 
 
-def test_logit_bias_precision_under_autocast():
-    block_original = _block(False, **ORIGINAL)
-    block_fp32 = _block(False, bias_fp32=True)
+def test_logit_bias_is_float32_under_autocast():
+    block = _block(False)
     edge_latent = torch.randn(5, 6, 8)
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-        assert block_original._logit_bias(edge_latent).dtype == torch.bfloat16
-        assert block_fp32._logit_bias(edge_latent).dtype == torch.float32
+        assert block._logit_bias(edge_latent).dtype == torch.float32
 
 
 @pytest.mark.parametrize("fused", [False, True])
-def test_bias_fp32_runs_with_half_precision_parameters(fused):
+def test_bias_runs_in_float32_with_half_precision_parameters(fused):
     """A block converted with ``.bfloat16()`` still projects the bias in float32."""
-    block = _block(fused, bias_fp32=True).bfloat16()
+    block = _block(fused).bfloat16()
     x, index, mask, edge_latent = _inputs(dtype=torch.bfloat16)
     assert block._logit_bias(edge_latent).dtype == torch.float32
     out = block(x, index, mask, edge_latent)
     assert out.shape == x.shape and out.dtype == torch.bfloat16
     assert torch.isfinite(out.float()).all()
-    reference = _block(False, bias_fp32=True).bfloat16()(x, index, mask, edge_latent)
+    reference = _block(False).bfloat16()(x, index, mask, edge_latent)
     torch.testing.assert_close(out.float(), reference.float(), atol=5e-2, rtol=5e-2)
 
 
@@ -239,15 +194,11 @@ def test_kernel_returns_detached_lse():
     assert q.grad is not None and k.grad is not None and v.grad is not None
 
 
-def test_processor_forwards_block_options_and_checkpoints():
+def test_processor_checkpoints_match_plain_execution():
     torch.manual_seed(2)
     processor = NeighborhoodAttentionProcessor(
-        2, 32, 4, edge_input_dim=4, edge_dim=8, checkpoint_segments=2, **RELEASED
+        2, 32, 4, edge_input_dim=4, edge_dim=8, checkpoint_segments=2
     ).train()
-    assert all(
-        block.update == "concat_mlp" and block.split_key_value
-        for block in processor.blocks
-    )
     x, index, mask, _ = _inputs()
     neighborhood = LocalNeighborhood(index, mask, torch.randn(40, 6, 4))
     y = processor(x.clone().requires_grad_(), neighborhood)

@@ -26,10 +26,6 @@
 # At evaluation the corrected positions are clamped at the rigid wall plane
 # x = 100 mm (datapipe.rigid_wall_position, model.final_clamp_to_wall); the
 # penetration metrics score the shell surface and the wall against the truth.
-# Options: model.teacher_window=true model.functional_dim=45 adds the teacher's
-# motion around the frame to the inputs; datapipe.frame_pairs=true
-# training.increment_loss_weight=1.0 adds the loss on the change between
-# consecutive frames.
 defaults:
   - yaris_deformer
   - model@model.teacher: deformer_time_conditional

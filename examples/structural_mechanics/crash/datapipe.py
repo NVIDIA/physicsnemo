@@ -752,7 +752,6 @@ class CrashGraphDataset(CrashBaseDataset):
         reference_dst = None
         reference_num_nodes = None
         reference_edge_index = None
-        reference_component_id = None
         self.local_knn_cache = None
         if self.local_knn_k is not None:
             from local_neighborhoods import LocalNeighborhoodCache
@@ -770,10 +769,8 @@ class CrashGraphDataset(CrashBaseDataset):
             )
             if shares_reference_topology:
                 # Crash ensembles normally deform the same mesh. Reuse its
-                # immutable connectivity and component labels instead of
-                # repeating coalescing and a Python union-find for every run.
+                # immutable connectivity instead of coalescing it for every run.
                 g = Data(edge_index=reference_edge_index, num_nodes=num_nodes)
-                g.component_id = reference_component_id
             else:
                 g = self.create_graph(
                     self.srcs[i],
@@ -781,15 +778,11 @@ class CrashGraphDataset(CrashBaseDataset):
                     num_nodes=num_nodes,
                     dtype=torch.long,
                 )
-                g.component_id = self.connected_component_ids(
-                    g.edge_index, int(g.num_nodes)
-                )
                 if reference_src is None:
                     reference_src = self.srcs[i]
                     reference_dst = self.dsts[i]
                     reference_num_nodes = num_nodes
                     reference_edge_index = g.edge_index
-                    reference_component_id = g.component_id
             pos0 = self.mesh_pos_seq[i][0]
             g = self.add_edge_features(g, pos0)
             g.shell_thickness = self.shell_thickness_data[i]
@@ -952,40 +945,6 @@ class CrashGraphDataset(CrashBaseDataset):
         edge_index, _ = _pyg_utils.coalesce(edge_index, None, num_nodes=num_nodes)
         edge_index, _ = _pyg_utils.add_self_loops(edge_index, num_nodes=num_nodes)
         return _pyg_data.Data(edge_index=edge_index, num_nodes=num_nodes)
-
-    @staticmethod
-    def connected_component_ids(
-        edge_index: torch.Tensor, num_nodes: int
-    ) -> torch.Tensor:
-        """Return contiguous structural component IDs using union-find."""
-
-        parents = np.arange(num_nodes, dtype=np.int64)
-        ranks = np.zeros(num_nodes, dtype=np.int8)
-
-        def find(node: int) -> int:
-            while parents[node] != node:
-                parents[node] = parents[parents[node]]
-                node = int(parents[node])
-            return node
-
-        for source, destination in edge_index.detach().cpu().numpy().T:
-            root_source = find(int(source))
-            root_destination = find(int(destination))
-            if root_source == root_destination:
-                continue
-            if ranks[root_source] < ranks[root_destination]:
-                root_source, root_destination = root_destination, root_source
-            parents[root_destination] = root_source
-            if ranks[root_source] == ranks[root_destination]:
-                ranks[root_source] += 1
-
-        root_to_component: dict[int, int] = {}
-        labels = np.empty(num_nodes, dtype=np.int64)
-        for node in range(num_nodes):
-            root = find(node)
-            component = root_to_component.setdefault(root, len(root_to_component))
-            labels[node] = component
-        return torch.from_numpy(labels)
 
     @staticmethod
     def add_edge_features(data, pos: torch.Tensor):

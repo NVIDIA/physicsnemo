@@ -36,7 +36,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `training.validation_freq`, `save_checkpoint_freq` | 5, 5 | epochs |
 | `datapipe.sample_type` | `one_time_step` | one (case, future frame) pair per sample, from the initial frame |
 | `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | from the model, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash |
-| `datapipe.contact_surface`, `mesh_edges`, `frame_pairs`, `rigid_wall_position` | false, false, false, null | graph attachments the corrector and the metrics need (see below) |
+| `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | false, false, null | graph attachments the corrector and the metrics need (see below) |
 
 ### Keys of `model/deformer_time_conditional.yaml`
 
@@ -51,10 +51,8 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `local_processor`, `local_neighborhood`, `local_knn_k` | `knn_attention`, `euclidean`, 32 | static kNN neighbourhood attention; the Yaris store edges cover shells only, so Euclidean neighbours |
 | `local_num_heads`, `local_mlp_ratio`, `local_edge_dim`, `local_activation` | 8, 2, 32, `gelu` | attention block |
 | `local_attention_fused`, `local_attention_backend` | true, `auto` | the fused kernel (Triton on CUDA) |
-| `local_value_norm`, `local_difference_values`, `local_update`, `local_bias_fp32`, `local_split_key_value` | false, true, `concat_mlp`, true, true | the DeFormer attention block (raw-stream values, difference values, concatenate-then-MLP update, float32 geometric bias, separate key and value projections) |
 | `activation_checkpointing`, `checkpointing_ratio`, `activation_checkpointing_components`, `num_*_processor_checkpoint_segments` | true, 1.0, `[blocks, context]`, 1 | memory policy of the 1.48M-node forward |
 | `clamp_to_wall`, `wall_axis`, `wall_sign` | false, 0, 1 | evaluation-time rigid-wall clamp (needs `datapipe.rigid_wall_position`) |
-| `penetration_projection_*` | iterations 0 | evaluation-time envelope projection (band, clearance, damping, tolerance, crossed-only, symmetric side test, search backend and budget) |
 
 The body-in-white recipe `crash_deformer_knn_time_conditional` uses the same
 model file with `local_neighborhood=geodesic`, no activation checkpointing and
@@ -66,20 +64,17 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | --- | --- | --- |
 | `model.teacher` | `model/deformer_time_conditional.yaml` | the network's architecture (frozen, weights from `teacher_weights`) |
 | `model.teacher_weights` | required | the network's `.mdlus` checkpoint |
-| `model.functional_dim` | 39 | coords + thickness + time code + the network's displacement (45 with `teacher_window`) |
-| `model.teacher_window` | false | also feed the displacement one frame earlier and later (as differences) |
+| `model.functional_dim` | 39 | coords + thickness + time code + the network's displacement |
 | `model.hidden_dim`, `processor_size`, `aggregation`, `num_processor_checkpoint_segments` | 128, 8, `sum`, 8 | the MeshGraphNet processor |
 | `model.use_contact`, `contact_activation_distance`, `contact_reference_clearance`, `node_contact_radius` | true, 5, 10, 10 | contact edges from the crossing-aware search on the predicted shape: 5 mm band, 10 mm reference clearance, features over 10 mm |
 | `model.contact_side_from_reference`, `contact_side_symmetric`, `contact_crossing_radius`, `contact_clearance_approach_only` | true, false, null, false | the side test and its corrections (see `physicsnemo.experimental.nn.shell_contact.ShellContactSearch`) |
 | `model.contact_bidirectional`, `contact_search_implementation`, `contact_surface_max_pairs` | true, `warp`, 8e6 | both message directions; search backend and budget |
 | `model.dt`, `local_knn_k`, `local_neighborhood` | 0.005, 32, `euclidean` | read by the datapipe (the network's neighbourhoods) |
 | `model.final_clamp_to_wall`, `wall_axis`, `wall_sign` | true (recipe), 0, 1 | wall clamp of the corrected shape at evaluation |
-| `model.final_projection_*` | iterations 0 | envelope projection of the corrected shape at evaluation |
 | `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | true, true, 100 | shell facets and exclusions, mesh edges, the Yaris barrier plane |
 | `training.epochs`, `lr_warmup_epochs`, `validation_freq`, `save_checkpoint_freq` | 30, 1, 2, 1 | the corrector's budget |
 | `training.coarse_loss_weight` | 0 | no provisional head |
 | `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm | target-relative penetration metrics in the validation record |
-| `datapipe.frame_pairs`, `training.increment_loss_weight` | false, 0 | optional loss on the change between consecutive frames |
 
 `yaris_geotransolver` sets the point model's time code, width and memory policy
 to the network's and the datapipe's neighbourhood keys explicitly (the point
@@ -94,10 +89,8 @@ model has none); it ignores the neighbourhoods.
 | `datapipe.contact_surface=true` | shell facets for the penetration metrics of a contact-free model |
 | `++training.validation_penetration.wall_position_mm=100` | wall family for models whose recipe has no `rigid_wall_position` |
 | `+training.validation_node_errors=true` | per-node RMSE map and per-region translational share |
-| `+training.validation_kinematics=true` | temporal smoothness and per-part kinematics (Kabsch fits per part) |
 | `training.validation_region_bounds=[-2000,-1000]` | reference-x bounds of the regions |
 | `+training.warm_start_model=<file>.mdlus` | score a model-only checkpoint (no `checkpoint.0.<E>.pt` next to it); `training.ckpt_path` may then be an empty directory |
-| `model.penetration_projection_iterations=4 model.penetration_projection_damping=0.5` | evaluate the network with the envelope projection |
 
 The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
 
@@ -107,7 +100,6 @@ The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
 | --- | --- | --- |
 | `training.restore_rng` | true | restore the checkpoint's RNG states on resume; false after a change of the GPU count |
 | `training.data_startup_timeout_seconds` | 3600 | how long the ranks wait while rank 0 prepares statistics and caches at startup |
-| `training.increment_loss_weight` | 0 | loss on the change between consecutive frames (with `datapipe.frame_pairs=true`) |
 | `training.num_training_samples`, `num_validation_samples` | 69, 20 | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
 
 Re-running a training command resumes from `<work_dir>/checkpoints`.
@@ -130,7 +122,7 @@ neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw_tc.py` scores a body-in-white time-conditional checkpoint with
 the Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
-++datapipe.rigid_wall_position=-29.8`, kinematics over the connected components).
+++datapipe.rigid_wall_position=-29.8`).
 
 ## Shared components
 

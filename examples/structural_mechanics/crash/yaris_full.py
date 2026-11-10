@@ -80,8 +80,7 @@ def atomic_json(path, value):
 # The Yaris store layout; every array is checked where the recipe reads it.
 STORE_LAYOUT = (
     "nodes/pos [T, N, 3], nodes/thickness [N], edges [E, 2], shell/connectivity "
-    "[S, 4] for contact, nodes/part_id [N] for the kinematics readout and "
-    "solid/connectivity [H, 8] with include_solid_edges"
+    "[S, 4] for contact and solid/connectivity [H, 8] with include_solid_edges"
 )
 
 
@@ -324,16 +323,6 @@ class YarisFullReader:
             raise ValueError("Thickness must be finite and nonnegative")
         return values
 
-    def part_ids(self, store):
-        """Part id per kept node (``nodes/part_id``), int64 ``[n_keep]``."""
-        try:
-            values = np.asarray(store["nodes/part_id"][:]).reshape(-1)
-        except KeyError as error:
-            raise ValueError("part tokens need nodes/part_id in the store") from error
-        if values.shape != (self.total_nodes,):
-            raise ValueError("part_id/node count mismatch")
-        return values[self.keep_ids].astype(np.int64)
-
     def structural_edges(self, store):
         """Reference connectivity restricted and renumbered to kept nodes, ``[2, E]``.
 
@@ -557,10 +546,6 @@ class YarisFullGraphDataset(Dataset):
         ``mesh_edge_attr``, ``mesh_edge_mean``, ``mesh_edge_std``) for the
         MeshGraphNet corrector; ``edge_index`` itself stays as the local
         operator expects it (empty under the Euclidean metric).
-    frame_pairs : bool
-        ``one_time_step`` training samples hold two consecutive future frames
-        ``[N, 2, 3]`` (``k`` and ``k+1``; the last frame pairs backwards) under
-        the earlier frame's time label, for ``training.increment_loss_weight``.
     """
 
     def __init__(
@@ -588,11 +573,9 @@ class YarisFullGraphDataset(Dataset):
         contact_surface=False,
         rigid_wall_position=None,
         mesh_edges=False,
-        frame_pairs=False,
     ):
         self.reader, self.name, self.split = reader, name, split
         self.mesh_edges = bool(mesh_edges)
-        self.frame_pairs = bool(frame_pairs) and sample_type == "one_time_step"
         self.contact_surface = bool(contact_surface)
         self.rigid_wall_position = (
             None if rigid_wall_position is None else float(rigid_wall_position)
@@ -639,10 +622,6 @@ class YarisFullGraphDataset(Dataset):
                 if len(frames) > self.num_steps or len(frames) < 2:
                     raise ValueError(
                         f"{path.stem}: {len(frames)} selected frames outside [2, {self.num_steps}]"
-                    )
-                if self.frame_pairs and len(frames) < 3:
-                    raise ValueError(
-                        f"{path.stem}: frame pairs need at least two future frames"
                     )
                 counts.append(len(frames) - 1)
             self.case_future_frames = counts
@@ -890,39 +869,26 @@ class YarisFullGraphDataset(Dataset):
         return sample
 
     def _time_step_sample(self, index):
-        """Initial frame plus one future frame (or a consecutive pair), labelled
-        by normalized time."""
+        """Initial frame plus one future frame, labelled by normalized time."""
         case, k = self._pair(index)
         path = self.paths[case]
         store = self.reader.open(path)
         frames = self.reader.frames(store)
-        if self.frame_pairs:
-            # Consecutive future frames (k, k+1); the last frame pairs backwards, so
-            # every index yields a pair and every frame of the case is supervised.
-            first = k if k + 1 < self.case_future_frames[case] else k - 1
-            targets = [1 + first, 2 + first]
-        else:
-            first, targets = k, [1 + k]
         pos = torch.from_numpy(
-            self.reader.coordinates(store, [frames[0], *(frames[j] for j in targets)])
+            self.reader.coordinates(store, [frames[0], frames[1 + k]])
         )
         pos = (pos - self.node_stats["pos_mean"]) / (self.node_stats["pos_std"] + EPS)
-        target = (
-            pos[1:].transpose(0, 1).contiguous()  # [N, 2, 3], earlier frame first
-            if self.frame_pairs
-            else pos[1].contiguous()
-        )
         node_features = dict(
             coords=pos[0],
             features=self._node_feature_tensor(store),
-            time=torch.tensor(first / (self.num_steps - 1), dtype=torch.float32),
+            time=torch.tensor(k / (self.num_steps - 1), dtype=torch.float32),
         )
         sample = SimSample(
             node_features=node_features,
-            node_target=target.contiguous(),
+            node_target=pos[1].contiguous(),
             graph=self.graph,
             global_features=None,
         )
         sample.yaris_case_name = path.stem
-        sample.yaris_target_frames = [int(frames[j]) for j in targets]
+        sample.yaris_target_frames = [int(frames[1 + k])]
         return sample

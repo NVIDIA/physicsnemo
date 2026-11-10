@@ -58,7 +58,7 @@ _torchinfo = OptionalImport("torchinfo")
 
 from data_startup import initialize_datasets
 from datapipe import SimSample, simsample_collate
-from losses import PositionLoss, increment_loss
+from losses import PositionLoss
 from omegaconf import open_dict
 from training_state import (
     configure_deterministic_training,
@@ -186,8 +186,7 @@ class Trainer:
     Training options read from ``cfg.training`` beyond the defaults of
     ``conf/training/default.yaml``: ``loss`` / ``loss_space`` / ``loss_scale_mm``
     (:class:`losses.PositionLoss`), ``coarse_loss_weight`` (provisional head of
-    the time-conditional DeFormer), ``increment_loss_weight`` (frame pairs),
-    ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
+    the time-conditional DeFormer), ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
     run's weights), ``manual_gradient_allreduce``, ``reproducible_sampling`` /
     ``sampler_seed``, ``deterministic`` and ``early_stopping_*``.
     """
@@ -227,14 +226,6 @@ class Trainer:
         self.coarse_loss_weight = float(cfg.training.get("coarse_loss_weight", 0.0))
         if self.coarse_loss_weight < 0.0:
             raise ValueError("training.coarse_loss_weight cannot be negative")
-        # Loss on the change between the two frames of a frame-pair sample
-        # (datapipe.frame_pairs): the predicted increment against the true one,
-        # with the position loss's kind and millimetre scale (losses.increment_loss).
-        self.increment_loss_weight = float(
-            cfg.training.get("increment_loss_weight", 0.0)
-        )
-        if self.increment_loss_weight < 0.0:
-            raise ValueError("training.increment_loss_weight cannot be negative")
 
         # --- Consistency check between model and datapipe ---
         model_name = cfg.model._target_
@@ -591,14 +582,6 @@ class Trainer:
             prediction, target, reference=self._loss_reference(sample)
         )
 
-    def _increment_term(self, prediction, target):
-        """Weighted increment loss of a frame pair, ``None`` when the weight is 0."""
-        if self.increment_loss_weight <= 0.0:
-            return None
-        return self.increment_loss_weight * increment_loss(
-            self.position_loss, prediction, target
-        )
-
     def _apply_lr_warmup(self, epoch: int) -> None:
         """Linear per-step warmup to each group's base rate during the first
         ``lr_warmup_epochs`` epochs; the epoch scheduler takes over afterwards."""
@@ -648,20 +631,11 @@ class Trainer:
                     "trajectory": prediction_loss.detach(),
                     "coarse": coarse_loss.detach(),
                 }
-                total = prediction_loss + self.coarse_loss_weight * coarse_loss
-                increment = self._increment_term(model_output.prediction, target)
-                if increment is not None:
-                    self.last_loss_components["increment"] = increment.detach()
-                    total = total + increment
-                return total
+                return prediction_loss + self.coarse_loss_weight * coarse_loss
             trajectory_loss = self._supervised_position_loss(
                 model_output, target, sample
             )
             self.last_loss_components = {"trajectory": trajectory_loss.detach()}
-            increment = self._increment_term(model_output, target)
-            if increment is not None:
-                self.last_loss_components["increment"] = increment.detach()
-                trajectory_loss = trajectory_loss + increment
             return trajectory_loss
 
     def backward(self, loss):

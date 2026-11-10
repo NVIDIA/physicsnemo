@@ -85,9 +85,10 @@ corrector's additions; `conf/README.md` lists every key.
 
 The Yaris recipes read one Zarr store per design with a shared reference mesh:
 `nodes/pos` (`[T, N, 3]` positions in mm at 1 ms), `nodes/thickness` (`[N]`),
-`nodes/part_id` (`[N]`), `edges` (`[E, 2]` shell edges), `shell/connectivity`
-(`[S, 4]` quads, triangles with the last id repeated) and optionally
-`solid/connectivity` (`[H, 8]` hexahedra). The Yaris stores are delivered in
+`edges` (`[E, 2]` shell edges), `shell/connectivity` (`[S, 4]` quads,
+triangles with the last id repeated), optionally `solid/connectivity`
+(`[H, 8]` hexahedra) and optionally `nodes/part_id` (`[N]`, copied into the
+node metadata written with the node-error maps). The Yaris stores are delivered in
 this layout by the dataset's own preparation pipeline, together with the two
 files below. It is not the layout PhysicsNeMo-Curator's crash ETL writes
 (`mesh_pos`, `thickness`, `edges`, read by `zarr_reader.py` for the VTP-derived
@@ -160,13 +161,7 @@ torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer_corre
 
 The recipe turns on the contact topology (`datapipe.contact_surface`), the mesh
 edges (`datapipe.mesh_edges`), the rigid wall (`datapipe.rigid_wall_position`)
-and the evaluation-time wall clamp. Options kept as documented switches:
-`model.teacher_window=true model.functional_dim=45` also feeds the network's
-displacement one frame earlier and later; `datapipe.frame_pairs=true
-training.increment_loss_weight=1.0` adds a loss on the change between
-consecutive frames; `model.final_projection_iterations=4` projects penetrating
-nodes onto the shell thickness envelope at evaluation (off by default: it also
-removes true crossings).
+and the evaluation-time wall clamp.
 
 #### Evaluate
 
@@ -175,8 +170,7 @@ without touching the run's own records: pooled and per-frame vector RMSE in
 millimetres, per-case and per-region breakdowns, the target-relative
 penetration statistics of the shell surface and the rigid wall (only
 penetration the ground truth does not have counts against a model) and,
-optionally, node-error maps and the temporal-smoothness and per-part kinematics
-readout:
+optionally, node-error maps:
 
 ```bash
 torchrun --nproc_per_node=<NUM_GPUS> evaluate_yaris_tc.py --config-name yaris_deformer_corrector \
@@ -186,7 +180,7 @@ torchrun --nproc_per_node=<NUM_GPUS> evaluate_yaris_tc.py --config-name yaris_de
   model.teacher_weights=/runs/yaris_deformer/checkpoints/MeshGeoFLARETimeConditional.0.60.mdlus \
   training.ckpt_path=/runs/yaris_corrector/checkpoints +training.load_epoch=30 \
   +training.validation_output_dir=/runs/eval/corrector hydra.run.dir=/runs/eval/corrector \
-  +training.validation_node_errors=true +training.validation_kinematics=true
+  +training.validation_node_errors=true
 ```
 
 For the network or the baseline use their recipe with `datapipe.contact_surface=true`
