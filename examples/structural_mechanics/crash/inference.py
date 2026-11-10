@@ -209,10 +209,16 @@ class InferenceWorker:
         self.model.eval()
 
         ckpt_path = cfg.training.ckpt_path
-        loaded_epoch = load_checkpoint(ckpt_path, models=self.model, device=self.device)
+        loaded_epoch = load_checkpoint(
+            ckpt_path,
+            models=self.model,
+            device=self.device,
+            epoch=cfg.training.get("load_epoch"),
+        )
         if loaded_epoch <= 0:
             raise FileNotFoundError(
-                f"No complete model and training checkpoint found in {ckpt_path}"
+                f"No training checkpoint (checkpoint.0.<E>.pt) with its model file "
+                f"found in {ckpt_path}"
             )
         self.logger.info(
             f"[Rank {dist.rank}] Loaded checkpoint {ckpt_path} at epoch {loaded_epoch}"

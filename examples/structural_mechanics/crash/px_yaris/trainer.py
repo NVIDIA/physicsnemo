@@ -100,8 +100,6 @@ def accumulate_validation(
             dtype=amp_dtype if amp_dtype is not None else torch.bfloat16,
         ):
             prediction = model(sample=sample, data_stats=data_stats)
-            if hasattr(prediction, "trajectory"):
-                prediction = prediction.trajectory
         target = sample.node_target
         if prediction.shape != target.shape or target.shape[-1] != 3:
             raise ValueError(

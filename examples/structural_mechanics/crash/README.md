@@ -201,8 +201,7 @@ conf/
 │   ├── geotransolver_time_conditional.yaml
 │   ├── transolver_one_shot.yaml
 │   ├── figconvunet_one_shot.yaml
-│   ├── mgn_one_shot.yaml
-│   └── ...
+│   └── mgn_one_shot.yaml
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
 │   ├── px_yaris_full.yaml

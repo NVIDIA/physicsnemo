@@ -101,6 +101,15 @@ class ResidualTimeConditional(physicsnemo.Module):
         self.teacher = teacher
         self.teacher_weights = str(teacher_weights)
         self.student = DeFormerCorrector(**student_kwargs)
+        teacher_steps = getattr(teacher, "rollout_steps", None)
+        if teacher_steps is not None and int(teacher_steps) != int(
+            self.student.rollout_steps
+        ):
+            raise ValueError(
+                "teacher and corrector disagree on the frame count: the teacher has "
+                f"rollout_steps={teacher_steps}, the corrector "
+                f"{self.student.rollout_steps} (training.num_time_steps)"
+            )
         # Read by recipes and readouts that know the time-conditional interface.
         self.rollout_steps = self.student.rollout_steps
         self.dt = self.student.dt

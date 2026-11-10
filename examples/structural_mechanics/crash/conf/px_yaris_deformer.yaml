@@ -72,6 +72,7 @@ training:
   start_lr: 2.0e-4
   end_lr: 1.0e-6
   validation_freq: 5
+  validation_region_bounds: [-2000.0, -1000.0]  # reference-x bounds (mm) of the per-region readouts
   save_checkpoint_freq: 5
   early_stopping_patience: 0
   auxiliary_loss_weight: 0.1

@@ -104,7 +104,7 @@ The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
 | --- | --- | --- |
 | `training.restore_rng` | true | restore the checkpoint's RNG states on resume; false after a change of the GPU count |
 | `training.data_startup_timeout_seconds` | 3600 | how long the ranks wait while rank 0 prepares statistics and caches at startup |
-| `training.num_training_samples`, `num_validation_samples` | 69, 20 | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
+| `training.num_training_samples`, `num_validation_samples` | `???`, 0 (69 and 20 in `px_yaris_deformer`) | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
 
 Re-running a training command resumes from `<work_dir>/checkpoints`.
 `px_yaris_prepare.py` reads the environment variable `YARIS_STATS_WORKERS`
@@ -125,8 +125,12 @@ change the neighbourhood metric and size; the datapipe builds the matching
 neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw.py` scores a body-in-white time-conditional checkpoint with
-the PX Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
-++datapipe.rigid_wall_position=-29.8`).
+the PX Yaris validation suite; the penetration metrics need the shell facets
+(`++reader.include_contact_topology=true ++datapipe.contact_surface=true
+++datapipe.contact_surface_exclusion=one_ring ++datapipe.rigid_wall_position=-29.8`,
+see the script's docstring). Its per-region readouts follow the recipe's
+`training.validation_region_bounds`, `[-3000, -1500]` for the body-in-white
+mesh (the PX Yaris recipes use `[-2000, -1000]`).
 
 ## Shared components
 

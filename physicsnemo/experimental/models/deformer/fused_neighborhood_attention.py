@@ -57,13 +57,15 @@ from jaxtyping import Bool, Float, Int
 
 from physicsnemo.core.version_check import check_version_spec
 
-# Triton ships with the CUDA builds of PyTorch (distribution ``triton``, or
-# ``pytorch-triton`` for nightly builds); CPU builds fall back to the Torch
+# Triton ships with the GPU builds of PyTorch (distribution ``triton``;
+# ``pytorch-triton`` for nightly, ``pytorch-triton-rocm`` for ROCm and
+# ``triton-windows`` for Windows builds); CPU builds fall back to the Torch
 # backend. Availability is read from the package metadata, so an installed but
 # broken Triton raises at import instead of silently disabling the kernel.
-TRITON_AVAILABLE = check_version_spec(
-    "triton", "3.0.0", hard_fail=False
-) or check_version_spec("pytorch-triton", "3.0.0", hard_fail=False)
+TRITON_AVAILABLE = any(
+    check_version_spec(name, "3.0.0", hard_fail=False)
+    for name in ("triton", "pytorch-triton", "pytorch-triton-rocm", "triton-windows")
+)
 
 if TRITON_AVAILABLE:
     import triton

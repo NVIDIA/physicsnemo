@@ -381,6 +381,8 @@ def run_suite(
     percentiles, node_rmse = (None, None)
     if errors is not None:
         percentiles, node_rmse = node_error_percentiles(errors)
+    # The datapipe's frame interval (its default of 5 ms when the recipe sets
+    # model.dt to null); the time labels of the record follow it.
     dt_ms = float(getattr(dataset, "dt", 5e-3)) * 1000.0
     history = 1  # the targets start one frame after the observed initial one
     record = dict(
@@ -486,11 +488,20 @@ def main(cfg: DictConfig) -> None:
             device=dist.device,
         )
         if epoch <= 0:
-            raise RuntimeError(f"No checkpoint found under {cfg.training.ckpt_path}")
+            raise RuntimeError(
+                f"No training checkpoint (checkpoint.0.<E>.pt) under "
+                f"{cfg.training.ckpt_path}; pass +training.warm_start_model=<file>.mdlus "
+                "for a weights-only file"
+            )
     model.eval()
-    amp_dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}[
-        cfg.training.get("amp_dtype", "bfloat16")
-    ]
+    amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
+    amp_dtype_name = str(cfg.training.get("amp_dtype", "bfloat16"))
+    if amp_dtype_name not in amp_dtypes:
+        raise ValueError(
+            "training.amp_dtype must be 'float16' or 'bfloat16'; "
+            f"got {amp_dtype_name!r}"
+        )
+    amp_dtype = amp_dtypes[amp_dtype_name]
     penetration_cfg = cfg.training.get("validation_penetration")
     penetration_cfg = (
         {"enabled": True}

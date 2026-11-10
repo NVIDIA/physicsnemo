@@ -461,7 +461,7 @@ class DeFormer(GeoTransolver):
     node_features : torch.Tensor
         Node inputs of shape :math:`(N, D_{in})` over the flattened graph batch
         (``functional_dim`` channels).
-    graph : PyGData
+    graph : GraphType
         Graph carrying the static neighborhoods: ``knn_index`` of shape
         :math:`(N, K + 1)` (``local_knn_k`` neighbors plus the node itself),
         ``knn_mask`` of shape :math:`(N, K + 1)`, ``knn_edge_attr`` of shape
@@ -472,8 +472,9 @@ class DeFormer(GeoTransolver):
         :math:`(B, N_b, C_{geo})`; required when ``geometry_dim`` is set.
         Default is ``None``.
     global_embedding : torch.Tensor, optional
-        Global parameters of shape :math:`(B, T, C_g)` (``(T, C_g)`` or
-        ``(C_g,)`` for a single graph); required when ``global_dim`` is set.
+        Global parameters of shape :math:`(B, T, C_g)`, :math:`(B, C_g)` for one
+        token per graph, or ``(T, C_g)`` / ``(C_g,)`` for a single graph;
+        required when ``global_dim`` is set.
         Default is ``None``.
     local_positions : torch.Tensor, optional
         Positions for the ball-query local features, shape :math:`(N, 3)` or
@@ -488,9 +489,9 @@ class DeFormer(GeoTransolver):
         Node outputs of shape :math:`(N, D_{out})`; with
         ``return_backbone=True`` a :class:`BackboneState` whose
         ``point_features`` have shape :math:`(N, D_{bb})` (``n_hidden`` plus
-        the local-feature width), whose ``neighborhood`` is the validated
+        the local-feature width), whose ``neighborhood`` is the
         :class:`~physicsnemo.experimental.models.deformer.local_attention.LocalNeighborhood`
-        of the graph and whose ``mesh_context`` has shape :math:`(N, D_{mesh})`
+        of the graph (checked unless compiling) and whose ``mesh_context`` has shape :math:`(N, D_{mesh})`
         or is ``None`` without mesh-context fusion.
     """
 

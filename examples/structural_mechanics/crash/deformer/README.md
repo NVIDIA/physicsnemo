@@ -34,7 +34,8 @@ The network (`deformer.time_conditional.DeFormerTimeConditional`,
 * a physical-space MSE loss (position error in millimetres over one 10 mm
   scale for all three axes) plus 0.1 times the same loss on the provisional
   shape; Muon/AdamW, cosine schedule, 60 epochs, bf16 autocast, activation
-  checkpointing of the FLARE blocks so a 1.48M-node forward fits one GPU.
+  checkpointing of the FLARE blocks and the geometry context so a 1.48M-node
+  forward fits one GPU.
   9,672,505 parameters.
 
 The corrector (`deformer.residual.ResidualTimeConditional` around
@@ -99,7 +100,7 @@ needed:
   nodes and fly-away nodes that are dropped from inputs, targets and
   neighbourhoods (pass `yaris.outlier_mask=null` to keep every node).
 
-Every recipe takes the same four paths: `yaris.data_root` (the stores),
+Every PX Yaris recipe takes the same four paths: `yaris.data_root` (the stores),
 `yaris.split_manifest`, `yaris.outlier_mask` and `yaris.work_dir` (statistics,
 neighbourhood caches, checkpoints and validation records of the run). Prepare
 the frozen normalization statistics and the kNN neighbourhood cache once, on a

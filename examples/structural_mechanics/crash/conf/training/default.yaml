@@ -43,7 +43,6 @@ validation_freq: 10
 save_checkpoint_freq: 10
 early_stopping_patience: 0      # Validation evaluations; 0 disables early stopping
 early_stopping_min_delta: 0.0   # Required absolute validation-MSE improvement
-validation_region_bounds: [-2000.0, -1000.0]  # Reference-x bounds (mm) of the per-region readouts
 restore_rng: true               # Restore the checkpoint's RNG states on resume (false after a GPU-count change)
 data_startup_timeout_seconds: 3600  # Collective timeout while rank 0 prepares statistics and caches at startup
 

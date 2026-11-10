@@ -42,7 +42,7 @@ import hydra
 import numpy as np
 import omegaconf
 import torch
-from hydra.utils import get_class, instantiate
+from hydra.utils import get_class, get_object, instantiate
 from omegaconf import DictConfig
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
@@ -168,11 +168,7 @@ def _warmup_cosine_factor(warmup_epochs, epochs, start_lr, end_lr):
 
 def trainable_parameters(model):
     """The parameters an optimizer should update: a frozen teacher's are skipped."""
-    return [
-        parameter
-        for name, parameter in model.named_parameters()
-        if parameter.requires_grad
-    ]
+    return [parameter for parameter in model.parameters() if parameter.requires_grad]
 
 
 class Trainer:
@@ -219,7 +215,11 @@ class Trainer:
         self.manual_gradient_allreduce = (
             requested_manual_allreduce and self.dist.world_size > 1
         )
-        if self.manual_gradient_allreduce and self.amp_dtype == torch.float16:
+        if (
+            self.manual_gradient_allreduce
+            and self.amp
+            and self.amp_dtype == torch.float16
+        ):
             raise ValueError(
                 "manual_gradient_allreduce currently requires bfloat16 or fp32"
             )
@@ -236,9 +236,10 @@ class Trainer:
         # --- Consistency check between model and datapipe ---
         # Model wrappers declare the sample kind they consume (``input_kind``:
         # "graph" or "points") and datapipes the kinds they serve
-        # (``sample_kinds``); classes without the attributes are not checked.
-        model_class = get_class(cfg.model._target_)
-        datapipe_class = get_class(cfg.datapipe._target_)
+        # (``sample_kinds``); targets without the attributes, factory functions
+        # included, are not checked.
+        model_class = get_object(cfg.model._target_)
+        datapipe_class = get_object(cfg.datapipe._target_)
         input_kind = getattr(model_class, "input_kind", None)
         sample_kinds = getattr(datapipe_class, "sample_kinds", None)
         if (
@@ -878,8 +879,9 @@ def main(cfg: DictConfig) -> None:
                 )
 
         # Save after validation: its DataLoader and any stochastic evaluation
-        # must be reflected in the state used for the next training epoch.
-        if (epoch + 1) % cfg.training.save_checkpoint_freq == 0:
+        # must be reflected in the state used for the next training epoch. An
+        # early stop saves too, so the final state is on disk.
+        if should_stop or (epoch + 1) % cfg.training.save_checkpoint_freq == 0:
             metadata = {
                 "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
                 "rng_states": gather_rng_states(trainer.loader_generators),

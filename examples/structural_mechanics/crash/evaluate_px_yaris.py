@@ -70,7 +70,11 @@ def main(cfg: DictConfig) -> None:
         cfg.training.restore_rng = False
     trainer = resolve_trainer_class(cfg.training.get("trainer_class"))(cfg, logger0)
     if trainer.epoch_init <= 0 and not cfg.training.get("warm_start_model"):
-        raise RuntimeError(f"No checkpoint found under {cfg.training.ckpt_path}")
+        raise RuntimeError(
+            f"No training checkpoint (checkpoint.0.<E>.pt) under "
+            f"{cfg.training.ckpt_path}; pass +training.warm_start_model=<file>.mdlus "
+            "for a weights-only file"
+        )
     logger0.info(
         f"Evaluating epoch {trainer.epoch_init} of {cfg.training.ckpt_path} "
         f"on {dist.world_size} rank(s); records under {output_dir}"
