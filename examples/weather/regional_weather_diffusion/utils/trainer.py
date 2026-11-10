@@ -691,9 +691,10 @@ class Trainer:
         A separate sampling scheduler is also created for validation-time
         diffusion sampling.
 
-        When ``training.perf.torch_compile`` is enabled (and domain parallelism
-        is off), the loss callable is wrapped with :func:`torch.compile` so the
-        forward path through the preconditioned model and loss is compiled.
+        When ``training.perf.torch_compile`` is enabled, the loss callable is
+        wrapped with :func:`torch.compile` so the forward path through the
+        preconditioned model and loss is compiled. This also applies under
+        domain parallelism (ShardTensor).
 
         Returns
         -------
@@ -704,11 +705,9 @@ class Trainer:
 
         self.sampling_scheduler = None
 
-        compile_loss = self.use_torch_compile
-
         if self.loss_type == "regression":
             loss_fn = RegressionLoss(self.net)
-            if compile_loss:
+            if self.use_torch_compile:
                 self.logger.info("Compiling loss function with torch.compile...")
                 loss_fn = torch.compile(loss_fn)
             return loss_fn
@@ -739,7 +738,7 @@ class Trainer:
             sampling_scheduler
         )
 
-        if compile_loss:
+        if self.use_torch_compile:
             self.logger.info("Compiling loss function with torch.compile...")
             loss_fn = torch.compile(loss_fn)
 
