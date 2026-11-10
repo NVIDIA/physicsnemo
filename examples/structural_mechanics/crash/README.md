@@ -236,12 +236,9 @@ def predict_with_features(sample):
 reference = torch.cat(
     [predict_with_features(inputs)[1] for inputs in reference_batches]
 )
-validation = torch.cat(
-    [predict_with_features(inputs)[1] for inputs in validation_batches]
-)
 scorer = KNNScorer(k=10, normalize=True)
 scorer.fit(reference)
-threshold = torch.quantile(scorer.score(validation), 0.99)
+threshold = torch.quantile(scorer.reference_scores(), 0.99) * 1.5
 
 prediction, features = predict_with_features(test_inputs)
 flagged = scorer.score(features) > threshold
@@ -249,17 +246,20 @@ if flagged.any():
     logging.warning("Geometry features exceed the selected OOD threshold")
 ```
 
-`GeoTransolverOneShot` in `rollout.py` accepts the optional feature flag and
-returns the normal rollout prediction plus detached geometry tokens. Calling
-`model(...)` preserves PyTorch's module hooks. Other rollout classes can adopt
-this optional output separately.
+`GeoTransolverOneShot` in `rollout.py` exposes the separate
+`forward_with_geometry_features` method, returning the normal prediction plus
+detached geometry tokens. Direct calls bypass model-level forward hooks;
+ordinary `model(...)` calls preserve those hooks and return predictions only.
+Other rollout classes can adopt the separate method.
 
-The optional output contains the same geometry tokens previously captured by the
-guard's hook; pooling is visible in the recipe. Prediction and scoring share one
-forward pass. Reference features can also be retained from existing evaluation
-forwards rather than recomputing them. Use a separate validation set for threshold
-selection: scoring reference samples against themselves includes a zero-distance
-self-neighbor.
+These are the same geometry tokens previously captured by the guard's hook;
+pooling is visible in the recipe. Prediction and scoring share one forward pass.
+Reference features can also be retained from existing evaluation forwards.
+`reference_scores()` excludes each reference row from its own neighbors, so this
+example retains the old leave-one-out threshold and sensitivity multiplier
+without reserving more training samples. Alternatively, select a threshold from
+independent validation scores. Neither empirical rule guarantees a false-positive
+rate; evaluate the chosen policy on held-out cases.
 
 Global parameter bounds remain ordinary input checks. For example, compare each
 velocity/thickness parameter with minima and maxima from the reference inputs,

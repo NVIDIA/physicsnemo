@@ -34,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 import pyvista as pv
+import torch
 
 from physicsnemo.experimental.uq.ood import DensityScorer
 from physicsnemo.experimental.uq.ood.geometry import FeatureSchema, extract_features
@@ -74,34 +75,20 @@ def directory_features(directory: Path, n_workers: int = 1):
 def save_scorer(
     path: Path, scorer: DensityScorer, feature_identity: dict, policy: dict
 ):
-    """Save NumPy state plus application feature identity and decision thresholds."""
-    state = scorer.get_state()
-    arrays = {
-        key: value for key, value in state.items() if isinstance(value, np.ndarray)
-    }
-    config = {key: value for key, value in state.items() if key not in arrays}
-    np.savez_compressed(path, **arrays)
-    path.with_suffix(".json").write_text(
-        json.dumps(
-            {
-                "config": config,
-                "features": feature_identity,
-                "policy": policy,
-            },
-            indent=2,
-        )
+    """Save weights-only tensor state and application metadata together."""
+    torch.save(
+        {"scorer": scorer.state_dict(), "features": feature_identity, "policy": policy},
+        path,
     )
 
 
 def load_scorer(path: Path, feature_identity: dict, device: str):
     """Reject mismatched descriptors or units before restoring the fitted scorer."""
-    saved = json.loads(path.with_suffix(".json").read_text())
+    saved = torch.load(path, weights_only=True, map_location=device)
     if saved["features"] != feature_identity:
         raise ValueError("Saved feature schema, units, or preprocessing do not match")
-    with np.load(path, allow_pickle=False) as arrays:
-        state = saved["config"] | {key: arrays[key] for key in arrays.files}
     scorer = DensityScorer()
-    scorer.set_state(state, device=device)
+    scorer.load_state_dict(saved["scorer"])
     return scorer, saved["policy"]
 
 
@@ -136,8 +123,11 @@ def fit_and_score(
 
     scorer = DensityScorer(
         method=method,
-        gmm_components=gmm_components,
-        pce_components=pce_components,
+        **(
+            {"gmm_components": gmm_components}
+            if method == "gmm"
+            else {"pce_components": pce_components}
+        ),
         device=device,
     )
     identity = {
@@ -147,9 +137,17 @@ def fit_and_score(
         "length_unit": length_unit,
         "preprocessing": "raw geometry descriptors",
     }
-    policy = {"warn_pct": 99.0, "reject_pct": 99.9}
+    policy = {"warn_pct": 90.0, "reject_pct": 97.0}
     _, reference = directory_features(train_dir, n_workers)
-    scorer.fit(reference)
+    # Hold out training-directory rows for calibration; leave test data untouched.
+    if len(reference) < 40:
+        raise ValueError(
+            "Need at least 40 reference meshes for fitting and calibration"
+        )
+    order = np.random.default_rng(0).permutation(len(reference))
+    split = len(reference) - max(20, len(reference) // 5)
+    scorer.fit(reference[order[:split]])
+    scorer.calibrate(reference[order[split:]])
     save_scorer(model_path, scorer, identity, policy)
     scorer, policy = load_scorer(model_path, identity, device)
 
@@ -209,7 +207,7 @@ def main():
         test_dir=val_dir,
         method="gmm",
         experiment_name="GMM - DrivAerML Train → DrivAerML Validation",
-        model_path=Path("drivaerml_gmm.npz"),
+        model_path=Path("drivaerml_gmm.pt"),
         device=device,
         n_workers=n_workers,
         gmm_components=1,
@@ -221,7 +219,7 @@ def main():
         test_dir=val_dir,
         method="pce",
         experiment_name="PCE - DrivAerML Train → DrivAerML Validation",
-        model_path=Path("drivaerml_pce.npz"),
+        model_path=Path("drivaerml_pce.pt"),
         device=device,
         n_workers=n_workers,
     )
@@ -232,7 +230,7 @@ def main():
         test_dir=ahmedml_dir,
         method="gmm",
         experiment_name="GMM - DrivAerML Train → AhmedML (Cross-Dataset)",
-        model_path=Path("drivaerml_gmm.npz"),
+        model_path=Path("drivaerml_gmm.pt"),
         device=device,
         n_workers=n_workers,
         gmm_components=1,

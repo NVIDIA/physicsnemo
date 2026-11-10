@@ -20,7 +20,6 @@ Run: python examples/minimal/uq/geometry_scoring.py
 Synthetic spheres illustrate composition and persistence, not OOD accuracy.
 """
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -50,6 +49,7 @@ def features(radii):
 def main():
     """Fit, save, restore, validate feature identity, and apply the same policy."""
     reference = features(torch.linspace(0.8, 1.2, 24))
+    calibration = features(torch.linspace(0.805, 1.195, 24))
     query = features([1.0, 2.0])
     # These values belong to the application, not to a generic density model.
     metadata = {
@@ -59,40 +59,27 @@ def main():
         "length_unit": "m",
         "preprocessing": "raw descriptor vector",
     }
-    policy = {"warn_percentile": 99.0, "reject_percentile": 99.9}
+    # Illustrative ranks with distinct attainable WARN/REJECT tiers for 24 rows.
+    policy = {"warn_percentile": 90.0, "reject_percentile": 97.0}
     scorer = DensityScorer(method="pce", pce_components=3)
     scorer.fit(reference)
 
-    # Density state retains its existing flat NumPy format. Store arrays in NPZ
-    # and configuration/feature identity/policy in JSON, without pickle loading.
-    state = scorer.get_state()
-    arrays = {
-        key: value for key, value in state.items() if isinstance(value, np.ndarray)
-    }
-    config = {key: value for key, value in state.items() if key not in arrays}
+    scorer.calibrate(calibration)
+
+    # One weights-only artifact holds state and application metadata.
     with tempfile.TemporaryDirectory() as directory:
-        folder = Path(directory)
-        np.savez_compressed(folder / "density.npz", **arrays)
-        (folder / "metadata.json").write_text(
-            json.dumps(
-                {
-                    "config": config,
-                    "features": metadata,
-                    "policy": policy,
-                }
-            )
+        path = Path(directory) / "density.pt"
+        torch.save(
+            {"scorer": scorer.state_dict(), "features": metadata, "policy": policy},
+            path,
         )
-        saved = json.loads((folder / "metadata.json").read_text())
+        saved = torch.load(path, weights_only=True, map_location="cpu")
         if saved["features"] != metadata:
             raise ValueError(
                 "Reference features use different schema, units, or preprocessing"
             )
-        with np.load(folder / "density.npz", allow_pickle=False) as stored:
-            restored_state = saved["config"] | {
-                key: stored[key] for key in stored.files
-            }
         restored = DensityScorer()
-        restored.set_state(restored_state, device="cpu")
+        restored.load_state_dict(saved["scorer"])
         policy = saved["policy"]
     torch.testing.assert_close(restored.score(query), scorer.score(query))
     scores = restored.score(query)

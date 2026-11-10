@@ -16,6 +16,9 @@
 
 from __future__ import annotations
 
+import warnings
+from numbers import Integral
+
 import numpy as np
 import torch
 
@@ -59,7 +62,7 @@ class DensityScorer:
     model : object
         The fitted PyTorch density backend.
     ref_scores : torch.Tensor or None
-        Reference anomaly scores from training data for percentile computation.
+        Reference anomaly scores from training or held-out calibration data.
     device : torch.device
         Device being used for computation.
     method : str
@@ -72,6 +75,14 @@ class DensityScorer:
     the caller. Fitted GMM/PCE transformations and reference scores are preserved
     in :meth:`get_state` / :meth:`set_state`. Scores are tensors;
     :meth:`percentiles` returns a NumPy array.
+
+    Training-score ranks are optimistic and are not false-positive probabilities.
+    Use :meth:`calibrate` with independent in-distribution features before choosing
+    thresholds. Percentiles have resolution ``100 / N`` for N calibration rows.
+    Calibration does not repair an overparameterized density fit. GMM uses full
+    covariance in raw feature units; scale heterogeneous features consistently
+    before fitting and scoring. PCE standardizes inputs but does not whiten PCA
+    outputs. Only its covariance calculation uses float64.
     """
 
     def __init__(
@@ -84,17 +95,46 @@ class DensityScorer:
         random_state: int | None = 0,
         device: str = "cpu",
     ):
+        if not isinstance(method, str):
+            raise ValueError("method must be 'gmm' or 'pce'")
+        for name, value in (
+            ("gmm_components", gmm_components),
+            ("pce_components", pce_components),
+            ("poly_degree", poly_degree),
+        ):
+            if name == "pce_components" and value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+                raise ValueError(
+                    f"{name} must be a positive integer"
+                    + (" or None" if name == "pce_components" else "")
+                )
+        if not isinstance(interaction_only, bool):
+            raise ValueError("interaction_only must be a bool")
         self.method = method.lower()
-        self.gmm_components = gmm_components
-        self.pce_components = pce_components
-        self.poly_degree = poly_degree
+        self.gmm_components = int(gmm_components)
+        self.pce_components = None if pce_components is None else int(pce_components)
+        self.poly_degree = int(poly_degree)
         self.interaction_only = interaction_only
         self.random_state = random_state
         self.ref_scores = None
+        self.reference_kind = "training"
 
         # Validate method
         if self.method not in ["gmm", "pce"]:
             raise ValueError(f"method must be 'gmm' or 'pce', got '{self.method}'")
+        if self.method == "gmm" and (
+            pce_components is not None or poly_degree != 2 or interaction_only
+        ):
+            warnings.warn(
+                "PCE options are ignored for method='gmm'. Pass only method-specific options.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if self.method == "pce" and gmm_components != 1:
+            warnings.warn(
+                "gmm_components is ignored for method='pce'.", UserWarning, stacklevel=2
+            )
 
         # Parse device
         if isinstance(device, str):
@@ -165,11 +205,41 @@ class DensityScorer:
         self.ref_scores = None
         self.model.fit(X_torch)
         # Compute reference scores for training data (returns torch tensor)
-        scores = self.model.score(X_torch)
+        scores = (
+            self.model.training_scores_
+            if self.method == "pce"
+            else self.model.score(X_torch)
+        )
         # Store as tensor on device
         if not torch.isfinite(scores).all():
             raise RuntimeError("Density fitting produced non-finite reference scores")
         self.ref_scores = scores
+        self.reference_kind = "training"
+        if self.method == "pce":
+            self.model.training_scores_ = None
+
+    @torch.no_grad()
+    def calibrate(self, features: np.ndarray | torch.Tensor) -> None:
+        """Replace percentile reference scores using held-out features, without refitting.
+
+        Parameters
+        ----------
+        features : np.ndarray or torch.Tensor
+            Nonempty independent in-distribution samples with the fitted feature
+            representation. Tensor inputs are moved to the configured device,
+            following :meth:`score`.
+
+        Returns
+        -------
+        None
+            Updates reference scores after successful scoring. A failed call
+            leaves the previous reference intact.
+        """
+        scores = self.score(features)
+        if not scores.numel():
+            raise ValueError("Calibration features must contain at least one sample")
+        self.ref_scores = scores.detach().clone()
+        self.reference_kind = "held_out"
 
     @torch.no_grad()
     def score(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
@@ -221,9 +291,9 @@ class DensityScorer:
         Convert anomaly scores to empirical percentiles.
 
         This method converts raw anomaly scores to percentiles relative to
-        the reference distribution established during training. Percentiles
-        provide an intuitive interpretation: a percentile of 95 means the
-        sample is more anomalous than 95% of the training data.
+        the reference scores established by fit or calibrate. A percentile of 95
+        means 95% of reference scores are less than or equal to the query score.
+        This empirical rank is not a false-positive probability.
 
         Parameters
         ----------
@@ -300,6 +370,7 @@ class DensityScorer:
         if self.ref_scores is None:
             raise RuntimeError("Call fit() before serializing the scorer")
         state = {
+            "reference_kind": self.reference_kind,
             "method": self.method,
             "gmm_components": self.gmm_components,
             "pce_components": self.pce_components,
@@ -363,4 +434,71 @@ class DensityScorer:
         }
         candidate.model.set_state(model_state, device=candidate.device)
         candidate.ref_scores = reference
+        candidate.reference_kind = state.get("reference_kind", "training")
+        if candidate.reference_kind not in ("training", "held_out"):
+            raise ValueError("Invalid reference_kind")
+        if candidate.method == "pce":
+            candidate.model.training_scores_ = None
         self.__dict__.update(candidate.__dict__)
+
+    def state_dict(self) -> dict:
+        """Return a versioned tensor snapshot for weights-only serialization.
+
+        Returns
+        -------
+        dict
+            Independent fitted state. Save feature metadata and application
+            thresholds alongside it using ``torch.save``.
+        """
+        return {
+            "version": 1,
+            "state": {
+                key: torch.from_numpy(value).to(self.device).clone()
+                if isinstance(value, np.ndarray)
+                else value
+                for key, value in self.get_state().items()
+            },
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore a versioned tensor snapshot without changing state on failure.
+
+        Parameters
+        ----------
+        state : dict
+            Output of :meth:`state_dict`. Use ``torch.load(..., weights_only=True,
+            map_location=device)`` to select the fitted device. All state tensors
+            must be on that device. Legacy NumPy dictionaries use :meth:`set_state`.
+
+        Returns
+        -------
+        None
+            Replaces the fitted state and configuration after validation.
+        """
+        if (
+            set(state) != {"version", "state"}
+            or type(state["version"]) is not int
+            or state["version"] != 1
+        ):
+            raise ValueError("Unsupported DensityScorer state version or keys")
+        payload = state["state"]
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("ref_scores"), torch.Tensor
+        ):
+            raise ValueError("DensityScorer state requires tensor reference scores")
+        device = payload["ref_scores"].device
+        converted = {}
+        for key, value in payload.items():
+            if isinstance(value, torch.Tensor):
+                if value.device != device:
+                    raise ValueError(
+                        "All saved density tensors must use the same device"
+                    )
+                converted[key] = value.detach().cpu().numpy().copy()
+            elif value is None or isinstance(value, (str, bool, int, float)):
+                converted[key] = value
+            else:
+                raise ValueError(
+                    "DensityScorer state must contain tensors and scalar configuration"
+                )
+        self.set_state(converted, device=device)

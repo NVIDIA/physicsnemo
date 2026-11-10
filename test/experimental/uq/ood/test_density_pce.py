@@ -17,10 +17,12 @@
 
 """Tests for PCE-based density estimation."""
 
+from itertools import product
+
 import numpy as np
 import pytest
 
-from physicsnemo.experimental.uq.ood._pce import TorchPCEDensityModel
+from physicsnemo.experimental.uq.ood._pce import TorchPCEDensityModel, _hermite_indices
 
 
 def test_pce_auto_components():
@@ -92,3 +94,23 @@ def test_polynomial_degrees(poly_degree):
     # Convert to numpy for assertion
     scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
     assert np.all(np.isfinite(scores_np))
+
+
+@pytest.mark.parametrize("interaction_only", [False, True])
+@pytest.mark.parametrize("degree", [1, 2, 3])
+def test_hermite_columns_preserve_legacy_order(interaction_only, degree):
+    """Saved polynomial state must retain the exact legacy feature-column order."""
+    dims = 4
+    expected = ((0,) * dims,) + tuple(
+        idx
+        for idx in product(range(2 if interaction_only else degree + 1), repeat=dims)
+        if 0 < sum(idx) <= degree
+    )
+    actual = _hermite_indices(dims, degree, interaction_only)
+    assert actual == expected
+    assert actual is _hermite_indices(dims, degree, interaction_only)
+
+
+def test_wide_hermite_enumerates_only_retained_terms():
+    """Twenty components must not enumerate the 3**20 candidate grid."""
+    assert len(_hermite_indices(20, 2, False)) == 231

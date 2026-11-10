@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import warnings
 from numbers import Integral
 
 import numpy as np
@@ -96,7 +97,7 @@ class TorchGMM(nn.Module):
 
     def _initialize_parameters(self, X: torch.Tensor) -> None:
         """
-        Initialize GMM parameters using k-means++ style initialization.
+        Initialize means from uniformly sampled rows without replacement.
 
         Parameters
         ----------
@@ -110,8 +111,7 @@ class TorchGMM(nn.Module):
             torch.ones(self.n_components, device=self.device) / self.n_components
         )
 
-        # Initialize means using k-means++ style
-        # Pick first mean randomly
+        # Sample distinct rows uniformly; this is not k-means++ initialization.
         indices = torch.randperm(
             n_samples, device=self.device, generator=self._generator
         )[: self.n_components]
@@ -155,6 +155,13 @@ class TorchGMM(nn.Module):
                 # Fallback: add more regularization
                 cov_reg = cov + torch.eye(n_features, device=self.device) * 1e-3
                 cov_chol = torch.linalg.cholesky(cov_reg)
+                warnings.warn(
+                    "GMM covariance required additional diagonal regularization (1e-3). "
+                    "Check feature scaling and the number of samples per component.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self.covariances_[k].copy_(cov_reg)
                 precisions_chol[k] = torch.linalg.solve_triangular(
                     cov_chol, torch.eye(n_features, device=self.device), upper=False
                 ).T
@@ -292,6 +299,24 @@ class TorchGMM(nn.Module):
             X = torch.from_numpy(X).float().to(self.device)
         else:
             X = X.to(self.device)
+
+        if (
+            isinstance(self.n_components, bool)
+            or not isinstance(self.n_components, Integral)
+            or self.n_components < 1
+            or self.n_components > X.shape[0]
+        ):
+            raise ValueError(
+                "n_components must be a positive integer no larger than the number of samples"
+            )
+        if X.shape[0] <= 2 * self.n_components * X.shape[1]:
+            warnings.warn(
+                "Few samples per GMM component relative to feature width; full covariance "
+                "may overfit. Reduce feature width/components or collect more data, "
+                "and calibrate thresholds on held-out scores.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Density fitting must not reseed a caller's dropout/ensemble workflow.
         self._generator = None

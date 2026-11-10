@@ -22,6 +22,28 @@ import torch
 from physicsnemo.experimental.uq.ood._gmm import TorchGMM
 
 
+def test_components_exceed_samples(device):
+    model = TorchGMM(n_components=5, device=device)
+    with pytest.raises(ValueError, match="number of samples"):
+        model.fit(torch.randn(3, 2, device=device))
+    assert model.weights_ is None
+
+
+def test_covariance_fallback_is_visible_and_persisted(device):
+    model = TorchGMM(n_components=1, device=device)
+    model.covariances_ = -1e-4 * torch.eye(2, device=device)[None]
+    with pytest.warns(UserWarning, match="regularization"):
+        precision = model._compute_precision_cholesky()
+    expected_cov = 9e-4 * torch.eye(2, device=device)[None]
+    torch.testing.assert_close(model.covariances_, expected_cov)
+    # Compare the factor directly: a float32 CUDA matmul in this assertion can
+    # use TF32, introducing rounding unrelated to the Cholesky/triangular solve.
+    expected_precision = torch.diag_embed(
+        expected_cov.diagonal(dim1=-2, dim2=-1).rsqrt()
+    )
+    torch.testing.assert_close(precision, expected_precision)
+
+
 @pytest.mark.parametrize("max_iter", [0, -1, 1.5, True])
 def test_invalid_iteration_limit_is_rejected_before_initialization(device, max_iter):
     """Invalid iteration budgets raise a clear error without fitting parameters."""

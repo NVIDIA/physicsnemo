@@ -17,11 +17,83 @@
 
 """Tests for geometry guardrail density model."""
 
+import io
+
 import numpy as np
 import pytest
 import torch
 
 from physicsnemo.experimental.uq.ood import DensityScorer
+
+
+@pytest.mark.parametrize("method", ["gmm", "pce"])
+def test_held_out_calibration_and_tensor_state(device, method):
+    """Calibration changes ranks, not fitted scores, and survives weights-only load."""
+    gen = torch.Generator().manual_seed(42)
+    width, count = (30, 40) if method == "gmm" else (10, 60)
+    train = torch.randn(count, width, generator=gen).to(device)
+    calibration = torch.randn(500, width, generator=gen).to(device)
+    query = torch.randn(500, width, generator=gen).to(device)
+    options = {"pce_components": 10} if method == "pce" else {}
+    scorer = DensityScorer(method=method, device=device, **options)
+    with pytest.warns(UserWarning, match="overfit"):
+        scorer.fit(train)
+    before = scorer.score(query)
+    assert np.mean(scorer.percentiles(before) > 95) > 0.9
+    scorer.calibrate(calibration)
+    torch.testing.assert_close(before, scorer.score(query))
+    ranks = scorer.percentiles(before)
+    # Held-out empirical ranks behave sensibly in the seeded reviewer reproduction.
+    # This is not a guarantee for arbitrary models or populations.
+    assert 0.01 < np.mean(ranks > 95) < 0.15
+    stream = io.BytesIO()
+    torch.save(scorer.state_dict(), stream)
+    stream.seek(0)
+    restored = DensityScorer()
+    restored.load_state_dict(torch.load(stream, weights_only=True, map_location=device))
+    assert restored.reference_kind == "held_out"
+    torch.testing.assert_close(restored.score(query), before)
+    np.testing.assert_array_equal(restored.percentiles(before), ranks)
+    if method == "pce":
+        assert "pce_training_scores_" not in restored.get_state()
+    state = restored.state_dict()
+    state["version"] = 2
+    with pytest.raises(ValueError, match="version"):
+        restored.load_state_dict(state)
+    with pytest.raises(ValueError, match="at least one"):
+        restored.calibrate(query[:0])
+    np.testing.assert_array_equal(restored.percentiles(before), ranks)
+    state = restored.state_dict()
+    state["state"]["ref_scores"].fill_(float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        restored.load_state_dict(state)
+    torch.testing.assert_close(restored.score(query), before)
+
+
+@pytest.mark.parametrize("name", ["gmm_components", "pce_components", "poly_degree"])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_invalid_density_configuration(name, value):
+    with pytest.raises(ValueError, match=name):
+        DensityScorer(**{name: value})
+
+
+def test_unused_density_options_warn():
+    with pytest.warns(UserWarning, match="ignored"):
+        DensityScorer(method="gmm", pce_components=3)
+    with pytest.warns(UserWarning, match="ignored"):
+        DensityScorer(method="pce", gmm_components=2)
+
+
+def test_pce_fit_does_not_score_twice(monkeypatch):
+    scorer = DensityScorer(method="pce", pce_components=2)
+
+    def unexpected_score(_):
+        raise AssertionError("PCE fit must reuse training scores")
+
+    monkeypatch.setattr(scorer.model, "score", unexpected_score)
+    scorer.fit(torch.randn(40, 3))
+    assert scorer.ref_scores.shape == (40,)
+    assert scorer.model.training_scores_ is None
 
 
 @pytest.mark.parametrize(

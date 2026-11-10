@@ -25,6 +25,72 @@ from physicsnemo.experimental.uq.ood import KNNScorer
 
 
 @pytest.mark.parametrize("normalize", [False, True])
+@pytest.mark.parametrize("k", [1, 4, 20])
+def test_chunked_leave_one_out_matches_dense(device, normalize, k, monkeypatch):
+    """Bound every distance block and exclude only the matching reference row."""
+    reference = torch.randn(11, 7, device=device, dtype=torch.float64)
+    reference[1] = reference[0]  # Duplicate rows must remain legitimate neighbors.
+    query = torch.randn(9, 7, device=device, dtype=torch.float64)
+    ref = (
+        reference / (reference.norm(dim=1, keepdim=True) + 1e-8)
+        if normalize
+        else reference
+    )
+    q = query / (query.norm(dim=1, keepdim=True) + 1e-8) if normalize else query
+    dense = torch.cdist(ref, ref)
+    dense.fill_diagonal_(float("inf"))
+    expected_reference = dense.topk(min(k, 10), largest=False).values.mean(1)
+    expected_query = torch.cdist(q, ref).topk(min(k, 11), largest=False).values.mean(1)
+    original = torch.cdist
+    calls = []
+
+    def bounded_cdist(x, y, **kwargs):
+        assert x.shape[0] <= 3 and y.shape[0] <= 4
+        calls.append((x.shape[0], y.shape[0]))
+        return original(x, y, **kwargs)
+
+    monkeypatch.setattr(torch, "cdist", bounded_cdist)
+    scorer = KNNScorer(k, normalize, query_chunk_size=3, reference_chunk_size=4)
+    scorer.fit(reference)
+    cached = scorer._normalized_reference
+    torch.testing.assert_close(scorer.reference_scores(), expected_reference)
+    torch.testing.assert_close(scorer.score(query), expected_query)
+    assert scorer._normalized_reference is cached and len(calls) > 1
+    restored = KNNScorer(query_chunk_size=3, reference_chunk_size=4)
+    restored.load_state_dict(scorer.state_dict())
+    torch.testing.assert_close(restored.reference_scores(), expected_reference)
+
+
+def test_leave_one_out_requires_two_samples():
+    scorer = KNNScorer()
+    with pytest.raises(RuntimeError, match="fit"):
+        scorer.reference_scores()
+    scorer.fit(torch.ones(1, 2))
+    with pytest.raises(ValueError, match="two"):
+        scorer.reference_scores()
+
+
+def test_normalization_setting_and_saved_state_remain_consistent():
+    scorer = KNNScorer(k=1, normalize=False)
+    scorer.fit(torch.tensor([[2.0, 0.0], [0.0, 3.0]]))
+    query = torch.tensor([[1.0, 0.0]])
+    scorer.normalize = True
+    torch.testing.assert_close(scorer.score(query), torch.zeros(1))
+    restored = KNNScorer()
+    restored.load_state_dict(scorer.state_dict())
+    torch.testing.assert_close(restored.score(query), scorer.score(query))
+    scorer.normalize = False
+    torch.testing.assert_close(scorer.score(query), torch.ones(1))
+
+
+@pytest.mark.parametrize("name", ["query_chunk_size", "reference_chunk_size"])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_invalid_chunk_size(name, value):
+    with pytest.raises(ValueError, match=name):
+        KNNScorer(**{name: value})
+
+
+@pytest.mark.parametrize("normalize", [False, True])
 @pytest.mark.parametrize("k", [1, 3, 20])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_distance_matches_dense_reference(device, normalize, k, dtype):

@@ -24,6 +24,12 @@ Neither score is a calibrated probability or a prediction interval.
 
 Use separate reference-validation data to select a threshold. Scoring the fitted
 reference against itself includes each sample's zero-distance self-neighbor.
+``reference_scores()`` provides leave-one-out scores when a validation split is
+unavailable, preserving the former guard's threshold workflow. Only the row itself
+is excluded; distinct rows with identical features remain valid neighbors.
+Reference normalization is cached at fit time. Exact torch distances use bounded
+query/reference blocks; ``query_chunk_size`` and ``reference_chunk_size`` control
+memory independently of the stored reference population.
 
 Persistence
 -----------
@@ -68,13 +74,18 @@ It consumes arbitrary feature matrices; geometry is optional.
 
     scorer = DensityScorer(method="pce", pce_components=3, device="cuda")
     scorer.fit(reference_features)
+    scorer.calibrate(calibration_features)  # Independent in-distribution samples
     scores = scorer.score(query_features)
     percentiles = scorer.percentiles(scores)
     flagged = percentiles > 99.0  # Application policy
 
-    saved = scorer.get_state()
+    torch.save(scorer.state_dict(), "density.pt")
     restored = DensityScorer()
-    restored.set_state(saved, device="cpu")
+    restored.load_state_dict(torch.load("density.pt", weights_only=True, map_location="cpu"))
+
+Both scorers provide versioned tensor ``state_dict`` / ``load_state_dict`` for
+weights-only persistence. Density also retains explicit NumPy support and moves
+inputs to its configured device; kNN requires tensors on the reference device.
 
 ``get_state`` / ``set_state`` retain the existing NumPy serialization format,
 including fitted GMM parameters or PCE standardization, PCA, polynomial state,
@@ -85,6 +96,18 @@ Artifacts with non-finite reference scores require refitting; percentile scoring
 rejects non-finite values rather than treating them as low novelty. Persist feature
 metadata and decision thresholds alongside this state, just as for the distance
 scorer.
+
+Training percentiles are optimistic ranks, not false-positive probabilities.
+Use held-out calibration features for reference ranks and separate evaluation data
+to measure the resulting policy. Percentile resolution is ``100 / N``; thresholds
+must be distinguishable with the available calibration sample count. Calibration
+does not fix an overparameterized model. Small-sample PCE/GMM fits warn when the
+number of terms or feature width is large relative to the training population.
+PCE standardizes inputs, but does not whiten PCA components or build polynomial
+features in float64; its covariance calculation uses float64. GMM retains full
+covariance in raw feature units: callers should scale heterogeneous features
+consistently. Whitening, shrinkage, and alternative covariance models would change
+fitting behavior and are not introduced by this migration.
 
 Mesh-specific descriptors are explicitly imported from
 ``physicsnemo.experimental.uq.ood.geometry``. Schema v1.1 corrects the PCA

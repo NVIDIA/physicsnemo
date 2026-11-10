@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on CUDA, and compiles to one graph.
 - Adds reusable `KNNScorer` and `DensityScorer` under `experimental.uq.ood`,
   optional geometry descriptors, and examples with application-owned scoring decisions.
+  Scorers support weights-only tensor persistence; kNN uses bounded distance blocks
+  and leave-one-out reference scoring, and density supports held-out calibration.
 - `Mean` and `Variance` now support opt-in tensor-aware streaming with detached
   state, state combination, and `ShardTensor` reductions over declared
   observation axes.

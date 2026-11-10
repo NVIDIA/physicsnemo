@@ -76,7 +76,8 @@ Persist checkpoint identity, pooling/preprocessing, feature schema, and threshol
 alongside scorer state. The API reference includes save/restore examples.
 
 `geometry_scoring.py` explicitly imports optional mesh descriptors, persists density
-arrays in NPZ and application metadata/policy in JSON, validates feature identity,
+tensor state and application metadata/policy in one weights-only Torch artifact,
+validates feature identity,
 and checks restored scores and decisions. It uses synthetic primitive meshes.
 
 ## Distributed Calibration

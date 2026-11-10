@@ -136,10 +136,11 @@ from physicsnemo.experimental.uq.ood import DensityScorer
 names, reference = directory_features(train_dir, n_workers=4)  # Recipe helper
 scorer = DensityScorer(method="gmm", gmm_components=1, device="cuda")
 scorer.fit(reference)
+scorer.calibrate(calibration)  # Held-out in-distribution features
 names, query = directory_features(test_dir, n_workers=4)
 percentiles = scorer.percentiles(scorer.score(query))
 statuses = [
-    "REJECT" if p >= 99.9 else "WARN" if p >= 99.0 else "OK" for p in percentiles
+    "REJECT" if p >= 97.0 else "WARN" if p >= 90.0 else "OK" for p in percentiles
 ]
 ```
 
@@ -149,8 +150,8 @@ reported and skipped by this recipe; an entirely invalid directory raises an
 error. Descriptor extraction stays on CPU; the generic scorer uses its configured
 device. `n_workers=1` runs extraction in the calling process.
 
-Each fitted model writes an NPZ file for array state and a companion JSON file
-for scoring configuration, descriptor identity, units, preprocessing, and policy.
+Each fitted model writes a weights-only Torch artifact containing fitted state
+alongside scoring configuration, descriptor identity, units, preprocessing, and policy.
 The example reloads these before scoring. Loading rejects a mismatched feature
 identity. Set `length_unit` to the actual source coordinate unit; it records the
 recipe's choice and does not infer or convert units. These application artifacts

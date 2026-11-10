@@ -16,10 +16,25 @@
 
 from __future__ import annotations
 
-from itertools import product
+import warnings
+from functools import lru_cache
+from itertools import combinations, combinations_with_replacement
 
 import numpy as np
 import torch
+
+
+@lru_cache(maxsize=16)
+def _hermite_indices(n_dims, max_degree, interaction_only):
+    """Enumerate retained terms in the legacy Cartesian-product column order."""
+    generate = combinations if interaction_only else combinations_with_replacement
+    return ((0,) * n_dims,) + tuple(
+        sorted(
+            tuple(term.count(j) for j in range(n_dims))
+            for degree in range(1, max_degree + 1)
+            for term in generate(range(n_dims), degree)
+        )
+    )
 
 
 class TorchPCEDensityModel:
@@ -106,10 +121,6 @@ class TorchPCEDensityModel:
     >>> all(s > 0 for s in scores)  # Scores should be positive
     True
     >>>
-    >>> # Compute percentiles
-    >>> percentiles = model.percentiles(scores)
-    >>> percentiles.shape
-    (10,)
 
     Notes
     -----
@@ -117,7 +128,8 @@ class TorchPCEDensityModel:
 
     1. **PCA Dimensionality Reduction**: Projects features onto principal components
        to capture main variance directions and reduce noise. Components are automatically
-       standardized (zero mean, unit variance).
+       centered but not whitened. The input features are standardized before
+       PCA; projected components retain their individual variances.
 
     2. **Hermite Polynomial Expansion**: Generates orthogonal Hermite polynomial features
        up to specified degree. Uses **probabilist's Hermite polynomials** which are
@@ -261,6 +273,14 @@ class TorchPCEDensityModel:
 
         # Generate Hermite polynomial features
         X_hermite = self._generate_hermite_features(X_pca)
+        if X_hermite.shape[1] >= X.shape[0] / 2:
+            warnings.warn(
+                f"PCE has {X_hermite.shape[1]} polynomial terms for {X.shape[0]} samples. "
+                "Covariance fitting may overfit; reduce components/degree or collect "
+                "more data, and use held-out scores for threshold calibration.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Compute statistics in Hermite polynomial space
         # Polynomial features can be highly collinear (including constant and
@@ -324,24 +344,7 @@ class TorchPCEDensityModel:
         n_samples, n_dims = X.shape
         max_degree = self.poly_degree
 
-        # Generate all multi-indices (polynomial powers for each dimension)
-        if self.interaction_only:
-            # Limit max degree in any dimension to 1 (only interactions)
-            indices = [
-                idx
-                for idx in product(range(2), repeat=n_dims)
-                if 0 < sum(idx) <= max_degree
-            ]
-        else:
-            # All combinations up to total degree
-            indices = [
-                idx
-                for idx in product(range(max_degree + 1), repeat=n_dims)
-                if 0 < sum(idx) <= max_degree
-            ]
-
-        # Add constant term (all zeros)
-        indices = [(0,) * n_dims] + indices
+        indices = _hermite_indices(n_dims, max_degree, self.interaction_only)
 
         n_terms = len(indices)
         X_hermite = torch.zeros((n_samples, n_terms), device=self.device, dtype=X.dtype)
@@ -472,56 +475,6 @@ class TorchPCEDensityModel:
 
         return mahal_dist.to(X_poly.dtype)
 
-    def percentiles(self, scores: torch.Tensor | np.ndarray) -> np.ndarray:
-        r"""
-        Convert anomaly scores to empirical percentiles.
-
-        Percentiles are computed relative to the training data distribution.
-        A percentile of 95.0 means the sample is more anomalous than 95% of
-        training samples.
-
-        Parameters
-        ----------
-        scores : torch.Tensor or np.ndarray
-            Anomaly scores from :meth:`score`.
-
-        Returns
-        -------
-        percentiles : np.ndarray
-            Percentiles in range [0, 100].
-        """
-        if self.training_scores_ is None:
-            raise RuntimeError("Model must be fitted before computing percentiles")
-
-        # Convert to torch tensor if needed
-        if isinstance(scores, np.ndarray):
-            scores = torch.from_numpy(scores).to(self.device)
-        elif isinstance(scores, torch.Tensor):
-            scores = scores.to(self.device)
-        else:
-            raise TypeError(
-                f"scores must be np.ndarray or torch.Tensor, got {type(scores)}"
-            )
-
-        # Validate training_scores_ is not empty
-        if len(self.training_scores_) == 0:
-            raise RuntimeError(
-                "Training scores are empty. Model may not have been fitted correctly."
-            )
-
-        # Compute percentile of each score relative to training distribution
-        # Using broadcasting for efficiency
-        scores_expanded = scores.unsqueeze(1)  # (n_scores, 1)
-        training_expanded = self.training_scores_.unsqueeze(0)  # (1, n_training)
-        percentiles = (
-            100.0
-            * (training_expanded <= scores_expanded).sum(dim=1).float()
-            / len(self.training_scores_)
-        )
-
-        # Convert to numpy for return
-        return percentiles.cpu().numpy()
-
     def get_state(self) -> dict:
         r"""
         Get model state for serialization.
@@ -545,9 +498,6 @@ class TorchPCEDensityModel:
             else None,
             "poly_cov_inv_": self.poly_cov_inv_.cpu().numpy()
             if self.poly_cov_inv_ is not None
-            else None,
-            "training_scores_": self.training_scores_.cpu().numpy()
-            if self.training_scores_ is not None
             else None,
             "n_features_in_": self.n_features_in_,
             "pca_mean_": self.pca_mean_.cpu().numpy()
