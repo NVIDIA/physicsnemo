@@ -24,16 +24,16 @@
 # Muon/AdamW, cosine 2e-4 -> 1e-6 over 60 epochs, bf16 autocast, 16 GPUs.
 # Validation every 5 epochs on the 20 held-out designs (exact, horizon-aware).
 # Prepare the statistics and caches first: python yaris_full_prepare.py
-# --config-name yaris_deformer yaris.data_root=... (see README.md).
+# --config-name px_yaris_deformer yaris.data_root=... (see README.md).
 defaults:
-  - reader: yaris_full
-  - datapipe: yaris_full
+  - reader: px_yaris_full
+  - datapipe: px_yaris_full
   - model: deformer_time_conditional
   - training: default
   - inference: default
   - _self_
 
-experiment_name: Yaris-DeFormer
+experiment_name: PX-Yaris-DeFormer
 
 yaris:
   data_root: ???       # directory of <case>.zarr stores

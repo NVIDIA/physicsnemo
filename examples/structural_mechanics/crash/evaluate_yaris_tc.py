@@ -24,7 +24,7 @@ prediction and the ground truth (shell surface and, with
 maps::
 
     torchrun --standalone --nproc_per_node=4 evaluate_yaris_tc.py \\
-        --config-name yaris_deformer \\
+        --config-name px_yaris_deformer \\
         yaris.data_root=... yaris.split_manifest=... yaris.outlier_mask=... \\
         yaris.work_dir=... training.ckpt_path=<run>/checkpoints \\
         +training.validation_output_dir=<out> hydra.run.dir=<out> \\
@@ -48,7 +48,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
-@hydra.main(version_base="1.3", config_path="conf", config_name="yaris_deformer")
+@hydra.main(version_base="1.3", config_path="conf", config_name="px_yaris_deformer")
 def main(cfg: DictConfig) -> None:
     """Evaluate the checkpoint of ``training.ckpt_path`` and write the record."""
     DistributedManager.initialize()

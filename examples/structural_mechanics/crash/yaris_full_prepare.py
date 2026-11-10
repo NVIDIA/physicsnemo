@@ -32,7 +32,7 @@ from yaris_full import STATS_FILE, atomic_json, file_sha256
 @hydra.main(
     version_base="1.3",
     config_path="conf",
-    config_name="yaris_deformer",
+    config_name="px_yaris_deformer",
 )
 def main(cfg):
     """Build the statistics and caches of the Yaris datapipe ahead of training."""

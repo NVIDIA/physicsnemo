@@ -5,19 +5,23 @@ shared groups (`reader/`, `datapipe/`, `model/`, `training/`, `inference/`) and
 overrides what the experiment changes. Print any recipe without starting
 training with `python train.py --config-name=<recipe> --cfg job`.
 
-## DeFormer on the Yaris dataset
+Recipe names start with their dataset: `px_yaris_*` is the full-vehicle
+Toyota Yaris dataset (Zarr stores), `biw_yaris_*` the body-in-white Yaris
+VTP data and `bumper_*` the bumper beam.
+
+## DeFormer on the full-vehicle Yaris dataset (`px_yaris_*`)
 
 | Recipe | Model | What it trains |
 | --- | --- | --- |
-| `yaris_deformer` | `model/deformer_time_conditional.yaml` (`time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
-| `yaris_deformer_corrector` | `model/mgn_corrector.yaml` (`residual_model.ResidualTimeConditional` around `mgn_corrector.MeshGraphNetCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
-| `yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
+| `px_yaris_deformer` | `model/deformer_time_conditional.yaml` (`time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
+| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`residual_model.ResidualTimeConditional` around `deformer_corrector.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
+| `px_yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
 
-`yaris_deformer` is self-contained (reader `yaris_full`, datapipe `yaris_full`,
+`px_yaris_deformer` is self-contained (reader `px_yaris_full`, datapipe `px_yaris_full`,
 training defaults plus the keys below); the other two inherit it. The four
 required paths are the `yaris.*` keys; everything else has a value.
 
-### Keys of `yaris_deformer`
+### Keys of `px_yaris_deformer`
 
 | Key | Value | Meaning |
 | --- | --- | --- |
@@ -54,11 +58,11 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `activation_checkpointing`, `checkpointing_ratio`, `activation_checkpointing_components`, `num_*_processor_checkpoint_segments` | true, 1.0, `[blocks, context]`, 1 | memory policy of the 1.48M-node forward |
 | `clamp_to_wall`, `wall_axis`, `wall_sign` | false, 0, 1 | evaluation-time rigid-wall clamp (needs `datapipe.rigid_wall_position`) |
 
-The body-in-white recipe `crash_deformer_knn_time_conditional` uses the same
+The body-in-white recipe `biw_yaris_deformer` uses the same
 model file with `local_neighborhood=geodesic`, no activation checkpointing and
 `dt=null`.
 
-### Keys of `yaris_deformer_corrector` and `model/mgn_corrector.yaml`
+### Keys of `px_yaris_deformer_corrector` and `model/deformer_corrector.yaml`
 
 | Key | Value | Meaning |
 | --- | --- | --- |
@@ -76,7 +80,7 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | `training.coarse_loss_weight` | 0 | no provisional head |
 | `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm | target-relative penetration metrics in the validation record |
 
-`yaris_geotransolver` sets the point model's time code, width and memory policy
+`px_yaris_geotransolver` sets the point model's time code, width and memory policy
 to the network's and the datapipe's neighbourhood keys explicitly (the point
 model has none); it ignores the neighbourhoods.
 
@@ -106,12 +110,12 @@ Re-running a training command resumes from `<work_dir>/checkpoints`.
 `yaris_full_prepare.py` reads the environment variable `YARIS_STATS_WORKERS`
 (default 8) for its statistics workers.
 
-## Body-in-white (VTP) recipes
+## Body-in-white Yaris (VTP) recipes (`biw_yaris_*`)
 
 | Recipe | Model | Purpose |
 | --- | --- | --- |
-| `crash_deformer_knn_time_conditional` | `model/deformer_time_conditional.yaml` with `local_neighborhood=geodesic`, no activation checkpointing and `dt=null` | the DeFormer network on the body-in-white data: 26 frames, 127 training and 8 validation cases, 100 epochs, Muon, normalized MSE with provisional-head loss 0.1 |
-| `crash_geoflare_oneshot`, `crash_geotransolver_oneshot`, `bumper_*` | one-shot and time-conditional point models | the original crash and bumper examples |
+| `biw_yaris_deformer` | `model/deformer_time_conditional.yaml` with `local_neighborhood=geodesic`, no activation checkpointing and `dt=null` | the DeFormer network on the body-in-white data: 26 frames, 127 training and 8 validation cases, 100 epochs, Muon, normalized MSE with provisional-head loss 0.1 |
+| `biw_yaris_geoflare_oneshot`, `biw_yaris_geotransolver_oneshot`, `bumper_*` | one-shot and time-conditional point models | the original body-in-white (formerly `crash_*`) and bumper examples |
 
 The recipe is self-contained (reader `vtp`, datapipe `graph`, training defaults
 plus its own keys); the required paths are `training.raw_data_dir` and
@@ -121,15 +125,15 @@ change the neighbourhood metric and size; the datapipe builds the matching
 neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw_tc.py` scores a body-in-white time-conditional checkpoint with
-the Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
+the PX Yaris validation suite (penetration metrics with `++datapipe.contact_surface=true
 ++datapipe.rigid_wall_position=-29.8`).
 
 ## Shared components
 
 | Directory | Purpose |
 | --- | --- |
-| `model/` | architecture defaults (`deformer_time_conditional`, `mgn_corrector`, `geotransolver_time_conditional`, the one-shot and legacy rollout models) |
-| `datapipe/` | `yaris_full` (Zarr, full mesh), `graph` and `point_cloud` (VTP) |
-| `reader/` | `yaris_full` (Zarr stores with a shared mesh; `include_solid_edges`, `connect_isolated_k` for geodesic neighbourhoods), `vtp`, `zarr` |
+| `model/` | architecture defaults (`deformer_time_conditional`, `deformer_corrector`, `geotransolver_time_conditional`, the one-shot and legacy rollout models) |
+| `datapipe/` | `px_yaris_full` (Zarr, full mesh), `graph` and `point_cloud` (VTP) |
+| `reader/` | `px_yaris_full` (Zarr stores with a shared mesh; `include_solid_edges`, `connect_isolated_k` for geodesic neighbourhoods), `vtp`, `zarr` |
 | `training/` | optimizer, schedule and checkpoint defaults |
 | `inference/` | evaluation and VTP export defaults |

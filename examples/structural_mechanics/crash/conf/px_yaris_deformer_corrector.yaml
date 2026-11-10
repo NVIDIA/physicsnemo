@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# DeFormer corrector on the frozen Yaris network (yaris_deformer). The teacher
+# DeFormer corrector on the frozen Yaris network (px_yaris_deformer). The teacher
 # (model.teacher: the network's architecture, model.teacher_weights: its
 # checkpoint, passed on the command line) is recomputed on the fly; the
-# MeshGraphNet corrector (conf/model/mgn_corrector.yaml) reads its predicted
+# DeFormer corrector (conf/model/deformer_corrector.yaml) reads its predicted
 # shape through message passing on the shell mesh edges and on contact edges
 # discovered on that shape (crossing-aware node-to-facet search, 5 mm band,
 # 10 mm reference clearance), eight layers of width 128, zero-initialised
@@ -27,12 +27,12 @@
 # x = 100 mm (datapipe.rigid_wall_position, model.final_clamp_to_wall); the
 # penetration metrics score the shell surface and the wall against the truth.
 defaults:
-  - yaris_deformer
+  - px_yaris_deformer
   - model@model.teacher: deformer_time_conditional
-  - override model: mgn_corrector
+  - override model: deformer_corrector
   - _self_
 
-experiment_name: Yaris-DeFormer-Corrector
+experiment_name: PX-Yaris-DeFormer-Corrector
 
 datapipe:
   contact_surface: true

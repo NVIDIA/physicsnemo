@@ -17,7 +17,7 @@
 
 The teacher is a finished :class:`time_conditional.DeFormerTimeConditional`,
 loaded from its checkpoint and frozen; the student is a
-:class:`mgn_corrector.MeshGraphNetCorrector` trained on top of it. The teacher's
+:class:`deformer_corrector.DeFormerCorrector` trained on top of it. The teacher's
 prediction at the queried time is recomputed on the fly and handed to the
 student, which adds its correction; the trainings are decoupled (the teacher
 never receives a gradient) and no prediction files are stored. Inference is
@@ -33,7 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-from mgn_corrector import MeshGraphNetCorrector
+from deformer_corrector import DeFormerCorrector
 from shape_corrections import RigidWallClamp, correct_shape
 from torch import nn
 from utils import load_warm_start
@@ -42,7 +42,7 @@ import physicsnemo
 
 
 class ResidualTimeConditional(physicsnemo.Module):
-    """Frozen teacher followed by the MeshGraphNet corrector.
+    """Frozen teacher followed by the DeFormer corrector.
 
     Parameters
     ----------
@@ -57,7 +57,7 @@ class ResidualTimeConditional(physicsnemo.Module):
         (:class:`shape_corrections.RigidWallClamp`); needs
         ``datapipe.rigid_wall_position``.
     **student_kwargs
-        Constructor arguments of :class:`mgn_corrector.MeshGraphNetCorrector`;
+        Constructor arguments of :class:`deformer_corrector.DeFormerCorrector`;
         its ``functional_dim`` counts the three teacher-displacement channels.
 
     A saved corrector (``.mdlus``) records ``teacher_weights`` as given at
@@ -97,7 +97,7 @@ class ResidualTimeConditional(physicsnemo.Module):
         teacher.eval()
         self.teacher = teacher
         self.teacher_weights = str(teacher_weights)
-        self.student = MeshGraphNetCorrector(**student_kwargs)
+        self.student = DeFormerCorrector(**student_kwargs)
         # Read by recipes and readouts that know the time-conditional interface.
         self.rollout_steps = self.student.rollout_steps
         self.dt = self.student.dt

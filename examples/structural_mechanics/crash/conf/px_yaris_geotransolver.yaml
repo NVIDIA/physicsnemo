@@ -15,18 +15,18 @@
 # limitations under the License.
 
 # GeoTransolver (FLARE variant) baseline on the full-resolution Yaris mesh under
-# the protocol of yaris_deformer: the same backbone width and depth, Fourier
+# the protocol of px_yaris_deformer: the same backbone width and depth, Fourier
 # time code as node input and global token, Muon, cosine schedule, 60 epochs,
 # physical loss, split and horizon. The point model reads coordinates, thickness
 # and the time label and ignores the kNN neighbourhoods the datapipe builds
 # (they are cached once like the DeFormer's). FLARE blocks and the geometry
 # context are checkpointed so the 1.48M-node forward fits one GPU.
 defaults:
-  - yaris_deformer
+  - px_yaris_deformer
   - override model: geotransolver_time_conditional
   - _self_
 
-experiment_name: Yaris-GeoTransolver
+experiment_name: PX-Yaris-GeoTransolver
 
 training:
   coarse_loss_weight: 0.0   # the point model has no provisional head

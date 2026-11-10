@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # DeFormer corrector: residual_model.ResidualTimeConditional (frozen teacher
-# recomputed on the fly) around mgn_corrector.MeshGraphNetCorrector (message
+# recomputed on the fly) around deformer_corrector.DeFormerCorrector (message
 # passing on the shell mesh edges and on contact edges discovered on the
 # teacher's predicted shape). The recipe adds model.teacher (the teacher's
 # architecture) and model.teacher_weights (its checkpoint). dt, local_knn_k

@@ -16,21 +16,21 @@
 
 # DeFormer network on the body-in-white crash data (VTP, 26 frames, 127 training
 # and 8 validation cases): every future frame is predicted independently from
-# the initial mesh by the time-conditional DeFormer of the Yaris recipe
-# (conf/model/deformer_time_conditional.yaml) with the body-in-white settings
+# the initial mesh by the time-conditional DeFormer of the PX Yaris recipe
+# (px_yaris_deformer, conf/model/deformer_time_conditional.yaml) with the body-in-white settings
 # below: geodesic neighbourhoods on the structural edges, no activation
 # checkpointing (one forward per update fits without it), no fixed frame
 # interval. Loss: normalized MSE plus 0.1 x the same loss on the provisional
 # head. Muon/AdamW, cosine 2e-4 -> 1e-6 over 100 epochs, bf16 autocast,
 # validation every 5 epochs. evaluate_biw_tc.py scores a checkpoint with the
-# Yaris validation suite.
+# PX Yaris validation suite.
 hydra:
   job:
     chdir: true
   run:
     dir: ./outputs/
 
-experiment_name: Crash-DeFormer-KNNAttention-TimeConditional
+experiment_name: BIW-Yaris-DeFormer
 
 defaults:
   - reader: vtp

@@ -35,7 +35,7 @@ local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
 contact_surface: false
 # structural shell connectivity in both directions with its standardized
 # reference features (graph.mesh_edge_index / mesh_edge_attr / mesh_edge_mean /
-# mesh_edge_std), for the MeshGraphNet corrector; edge_index itself is unchanged
+# mesh_edge_std), for the DeFormer corrector; edge_index itself is unchanged
 mesh_edges: false
 # analytic rigid wall plane x = position in mm (Yaris barrier: 100), for the
 # wall clamp and the wall penetration metrics

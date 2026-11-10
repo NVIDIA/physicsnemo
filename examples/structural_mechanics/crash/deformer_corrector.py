@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""MeshGraphNet corrector: local message passing on a teacher's predicted shape.
+"""DeFormer corrector: local message passing on a teacher's predicted shape.
 
 The corrector is the second half of DeFormer. A frozen time-conditional
 network (the teacher) predicts the deformed shape of a frame; the corrector
@@ -49,13 +49,13 @@ from time_conditional import TimeConditionalOutput
 from torch import nn
 
 import physicsnemo
-from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
 from physicsnemo.experimental.nn.shell_contact import (
     CONTACT_FEATURE_DIM,
     ShellContactSearch,
     shell_contact_edge_features,
     shell_contact_pairs,
 )
+from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
 from physicsnemo.nn.module.gnn_layers.graph_types import PyGData
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 
@@ -66,7 +66,7 @@ CONTACT_EDGE_INPUT_DIM = CONTACT_FEATURE_DIM + 2
 """Contact geometry (8) + barycentric weight + direction sign."""
 
 
-class MeshGraphNetCorrector(physicsnemo.Module):
+class DeFormerCorrector(physicsnemo.Module):
     """Local message-passing corrector of a teacher's prediction for one frame.
 
     Parameters
@@ -218,7 +218,7 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         else:
             self.contact_edge_encoder = None
             self.contact_search = None
-        self.__name__ = "MeshGraphNetCorrector"
+        self.__name__ = "DeFormerCorrector"
 
     # ----- contact edges -----
     def contact_edges(self, predicted, sample, data_stats):
@@ -345,7 +345,7 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         edge_index = getattr(graph, "mesh_edge_index", None)
         if edge_index is None:
             raise ValueError(
-                "MeshGraphNetCorrector needs graph.mesh_edge_index and mesh_edge_attr "
+                "DeFormerCorrector needs graph.mesh_edge_index and mesh_edge_attr "
                 "(datapipe.mesh_edges=true)"
             )
         predicted = coords + prior

@@ -46,7 +46,7 @@ The network (`time_conditional.DeFormerTimeConditional`,
   9,672,505 parameters.
 
 The corrector (`residual_model.ResidualTimeConditional` around
-`mgn_corrector.MeshGraphNetCorrector`, `conf/model/mgn_corrector.yaml`):
+`deformer_corrector.DeFormerCorrector`, `conf/model/deformer_corrector.yaml`):
 
 * the frozen network is recomputed on the fly (no prediction files); the
   corrector reads its predicted shape through message passing on the shell
@@ -72,14 +72,17 @@ the `shell_contact` functional.
 
 | Recipe | Model | Purpose |
 |---|---|---|
-| `yaris_deformer` | network | the DeFormer network on the Yaris mesh (60 epochs) |
-| `yaris_deformer_corrector` | network + corrector | the contact-aware corrector on the frozen network (30 epochs) |
-| `yaris_geotransolver` | GeoTransolver (FLARE variant) | the point-model baseline under the identical protocol |
-| `crash_deformer_knn_time_conditional` | network | the same network on the body-in-white VTP data (26 frames, 100 epochs) |
+| `px_yaris_deformer` | network | the DeFormer network on the Yaris mesh (60 epochs) |
+| `px_yaris_deformer_corrector` | network + corrector | the contact-aware corrector on the frozen network (30 epochs) |
+| `px_yaris_geotransolver` | GeoTransolver (FLARE variant) | the point-model baseline under the identical protocol |
+| `biw_yaris_deformer` | network | the same network on the body-in-white VTP data (26 frames, 100 epochs) |
 
-The three Yaris recipes share one data recipe (`conf/reader/yaris_full.yaml`,
-`conf/datapipe/yaris_full.yaml`) and differ only in the model group and the
-corrector's additions; `conf/README.md` lists every key.
+Recipe names start with their dataset: `px_yaris_*` is the full-vehicle
+Toyota Yaris dataset (Zarr stores) and `biw_yaris_*` the body-in-white Yaris
+VTP data. The three PX Yaris recipes share one data recipe
+(`conf/reader/px_yaris_full.yaml`, `conf/datapipe/px_yaris_full.yaml`) and
+differ only in the model group and the corrector's additions; `conf/README.md`
+lists every key.
 
 #### Data preparation
 
@@ -112,9 +115,9 @@ CPU node (minutes for 1.48M nodes):
 
 ```bash
 cd examples/structural_mechanics/crash
-python yaris_full_prepare.py --config-name yaris_deformer \
+python yaris_full_prepare.py --config-name px_yaris_deformer \
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
-  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_deformer
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/px_yaris_deformer
 ```
 
 The statistics carry an identity (split manifest, outlier mask, kept node
@@ -130,9 +133,9 @@ training starts while the other ranks wait, bounded by
 #### Train the network
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer \
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name px_yaris_deformer \
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
-  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_deformer
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/px_yaris_deformer
 ```
 
 The reference run used 16 GPUs for 60 epochs (about 6.6 h on GB300s). Pair
@@ -152,11 +155,11 @@ the exact validation additionally holds two float64 `[N, T, 3]` error tensors
 #### Train the corrector
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer_corrector \
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name px_yaris_deformer_corrector \
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
-  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_corrector \
-  datapipe.stats_dir=/runs/yaris_deformer/stats \
-  model.teacher_weights=/runs/yaris_deformer/checkpoints/DeFormerTimeConditional.0.60.mdlus
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/px_yaris_corrector \
+  datapipe.stats_dir=/runs/px_yaris_deformer/stats \
+  model.teacher_weights=/runs/px_yaris_deformer/checkpoints/DeFormerTimeConditional.0.60.mdlus
 ```
 
 The recipe turns on the contact topology (`datapipe.contact_surface`), the mesh
@@ -173,12 +176,12 @@ penetration the ground truth does not have counts against a model) and,
 optionally, node-error maps:
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> evaluate_yaris_tc.py --config-name yaris_deformer_corrector \
+torchrun --nproc_per_node=<NUM_GPUS> evaluate_yaris_tc.py --config-name px_yaris_deformer_corrector \
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
-  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_corrector \
-  datapipe.stats_dir=/runs/yaris_deformer/stats \
-  model.teacher_weights=/runs/yaris_deformer/checkpoints/DeFormerTimeConditional.0.60.mdlus \
-  training.ckpt_path=/runs/yaris_corrector/checkpoints +training.load_epoch=30 \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/px_yaris_corrector \
+  datapipe.stats_dir=/runs/px_yaris_deformer/stats \
+  model.teacher_weights=/runs/px_yaris_deformer/checkpoints/DeFormerTimeConditional.0.60.mdlus \
+  training.ckpt_path=/runs/px_yaris_corrector/checkpoints +training.load_epoch=30 \
   +training.validation_output_dir=/runs/eval/corrector hydra.run.dir=/runs/eval/corrector \
   +training.validation_node_errors=true
 ```
@@ -200,17 +203,17 @@ recorded in the checkpoint (the delivered corrector records
 
 #### The network on the body-in-white data
 
-`crash_deformer_knn_time_conditional` trains the same network on the
+`biw_yaris_deformer` trains the same network on the
 body-in-white VTP data (26 frames, 127 training and 8 validation cases) with
 geodesic neighbourhoods on the structural edges and without activation
 checkpointing; the recipe is self-contained and needs only the two data paths:
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name crash_deformer_knn_time_conditional \
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name biw_yaris_deformer \
   training.raw_data_dir=/data/crash/train training.raw_data_dir_validation=/data/crash/validation
 ```
 
-`evaluate_biw_tc.py` scores a body-in-white checkpoint with the Yaris
+`evaluate_biw_tc.py` scores a body-in-white checkpoint with the PX Yaris
 validation suite; the command in its docstring turns on the shell facets and
 the one-ring exclusions that the penetration metrics need.
 
@@ -373,20 +376,20 @@ The main script is `train.py`.
 conf/
 ├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
 ├── bumper_geotransolver_time_conditional.yaml
-├── crash_geotransolver_oneshot.yaml
+├── biw_yaris_geotransolver_oneshot.yaml
 ├── bumper_geoflare_oneshot.yaml
-├── crash_geoflare_oneshot.yaml
-├── crash_deformer_knn_time_conditional.yaml  # DeFormer network, body-in-white data
-├── yaris_deformer.yaml                     # DeFormer network, Yaris full mesh
-├── yaris_deformer_corrector.yaml           # DeFormer corrector on the frozen network
-├── yaris_geotransolver.yaml                # GeoTransolver baseline under the same protocol
+├── biw_yaris_geoflare_oneshot.yaml
+├── biw_yaris_deformer.yaml                # DeFormer network, body-in-white Yaris data
+├── px_yaris_deformer.yaml                 # DeFormer network, full-vehicle Yaris mesh
+├── px_yaris_deformer_corrector.yaml       # DeFormer corrector on the frozen network
+├── px_yaris_geotransolver.yaml            # GeoTransolver baseline under the same protocol
 ├── datapipe/                              # dataset configs (generic defaults)
 │   ├── graph.yaml
 │   ├── point_cloud.yaml
-│   └── yaris_full.yaml
+│   └── px_yaris_full.yaml
 ├── model/                                 # model configs
 │   ├── deformer_time_conditional.yaml
-│   ├── mgn_corrector.yaml
+│   ├── deformer_corrector.yaml
 │   ├── geotransolver_one_shot.yaml
 │   ├── geotransolver_autoregressive_rollout_training.yaml
 │   ├── geotransolver_one_step_rollout.yaml
@@ -397,13 +400,13 @@ conf/
 │   └── ...
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
-│   ├── yaris_full.yaml
+│   ├── px_yaris_full.yaml
 │   └── zarr.yaml
 ├── training/default.yaml                  # generic training hyperparameters
 └── inference/default.yaml                 # generic inference options
 ```
 
-Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file; `yaris_deformer_corrector` and `yaris_geotransolver` inherit `yaris_deformer` and override its model group. See [configuration layout](conf/README.md) for every key.
+Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file; `px_yaris_deformer_corrector` and `px_yaris_geotransolver` inherit `px_yaris_deformer` and override its model group. See [configuration layout](conf/README.md) for every key.
 
 ### Launch Training
 
@@ -511,7 +514,7 @@ falls outside the calibrated training envelope.  Warnings do not halt inference.
 
 ## Experiments
 
-Each experiment is a YAML file in `conf/` that selects the shared component defaults and holds its own settings; the two Yaris recipes derived from `yaris_deformer` inherit it rather than copying it.
+Each experiment is a YAML file in `conf/` that selects the shared component defaults and holds its own settings; the two PX Yaris recipes derived from `px_yaris_deformer` inherit it rather than copying it.
 
 ### Anatomy of an experiment config
 
@@ -573,13 +576,13 @@ datapipe:
 |------|---------|-------|----------------|
 | `bumper_geotransolver_oneshot.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=bumper_geotransolver_oneshot` |
 | `bumper_geotransolver_time_conditional.yaml` | Bumper beam (VTP) | GeoTransolver time-conditional | `python train.py --config-name=bumper_geotransolver_time_conditional` |
-| `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
+| `biw_yaris_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=biw_yaris_geotransolver_oneshot` |
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
-| `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
-| `crash_deformer_knn_time_conditional.yaml` | Full-car crash (VTP) | DeFormer network, time-conditional | `python train.py --config-name=crash_deformer_knn_time_conditional` |
-| `yaris_deformer.yaml` | Yaris full mesh (Zarr) | DeFormer network | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_deformer yaris.data_root=...` |
-| `yaris_deformer_corrector.yaml` | Yaris full mesh (Zarr) | DeFormer corrector on the frozen network | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_deformer_corrector yaris.data_root=... model.teacher_weights=...` |
-| `yaris_geotransolver.yaml` | Yaris full mesh (Zarr) | GeoTransolver time-conditional baseline | `torchrun --nproc_per_node=<N> train.py --config-name=yaris_geotransolver yaris.data_root=...` |
+| `biw_yaris_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=biw_yaris_geoflare_oneshot` |
+| `biw_yaris_deformer.yaml` | Car body-in-white crash (VTP) | DeFormer network, time-conditional | `python train.py --config-name=biw_yaris_deformer` |
+| `px_yaris_deformer.yaml` | Yaris full mesh (Zarr) | DeFormer network | `torchrun --nproc_per_node=<N> train.py --config-name=px_yaris_deformer yaris.data_root=...` |
+| `px_yaris_deformer_corrector.yaml` | Yaris full mesh (Zarr) | DeFormer corrector on the frozen network | `torchrun --nproc_per_node=<N> train.py --config-name=px_yaris_deformer_corrector yaris.data_root=... model.teacher_weights=...` |
+| `px_yaris_geotransolver.yaml` | Yaris full mesh (Zarr) | GeoTransolver time-conditional baseline | `torchrun --nproc_per_node=<N> train.py --config-name=px_yaris_geotransolver yaris.data_root=...` |
 
 ### Choosing a time scheme
 

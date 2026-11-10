@@ -19,7 +19,7 @@
 # zero-initialised side head gives a provisional position, and an independent
 # post stage B whose gated correction gives the final position. The local
 # stages are static kNN neighbourhood attention (k = 32) with the fused kernel.
-# The values are the Yaris recipe's (yaris_deformer); the body-in-white recipe overrides
+# The values are the Yaris recipe's (px_yaris_deformer); the body-in-white recipe overrides
 # the neighbourhood metric and the memory policy.
 _target_: time_conditional.DeFormerTimeConditional
 _convert_: all

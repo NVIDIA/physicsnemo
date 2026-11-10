@@ -66,11 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network (a GeoTransolver/FLARE backbone with static kNN neighbourhood-attention
   stages and a fused kernel).
 - Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
-  the time-conditional network, the MeshGraphNet contact corrector, the three
-  full-resolution Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,
-  `yaris_geotransolver`) and the body-in-white recipe
-  `crash_deformer_knn_time_conditional` and target-relative penetration
-  metrics.
+  the time-conditional network, the contact-aware corrector
+  (`deformer_corrector.DeFormerCorrector`), the three full-vehicle Yaris
+  recipes (`px_yaris_deformer`, `px_yaris_deformer_corrector`,
+  `px_yaris_geotransolver`), the body-in-white recipe `biw_yaris_deformer`
+  and target-relative penetration metrics.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
@@ -169,6 +169,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
+  `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
+  `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
+  recipe of the example now names its dataset (`px_yaris_*` full vehicle,
+  `biw_yaris_*` body-in-white, `bumper_*` bumper beam).
 - &#9888;&#65039; **BC-impact (diffusion metric imports):** Cleans up
   `physicsnemo.diffusion` dependencies and imports. General-purpose metrics can
   no longer be imported from `physicsnemo.diffusion.metrics`. Use the following

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Score a body-in-white (VTP, structural-graph datapipe) time-conditional checkpoint with
-the evaluation suite of the Yaris recipes.
+the evaluation suite of the PX Yaris recipes.
 
 The body-in-white recipes train with the generic :class:`train.Trainer`, whose validation
 is the pooled normalized MSE only. This script applies the suite that
@@ -28,7 +28,7 @@ inside the training
 environment, sharded over GPUs like training::
 
     torchrun --standalone --nproc_per_node=4 evaluate_biw_tc.py \\
-        --config-name crash_deformer_knn_time_conditional \\
+        --config-name biw_yaris_deformer \\
         training.raw_data_dir=<train> training.raw_data_dir_validation=<validation> \\
         reader.cache_dir=<vtp cache with cells> ++reader.include_contact_topology=true \\
         ++datapipe.local_knn_cache_dir=<knn cache> datapipe.stats_dir=<run>/stats \\
@@ -40,7 +40,7 @@ environment, sharded over GPUs like training::
 Only the validation split is built; the normalization statistics are loaded
 from ``datapipe.stats_dir`` (the run's ``stats`` directory, written when the
 training split was built), so nothing is ever written next to the run. The
-record goes to ``<out>/epoch_<E>.json`` with the keys of the Yaris validation
+record goes to ``<out>/epoch_<E>.json`` with the keys of the PX Yaris validation
 JSON, plus ``node_rmse_epoch_<E>.npy``.
 
 Options (all under ``training``): ``validation_penetration`` (the metric
@@ -438,7 +438,7 @@ def log_summary(logger, epoch, record, extras) -> None:
 @hydra.main(
     version_base="1.3",
     config_path="conf",
-    config_name="crash_deformer_knn_time_conditional",
+    config_name="biw_yaris_deformer",
 )
 def main(cfg: DictConfig) -> None:
     """Score a body-in-white checkpoint and write the validation record."""
