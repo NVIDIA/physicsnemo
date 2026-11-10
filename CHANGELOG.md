@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
-  contexts, and a finite-difference vorticity helper that undoes coordinate
-  and velocity scaling.
+  contexts, input scaling and chunked forward decoding, and a finite-difference
+  vorticity helper that undoes coordinate and velocity scaling.
 
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with

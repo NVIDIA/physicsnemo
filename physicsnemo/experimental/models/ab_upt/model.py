@@ -170,6 +170,17 @@ class ABUPT(Module):
         to pooling chunk size. Requires float32 message weights under AMP;
         explicit float64 models retain double precision. This is an optional
         numerical variant, not a precision setting specified by the paper.
+    coordinate_scale : float, optional, default=1.0
+        Multiplier applied by ``forward`` to coordinates and to the configured
+        ``pooling_radius``. Low-level encode/decode methods use scaled coordinates.
+    parameter_scale : float, optional, default=1.0
+        Divisor applied by ``forward`` to global conditioning values.
+    query_chunk_size : int, optional, default=4096
+        Maximum queries decoded at once using a single shared anchor context.
+        Bounds individual attention operations, not the full autograd graph.
+    train_on_anchors : bool, optional, default=False
+        Use anchor predictions during training. Supplied queries must equal
+        their anchors in shape, coordinates, and order. Evaluation decodes queries.
 
     Forward
     -------
@@ -191,8 +202,8 @@ class ABUPT(Module):
         Volume query coordinates of shape :math:`(B,Q_v,3)`. ``None`` uses
         predictions at the volume anchors.
     parameters : torch.Tensor or None, optional, default=None
-        Global conditions of shape :math:`(B,P)`, required exactly when
-        ``parameter_channels > 0``.
+        Global conditions of shape :math:`(B,P)` or :math:`(B,1,P)`, required
+        exactly when ``parameter_channels > 0``.
 
     Outputs
     -------
@@ -215,9 +226,10 @@ class ABUPT(Module):
     they retain geometry encoding and anchor decoding, replace cross-branch
     attention with self-attention, and require no inactive-branch inputs.
 
-    Sampling and normalization belong to the caller. All coordinates and
-    ``pooling_radius`` must use the same units. The positional frequencies span
-    approximately 1 to 1e-4; coordinates of order 1000 exercise more frequency
+    Sampling belongs to the caller. Input coordinates and the configured
+    ``pooling_radius`` must use the same units. ``forward`` scales both by
+    ``coordinate_scale`` and casts inputs to the model weight dtype. The positional
+    frequencies span approximately 1 to 1e-4; coordinates of order 1000 exercise more frequency
     bands than unit-scale coordinates. When rescaling coordinates, rescale the
     radius as well; the default radius is in caller-supplied units.
 
@@ -257,6 +269,10 @@ class ABUPT(Module):
         parameter_channels: int = 0,
         radius_search_backend: Literal["torch", "warp"] | None = None,
         pooling_message_fp32: bool = False,
+        coordinate_scale: float = 1.0,
+        parameter_scale: float = 1.0,
+        query_chunk_size: int = 4096,
+        train_on_anchors: bool = False,
     ):
         super().__init__(
             meta=ModelMetaData(
@@ -279,6 +295,7 @@ class ABUPT(Module):
             ("mlp_ratio", mlp_ratio, 1),
             ("pooling_chunk_size", pooling_chunk_size, 1),
             ("parameter_channels", parameter_channels, 0),
+            ("query_chunk_size", query_chunk_size, 1),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -296,7 +313,17 @@ class ABUPT(Module):
         if not isinstance(pooling_message_fp32, bool):
             raise ValueError("pooling_message_fp32 must be a bool")
         self.pooling_message_fp32 = pooling_message_fp32
-        self.pooling_radius = pooling_radius
+        for name, value in (
+            ("coordinate_scale", coordinate_scale),
+            ("parameter_scale", parameter_scale),
+        ):
+            if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+            setattr(self, name, value)
+        if not isinstance(train_on_anchors, bool):
+            raise ValueError("train_on_anchors must be a boolean")
+        self.train_on_anchors = train_on_anchors
+        self.pooling_radius = pooling_radius * coordinate_scale
         self.radius_search_backend = radius_search_backend
         pairs = hidden_dim // 6
         self.position = FourierPositionalEmbedding(
@@ -805,6 +832,24 @@ class ABUPT(Module):
             dim=-1,
         )
 
+    def get_extra_state(self):
+        """Persist numerical settings that are not represented by weight shapes."""
+        return {
+            "coordinate_scale": self.coordinate_scale,
+            "parameter_scale": self.parameter_scale,
+            "train_on_anchors": self.train_on_anchors,
+            "pooling_radius": self.pooling_radius,
+            "num_heads": self.num_heads,
+            "cross_branch": list(self.cross_branch),
+        }
+
+    def set_extra_state(self, state):
+        """Reject a checkpoint loaded with different numerical settings."""
+        if state != self.get_extra_state():
+            raise ValueError(
+                "AB-UPT checkpoint settings do not match the current model"
+            )
+
     def forward(
         self,
         geometry: Float[Tensor, "B Ng 3"],
@@ -813,30 +858,79 @@ class ABUPT(Module):
         volume_anchors: Float[Tensor, "B Mv 3"] | None = None,
         surface_queries: Float[Tensor, "B Qs 3"] | None = None,
         volume_queries: Float[Tensor, "B Qv 3"] | None = None,
-        parameters: Float[Tensor, "B P"] | None = None,
+        parameters: Float[Tensor, "B P"] | Float[Tensor, "B 1 P"] | None = None,
     ) -> tuple[Float[Tensor, "B Qs Cs"] | None, Float[Tensor, "B Qv Cv"] | None]:
-        r"""Encode geometry/anchors once and predict at anchors or queries."""
+        r"""Scale inputs, encode once, and predict at anchors or chunked queries.
+
+        Disabled branches return ``None``. Low-level :meth:`encode` and
+        :meth:`decode_queries` accept coordinates in the scaled model frame.
+        """
         if not torch.compiler.is_compiling():
             self._validate_points(geometry, "geometry")
-            for name, queries, channels in (
-                ("surface_queries", surface_queries, self.surface_channels),
-                ("volume_queries", volume_queries, self.volume_channels),
+            for name, queries, anchors, channels in (
+                ("surface", surface_queries, surface_anchors, self.surface_channels),
+                ("volume", volume_queries, volume_anchors, self.volume_channels),
             ):
                 if queries is not None:
                     if not channels:
-                        raise ValueError(f"{name} supplied for a disabled output head")
-                    self._validate_points(queries, name, geometry, empty=True)
+                        raise ValueError(
+                            f"{name}_queries supplied for a disabled output head"
+                        )
+                    self._validate_points(queries, f"{name}_queries", empty=True)
+                    if (
+                        queries.shape[0] != geometry.shape[0]
+                        or queries.device != geometry.device
+                    ):
+                        raise ValueError(
+                            f"{name}_queries must match the geometry batch size and device"
+                        )
+                    if (
+                        self.training
+                        and self.train_on_anchors
+                        and (
+                            anchors is None
+                            or queries.shape != anchors.shape
+                            or not torch.equal(queries, anchors)
+                        )
+                    ):
+                        raise ValueError(
+                            f"Anchor-supervised training requires {name}_queries to "
+                            f"equal {name}_anchors in shape, coordinates, and order"
+                        )
+        dtype = next(self.parameters()).dtype
+
+        def scale(points):
+            return (
+                None
+                if points is None
+                else points.to(dtype=dtype) * self.coordinate_scale
+            )
+
+        if parameters is not None:
+            if parameters.ndim == 3 and parameters.shape[1] == 1:
+                parameters = parameters[:, 0]
+            parameters = parameters.to(dtype=dtype) / self.parameter_scale
         context = self.encode(
-            geometry, supernodes, surface_anchors, volume_anchors, parameters
+            scale(geometry),
+            scale(supernodes),
+            scale(surface_anchors),
+            scale(volume_anchors),
+            parameters,
         )
-        surface = (
-            context.surface_predictions
-            if surface_queries is None
-            else self.decode_queries(surface_queries, context, "surface")
-        )
-        volume = (
-            context.volume_predictions
-            if volume_queries is None
-            else self.decode_queries(volume_queries, context, "volume")
-        )
-        return surface, volume
+        predictions = []
+        for field, queries in (
+            ("surface", surface_queries),
+            ("volume", volume_queries),
+        ):
+            if queries is None or (self.training and self.train_on_anchors):
+                prediction = getattr(context, f"{field}_predictions")
+            else:
+                prediction = torch.cat(
+                    [
+                        self.decode_queries(scale(chunk), context, field)
+                        for chunk in queries.split(self.query_chunk_size, dim=1)
+                    ],
+                    dim=1,
+                )
+            predictions.append(prediction)
+        return predictions[0], predictions[1]

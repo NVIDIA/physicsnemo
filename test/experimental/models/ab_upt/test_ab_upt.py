@@ -34,6 +34,10 @@ from test.common import (
 
 DATA = Path(__file__).parent / "data"
 DEFAULTS = dict(
+    coordinate_scale=1.0,
+    parameter_scale=1.0,
+    query_chunk_size=4096,
+    train_on_anchors=False,
     surface_channels=4,
     volume_channels=7,
     hidden_dim=192,
@@ -652,3 +656,46 @@ def test_coordinates_encode_all_axes_equally(width):
     torch.testing.assert_close(changes, changes[0].expand(3), rtol=0, atol=1e-15)
     assert shifted.shape == (3, width)
     assert (shifted[..., 6 * (width // 6) :] == 0).all()
+
+
+@pytest.mark.parametrize("train_on_anchors", [False, True])
+def test_forward_scaling_and_chunking_match_low_level_api(device, train_on_anchors):
+    """The public API preserves scaled encode/decode values and gradients."""
+    model = ABUPT(
+        **SMALL,
+        parameter_channels=3,
+        coordinate_scale=10.0,
+        parameter_scale=40.0,
+        query_chunk_size=3,
+        train_on_anchors=train_on_anchors,
+    ).to(device)
+    g, sp, s, v = inputs(device)
+    parameters = torch.tensor([[[40.0, 2.0, 0.0]], [[30.0, 0.0, 1.0]]], device=device)
+    context = model.encode(g * 10, sp * 10, s * 10, v * 10, parameters[:, 0] / 40)
+    expected = (
+        (context.surface_predictions, context.volume_predictions)
+        if train_on_anchors
+        else (
+            model.decode_queries(s * 10, context, "surface"),
+            model.decode_queries(v * 10, context, "volume"),
+        )
+    )
+    actual = model(g, sp.double(), s, v.double(), s, v, parameters.double())
+    for a, b in zip(actual, expected):
+        torch.testing.assert_close(a, b, rtol=2e-5, atol=2e-6)
+    weights = tuple(model.parameters())
+    actual_grad = torch.autograd.grad(sum(t.square().mean() for t in actual), weights)
+    expected_grad = torch.autograd.grad(
+        sum(t.square().mean() for t in expected), weights
+    )
+    for a, b in zip(actual_grad, expected_grad):
+        torch.testing.assert_close(a, b, rtol=2e-4, atol=2e-5)
+    if train_on_anchors:
+        with pytest.raises(ValueError, match="coordinates, and order"):
+            model(g, sp, s, v, s.flip(1), v, parameters)
+        model.eval()
+        queries = s[:, :2]
+        result = model(g, sp, s, v, queries, v, parameters)
+        torch.testing.assert_close(
+            result[0], model.decode_queries(queries * 10, context, "surface")
+        )
