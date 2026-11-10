@@ -66,19 +66,19 @@ checks that statistics retain no computation graph while the original forces can
 still participate in a training loss. The application controls its energy models
 and gradient context. This example needs no GP or application-specific toolkit.
 
-## Scoring and persistence
+## Scoring and Persistence
 
 `feature_scoring.py` obtains optional GeoTransolver geometry tokens, pools them
-in the recipe, fits reusable distance/density scorers, and applies a validation
+in the recipe, fits reusable distance and density scorers, and applies a validation
 threshold. Generic scorers do not depend on geometry utilities. For mesh
 descriptors, explicitly import `physicsnemo.experimental.uq.ood.geometry`.
-Persist checkpoint identity, pooling/preprocessing, feature schema, and threshold
-alongside scorer state. The API reference includes save/restore examples.
+Persist checkpoint identity, pooling, preprocessing, feature schema, and threshold
+alongside scorer state. The API reference includes save and restore examples.
 
-`geometry_scoring.py` explicitly imports optional mesh descriptors, persists density
-tensor state and application metadata/policy in one weights-only Torch artifact,
-validates feature identity,
-and checks restored scores and decisions. It uses synthetic primitive meshes.
+`geometry_scoring.py` uses synthetic primitive meshes and explicitly imports
+optional mesh descriptors. It saves density tensor state, application metadata,
+and policy in one weights-only PyTorch artifact. It also validates feature
+identity and checks restored scores and decisions.
 
 ## Distributed Calibration
 

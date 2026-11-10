@@ -211,7 +211,7 @@ torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotranso
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
 Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be opened using ParaView.
 
-## Guardrails (OOD detection)
+## Guardrails (OOD Detection)
 
 Use the trained model's optional geometry-feature output with the reusable
 `KNNScorer`. Feature collection, threshold selection, and the response to a score

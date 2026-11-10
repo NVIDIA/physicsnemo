@@ -22,10 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
-- Adds reusable `KNNScorer` and `DensityScorer` under `experimental.uq.ood`,
-  optional geometry descriptors, and examples with application-owned scoring decisions.
-  Scorers support weights-only tensor persistence; kNN uses bounded distance blocks
-  and leave-one-out reference scoring, and density supports held-out calibration.
+- `KNNScorer` and `DensityScorer` provide reusable out-of-distribution (OOD)
+  scoring under `experimental.uq.ood`, with optional geometry descriptors.
+  The examples keep scoring decisions in the application. Both scorers support
+  weights-only tensor persistence. The k-nearest neighbors (kNN) scorer uses
+  bounded distance blocks and leave-one-out reference scoring. The density
+  scorer supports held-out calibration.
 - `Mean` and `Variance` now support opt-in tensor-aware streaming with detached
   state, state combination, and `ShardTensor` reductions over declared
   observation axes.
