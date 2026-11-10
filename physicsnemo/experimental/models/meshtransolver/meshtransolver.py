@@ -42,12 +42,15 @@ from physicsnemo.models.geotransolver import GeoTransolver, GlobalContextBuilder
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
 from physicsnemo.models.transolver.transolver import TransolverBlock
 from physicsnemo.nn import GALEBlock, get_activation
-from physicsnemo.nn.module.gnn_layers.graph_types import PyGData
+from physicsnemo.nn.module.gnn_layers.graph_types import PYG_AVAILABLE
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 from .contact import CONTACT_FEATURE_DIM, ContactGraph, SparseContactBlock
 from .local_attention import LocalNeighborhood, NeighborhoodAttentionProcessor
+
+if PYG_AVAILABLE:
+    from physicsnemo.nn.module.gnn_layers.graph_types import PyGData
 
 GlobalProcessor = Literal["transolver", "gale", "gale_fa"]
 MeshContextFusionStage = Literal["none", "post", "pre_post"]
@@ -1733,6 +1736,11 @@ class MeshGeoFLARE(GeoTransolver):
         )
         edge_index = torch.stack((index[mask], destination[mask]), dim=0)
         slot_features = neighborhood.edge_features[mask]
+        if not PYG_AVAILABLE:
+            raise ImportError(
+                "The 'knn_mpnn' local processor builds a PyTorch Geometric graph; "
+                "install torch_geometric and torch_scatter (physicsnemo[gnns])."
+            )
         return PyGData(edge_index=edge_index, num_nodes=num_nodes), slot_features
 
     def _contact_residual(
