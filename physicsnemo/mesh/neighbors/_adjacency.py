@@ -197,8 +197,9 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         ----------
         sources : slice | Sequence[int] | Sequence[bool] | torch.Tensor
             The sources to keep, in order: a one-dimensional selection, as of
-            a tensor of shape ``(n_sources,)``. That is a slice, integer
-            indices (repeats allowed), or a boolean mask.
+            a tensor of shape ``(n_sources,)``. That is a slice, or integer
+            indices (repeats allowed) or a boolean mask as a tensor, list, or
+            tuple.
 
         Returns
         -------
@@ -218,6 +219,15 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         [[3, 4], [5]]
         """
         from physicsnemo.mesh.spatial._ragged import _ragged_arange
+
+        ### Make a list or tuple one index tensor: torch reads a tuple as one
+        ### index per dimension. An empty one selects no sources.
+        if not isinstance(sources, (slice, torch.Tensor)):
+            sources = (
+                torch.as_tensor(sources, device=self.offsets.device)
+                if len(sources) > 0
+                else torch.empty(0, dtype=torch.long, device=self.offsets.device)
+            )
 
         starts = self.offsets[:-1][sources]
         counts = self.offsets[1:][sources] - starts

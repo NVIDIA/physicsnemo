@@ -50,11 +50,14 @@ def test_indexing_takes_the_selections_of_a_tensor(device):
     mask = torch.tensor([True, False, False, True], device=device)
 
     assert adjacency[[2, 0]].to_list() == [[], [0, 1, 2]]
+    assert adjacency[(2, 0)].to_list() == [[], [0, 1, 2]]
     assert adjacency[1:].to_list() == [[3], [], [4, 5]]
     assert adjacency[mask].to_list() == [[0, 1, 2], [4, 5]]
-    empty = adjacency[torch.empty(0, dtype=torch.long, device=device)]
-    assert empty.n_sources == 0
-    assert empty.indices.dtype == adjacency.indices.dtype
+    assert adjacency[(True, False, False, True)].to_list() == [[0, 1, 2], [4, 5]]
+    for nothing in (torch.empty(0, dtype=torch.long, device=device), [], ()):
+        empty = adjacency[nothing]
+        assert empty.n_sources == 0
+        assert empty.indices.dtype == adjacency.indices.dtype
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
