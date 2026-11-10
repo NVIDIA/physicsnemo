@@ -21,7 +21,7 @@ not calibrated coverage or out-of-distribution (OOD) detection quality.
 ## Statistical Axes Determine Communication
 
 The distributed examples use a 2 × 2 mesh over the member and space dimensions
-on four GPUs. They also run on two GPUs: 
+on four GPUs. They also run on two GPUs:
 
 - By default, they distribute members (2 × 1)
 - `--member-groups 1` distributes space (1 × 2)
@@ -30,7 +30,8 @@ For example:
 
 ```bash
 torchrun --standalone --nproc-per-node=2 examples/minimal/uq/distributed_moments.py
-torchrun --standalone --nproc-per-node=2 examples/minimal/uq/distributed_moments.py --member-groups 1
+torchrun --standalone --nproc-per-node=2 \
+  examples/minimal/uq/distributed_moments.py --member-groups 1
 ```
 
 The four-GPU example uses independently sharded simulations and space.
