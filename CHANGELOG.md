@@ -434,6 +434,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `FNO` compiled with `torch.compile(dynamic=True)` no longer recompiles for
+  every new grid resolution. The encoders' coordinate grids are built with
+  `torch.arange` instead of `torch.linspace`, which specialized on the size.
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.
