@@ -748,10 +748,10 @@ def compute_surface_force_coefficients(
     The pressure force on the body is ``-C_p * n`` (outward normal convention)
     and the friction force on the body is ``-C_f``: ``C_f`` is OpenFOAM's
     ``wallShearStress`` over the dynamic pressure, and that stress is the one
-    the wall exerts on the fluid.  Normal orientation is
-    determined at integration time using the divergence theorem (matching
-    the AirFRANS pattern), so cell winding in the input mesh does not
-    need to be pre-corrected.
+    the wall exerts on the fluid.  Normal orientation is determined at
+    integration time using the divergence theorem (matching the AirFRANS
+    pattern), so cell winding in the input mesh does not need to be
+    pre-corrected.
 
     Args:
         surface_mesh: Car surface Mesh with ``point_data["C_p"]`` and
