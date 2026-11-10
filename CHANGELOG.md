@@ -56,24 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `QuantileRegressionScore`, and `AuxScale`. Custom scores subclass
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
-- Adds `physicsnemo.nn.functional.shell_contact`: shell contact as pure
+- Adds `physicsnemo.experimental.nn.shell_contact`: shell contact as pure
   functions over tensors (node-to-facet pair search with a Warp BVH broad
   phase and fused Warp narrow phase, crossing-aware signed gaps, edge
   features and tapers, penetration depths, envelope projection and
-  rigid-wall clamp). `SurfaceContactGraphBuilder` now wraps these
-  functions with an unchanged interface and bit-identical outputs.
-- Adds `physicsnemo.nn.functional.neighbors.static_knn` (reference geodesic or
-  Euclidean k-nearest neighbourhoods of a mesh) and, in
-  `physicsnemo.experimental.models.meshtransolver`, the MeshGeoFLARE
+  rigid-wall clamp), and `physicsnemo.experimental.nn.static_knn`
+  (reference geodesic or Euclidean k-nearest neighbourhoods of a mesh).
+- Adds, in `physicsnemo.experimental.models.meshtransolver`, the MeshGeoFLARE
   mesh/attention hybrids with a fused neighbourhood-attention kernel and a
-  surface-contact graph builder.
+  surface-contact graph builder over the shell-contact functions.
 - Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
   the time-conditional network, the MeshGraphNet contact corrector, the three
   full-resolution Yaris recipes (`yaris_deformer`, `yaris_deformer_corrector`,
   `yaris_geotransolver`) and the body-in-white recipe
   `crash_deformer_knn_time_conditional`, target-relative penetration metrics
-  and a kinematics readout, with the API page
-  `docs/api/nn/functionals/shell_contact.rst`.
+  and a kinematics readout.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside

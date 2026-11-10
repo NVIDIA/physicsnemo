@@ -373,9 +373,7 @@ class YarisFullReader:
         reference (folded, overlapping or degenerate centre fan) are split
         into two triangles so the surface stays covered.
         """
-        from physicsnemo.nn.functional.neighbors.surface_contact import (
-            supported_quad_mask,
-        )
+        from physicsnemo.experimental.nn.shell_contact import supported_quad_mask
 
         try:
             cells = np.asarray(store["shell/connectivity"][:], dtype=np.int64)

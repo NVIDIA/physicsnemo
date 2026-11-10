@@ -20,7 +20,7 @@ import math
 import pytest
 import torch
 
-from physicsnemo.nn.functional.shell_contact import (
+from physicsnemo.experimental.nn.shell_contact import (
     CONTACT_FEATURE_DIM,
     KINEMATIC_CONTACT_FEATURE_DIM,
     ShellContactSearch,

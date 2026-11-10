@@ -18,7 +18,7 @@ r"""Neighborhood attention over static reference neighborhoods.
 This is the local operator DeFormer can use in place of its MeshGraphNet
 pre-/post-processors. Each node attends over a fixed set of ``K`` reference
 neighbors (including itself as one slot) selected once on the initial mesh by
-:func:`physicsnemo.nn.functional.neighbors.static_knn.static_knn`. Reference
+:func:`physicsnemo.experimental.nn.static_knn.static_knn`. Reference
 edge geometry (displacement and distance) enters both the attention logits, as
 a per-head bias, and the values, as an attention-weighted edge aggregate that is
 projected after aggregation so no :math:`N \times K \times D` edge-value tensor

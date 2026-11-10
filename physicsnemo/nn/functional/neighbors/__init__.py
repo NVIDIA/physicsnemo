@@ -16,15 +16,10 @@
 
 from .knn import KNN, knn
 from .radius_search import RadiusSearch, radius_search
-from .static_knn import StaticNeighborhood, euclidean_knn, geodesic_knn, static_knn
 
 __all__ = [
     "KNN",
     "knn",
     "RadiusSearch",
     "radius_search",
-    "StaticNeighborhood",
-    "euclidean_knn",
-    "geodesic_knn",
-    "static_knn",
 ]

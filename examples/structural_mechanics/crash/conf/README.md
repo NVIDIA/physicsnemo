@@ -70,7 +70,7 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | `model.teacher_window` | false | also feed the displacement one frame earlier and later (as differences) |
 | `model.hidden_dim`, `processor_size`, `aggregation`, `num_processor_checkpoint_segments` | 128, 8, `sum`, 8 | the MeshGraphNet processor |
 | `model.use_contact`, `contact_activation_distance`, `contact_reference_clearance`, `node_contact_radius` | true, 5, 10, 10 | contact edges from the crossing-aware search on the predicted shape: 5 mm band, 10 mm reference clearance, features over 10 mm |
-| `model.contact_side_from_reference`, `contact_side_symmetric`, `contact_crossing_radius`, `contact_clearance_approach_only` | true, false, null, false | the side test and its corrections (see `physicsnemo.nn.functional.ShellContactSearch`) |
+| `model.contact_side_from_reference`, `contact_side_symmetric`, `contact_crossing_radius`, `contact_clearance_approach_only` | true, false, null, false | the side test and its corrections (see `physicsnemo.experimental.nn.shell_contact.ShellContactSearch`) |
 | `model.contact_bidirectional`, `contact_search_implementation`, `contact_surface_max_pairs` | true, `warp`, 8e6 | both message directions; search backend and budget |
 | `model.dt`, `local_knn_k`, `local_neighborhood` | 0.005, 32, `euclidean` | read by the datapipe (the network's neighbourhoods) |
 | `model.final_clamp_to_wall`, `wall_axis`, `wall_sign` | true (recipe), 0, 1 | wall clamp of the corrected shape at evaluation |

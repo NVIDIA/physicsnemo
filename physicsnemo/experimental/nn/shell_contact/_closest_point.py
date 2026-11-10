@@ -400,7 +400,7 @@ def node_triangle_candidate_chunks(
             raise ValueError(
                 "Warp discovery requires float32; use torch for float64 reference"
             )
-        from .surface_contact_warp import bvh_pair_chunks
+        from ._bvh_warp import bvh_pair_chunks
 
         chunks = bvh_pair_chunks(
             lower,

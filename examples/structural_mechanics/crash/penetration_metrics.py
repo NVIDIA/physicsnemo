@@ -27,7 +27,7 @@ penetration the truth does not have counts against a model.
 Definitions (physical millimetres, per held-out case and future frame):
 
 * Candidate pairs: node-facet pairs of the dataset's shell surface discovered
-  by :func:`physicsnemo.nn.functional.shell_contact_pairs` on the frame's positions inside the
+  by :func:`physicsnemo.experimental.nn.shell_contact.shell_contact_pairs` on the frame's positions inside the
   ``activation_distance_mm`` shell-clearance band, minus the one-ring
   exclusions, minus pairs already within ``reference_clearance_mm`` of each
   other in the initial configuration (flanges, in-plane neighbours).
@@ -70,7 +70,7 @@ import math
 
 import torch
 
-from physicsnemo.nn.functional.shell_contact import (
+from physicsnemo.experimental.nn.shell_contact import (
     ShellContactSearch,
     shell_contact_pairs,
     shell_penetration_depths,

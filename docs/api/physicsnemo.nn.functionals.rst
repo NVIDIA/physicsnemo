@@ -19,7 +19,6 @@ in the documentation for performance comparisons.
    :name: PhysicsNeMo Functionals
 
    nn/functionals/neighbors
-   nn/functionals/shell_contact
    nn/functionals/derivatives
    nn/functionals/geometry
    nn/functionals/fourier_spectral

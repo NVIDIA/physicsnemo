@@ -23,7 +23,7 @@ scipy = pytest.importorskip("scipy")
 from scipy.sparse import coo_matrix  # noqa: E402
 from scipy.sparse.csgraph import dijkstra  # noqa: E402
 
-from physicsnemo.nn.functional.neighbors.static_knn import (  # noqa: E402
+from physicsnemo.experimental.nn.static_knn import (  # noqa: E402
     euclidean_knn,
     geodesic_knn,
     static_knn,

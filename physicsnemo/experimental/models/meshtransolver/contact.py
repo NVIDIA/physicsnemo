@@ -33,7 +33,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.nn.functional.shell_contact import (
+from physicsnemo.experimental.nn.shell_contact import (
     CONTACT_FEATURE_DIM,
     KINEMATIC_CONTACT_FEATURE_DIM,
     contact_edge_features,
@@ -233,7 +233,7 @@ class SparseContactGraphBuilder(nn.Module):
     distance minus the mean of the two shell thicknesses) lies within
     ``search_radius`` is a directed candidate edge, the ``max_neighbors``
     smallest gaps per destination node are kept, and the edge features are
-    :func:`~physicsnemo.nn.functional.shell_contact.contact_edge_features`.
+    :func:`~physicsnemo.experimental.nn.shell_contact.contact_edge_features`.
     Small graphs use a deterministic ``torch.cdist`` implementation. Larger
     graphs use ``torch_cluster.radius_graph`` and therefore require
     PhysicsNeMo's ``gnns`` optional dependency group.

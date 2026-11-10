@@ -19,7 +19,7 @@ The functions here are the geometric primitives behind the pair search: the
 live closest point of a node on a facet, the detached projection of the same
 pair in the reference configuration, and the discrete test that decides
 whether a node has passed through a shell since that configuration. None of
-them discovers pairs; :func:`~physicsnemo.nn.functional.shell_contact.shell_contact_pairs`
+them discovers pairs; :func:`~physicsnemo.experimental.nn.shell_contact.shell_contact_pairs`
 does.
 """
 
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import torch
 
-from physicsnemo.nn.functional.neighbors.surface_contact import (
+from ._closest_point import (
     TriangleProjection,
     closest_point_facet,
 )

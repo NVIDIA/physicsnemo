@@ -25,10 +25,10 @@ from physicsnemo.experimental.models.meshtransolver import (
     SparseContactBlock,
     SurfaceContactGraphBuilder,
 )
-from physicsnemo.nn.functional.neighbors.surface_contact import (
+from physicsnemo.experimental.nn.shell_contact._closest_point import (
     node_triangle_candidate_chunks,
 )
-from physicsnemo.nn.functional.neighbors.surface_contact_narrow_warp import (
+from physicsnemo.experimental.nn.shell_contact._narrow_phase_warp import (
     fused_activation_gaps,
 )
 

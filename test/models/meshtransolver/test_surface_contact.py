@@ -23,13 +23,13 @@ from physicsnemo.experimental.models.meshtransolver import (
     SurfaceContactGraphBuilder,
     merge_contact_graphs,
 )
-from physicsnemo.nn.functional.neighbors.surface_contact import (
+from physicsnemo.experimental.nn.shell_contact import linear_closest_approach
+from physicsnemo.experimental.nn.shell_contact._closest_point import (
     closest_point_facet,
     closest_point_triangle,
     node_triangle_candidate_chunks,
     supported_quad_mask,
 )
-from physicsnemo.nn.functional.shell_contact import linear_closest_approach
 
 
 @pytest.fixture(params=["cpu", "cuda"])

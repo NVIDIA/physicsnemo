@@ -20,7 +20,7 @@ Two corrections, both pure geometry and both off unless a recipe turns them on:
 * the **envelope projection** moves nodes that violate the shell thickness
   envelope back onto it (and nodes that passed through a shell back through
   it), using the crossing-aware pair search of
-  :mod:`physicsnemo.nn.functional.shell_contact`;
+  :mod:`physicsnemo.experimental.nn.shell_contact`;
 * the **rigid-wall clamp** caps the coordinate of every node at an analytic
   rigid wall plane (the Yaris barrier at ``x = 100`` mm), so no node is
   predicted inside the wall.
@@ -37,7 +37,7 @@ from dataclasses import dataclass
 
 import torch
 
-from physicsnemo.nn.functional.shell_contact import (
+from physicsnemo.experimental.nn.shell_contact import (
     ShellContactSearch,
     clamp_to_wall,
     project_shell_penetrations,

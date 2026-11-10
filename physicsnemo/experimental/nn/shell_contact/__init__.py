@@ -26,6 +26,7 @@
   evaluation-time geometric corrections of a predicted shape.
 """
 
+from ._closest_point import supported_quad_mask
 from .features import (
     CONTACT_FEATURE_DIM,
     KINEMATIC_CONTACT_FEATURE_DIM,
@@ -76,6 +77,7 @@ __all__ = [
     "shell_contact_pairs",
     "shell_penetration_depths",
     "smooth_contact_cutoff",
+    "supported_quad_mask",
     "uses_fused_narrow_phase",
     "wall_penetration_depths",
 ]

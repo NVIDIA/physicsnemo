@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.meshtransolver import SurfaceContactGraphBuilder
-from physicsnemo.nn.functional.neighbors.surface_contact import (
+from physicsnemo.experimental.nn.shell_contact._closest_point import (
     node_triangle_candidate_chunks,
 )
 

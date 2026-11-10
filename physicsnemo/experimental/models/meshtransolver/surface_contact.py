@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Surface-contact adapter over :mod:`physicsnemo.nn.functional.shell_contact`.
+"""Surface-contact adapter over :mod:`physicsnemo.experimental.nn.shell_contact`.
 
 The module keeps the ``SurfaceContactGraphBuilder`` interface the mesh-attention
 models and recipes were written against; discovery, features and tapers are the
@@ -26,7 +26,7 @@ import math
 import torch
 from torch import nn
 
-from physicsnemo.nn.functional.shell_contact import (
+from physicsnemo.experimental.nn.shell_contact import (
     ShellContactSearch,
     candidate_activation_gaps,
     facet_area_quadrature,
@@ -44,8 +44,8 @@ __all__ = ["SurfaceContactGraphBuilder"]
 class SurfaceContactGraphBuilder(nn.Module):
     """All eligible node--facet pairs with live surface-interpolated messages.
 
-    A stateless wrapper over :func:`~physicsnemo.nn.functional.shell_contact.shell_contact_pairs`
-    and :func:`~physicsnemo.nn.functional.shell_contact.shell_contact_edge_features`
+    A stateless wrapper over :func:`~physicsnemo.experimental.nn.shell_contact.shell_contact_pairs`
+    and :func:`~physicsnemo.experimental.nn.shell_contact.shell_contact_edge_features`
     that returns a :class:`~physicsnemo.experimental.models.meshtransolver.contact.ContactGraph`.
     Broad phase uses a facet BVH and a conservative maximum nodal thickness;
     narrow phase uses half query thickness + half barycentric facet thickness.
@@ -80,7 +80,7 @@ class SurfaceContactGraphBuilder(nn.Module):
     ``side_from_reference``, ``reference_clearance``, ``side_symmetric``,
     ``crossing_radius`` and ``clearance_approach_only`` are the crossing-aware
     discovery corrections documented on
-    :class:`~physicsnemo.nn.functional.shell_contact.ShellContactSearch`: a node
+    :class:`~physicsnemo.experimental.nn.shell_contact.ShellContactSearch`: a node
     that has crossed a shell since the reference configuration gets a negative
     signed gap and a flipped direction; pairs assembled within the clearance in
     the reference are dropped; the sweep discovers crossings deeper than the

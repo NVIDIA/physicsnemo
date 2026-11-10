@@ -36,8 +36,8 @@ from pathlib import Path
 import torch
 from torch_geometric.data import Data
 
-from physicsnemo.nn.functional.neighbors import static_knn as _static_knn_module
-from physicsnemo.nn.functional.neighbors.static_knn import (
+from physicsnemo.experimental.nn import static_knn as _static_knn_module
+from physicsnemo.experimental.nn.static_knn import (
     StaticNeighborhood,
     static_knn,
 )

@@ -24,7 +24,7 @@ mesh:
   on the predicted shape and their difference (the local stretch, bend and
   fold of the prediction), standardised with the reference edge statistics;
 * contact pairs discovered on the predicted shape by the crossing-aware
-  node-to-facet search of :mod:`physicsnemo.nn.functional.shell_contact`
+  node-to-facet search of :mod:`physicsnemo.experimental.nn.shell_contact`
   become extra edges between the facet vertices and the node (in both
   directions), carrying the contact geometry, the barycentric weight of the
   vertex and the direction sign: the "world edges" of MeshGraphNet collision
@@ -51,7 +51,7 @@ from torch import nn
 
 import physicsnemo
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
-from physicsnemo.nn.functional.shell_contact import (
+from physicsnemo.experimental.nn.shell_contact import (
     CONTACT_FEATURE_DIM,
     ShellContactSearch,
     shell_contact_edge_features,
@@ -105,7 +105,7 @@ class MeshGraphNetCorrector(physicsnemo.Module):
     contact_surface_material_fan, contact_side_from_reference,
     contact_reference_clearance, contact_side_symmetric, contact_crossing_radius,
     contact_clearance_approach_only
-        Settings of the contact search (:class:`~physicsnemo.nn.functional.ShellContactSearch`;
+        Settings of the contact search (:class:`~physicsnemo.experimental.nn.shell_contact.ShellContactSearch`;
         ``node_contact_radius`` is the feature scale in mm, the activation
         distance the band, the reference clearance drops assembled pairs).
     contact_bidirectional : bool

@@ -70,7 +70,7 @@ def shell_penetration_depths(
     Parameters
     ----------
     pairs : ShellContactPairs
-        Output of :func:`~physicsnemo.nn.functional.shell_contact.shell_contact_pairs`.
+        Output of :func:`~physicsnemo.experimental.nn.shell_contact.shell_contact_pairs`.
     num_nodes : int
         Number of nodes ``N``.
 

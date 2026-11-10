@@ -38,13 +38,12 @@ from dataclasses import dataclass, replace
 
 import torch
 
-from physicsnemo.nn.functional.neighbors.surface_contact import (
+from ._closest_point import (
     TriangleProjection,
     closest_point_triangle,
     node_triangle_candidate_chunks,
     supported_quad_mask,
 )
-
 from .geometry import (
     crossing_flags,
     project_onto_facets,
@@ -61,7 +60,7 @@ class ShellContactSearch:
     activation_distance : float
         Positive shell-clearance band: a pair is active while its activation
         gap lies below it (and the taper of
-        :func:`~physicsnemo.nn.functional.shell_contact.smooth_contact_cutoff`
+        :func:`~physicsnemo.experimental.nn.shell_contact.smooth_contact_cutoff`
         reaches zero there). Physical length.
     implementation : {"warp", "torch"}
         Broad-phase backend: a Warp BVH (float32 positions only; runs on CPU
@@ -373,7 +372,7 @@ def _reference_candidate_gaps(positions, velocities, thickness, faces, pairs, se
 
 def _fused_candidate_gaps(positions, velocities, thickness, faces, pairs, search):
     """Fused Warp membership gaps and the ambiguity mask of candidate pairs."""
-    from physicsnemo.nn.functional.neighbors.surface_contact_narrow_warp import (
+    from ._narrow_phase_warp import (
         fused_activation_gaps,
     )
 

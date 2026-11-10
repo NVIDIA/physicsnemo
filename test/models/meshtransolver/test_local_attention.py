@@ -27,7 +27,7 @@ from physicsnemo.experimental.models.meshtransolver import (  # noqa: E402
     MeshGeoFLARE,
     NeighborhoodAttentionProcessor,
 )
-from physicsnemo.nn.functional.neighbors.static_knn import geodesic_knn  # noqa: E402
+from physicsnemo.experimental.nn.static_knn import geodesic_knn  # noqa: E402
 
 
 def _neighborhood(num_nodes, k, seed=0, break_at=None):

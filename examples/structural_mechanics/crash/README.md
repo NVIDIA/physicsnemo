@@ -53,7 +53,7 @@ The corrector (`residual_model.ResidualTimeConditional` around
   mesh edges (reference geometry, predicted geometry and their difference per
   edge) and on *contact edges* discovered on the predicted shape by the
   crossing-aware node-to-facet search of
-  `physicsnemo.nn.functional.shell_contact` (5 mm band, 10 mm reference
+  `physicsnemo.experimental.nn.shell_contact` (5 mm band, 10 mm reference
   clearance so that assembled flanges do not count as contact, both message
   directions);
 * 8 layers of width 128, zero-initialised decoder (epoch 0 reproduces the
