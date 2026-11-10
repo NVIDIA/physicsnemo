@@ -67,14 +67,18 @@ def estimate_tangent_space_pca(
     -----
     Algorithm:
 
-    1. For each point, gather :math:`k` nearest neighbors.
-    2. Center the neighborhood (subtract mean).
-    3. Compute the covariance matrix
-       :math:`C = \tfrac{1}{k} \sum_i (x_i - \bar{x})(x_i - \bar{x})^\top`.
+    1. For each point :math:`x`, gather :math:`k` nearest neighbors.
+    2. Take their offsets :math:`x_i - x` from the point.
+    3. Compute the second-moment matrix
+       :math:`C = \tfrac{1}{k} \sum_i (x_i - x)(x_i - x)^\top`.
     4. Eigen-decompose: :math:`C = V \Lambda V^\top`.
     5. Sort eigenvectors by eigenvalue (descending).
     6. First ``n_manifold_dims`` eigenvectors span the tangent space.
     7. Remaining eigenvectors span the normal space.
+
+    Derivatives of the bases are those of the tangent and normal spaces: each
+    basis turns only into the other space, so the derivatives stay finite where
+    eigenvalues within one space tie. Only first derivatives are exact.
 
     Examples
     --------
@@ -95,7 +99,7 @@ def estimate_tangent_space_pca(
     if k_neighbors is None:
         k_neighbors = min(2 * n_manifold_dims + 1, n_points - 1)
 
-    k_neighbors = max(k_neighbors, n_manifold_dims + 1)  # Need at least n+1 neighbors
+    k_neighbors = max(k_neighbors, n_manifold_dims + 1)  # Use n+1 where available
 
     ### Get point-to-point adjacency
     adjacency = mesh.get_point_to_points_adjacency()
@@ -113,7 +117,9 @@ def estimate_tangent_space_pca(
     )
 
     ### Identity fallback for points with insufficient neighbors
-    min_required = n_manifold_dims + 1
+    # The offsets from the point are not centred, so n_manifold_dims neighbors
+    # in general position span the tangent space
+    min_required = max(n_manifold_dims, 1)
     neighbor_counts = adjacency.counts
     effective_counts = torch.minimum(
         neighbor_counts,
@@ -134,23 +140,24 @@ def estimate_tangent_space_pca(
         mesh.points, adjacency, min_neighbors=min_required, max_neighbors=k_neighbors
     ):
         point_indices = batch.entity_indices
-        centered = batch.relative_positions  # (n_group, n_neighbors, n_spatial_dims)
+        # (n_group, n_neighbors, n_spatial_dims); 16-bit in float32, which eigh needs
+        offsets = batch.relative_positions.to(torch.promote_types(dtype, torch.float32))
         n_neighbors = batch.n_neighbors
 
         ### Covariance matrix: C = (1/k) X^T X
         cov_matrices = (
             torch.bmm(
-                centered.transpose(1, 2),  # (n_group, n_spatial_dims, n_neighbors)
-                centered,  # (n_group, n_neighbors, n_spatial_dims)
+                offsets.transpose(1, 2),  # (n_group, n_spatial_dims, n_neighbors)
+                offsets,  # (n_group, n_neighbors, n_spatial_dims)
             )
             / n_neighbors
         )
 
-        ### Batch eigen-decomposition
-        eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrices)
+        ### Batch eigen-decomposition, without derivatives (see below)
+        eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrices.detach())
 
         ### Sort eigenvectors by eigenvalue (descending)
-        sorted_indices = torch.argsort(eigenvalues, dim=1, descending=True)
+        eigenvalues, sorted_indices = eigenvalues.sort(dim=1, descending=True)
         sorted_idx_expanded = sorted_indices.unsqueeze(1).expand_as(eigenvectors)
         eigenvectors_sorted = torch.gather(
             eigenvectors, dim=2, index=sorted_idx_expanded
@@ -158,10 +165,31 @@ def estimate_tangent_space_pca(
 
         ### Extract tangent and normal bases
         tangent_vecs = eigenvectors_sorted[:, :, :n_manifold_dims]
-        tangent_basis[point_indices] = tangent_vecs.transpose(1, 2)
-
         normal_vecs = eigenvectors_sorted[:, :, n_manifold_dims:]
-        normal_basis[point_indices] = normal_vecs.transpose(1, 2)
+
+        ### Derivatives of the tangent and normal spaces
+        # eigh's backward divides by every eigenvalue gap, so it is NaN or wrong
+        # where eigenvalues tie, such as the zero normal eigenvalues of a flat
+        # neighborhood. The spaces depend only on the gaps between tangent and
+        # normal eigenvalues: to first order, a change of the matrix turns each
+        # space into the other by this rotation, which is zero in value (so only
+        # first derivatives are exact). Where such a gap is zero, the tangent
+        # space is undefined and gets no derivative.
+        gaps = (
+            eigenvalues[:, None, :n_manifold_dims]
+            - eigenvalues[:, n_manifold_dims:, None]
+        )  # (n_group, codimension, n_manifold_dims)
+        d_cov = cov_matrices - cov_matrices.detach()
+        rotation = (
+            normal_vecs.mT @ d_cov @ tangent_vecs / gaps.where(gaps > 0, torch.inf)
+        )
+        tangent_vecs, normal_vecs = (
+            tangent_vecs + normal_vecs @ rotation,
+            normal_vecs - tangent_vecs @ rotation.mT,
+        )
+
+        tangent_basis[point_indices] = tangent_vecs.transpose(1, 2).to(dtype)
+        normal_basis[point_indices] = normal_vecs.transpose(1, 2).to(dtype)
 
     return tangent_basis, normal_basis
 
