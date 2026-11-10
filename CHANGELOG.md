@@ -434,6 +434,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.sym` expressions with a constant term, such as a source term,
+  no longer raise `TypeError` when built with `freeze_terms`. `torch_lambdify`
+  now calls constants with the same arguments as other expressions.
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.

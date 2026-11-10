@@ -19,9 +19,11 @@ import pytest
 import torch
 from sympy import Function, Number, Symbol
 
+from physicsnemo.sym.computation import Computation
 from physicsnemo.sym.eq.gradients import _compute_stencil3d
 from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
+from physicsnemo.sym.utils.sympy.torch_printer import torch_lambdify
 
 # ---------------------------------------------------------------------------
 # Inline Navier-Stokes PDE (replaces ported NavierStokes class)
@@ -482,3 +484,23 @@ def test_pde_make_computations():
     assert len(comps) == len(ns.equations)
     for comp in comps:
         assert comp.outputs[0] in ns.equations
+
+
+@pytest.mark.parametrize("separable", [False, True])
+def test_torch_lambdify_constant(separable):
+    """A constant expression evaluates with the same arguments as any other."""
+    x = torch.linspace(0.0, 1.0, 5)
+    fn = torch_lambdify(Number(2), ["x"], separable=separable)
+    out = fn(x) if separable else fn([x])
+    torch.testing.assert_close(out, torch.full_like(x, 2.0))
+
+
+def test_computation_freeze_terms_with_constant():
+    """Freezing terms of an expression that has a constant term works."""
+    u = Symbol("u")
+    comp = Computation.from_sympy(2 * u + 3, "out", freeze_terms=[1])
+    x = torch.linspace(0.0, 1.0, 5, requires_grad=True)
+    out = comp.evaluate({"u": x})["out"]
+    torch.testing.assert_close(out, 2 * x + 3)
+    # The frozen term 2 * u is detached, so the output carries no gradient.
+    assert not out.requires_grad
