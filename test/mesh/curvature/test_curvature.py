@@ -272,6 +272,24 @@ class TestGaussianCurvature:
                 f"{relative_error:.9f} ({total_voronoi_area=:.6f}, {total_triangle_area=:.6f})"
             )
 
+    def test_voronoi_areas_tile_thin_float32_triangles(self, device):
+        """Voronoi areas tile float32 right triangles with edge ratios up to 4096.
+
+        Inaccurate small angles once made these areas sum to 2.4 times the mesh area.
+        """
+        from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
+        from physicsnemo.mesh.primitives.planar import unit_square
+
+        mesh = unit_square.load(subdivisions=6, device=device)
+        x, y = mesh.points.unbind(dim=-1)
+        mesh = mesh.with_points(torch.stack([x**3, y], dim=-1))  # thin cells near x = 0
+
+        voronoi_areas = compute_dual_volumes_0(mesh)
+
+        torch.testing.assert_close(
+            voronoi_areas.sum(), mesh.cell_areas.sum(), rtol=1e-6, atol=0.0
+        )
+
 
 ### Test Mean Curvature
 

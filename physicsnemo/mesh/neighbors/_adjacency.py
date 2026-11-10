@@ -20,6 +20,8 @@ This module provides the Adjacency tensorclass for representing ragged arrays
 using offset-indices encoding, commonly used in graph and mesh processing.
 """
 
+from collections.abc import Sequence
+
 import torch
 from jaxtyping import Int
 from tensordict import TensorClass
@@ -69,6 +71,12 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         ... )
         >>> adj.to_list()
         [[10, 11], [], [12, 13]]
+
+    Indexing with integer indices, a boolean mask, or a slice selects sources
+    and returns their neighbor lists as a new ``Adjacency``:
+
+    >>> adj[torch.tensor([2, 0])].to_list()
+    [[12, 13], [10, 11]]
     """
 
     # n_sources_plus_one == n_sources + 1; the trailing offset is len(indices).
@@ -77,8 +85,8 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
 
     def __post_init__(self) -> None:
         # Runs on construction and load, but not when tensordict rebuilds an
-        # existing adjacency (clone, to, indexing): the offsets read below
-        # synchronize a CUDA device.
+        # existing adjacency (clone, to): the offsets read below synchronize a
+        # CUDA device.
         if not is_tracing():
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
@@ -179,6 +187,46 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         [3, 0, 2]
         """
         return self.offsets[1:] - self.offsets[:-1]
+
+    def __getitem__(
+        self, sources: slice | Sequence[int] | Sequence[bool] | torch.Tensor
+    ) -> "Adjacency":
+        """Select sources and return their neighbor lists.
+
+        Parameters
+        ----------
+        sources : slice | Sequence[int] | Sequence[bool] | torch.Tensor
+            The sources to keep, in order: a one-dimensional selection, as of
+            a tensor of shape ``(n_sources,)``. That is a slice, integer
+            indices (repeats allowed), or a boolean mask.
+
+        Returns
+        -------
+        Adjacency
+            Adjacency whose ``i``-th neighbor list is that of the ``i``-th
+            selected source. The neighbor indices keep their values.
+
+        Examples
+        --------
+        >>> adj = Adjacency(
+        ...     offsets=torch.tensor([0, 3, 5, 6, 9]),
+        ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        ... )
+        >>> adj[torch.tensor([3, 0, 3])].to_list()
+        [[6, 7, 8], [0, 1, 2], [6, 7, 8]]
+        >>> adj[1:3].to_list()
+        [[3, 4], [5]]
+        """
+        from physicsnemo.mesh.spatial._ragged import _ragged_arange
+
+        starts = self.offsets[:-1][sources]
+        counts = self.offsets[1:][sources] - starts
+        positions, _ = _ragged_arange(starts, counts)
+        return Adjacency(
+            offsets=torch.cat([counts.new_zeros(1), counts.cumsum(0)]),
+            indices=self.indices[positions],
+            device=self.device,
+        )
 
     def expand_to_pairs(
         self,
