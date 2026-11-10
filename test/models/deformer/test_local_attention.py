@@ -22,9 +22,9 @@ import torch
 
 pyg = pytest.importorskip("torch_geometric")
 
-from physicsnemo.experimental.models.meshgeoflare import (  # noqa: E402
+from physicsnemo.experimental.models.deformer import (  # noqa: E402
+    DeFormer,
     LocalNeighborhood,
-    MeshGeoFLARE,
     NeighborhoodAttentionProcessor,
 )
 from physicsnemo.experimental.nn.static_knn import geodesic_knn  # noqa: E402
@@ -83,7 +83,7 @@ def _model(**overrides):
         local_edge_dim=8,
     )
     kwargs.update(overrides)
-    return MeshGeoFLARE(**kwargs)
+    return DeFormer(**kwargs)
 
 
 def _forward(model, graph, global_embedding):
@@ -235,11 +235,11 @@ def test_rejects_mismatched_neighborhoods_and_invalid_settings():
 # Fused neighborhood attention (no gathered [N, K, H, dh] tensors).           #
 # --------------------------------------------------------------------------- #
 
-from physicsnemo.experimental.models.meshgeoflare.fused_neighborhood_attention import (  # noqa: E402
+from physicsnemo.experimental.models.deformer.fused_neighborhood_attention import (  # noqa: E402
     neighborhood_attention,
     triton_available,
 )
-from physicsnemo.experimental.models.meshgeoflare.local_attention import (  # noqa: E402
+from physicsnemo.experimental.models.deformer.local_attention import (  # noqa: E402
     NeighborhoodAttentionBlock,
 )
 

@@ -14,23 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""MeshGeoFLARE, the DeFormer network, and its neighbourhood-attention processor.
+r"""DeFormer's network and its neighbourhood-attention processor.
 
 A GeoTransolver/FLARE backbone with static kNN neighbourhood-attention stages
 before and after it, FiLM-conditioned on a mesh context.
 """
 
+from .deformer import DeFormer, MeshContextFiLM, MeshGeometryContextEncoder
 from .local_attention import (
     LocalNeighborhood,
     NeighborhoodAttentionBlock,
     NeighborhoodAttentionProcessor,
 )
-from .meshgeoflare import MeshContextFiLM, MeshGeoFLARE, MeshGeometryContextEncoder
 
 __all__ = [
     "MeshGeometryContextEncoder",
     "MeshContextFiLM",
-    "MeshGeoFLARE",
+    "DeFormer",
     "LocalNeighborhood",
     "NeighborhoodAttentionBlock",
     "NeighborhoodAttentionProcessor",

@@ -232,7 +232,7 @@ class Trainer:
         datapipe_name = cfg.datapipe._target_
         graph_model_markers = (
             "MeshGraphNet",
-            "MeshGeoFLARE",
+            "DeFormer",
             "ResidualTimeConditional",
         )
         is_graph_model = any(marker in model_name for marker in graph_model_markers)

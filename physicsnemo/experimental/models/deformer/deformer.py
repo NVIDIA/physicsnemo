@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""MeshGeoFLARE, the DeFormer network.
+r"""DeFormer: the network of the DeFormer crash surrogate.
 
 A static kNN neighbourhood-attention processor refines the native GeoTransolver
 node latent, geometry-aware FLARE communicates globally, and a second
@@ -46,7 +46,7 @@ MeshContextFusionStage = Literal["none", "post", "pre_post"]
 class BackboneState(NamedTuple):
     """Full-width state after the FLARE blocks, before any output head.
 
-    Returned by :meth:`MeshGeoFLARE.forward` with ``return_backbone=True`` so
+    Returned by :meth:`DeFormer.forward` with ``return_backbone=True`` so
     recipes can attach their own post-attention stages (for example a
     latent-preserving time-conditional refinement) without a projection through
     the three-channel output.
@@ -284,7 +284,7 @@ def _normalize_global_embedding(
     return global_embedding
 
 
-class MeshGeoFLARE(GeoTransolver):
+class DeFormer(GeoTransolver):
     r"""DeFormer's network: a FLARE-family GeoTransolver with local mesh stages.
 
     The DeFormer recipe selects ``attention_type="GALE_FA"`` (original FLARE);
@@ -300,10 +300,10 @@ class MeshGeoFLARE(GeoTransolver):
     function. The latent pre-processor avoids a
     decode-to-input/re-encode bottleneck. Consequently, every
     fixed-query GeoFLARE parameter is present with the same shape and
-    MeshGeoFLARE always has strictly more parameters for a matching configuration.
+    DeFormer always has strictly more parameters for a matching configuration.
 
     The local operator run before and after the FLARE blocks is a
-    :class:`~physicsnemo.experimental.models.meshgeoflare.local_attention.NeighborhoodAttentionProcessor`
+    :class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionProcessor`
     stack over static reference neighborhoods. It needs the datapipe to attach
     ``knn_index`` (``[N, local_knn_k + 1]`` including the node itself),
     ``knn_mask``, ``knn_edge_attr`` (``[N, local_knn_k + 1, input_dim_edges]``)
@@ -390,7 +390,7 @@ class MeshGeoFLARE(GeoTransolver):
         Default is ``"gelu"``.
     local_attention_fused : bool, optional
         Run the kNN attention with the fused kernel of
-        :mod:`~physicsnemo.experimental.models.meshgeoflare.fused_neighborhood_attention`
+        :mod:`~physicsnemo.experimental.models.deformer.fused_neighborhood_attention`
         (same math, no gathered ``[N, K, H, d_h]`` key/value tensors). Default
         is ``True``.
     local_attention_backend : {"auto", "triton", "torch"}, optional
@@ -398,7 +398,7 @@ class MeshGeoFLARE(GeoTransolver):
         is ``"auto"``.
     local_dropout, local_concrete_dropout
         Forwarded to every
-        :class:`~physicsnemo.experimental.models.meshgeoflare.local_attention.NeighborhoodAttentionBlock`
+        :class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionBlock`
         as ``dropout`` and ``concrete_dropout``.
     """
 
@@ -464,7 +464,7 @@ class MeshGeoFLARE(GeoTransolver):
             raise ValueError("num_post_processor_layers must be positive")
         if attention_type not in {"GALE_FA", "GALE_FPP"}:
             raise ValueError(
-                "MeshGeoFLARE requires a FLARE-family GeoTransolver backend; "
+                "DeFormer requires a FLARE-family GeoTransolver backend; "
                 "expected attention_type='GALE_FA' or 'GALE_FPP'"
             )
         if mesh_context_fusion not in {"none", "post", "pre_post"}:
@@ -538,7 +538,7 @@ class MeshGeoFLARE(GeoTransolver):
             checkpointing_ratio=checkpointing_ratio,
             activation_checkpointing_components=activation_checkpointing_components,
         )
-        self.__name__ = "MeshGeoFLARE"
+        self.__name__ = "DeFormer"
 
         mesh_hidden_dim = n_hidden if mesh_hidden_dim is None else mesh_hidden_dim
         if mesh_hidden_dim <= 0:
@@ -844,7 +844,7 @@ class MeshGeoFLARE(GeoTransolver):
         edge_attr = getattr(graph, "knn_edge_attr", None)
         if index is None or mask is None or edge_attr is None:
             raise ValueError(
-                "MeshGeoFLARE requires graph.knn_index, graph.knn_mask and "
+                "DeFormer requires graph.knn_index, graph.knn_mask and "
                 "graph.knn_edge_attr (enable datapipe.local_knn_k)"
             )
         metric = getattr(graph, "knn_metric", None)

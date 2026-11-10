@@ -27,7 +27,7 @@ spurious shell crossings about sevenfold. The paper is "DeFormer: Deformation
 Transformers with Contact-Aware Local Corrections for Full-Vehicle Crash
 Simulation".
 
-The network (`time_conditional.MeshGeoFLARETimeConditional`,
+The network (`time_conditional.DeFormerTimeConditional`,
 `conf/model/deformer_time_conditional.yaml`):
 
 * a GeoTransolver/FLARE global stage (`attention_type: GALE_FA`, 6 blocks,
@@ -35,7 +35,7 @@ The network (`time_conditional.MeshGeoFLARETimeConditional`,
   (8 bands, 32 channels) that enters every node's input and the global token;
 * local stages of static kNN neighbourhood attention over the undeformed mesh
   (k = 32 Euclidean neighbours, the fused Triton kernel of
-  `physicsnemo.experimental.models.meshgeoflare`): a pre-processor before the
+  `physicsnemo.experimental.models.deformer`): a pre-processor before the
   backbone and a two-stage decoder after it, where stage A emits a provisional
   shape through a zero-initialised head and stage B, an independent copy of
   stage A, adds a gated correction;
@@ -137,7 +137,7 @@ torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer \
 
 The reference run used 16 GPUs for 60 epochs (about 6.6 h on GB300s). Pair
 seeds with `training.seed=43 training.sampler_seed=1`. Checkpoints land in
-`<work_dir>/checkpoints/` as `MeshGeoFLARETimeConditional.0.<epoch>.mdlus`
+`<work_dir>/checkpoints/` as `DeFormerTimeConditional.0.<epoch>.mdlus`
 plus the optimizer state; the exact held-out validation (every validation
 design once, pooled over its own horizon) writes `<work_dir>/validation/epoch_<EEEE>.json`
 (zero-padded, e.g. `epoch_0060.json`) every `training.validation_freq` epochs.
@@ -156,7 +156,7 @@ torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name yaris_deformer_corre
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
   yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_corrector \
   datapipe.stats_dir=/runs/yaris_deformer/stats \
-  model.teacher_weights=/runs/yaris_deformer/checkpoints/MeshGeoFLARETimeConditional.0.60.mdlus
+  model.teacher_weights=/runs/yaris_deformer/checkpoints/DeFormerTimeConditional.0.60.mdlus
 ```
 
 The recipe turns on the contact topology (`datapipe.contact_surface`), the mesh
@@ -177,7 +177,7 @@ torchrun --nproc_per_node=<NUM_GPUS> evaluate_yaris_tc.py --config-name yaris_de
   yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
   yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/yaris_corrector \
   datapipe.stats_dir=/runs/yaris_deformer/stats \
-  model.teacher_weights=/runs/yaris_deformer/checkpoints/MeshGeoFLARETimeConditional.0.60.mdlus \
+  model.teacher_weights=/runs/yaris_deformer/checkpoints/DeFormerTimeConditional.0.60.mdlus \
   training.ckpt_path=/runs/yaris_corrector/checkpoints +training.load_epoch=30 \
   +training.validation_output_dir=/runs/eval/corrector hydra.run.dir=/runs/eval/corrector \
   +training.validation_node_errors=true
@@ -196,7 +196,7 @@ directly with
 `physicsnemo.Module.from_checkpoint(path, override_args={"teacher_weights": "<network .mdlus>"})`;
 without the override it looks for the network's `.mdlus` under the file name
 recorded in the checkpoint (the delivered corrector records
-`MeshGeoFLARETimeConditional.0.60.mdlus`, resolved from the working directory).
+`DeFormerTimeConditional.0.60.mdlus`, resolved from the working directory).
 
 #### The network on the body-in-white data
 
@@ -701,7 +701,7 @@ global_dim: 3   # must match len(datapipe.global_features)
 ```
 
 If `global_features` is `null`, `sample.global_features` is `None` and the selected
-model must support unconditioned execution; GeoTransolver and MeshGeoFLARE consume
+model must support unconditioned execution; GeoTransolver and DeFormer consume
 the global token directly.
 
 ## Reader: built-in VTP and Zarr readers and how to add your own

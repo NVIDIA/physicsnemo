@@ -50,7 +50,7 @@ from rollout import TimeEmbedding, global_tokens
 from shape_corrections import RigidWallClamp, correct_shape
 from torch import nn
 
-from physicsnemo.experimental.models.meshgeoflare import MeshGeoFLARE
+from physicsnemo.experimental.models.deformer import DeFormer
 
 
 class TimeConditionalOutput(NamedTuple):
@@ -62,7 +62,7 @@ class TimeConditionalOutput(NamedTuple):
     coarse_prediction: torch.Tensor
 
 
-class MeshGeoFLARETimeConditional(MeshGeoFLARE):
+class DeFormerTimeConditional(DeFormer):
     """Time-conditional DeFormer (the "network" of the DeFormer paper).
 
     Parameters
@@ -89,7 +89,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         :class:`shape_corrections.RigidWallClamp`); needs ``graph.rigid_wall``
         from ``datapipe.rigid_wall_position``.
     **kwargs
-        :class:`~physicsnemo.experimental.models.meshgeoflare.MeshGeoFLARE`
+        :class:`~physicsnemo.experimental.models.deformer.DeFormer`
         settings (backbone, local operator, context fusion, activation
         checkpointing). ``out_dim`` must be 3 and ``use_te`` false.
     """
@@ -153,7 +153,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
             m for m in self.post_node_decoder.modules() if isinstance(m, nn.Linear)
         ][-1]
         self._zero_head(last_linear)
-        self.__name__ = "MeshGeoFLARETimeConditional"
+        self.__name__ = "DeFormerTimeConditional"
 
     @staticmethod
     def _zero_head(linear: nn.Linear) -> None:
@@ -184,7 +184,7 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         )
         time_code, global_embedding = self._time_inputs(sample, coords.shape[0])
         nodes = torch.cat((coords, features, time_code), dim=-1)
-        state = MeshGeoFLARE.forward(
+        state = DeFormer.forward(
             self,
             node_features=nodes,
             graph=sample.graph,

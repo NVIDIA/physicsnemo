@@ -9,7 +9,7 @@ training with `python train.py --config-name=<recipe> --cfg job`.
 
 | Recipe | Model | What it trains |
 | --- | --- | --- |
-| `yaris_deformer` | `model/deformer_time_conditional.yaml` (`time_conditional.MeshGeoFLARETimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
+| `yaris_deformer` | `model/deformer_time_conditional.yaml` (`time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
 | `yaris_deformer_corrector` | `model/mgn_corrector.yaml` (`residual_model.ResidualTimeConditional` around `mgn_corrector.MeshGraphNetCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
 | `yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
 

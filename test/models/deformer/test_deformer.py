@@ -19,7 +19,7 @@ import torch
 
 pyg = pytest.importorskip("torch_geometric")
 
-from physicsnemo.experimental.models.meshgeoflare import MeshGeoFLARE  # noqa: E402
+from physicsnemo.experimental.models.deformer import DeFormer  # noqa: E402
 from physicsnemo.experimental.nn.static_knn import geodesic_knn  # noqa: E402
 from physicsnemo.models.geotransolver import GeoTransolver  # noqa: E402
 from physicsnemo.models.geotransolver.flare_plus_plus import (  # noqa: E402
@@ -81,7 +81,7 @@ def _model(**overrides):
         use_te=False,
     )
     kwargs.update(overrides)
-    return MeshGeoFLARE(**kwargs)
+    return DeFormer(**kwargs)
 
 
 def _forward(model, graph, global_embedding=None):
@@ -139,7 +139,7 @@ def test_global_context_is_required_when_configured():
 
 @pytest.mark.parametrize("attention_type", ["GALE_FA", "GALE_FPP"])
 def test_retains_full_geoflare_backbone_and_adds_parameters(attention_type):
-    """MeshGeoFLARE keeps every GeoTransolver parameter and its attention backend."""
+    """DeFormer keeps every GeoTransolver parameter and its attention backend."""
     common = dict(
         functional_dim=6,
         out_dim=5,
@@ -219,13 +219,13 @@ def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():
         attention_type="GALE_FA",
     )
     geoflare = GeoTransolver(**common).eval()
-    meshgeoflare = _model(
+    model = _model(
         **common,
         mesh_hidden_dim=32,
         mesh_pre_residual_gate_init=0.0,
         mesh_post_residual_gate_init=0.0,
     ).eval()
-    incompatible = meshgeoflare.load_state_dict(geoflare.state_dict(), strict=False)
+    incompatible = model.load_state_dict(geoflare.state_dict(), strict=False)
     assert incompatible.unexpected_keys == []
     assert "mesh_pre_residual_gate" in incompatible.missing_keys
     assert "mesh_post_residual_gate" in incompatible.missing_keys
@@ -236,7 +236,7 @@ def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():
             local_positions=graph.x.unsqueeze(0),
             global_embedding=global_embedding,
         ).squeeze(0)
-        actual = meshgeoflare(
+        actual = model(
             node_features=graph.x,
             graph=graph,
             geometry=graph.x,
@@ -367,10 +367,10 @@ def test_rejects_invalid_context_fusion(kwargs, message):
 
 def test_checkpoint_roundtrip(tmp_path):
     model = _model()
-    checkpoint = tmp_path / "MeshGeoFLARE.mdlus"
+    checkpoint = tmp_path / "DeFormer.mdlus"
     model.save(checkpoint)
-    restored = MeshGeoFLARE.from_checkpoint(checkpoint)
-    assert type(restored) is MeshGeoFLARE
+    restored = DeFormer.from_checkpoint(checkpoint)
+    assert type(restored) is DeFormer
     for expected, actual in zip(model.parameters(), restored.parameters()):
         torch.testing.assert_close(expected, actual)
 

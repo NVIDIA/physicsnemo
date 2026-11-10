@@ -15,7 +15,7 @@
 # limitations under the License.
 r"""Fused attention over static ``K``-slot neighborhoods.
 
-:class:`~physicsnemo.experimental.models.meshgeoflare.local_attention.NeighborhoodAttentionBlock`
+:class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionBlock`
 computes, per node :math:`n` and head :math:`h`,
 
 .. math::

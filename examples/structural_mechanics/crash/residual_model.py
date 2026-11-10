@@ -15,7 +15,7 @@
 # limitations under the License.
 """DeFormer: a frozen time-conditional network followed by its corrector.
 
-The teacher is a finished :class:`time_conditional.MeshGeoFLARETimeConditional`,
+The teacher is a finished :class:`time_conditional.DeFormerTimeConditional`,
 loaded from its checkpoint and frozen; the student is a
 :class:`mgn_corrector.MeshGraphNetCorrector` trained on top of it. The teacher's
 prediction at the queried time is recomputed on the fly and handed to the
@@ -48,7 +48,7 @@ class ResidualTimeConditional(physicsnemo.Module):
     ----------
     teacher : nn.Module
         The teacher's architecture (an instantiated, randomly initialised
-        ``MeshGeoFLARETimeConditional`` of the teacher's recipe); its weights
+        ``DeFormerTimeConditional`` of the teacher's recipe); its weights
         come from ``teacher_weights``.
     teacher_weights : str
         ``.mdlus`` (or state-dict ``.pt``) file of the teacher, loaded strictly.
