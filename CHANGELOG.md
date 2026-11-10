@@ -559,6 +559,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mesh now return float64 results instead of raising. DEC gradients and
   Laplacians of tensor fields, and LSQ cell gradients, no longer fail on meshes
   without cells, and `flat` handles fields with several trailing dimensions.
+- Intrinsic LSQ gradients no longer raise on float32 point clouds or on 16-bit
+  curves, and raise a `TypeError` for integer fields instead of truncating the
+  result. On surfaces in four or more dimensions they are now correct at points
+  with two neighbors, and DEC intrinsic gradients of curves in 3D are now
+  correct at their endpoints.
+- Derivatives of intrinsic gradients with respect to the points are no longer
+  NaN on straight curves in 3D, or flat surfaces in 4D, that lie along the axes.
+  On curves in 3D and surfaces in 4D, only first derivatives are exact.
+- DEC gradients of planar triangle meshes are no longer NaN at the vertices of
+  zero-area triangles, such as those `Mesh.pad` adds. DEC divergences are now
+  correct on float32 meshes a few millimetres across in metres.
+- `Mesh.clean` now sums the point measures of merged points, so integrals by
+  point quadrature no longer change.
 - `DefaultCollator` with a `stack_dim` past the batch dimensions of the
   samples stacks each tensor with `torch.stack`, without TensorDict behaviour
   that 0.15 deprecates. The batch's `batch_size` now matches its tensors, and
