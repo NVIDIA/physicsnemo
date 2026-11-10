@@ -42,12 +42,10 @@ Single-branch configurations are ablations of the coupled architecture:
 setting ``volume_channels=0`` removes the volume branch and its anchor inputs,
 while setting ``surface_channels=0`` removes the surface branch. Cross-branch
 blocks become self-attention blocks to preserve depth. Joint configurations
-retain both interacting streams. Earlier single-output draft checkpoints that
-retained the inactive stream must be retrained for this architecture.
+retain both interacting streams.
 
 .. autoclass:: physicsnemo.experimental.models.ab_upt.ABUPT
     :show-inheritance:
     :members: encode_geometry, encode, decode_queries, decode_vorticity
 
 .. autoclass:: physicsnemo.experimental.models.ab_upt.ABUPTContext
-

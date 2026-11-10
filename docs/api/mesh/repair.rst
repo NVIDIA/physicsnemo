@@ -94,8 +94,8 @@ The single repairs are the following functions:
      - Duplicates and unused points, as tensor-level steps that take
        ``points``, ``cells``, and data, not a ``Mesh``
 
-By default, :func:`repair_mesh` removes degenerate cells, merges duplicate
-points, and removes isolated points. Pass ``fix_orientation=True`` or
+By default, :func:`repair_mesh` merges duplicate points, removes degenerate
+cells, and removes isolated points. Pass ``fix_orientation=True`` or
 ``fill_holes=True`` to add the other two.
 
 Example
@@ -127,7 +127,7 @@ sphere, then fills a hole in it:
     print(stats["n_cells_before_dedup"], stats["n_cells_after_dedup"])  # 160 80
 
     repaired, repair_stats = repair_mesh(cleaned, fix_orientation=True)
-    print(list(repair_stats))  # ['degenerates', 'merge_points', 'clean', 'isolated', 'orientation']
+    print(list(repair_stats))  # ['merge_points', 'clean', 'degenerates', 'isolated', 'orientation']
 
     # Cut one triangle out, then fill the hole.
     holed = cleaned.slice_cells(torch.arange(1, cleaned.n_cells))

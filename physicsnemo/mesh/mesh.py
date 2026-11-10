@@ -18,7 +18,7 @@ import dataclasses
 import itertools
 import math
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -73,6 +73,7 @@ from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
+from physicsnemo.utils._tracing import is_tracing
 
 ### slice_points remaps cells through a full-mesh lookup table unless the mesh
 ### has more than this many points per cell-vertex entry, in which case it
@@ -120,7 +121,7 @@ _64_BIT_INTEGER_DTYPES = frozenset({torch.int64, torch.uint64})
 
 def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
     """Check tensor values eagerly or retain the assertion in a compiled graph."""
-    if torch.compiler.is_compiling() or valid.device.type == "meta":
+    if is_tracing() or valid.device.type == "meta":
         torch._assert_async(valid, message)
         return
 
@@ -432,7 +433,9 @@ class Mesh(
     ``mesh.cell_normals`` computes and caches the result; subsequent calls
     return the cached value). Because ``Mesh`` is effectively immutable (see
     above), cached values never go stale -- they remain valid for the
-    lifetime of the ``Mesh`` instance.
+    lifetime of the ``Mesh`` instance. Under ``torch.compile``, geometric
+    properties compute from ``points`` and ``cells`` without reading or
+    filling ``_cache``.
 
     Geometric transforms (``translate``, ``rotate``, ``scale``, ``transform``)
     carry forward applicable cache entries to the new ``Mesh`` rather than
@@ -456,6 +459,11 @@ class Mesh(
 
     Prefer using properties (``mesh.cell_centroids``, ``mesh.point_normals``)
     over direct ``_cache`` access.
+
+    References
+    ----------
+    - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI
+      <https://arxiv.org/abs/2610.39072>`__
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
@@ -570,7 +578,7 @@ class Mesh(
             )
 
         ### Validate shapes and dtypes
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if self.points.ndim != 2:
                 raise ValueError(
                     f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
@@ -1012,11 +1020,10 @@ class Mesh(
         torch.Tensor
             Tensor of shape (n_cells, n_spatial_dims) containing the centroid of each cell.
         """
-        cached = self._cache.get(("cell", "centroids"), None)
-        if cached is None:
-            cached = gather_rows(self.points, self.cells).mean(dim=1)
-            self._cache["cell", "centroids"] = cached
-        return cached
+        return self._cached(
+            ("cell", "centroids"),
+            lambda: gather_rows(self.points, self.cells).mean(dim=1),
+        )
 
     @property
     def cell_areas(self) -> torch.Tensor:
@@ -1041,15 +1048,14 @@ class Mesh(
         torch.Tensor
             Tensor of shape (n_cells,) containing the volume of each cell.
         """
-        cached = self._cache.get(("cell", "areas"), None)
-        if cached is None:
+
+        def compute() -> torch.Tensor:
             cell_vertices = gather_rows(self.points, self.cells)
             relative_vectors = cell_vertices[:, 1:] - cell_vertices[:, :1]
             del cell_vertices
-            cached = compute_cell_areas(relative_vectors)
-            self._cache["cell", "areas"] = cached
+            return compute_cell_areas(relative_vectors)
 
-        return cached
+        return self._cached(("cell", "areas"), compute)
 
     @property
     def cell_normals(self) -> torch.Tensor:
@@ -1074,8 +1080,8 @@ class Mesh(
         ValueError
             If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
         """
-        cached = self._cache.get(("cell", "normals"), None)
-        if cached is None:
+
+        def compute() -> torch.Tensor:
             if self.codimension != 1:
                 raise ValueError(
                     f"cell normals are only defined for codimension-1 manifolds.\n"
@@ -1083,10 +1089,9 @@ class Mesh(
                     f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
                     f"Current codimension: {self.codimension}"
                 )
-            cached = _compute_cell_normals_from_points(self.points, self.cells)
-            self._cache["cell", "normals"] = cached
+            return _compute_cell_normals_from_points(self.points, self.cells)
 
-        return cached
+        return self._cached(("cell", "normals"), compute)
 
     @property
     def point_normals(self) -> torch.Tensor:
@@ -1127,12 +1132,11 @@ class Mesh(
         >>> # Normals are unit vectors (or zero for isolated points)
         >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
-        cached = self._cache.get(("point", "normals"), None)
-        if cached is None:
-            weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
-            cached = self.compute_point_normals(weighting=weighting)
-            self._cache["point", "normals"] = cached
-        return cached
+        weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
+        return self._cached(
+            ("point", "normals"),
+            lambda: self.compute_point_normals(weighting=weighting),
+        )
 
     def compute_point_normals(
         self,
@@ -1344,14 +1348,11 @@ class Mesh(
         >>> K = sphere.gaussian_curvature_vertices
         >>> # K.mean() approx 0.25 (= 1 / 2.0^2)
         """
-        cached = self._cache.get(("point", "gaussian_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import gaussian_curvature_vertices
+        from physicsnemo.mesh.curvature import gaussian_curvature_vertices
 
-            cached = gaussian_curvature_vertices(self)
-            self._cache["point", "gaussian_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("point", "gaussian_curvature"), lambda: gaussian_curvature_vertices(self)
+        )
 
     @property
     def gaussian_curvature_cells(self) -> torch.Tensor:
@@ -1374,14 +1375,11 @@ class Mesh(
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> K_cells = mesh.gaussian_curvature_cells
         """
-        cached = self._cache.get(("cell", "gaussian_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import gaussian_curvature_cells
+        from physicsnemo.mesh.curvature import gaussian_curvature_cells
 
-            cached = gaussian_curvature_cells(self)
-            self._cache["cell", "gaussian_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("cell", "gaussian_curvature"), lambda: gaussian_curvature_cells(self)
+        )
 
     @property
     def mean_curvature_vertices(self) -> torch.Tensor:
@@ -1422,14 +1420,11 @@ class Mesh(
         >>> H = sphere.mean_curvature_vertices
         >>> # H.mean() ≈ 0.5 (= 1/2.0)
         """
-        cached = self._cache.get(("point", "mean_curvature"), None)
-        if cached is None:
-            from physicsnemo.mesh.curvature import mean_curvature_vertices
+        from physicsnemo.mesh.curvature import mean_curvature_vertices
 
-            cached = mean_curvature_vertices(self)
-            self._cache["point", "mean_curvature"] = cached
-
-        return cached
+        return self._cached(
+            ("point", "mean_curvature"), lambda: mean_curvature_vertices(self)
+        )
 
     @classmethod
     def merge(
@@ -1462,11 +1457,9 @@ class Mesh(
             If tensors from different meshes reside on different devices.
         """
         ### Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
-            elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
-                return meshes[0].clone()
             if not all(isinstance(m, Mesh) for m in meshes):
                 raise TypeError(
                     f"All objects must be Mesh types. Got:\n"
@@ -2708,6 +2701,25 @@ class Mesh(
 
     is_watertight = is_watertight
 
+    def _cached(
+        self, key: tuple[str, str], compute: Callable[[], torch.Tensor]
+    ) -> torch.Tensor:
+        """Return ``_cache[key]``, computing and storing it on a miss.
+
+        While this call is traced (see ``is_tracing``), it always calls
+        ``compute()`` and leaves ``_cache`` alone: Dynamo guards on the cache's
+        contents, so each cache state would need its own graph, and it would
+        replay the write onto the caller's mesh. Other threads keep their
+        caches meanwhile, which carry cell areas through transforms.
+        """
+        if is_tracing():
+            return compute()
+        cached = self._cache.get(key, None)
+        if cached is None:
+            cached = compute()
+            self._cache[key] = cached
+        return cached
+
     def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
         r"""Look up or compute-and-cache a topological adjacency.
 
@@ -2882,7 +2894,10 @@ class Mesh(
         Padding uses null/degenerate elements that don't affect computations:
 
         - Points: Additional points at the last existing point (preserves bounding box)
-        - cells: Degenerate cells with all vertices at the last existing point (zero area)
+        - cells: Degenerate cells with all vertices at the first padding point
+          (zero area). With cells-only padding there is no padding point, so the
+          cells sit at the last existing point; then only measure-weighted
+          computations are unaffected.
         - cell data: NaN-valued padding for all cell data fields (default)
         - explicit effective measures: zero, so padding adds nothing to integrals
 
@@ -2918,7 +2933,7 @@ class Mesh(
         >>> padded.n_cells   # 256  # doctest: +SKIP
         """
         # Validate inputs
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if target_n_points is not None and target_n_points < self.n_points:
                 raise ValueError(f"{target_n_points=} must be >= {self.n_points=}")
             if target_n_cells is not None and target_n_cells < self.n_cells:
@@ -2934,11 +2949,7 @@ class Mesh(
         if target_n_cells is None:
             target_n_cells = self.n_cells
 
-        if (
-            not torch.compiler.is_compiling()
-            and target_n_cells > 0
-            and target_n_points == 0
-        ):
+        if not is_tracing() and target_n_cells > 0 and target_n_points == 0:
             raise ValueError("Cannot pad cells without at least one mesh point.")
 
         def _pad_data(tensor: torch.Tensor, size: int) -> torch.Tensor:
@@ -2983,7 +2994,12 @@ class Mesh(
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
             cells=_pad_with_value(
-                self.cells, target_n_cells, max(self.n_points - 1, 0)
+                self.cells,
+                target_n_cells,
+                # The first padding point, if any, keeps padding cells off real points
+                self.n_points
+                if target_n_points > self.n_points
+                else max(self.n_points - 1, 0),
             ),
             point_data=_pad_fields(self.point_data, target_n_points),
             cell_data=_pad_fields(self.cell_data, target_n_cells),
@@ -3029,7 +3045,9 @@ class Mesh(
         -------
         Mesh
             A new Mesh with padded points and cells arrays. The padding uses
-            null elements that don't affect geometric computations.
+            null elements that don't affect geometric computations. If only
+            cells need padding, the padding cells sit at the last existing
+            point; then only measure-weighted computations are unaffected.
 
         Raises
         ------
@@ -3044,7 +3062,7 @@ class Mesh(
         >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 291 cells
         >>> # Padding cells have zero area and don't affect computations
         """
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             if power <= 1:
                 raise ValueError(f"power must be > 1, got {power=}")
 

@@ -173,7 +173,7 @@ function, which lists the arguments and defaults.
 
    .. tab-item:: Surfaces
 
-      ``physicsnemo.mesh.primitives.surfaces``: Triangle meshes in 3D space. The closed surfaces are spheres, a torus, Platonic solids, and a cylinder with caps. The open ones are a plane, a disk, a hemisphere, an open cylinder, a cone, and a Möbius strip. The following table lists its primitives:
+      ``physicsnemo.mesh.primitives.surfaces``: Triangle meshes in 3D space. The closed surfaces are spheres, a torus, Platonic solids, a cylinder with caps, and a cone. The open ones are a plane, a disk, a hemisphere, an open cylinder, and a Möbius strip. The following table lists its primitives:
 
       .. list-table::
          :header-rows: 1

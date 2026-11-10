@@ -20,9 +20,9 @@ The trainer needs exactly two things from a data source: **static metadata**
 (channel names, image shape, invariants) and a **stream of batches**. It does
 not need the source to be indexable. That split is expressed as two tiers:
 
-* :class:`StormCastDataSource` -- the contract the trainer programs against:
-  metadata, a sample count, and :meth:`~StormCastDataSource.make_loader`.
-* :class:`StormCastDataset` -- a map-style (``__getitem__``) source whose
+* :class:`CustomDataSource` -- the contract the trainer programs against:
+  metadata, a sample count, and :meth:`~CustomDataSource.make_loader`.
+* :class:`CustomDataset` -- a map-style (``__getitem__``) source whose
   ``make_loader`` defaults to the classic PyTorch :class:`~torch.utils.data
   .DataLoader`. Every existing dataset subclasses this and needs no changes.
 
@@ -67,7 +67,7 @@ class LoaderSpec:
     batch_size : int
         Number of *training samples* per batch on this rank, i.e. the local
         batch size. When the source declares a group axis (see
-        :meth:`StormCastDataSource.sample_group_size`) the loader draws
+        :meth:`CustomDataSource.sample_group_size`) the loader draws
         ``batch_size // group_size`` items and folds the group axis back in, so
         the tensor the trainer sees always has leading dim ``batch_size``.
     sampler : Iterable[int]
@@ -112,14 +112,14 @@ class LoaderSpec:
 
 
 def resolve_group_size(
-    source: "StormCastDataSource", spec: LoaderSpec
+    source: "CustomDataSource", spec: LoaderSpec
 ) -> tuple[int | None, int]:
     """Resolve a source's group axis against the requested batch size.
 
     Parameters
     ----------
-    source : StormCastDataSource
-        Source whose :meth:`~StormCastDataSource.sample_group_size` is consulted.
+    source : CustomDataSource
+        Source whose :meth:`~CustomDataSource.sample_group_size` is consulted.
     spec : LoaderSpec
         The requested loader behavior.
 
@@ -184,7 +184,7 @@ def flatten_group_collate(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any
 
 
 def default_torch_loader(
-    source: "StormCastDataset", spec: LoaderSpec
+    source: "CustomDataset", spec: LoaderSpec
 ) -> torch.utils.data.DataLoader:
     """Build the classic PyTorch DataLoader for a map-style source.
 
@@ -193,7 +193,7 @@ def default_torch_loader(
 
     Parameters
     ----------
-    source : StormCastDataset
+    source : CustomDataset
         Map-style dataset to draw from.
     spec : LoaderSpec
         Requested loader behavior.
@@ -217,12 +217,12 @@ def default_torch_loader(
     )
 
 
-class StormCastDataSource(ABC):
+class CustomDataSource(ABC):
     """The data-source contract the trainer programs against.
 
     Implementations provide static metadata, a count of drawable items, and a
     batch stream. Being indexable is *not* part of this contract -- see
-    :class:`StormCastDataset` for the map-style tier that adds it.
+    :class:`CustomDataset` for the map-style tier that adds it.
 
     See the module docstring for the batch contract every :meth:`make_loader`
     implementation must satisfy.
@@ -335,7 +335,7 @@ class StormCastDataSource(ABC):
         return None
 
 
-class StormCastDataset(StormCastDataSource, torch.utils.data.Dataset, ABC):
+class CustomDataset(CustomDataSource, torch.utils.data.Dataset, ABC):
     """An abstract class that defines the interface for map-style StormCast datasets.
 
     All datasets must inherit from this class and implement the methods marked as

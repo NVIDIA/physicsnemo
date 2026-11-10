@@ -334,6 +334,7 @@ physicsnemo/experimental/models/aerojepa/ @mnabian
 physicsnemo/experimental/models/globe/ @peterdsharpe
 physicsnemo/experimental/models/smart/ @mnabian
 physicsnemo/experimental/peft/ @mnabian
+physicsnemo/experimental/uq/conformal/ @melo-gonzo
 
 # ==============================================================================
 # EXAMPLES - Active Learning
@@ -434,8 +435,8 @@ examples/reservoir_simulation/
 # EXAMPLES - Structural Mechanics
 # ==============================================================================
 
-examples/structural_mechanics/
-examples/structural_mechanics/crash/ @coreyjadams
+examples/structural_mechanics/ @mnabian
+examples/structural_mechanics/crash/ @mnabian
 examples/structural_mechanics/deforming_plate/
 
 # ==============================================================================
@@ -451,7 +452,7 @@ examples/weather/fcn_afno/
 examples/weather/flood_modeling/
 examples/weather/graphcast/ @mnabian
 examples/weather/mixture_of_experts/
-examples/weather/pangu_weather/ @dallasfoster
+examples/weather/pangu_weather/ @dallasfoster @pzharrington
 examples/weather/regen/
 examples/weather/regional_weather_diffusion/
 examples/weather/temporal_interpolation/
@@ -511,6 +512,7 @@ test/experimental/
 test/experimental/models/aerojepa/ @mnabian
 test/experimental/models/smart/ @mnabian
 test/experimental/peft/ @mnabian
+test/experimental/uq/conformal/ @melo-gonzo
 
 # ==============================================================================
 # TESTS - CI

@@ -78,7 +78,7 @@ env:
   # Change ANY of these and the uv cache invalidates via prefix change.
   # Keep CONTAINER_ID in sync with the `image:` tag below.
   PYTHON_VERSION: "3.12"
-  UV_VERSION: "0.12.20"
+  UV_VERSION: "0.13.5"
   CONTAINER_ID: "cuda13.3.1-devel-ubuntu24.04"
   # All feature extras + cu13 backend + matching natten wheel index.  This
   # powers the @requires_module / pytest.importorskip tests that would
@@ -97,7 +97,7 @@ env:
   # a stale narrower cache.  `-torchX.Y` tracks the locked PyTorch minor:
   # uv caches the source-built PyG wheels by sdist alone, so a torch bump
   # must change the prefix or CI reuses wheels built for the old ABI.
-  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-devel-ubuntu24.04-py3.12-uv0.12.20-torch2.13-fullextras"
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-devel-ubuntu24.04-py3.12-uv0.13.5-torch2.13-fullextras"
   # `-cu13` keeps these slots separate from the cu12 nightly's: a testmon
   # DB or coverage baseline built under one CUDA stack is not valid for
   # the other, and replace-cache's delete-before-save would otherwise

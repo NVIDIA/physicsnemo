@@ -106,7 +106,7 @@ The following surface meshes are embedded in 3D:
 | **Other Shapes** | | | |
 | `torus` | 2D→3D | Torus (donut shape) | Closed, genus=1 |
 | `plane` | 2D→3D | Flat plane | Has boundary |
-| `cone` | 2D→3D | Cone with an open base | Has boundary circle |
+| `cone` | 2D→3D | Cone with a base cap | Closed |
 | `disk` | 2D→3D | Flat disk | Has boundary circle |
 | `hemisphere` | 2D→3D | Half sphere | Has boundary circle |
 | **Platonic Solids** | | | |
