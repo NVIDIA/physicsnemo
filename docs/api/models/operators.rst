@@ -28,3 +28,7 @@ choices and CFD-mesh recipe are described in the `unified external aerodynamics 
 .. autoclass:: physicsnemo.experimental.models.smart.SMART
     :show-inheritance:
     :members: encode_geometry, decode_queries
+
+.. autoclass:: physicsnemo.experimental.models.smart.SMARTField
+    :show-inheritance:
+    :members: forward

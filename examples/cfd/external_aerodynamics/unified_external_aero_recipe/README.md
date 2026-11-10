@@ -613,8 +613,9 @@ attention is opt-in, not the default).
 
 ### SMART with independent geometry and query sampling
 
-SMART reuses the unified trainer, Muon/AdamW optimizer, checkpointing, and
-physical-unit inference. Train separate surface and volume models:
+SMART uses library models and datapipes with the unified trainer, Muon/AdamW
+optimizer, checkpointing, and physical-unit inference. Train separate surface
+and volume models:
 
 ```bash
 torchrun --standalone --nproc_per_node=4 src/train.py \
@@ -877,9 +878,9 @@ rather than physical constants, and lets `RandomRotateMesh` rotate
 `U_inf` together with the geometry through its existing
 `transform_global_data: true` path. The conditions are stored at the
 **domain level** of each file; surface configs that read a boundary
-`Mesh` directly use the recipe-local `MeshReaderWithGlobalData`
-(`src/merge_global_data.py`) to merge the parent's `global_data` onto
-each boundary at load time, so downstream transforms see a uniform
+`Mesh` directly use `physicsnemo.datapipes.MeshReaderWithGlobalData` to merge
+the parent's `global_data` onto each boundary at load time, so downstream
+transforms see a uniform
 shape regardless of whether the entry point was the domain or a
 boundary.
 

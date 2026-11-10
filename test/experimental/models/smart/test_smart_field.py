@@ -18,7 +18,9 @@
 
 import pytest
 import torch
-from smart_model import SMARTField
+
+from physicsnemo import Module
+from physicsnemo.experimental.models.smart import SMARTField
 
 
 def _model(**overrides):
@@ -49,7 +51,7 @@ def _inputs():
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
-def test_coordinate_frame_preserves_inputs(field):
+def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
     """Normalize geometry and queries consistently without mutating their inputs."""
     model = _model(field=field, coordinate_scale=(12.0, 4.5, 3.25))
     reference = _model(field=field, coordinate_scale=(1.0, 1.0, 1.0))
@@ -69,3 +71,8 @@ def test_coordinate_frame_preserves_inputs(field):
         torch.testing.assert_close(model(**inputs), reference(**normalized))
         for key in inputs:
             torch.testing.assert_close(inputs[key], original[key], rtol=0, atol=0)
+    path = tmp_path / "field.mdlus"
+    model.save(path)
+    restored = Module.from_checkpoint(path).eval()
+    assert restored.coordinate_scale == model.coordinate_scale
+    torch.testing.assert_close(restored(**inputs), model(**inputs))

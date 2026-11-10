@@ -42,7 +42,7 @@ forward_kwargs:
   frame_center: global_data.smart_center
   geometry_seed: global_data.smart_geometry_seed
 model:
-  _target_: smart_model.SMARTField
+  _target_: physicsnemo.experimental.models.smart.SMARTField
   field: surface
   out_dim: ${out_dim}
   query_feature_channels: 3

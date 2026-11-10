@@ -16,8 +16,8 @@
 
 """CFD-only geometry and independent online query sampling for SMART.
 
-These components are instantiated only by the SMART dataset configurations.
-They preserve the existing recipe's DomainMesh target/force contract.
+Readers preserve full CFD geometry and provide independent geometry and query
+seeds. Transforms retain physical features alongside normalized mesh data.
 """
 
 from __future__ import annotations
@@ -25,9 +25,8 @@ from __future__ import annotations
 import math
 
 import torch
-from merge_global_data import MeshReaderWithGlobalData
 
-from physicsnemo.datapipes import DomainMeshReader
+from physicsnemo.datapipes import DomainMeshReader, MeshReaderWithGlobalData
 from physicsnemo.datapipes._rng import derive_seed
 from physicsnemo.datapipes.transforms.mesh import CenterMesh as _CenterMesh
 from physicsnemo.datapipes.transforms.mesh import MeshToDomainMesh, SubsampleMesh
@@ -244,10 +243,9 @@ class SMARTVolumeGeometry(MeshTransform):
         )
 
 
-class CenterMesh(_CenterMesh):
+class CenterOnBoundary(_CenterMesh):
     """Center SMART domains on the full CFD boundary, independent of queries.
 
-    The class name retains the recipe's augmentation insertion convention.
     Surface Mesh inputs use the standard PhysicsNeMo centering operation.
     """
 

@@ -18,7 +18,7 @@
 Reader extension that merges an external on-disk ``TensorDict`` into each
 sample's ``global_data`` at load time.
 
-This recipe's surface configs read a boundary :class:`Mesh` directly out
+Surface pipelines can read a boundary :class:`Mesh` directly out
 of a parent :class:`~physicsnemo.mesh.DomainMesh`'s on-disk tensordict
 tree (e.g. ``.../*.pdmsh/_tensordict/boundaries/vehicle``).  The boundary
 tensordict's own ``global_data`` carries little or nothing of the
@@ -32,10 +32,6 @@ the tensordict it points at, and merges its keys into the boundary
 ``transform_global_data: true``, ...) can read them straight off the
 loaded sample.
 
-Recipe-local module registered into the global datapipe component
-registry so the class can be referenced via
-``${dp:MeshReaderWithGlobalData}`` in Hydra YAML configs.  Import this
-module before Hydra instantiation.
 """
 
 from __future__ import annotations

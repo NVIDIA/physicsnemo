@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Single-field SMART adapter for the unified recipe's tensor contract."""
+"""Single-field SMART model with coordinate normalization and chunked inference."""
 
 from __future__ import annotations
 
@@ -24,16 +24,16 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from physicsnemo.experimental.models.smart import SMART
+from .model import SMART
 
 
 class SMARTField(SMART):
-    r"""Expose one SMART head through the unified recipe's tensor contract.
+    r"""Predict one field with SMART using a tensor input and output interface.
 
     Geometry remains a separate full CFD boundary cloud. Only the initial
     latents and per-layer subsamples enter the SMART encoder. Query features
-    use SMART's additive projections. The recipe provides normalization,
-    losses, optimizer, metrics, and physical-unit export.
+    use SMART's additive projections. Training pipelines supply field
+    normalization, losses, optimizer, metrics, and physical-unit export.
 
     Parameters
     ----------

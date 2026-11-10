@@ -19,9 +19,9 @@
 # sampling_resolution below controls field queries only.
 train_datadir: ${dataset_paths.drivaer_ml}
 pipeline:
-  augmentation_before: smart_data.SMARTInputs
+  augmentation_before: physicsnemo.experimental.datapipes.smart.SMARTInputs
   reader:
-    _target_: smart_data.SMARTVolumeReader
+    _target_: physicsnemo.experimental.datapipes.smart.SMARTVolumeReader
     path: ${train_datadir}
     pattern: run_*/domain_*.pdmsh
     subsample_n_points: ${sampling_resolution}
@@ -50,11 +50,11 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
-    - _target_: smart_data.SMARTInputs
+    - _target_: physicsnemo.experimental.datapipes.smart.SMARTInputs
       field: volume
       coordinate_scale: [12.0, 4.5, 3.25]
       conditioning: [1.205, 30.0]
-    - _target_: smart_data.CenterMesh
+    - _target_: physicsnemo.experimental.datapipes.smart.CenterOnBoundary
       use_area_weighting: false
     - _target_: ${dp:NonDimensionalizeByMetadata}
       fields:
@@ -83,7 +83,7 @@ pipeline:
           type: scalar
           mean: 0.00048
           std: 0.00094001
-    - _target_: smart_data.SMARTVolumeGeometry
+    - _target_: physicsnemo.experimental.datapipes.smart.SMARTVolumeGeometry
 targets:
   velocity: vector
   pressure: scalar

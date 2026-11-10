@@ -18,12 +18,12 @@
 
 import pytest
 import torch
-from smart_data import (
+
+from physicsnemo.experimental.datapipes.smart import (
     SMARTSurfaceMeshToDomainMesh,
     SMARTSurfaceReader,
     SMARTVolumeReader,
 )
-
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import cell_measures, point_measures
 

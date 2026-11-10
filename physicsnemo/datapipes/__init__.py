@@ -47,6 +47,7 @@ from physicsnemo.datapipes.readers import (
     DomainMeshReader,
     HDF5Reader,
     MeshReader,
+    MeshReaderWithGlobalData,
     NumpyReader,
     Reader,
     TensorStoreZarrReader,
@@ -163,6 +164,7 @@ __all__ = [
     "VTKReader",
     "TensorStoreZarrReader",
     "MeshReader",
+    "MeshReaderWithGlobalData",
     "DomainMeshReader",
     # Collation
     "Collator",
