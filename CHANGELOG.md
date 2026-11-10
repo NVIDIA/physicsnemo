@@ -133,14 +133,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DistributedGraph` and GraphCast's distributed mode) no longer loops over
   destination nodes in Python. A 1-million-node grid now takes well under a
   second instead of half a minute or more.
-- `FNO` supports automatic mixed precision. `SpectralConv1d`-`4d` upcast
-  float16 and bfloat16 inputs to float32 and run their FFTs and mode
-  multiplication with autocast disabled, so float16 autocast no longer fails
-  with a cuFFT or `ComplexHalf` error, and bfloat16 autocast works on PyTorch
-  versions whose FFT does not accept bfloat16. Layers outside the spectral
-  convolutions still run under autocast. `FNO` is now marked as AMP-capable,
-  so `StaticCaptureTraining` and `StaticCaptureEvaluateNoGrad` enable autocast
-  for it by default; pass `use_amp=False` to keep full precision.
+- `FNO` supports automatic mixed precision. Under autocast,
+  `SpectralConv1d`-`4d` upcast float16 and bfloat16 inputs to float32 and run
+  their FFTs and mode multiplication with autocast disabled, so float16
+  autocast no longer fails with a cuFFT or `ComplexHalf` error, and bfloat16
+  autocast works on PyTorch versions whose FFT does not accept bfloat16.
+  Layers outside the spectral convolutions still run under autocast. `FNO` is
+  now marked as AMP-capable, so `StaticCaptureTraining` and
+  `StaticCaptureEvaluateNoGrad` enable autocast for it by default; pass
+  `use_amp=False` to keep full precision.
 - `ClusterTree` builds tighter trees by default (`split="morton"`), so
   Barnes-Hut plans need 2-4x fewer interactions at the same `theta`.
   `split="midpoint"` gives the previous trees.

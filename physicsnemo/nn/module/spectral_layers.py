@@ -38,15 +38,10 @@ def _fp32_under_autocast(forward: Callable) -> Callable:
     keep running under autocast. Without autocast, the wrapped ``forward`` is
     called unchanged.
 
-    .. code-block:: python
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            ...
-
     Parameters
     ----------
     forward : Callable[[torch.nn.Module, torch.Tensor], torch.Tensor]
-        ``forward`` method of a spectral convolution. See code block above.
+        ``forward`` method of a spectral convolution.
 
     Returns
     -------
