@@ -286,11 +286,6 @@ class GeoTransolver(Module):
         ``"output"``. The default ``("blocks",)`` matches Transolver's
         block-only policy. ``checkpointing_ratio`` applies to the block stack;
         other selected components are either fully checkpointed or disabled.
-    attn_scale : float | None, optional
-        Positive finite attention-logit scale for FLARE-family backends.
-        ``None`` preserves the backend default: ``1.0`` for ``GALE_FA`` and
-        inverse square root of the per-head width for ``GALE_FPP``.
-        Must remain ``None`` for ``GALE``.
 
     Forward
     -------
@@ -446,18 +441,9 @@ class GeoTransolver(Module):
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
         activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
-        attn_scale: float | None = None,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
-
-        if attention_type not in {"GALE", "GALE_FA", "GALE_FPP"}:
-            raise ValueError(f"Invalid attention_type: {attention_type!r}")
-        if attention_type == "GALE" and attn_scale is not None:
-            raise ValueError(
-                "attn_scale is only supported by the GALE_FA and GALE_FPP "
-                "attention backends"
-            )
 
         if attention_type == "GALE_FPP" and plus:
             raise ValueError(
@@ -589,7 +575,6 @@ class GeoTransolver(Module):
                         context_dim=context_dim,
                         concrete_dropout=concrete_dropout,
                         state_mixing_mode=state_mixing_mode,
-                        attn_scale=attn_scale,
                     )
                     for _ in range(n_layers)
                 ]
@@ -612,7 +597,6 @@ class GeoTransolver(Module):
                         attention_type=attention_type,
                         concrete_dropout=concrete_dropout,
                         state_mixing_mode=state_mixing_mode,
-                        attn_scale=attn_scale,
                     )
                     for layer_idx in range(n_layers)
                 ]

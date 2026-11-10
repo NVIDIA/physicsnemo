@@ -23,7 +23,6 @@ geometry and global context embeddings.
 
 from __future__ import annotations
 
-import math
 from typing import Literal
 
 import torch
@@ -540,9 +539,6 @@ class GALE_FA(nn.Module):
         Dropout rate. Default is 0.0.
     n_global_queries : int, optional
         Number of learned global queries. Default is 64.
-    attn_scale : float | None, optional
-        Positive finite attention-logit scale. ``None`` preserves the original
-        FLARE scale of ``1.0``.
     use_te : bool, optional
         Whether to use Transformer Engine backend when available. Default is False.
     context_dim : int, optional
@@ -607,7 +603,6 @@ class GALE_FA(nn.Module):
         context_dim: int = 0,
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
-        attn_scale: float | None = None,
     ):
         # With use_te, linear projections and attention run on Transformer
         # Engine; otherwise on PyTorch. A missing TE install raises with an
@@ -616,9 +611,9 @@ class GALE_FA(nn.Module):
         self.use_te = use_te
         self.heads = heads
         self.dim_head = dim_head
-        self.scale = 1.0 if attn_scale is None else float(attn_scale)
-        if not math.isfinite(self.scale) or self.scale <= 0:
-            raise ValueError("attn_scale must be a positive finite value")
+        self.scale = 1.0
+        # It is recommended by the FLARE authors to use self.scale = 1 if self.dim_head <= 8 else (self.dim_head ** -0.5)
+        # but we use self.scale = 1.0 because the recommended scaling is not tested yet.
         inner_dim = dim_head * heads
 
         linear_layer = te.Linear if self.use_te else nn.Linear
@@ -807,9 +802,6 @@ class GALEBlock(nn.Module):
         Attention backend to use. ``"GALE"`` uses the standard physics-aware
         slice attention and ``"GALE_FA"`` uses fixed-query FLARE. Default is
         ``"GALE"``.
-    attn_scale : float | None, optional
-        Optional positive finite logit scale for ``GALE_FA``; ``None`` keeps
-        its original scale of ``1.0``. Must be ``None`` for ``GALE``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs. ``"weighted"`` uses
         a learnable sigmoid-gated weighted sum. ``"concat_project"``
@@ -871,13 +863,10 @@ class GALEBlock(nn.Module):
         attention_type: Literal["GALE", "GALE_FA"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
-        attn_scale: float | None = None,
     ) -> None:
         super().__init__()
 
         self.last_layer = last_layer
-        if attention_type == "GALE" and attn_scale is not None:
-            raise ValueError("attn_scale is only supported by FLARE attention")
 
         # Layer normalization before attention
         if use_te:
@@ -947,7 +936,6 @@ class GALEBlock(nn.Module):
                     context_dim=context_dim,
                     concrete_dropout=concrete_dropout,
                     state_mixing_mode=state_mixing_mode,
-                    attn_scale=attn_scale,
                 )
             case _:
                 raise ValueError(

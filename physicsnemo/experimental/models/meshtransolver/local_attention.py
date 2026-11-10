@@ -128,26 +128,26 @@ class NeighborhoodAttentionBlock(nn.Module):
         Project values from the pre-normalized latent (``True``, the original
         block) or from the raw residual stream (``False``), which lets the block
         form clean neighbor differences. ``False`` requires ``split_key_value``.
-        Default is ``True``.
+        Default is ``False``.
     difference_values : bool, optional
         Return :math:`\sum_j p_{ij} (v_j - v_i)` instead of :math:`\sum_j p_{ij}
-        v_j`, i.e. attention-weighted neighbor differences. Default is ``False``.
+        v_j`, i.e. attention-weighted neighbor differences. Default is ``True``.
     update : {"residual", "concat_mlp"}, optional
         ``"residual"`` adds the projected message to the stream and applies a
         feed-forward net (original block). ``"concat_mlp"`` concatenates the
         normalized latent, the aggregated values, the aggregated edge latent and
         the attention log-sum-exp and applies one MLP with an output LayerNorm,
-        the MeshGraphNet node-update form. Default is ``"residual"``.
+        the MeshGraphNet node-update form. Default is ``"concat_mlp"``.
     bias_fp32 : bool, optional
         Compute the geometric logit bias in float32 even under autocast or with
         half-precision parameters (weight and bias are cast with the input), so
         the only route for geometry into the attention weights is not quantized
         to bfloat16. The bias is returned in float32 (float64 for float64
-        parameters). Default is ``False`` (the bias follows the parameter and
-        autocast dtype).
+        parameters). Default is ``True``; with ``False`` the bias follows the
+        parameter and autocast dtype.
     split_key_value : bool, optional
         Use separate key and value projections instead of one fused ``[2D, D]``
-        matrix (which Muon otherwise orthogonalizes jointly). Default ``False``.
+        matrix (which Muon otherwise orthogonalizes jointly). Default ``True``.
     dropout : float, optional
         Dropout probability on the block's residual updates (the attention
         message and the feed-forward output, or the ``concat_mlp`` update).
@@ -183,11 +183,11 @@ class NeighborhoodAttentionBlock(nn.Module):
         activation: str = "gelu",
         fused: bool = False,
         fused_backend: Backend = "auto",
-        value_norm: bool = True,
-        difference_values: bool = False,
-        update: str = "residual",
-        bias_fp32: bool = False,
-        split_key_value: bool = False,
+        value_norm: bool = False,
+        difference_values: bool = True,
+        update: str = "concat_mlp",
+        bias_fp32: bool = True,
+        split_key_value: bool = True,
         dropout: float = 0.0,
         concrete_dropout: bool = False,
     ) -> None:
@@ -397,8 +397,10 @@ class NeighborhoodAttentionProcessor(nn.Module):
         Backend for the fused kernel. Default is ``"auto"``.
     value_norm, difference_values, update, bias_fp32, split_key_value, dropout, concrete_dropout
         Forwarded to every :class:`NeighborhoodAttentionBlock`; the defaults
-        (``True``, ``False``, ``"residual"``, ``False``, ``False``, 0.0,
-        ``False``) reproduce the original block.
+        (``False``, ``True``, ``"concat_mlp"``, ``True``, ``True``, 0.0,
+        ``False``) are the DeFormer block. ``value_norm=True,
+        difference_values=False, update="residual", bias_fp32=False,
+        split_key_value=False`` is the original block.
 
     Forward
     -------
@@ -426,11 +428,11 @@ class NeighborhoodAttentionProcessor(nn.Module):
         checkpoint_offloading: bool = False,
         fused_attention: bool = False,
         fused_backend: Backend = "auto",
-        value_norm: bool = True,
-        difference_values: bool = False,
-        update: str = "residual",
-        bias_fp32: bool = False,
-        split_key_value: bool = False,
+        value_norm: bool = False,
+        difference_values: bool = True,
+        update: str = "concat_mlp",
+        bias_fp32: bool = True,
+        split_key_value: bool = True,
         dropout: float = 0.0,
         concrete_dropout: bool = False,
     ) -> None:

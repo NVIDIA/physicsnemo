@@ -593,12 +593,12 @@ def test_fused_path_uses_a_fraction_of_the_reference_memory():
 
 
 def test_knn_mode_fused_flag_matches_reference_model():
-    """``local_attention_fused=True`` builds fused blocks and reproduces the model output."""
+    """The fused blocks (the default) reproduce the gather-based reference model."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(6)
     graph = _graph(num_nodes=12).to(device)
     global_embedding = torch.randn(1, 1, 2, device=device)
-    reference = _model().to(device).eval()
+    reference = _model(local_attention_fused=False).to(device).eval()
     fused = (
         _model(local_attention_fused=True, local_attention_backend="auto")
         .to(device)

@@ -43,6 +43,22 @@ def _graph(num_nodes: int, node_dim: int = 6, edge_dim: int = 4):
 
 
 def _model(model_cls):
+    if model_cls is MeshGeoFLARE:
+        return MeshGeoFLARE(
+            functional_dim=6,
+            out_dim=5,
+            input_dim_edges=4,
+            geometry_dim=3,
+            global_dim=2,
+            n_hidden=32,
+            n_head=4,
+            n_layers=2,
+            slice_num=8,
+            num_pre_processor_layers=1,
+            num_post_processor_layers=1,
+            local_processor="mpnn",
+            use_te=False,
+        )
     kwargs = dict(
         input_dim_nodes=6,
         input_dim_edges=4,
@@ -64,17 +80,18 @@ def _meshgeoflare(
     mesh_context_fusion: str = "none", mesh_context_use_global: bool = False
 ):
     return MeshGeoFLARE(
-        input_dim_nodes=6,
+        functional_dim=6,
+        out_dim=5,
         input_dim_edges=4,
-        output_dim=5,
         geometry_dim=3,
         global_dim=2,
-        hidden_dim=32,
-        num_heads=4,
+        n_hidden=32,
+        n_head=4,
+        n_layers=2,
         slice_num=8,
         num_pre_processor_layers=1,
-        num_attention_layers=2,
         num_post_processor_layers=1,
+        local_processor="mpnn",
         mesh_context_fusion=mesh_context_fusion,
         mesh_context_use_global=mesh_context_use_global,
         use_te=False,
@@ -193,6 +210,7 @@ def test_meshgeoflare_retains_full_geoflare_backbone_and_adds_parameters(
     backbone = GeoTransolver(**common)
     hybrid = MeshGeoFLARE(
         **common,
+        local_processor="mpnn",
         input_dim_edges=4,
         num_pre_processor_layers=1,
         num_post_processor_layers=1,
@@ -232,6 +250,7 @@ def test_meshgeoflare_upstream_checkpointing_preserves_outputs_and_gradients(
         attention_type="GALE_FA",
         mesh_context_fusion="pre_post",
         mesh_context_use_global=True,
+        local_processor="mpnn",
     )
     plain = MeshGeoFLARE(**common).train()
     checkpointed = MeshGeoFLARE(
@@ -274,6 +293,7 @@ def test_zero_gated_mesh_residuals_exactly_match_geoflare_backbone():
     geoflare = GeoTransolver(**common).eval()
     meshgeoflare = MeshGeoFLARE(
         **common,
+        local_processor="mpnn",
         input_dim_edges=4,
         mesh_hidden_dim=32,
         num_pre_processor_layers=1,
@@ -343,6 +363,7 @@ def test_meshgeoflare_latent_adapters_support_distinct_mesh_width():
         slice_num=8,
         num_pre_processor_layers=1,
         num_post_processor_layers=1,
+        local_processor="mpnn",
         use_te=False,
     ).eval()
     observed = {}
@@ -444,14 +465,15 @@ def test_meshgeoflare_context_fusion_parameter_ordering():
 def test_meshgeoflare_rejects_invalid_context_fusion(kwargs, message):
     with pytest.raises(ValueError, match=message):
         MeshGeoFLARE(
-            input_dim_nodes=6,
+            functional_dim=6,
+            out_dim=5,
             input_dim_edges=4,
-            output_dim=5,
             geometry_dim=3,
             global_dim=2,
-            hidden_dim=32,
-            num_heads=4,
-            num_attention_layers=1,
+            n_hidden=32,
+            n_head=4,
+            n_layers=1,
+            local_processor="mpnn",
             use_te=False,
             **kwargs,
         )

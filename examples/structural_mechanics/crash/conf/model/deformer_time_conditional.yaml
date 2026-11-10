@@ -36,7 +36,6 @@ use_te: false
 time_input: false
 include_local_features: true
 attention_type: GALE_FA
-attn_scale: null
 num_time_steps: ${training.num_time_steps}
 dt: 0.005               # frame interval in seconds (the datapipe reads it)
 time_embedding: fourier

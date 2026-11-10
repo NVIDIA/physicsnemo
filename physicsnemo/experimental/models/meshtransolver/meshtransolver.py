@@ -42,18 +42,14 @@ from physicsnemo.models.geotransolver import GeoTransolver, GlobalContextBuilder
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNetProcessor
 from physicsnemo.models.transolver.transolver import TransolverBlock
 from physicsnemo.nn import GALEBlock, get_activation
-from physicsnemo.nn.module.gnn_layers.graph_types import PYG_AVAILABLE
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 from .local_attention import LocalNeighborhood, NeighborhoodAttentionProcessor
 
-if PYG_AVAILABLE:
-    from physicsnemo.nn.module.gnn_layers.graph_types import PyGData
-
 GlobalProcessor = Literal["transolver", "gale", "gale_fa"]
 MeshContextFusionStage = Literal["none", "post", "pre_post"]
-LocalProcessor = Literal["mpnn", "knn_attention", "knn_mpnn"]
+LocalProcessor = Literal["knn_attention", "mpnn"]
 
 
 class BackboneState(NamedTuple):
@@ -795,12 +791,11 @@ class MeshGeoTransolver(MeshAttentionHybrid):
 
 
 class MeshGeoFLARE(GeoTransolver):
-    r"""DeFormer: FLARE-family GeoTransolver with additive mesh message passing.
+    r"""DeFormer's network: a FLARE-family GeoTransolver with local mesh stages.
 
-    The ``MeshGeoFLARE`` class name is retained so saved model metadata and
-    Hydra targets remain loadable. The reference DeFormer recipe explicitly
-    selects ``attention_type="GALE_FA"`` (original FLARE); the class also
-    accepts FLARE++ for compatibility with earlier experiments.
+    The DeFormer recipe selects ``attention_type="GALE_FA"`` (original FLARE)
+    and static kNN neighbourhood attention as the local operator; the class
+    also accepts FLARE++ and MeshGraphNet local processors.
 
     The complete :class:`GeoTransolver` backbone is retained: its input
     projection, geometry/global context builder, FLARE-family blocks, local
@@ -815,28 +810,17 @@ class MeshGeoFLARE(GeoTransolver):
     MeshGeoFLARE always has strictly more parameters for a matching configuration.
 
     ``local_processor`` selects the local operator run before and after the
-    FLARE blocks. ``"mpnn"`` (the reference recipe) runs MeshGraphNet processors
-    on the finite-element edges. ``"knn_attention"`` replaces both processors
-    with
+    FLARE blocks. ``"knn_attention"`` (the DeFormer recipe and the default) runs
     :class:`~physicsnemo.experimental.models.meshtransolver.local_attention.NeighborhoodAttentionProcessor`
-    stacks over static reference neighborhoods. ``"knn_mpnn"`` keeps the
-    MeshGraphNet processors but runs them on the static kNN slots: every valid
-    slot is one directed edge neighbor -> node (the self slot included, as a
-    self loop) and the slot features replace the structural edge features. Both
-    kNN modes need the datapipe to attach ``knn_index`` (``[N, local_knn_k + 1]``
-    including the node itself), ``knn_mask``, ``knn_edge_attr``
-    (``[N, local_knn_k + 1, input_dim_edges]``) and optionally ``knn_metric`` to
-    the graph; ``local_neighborhood`` names the metric those neighborhoods were
-    built with and is checked against ``knn_metric``. Structural
-    ``edge_features`` are ignored in the kNN modes. The residual gates, FiLM
-    conditioning and backbone are unchanged, so the model is still exactly
-    GeoFLARE at zero gates. The kNN modes are experimental
-    options; they do not change the validated MPNN reference recipe.
-
-    ``input_dim_nodes``, ``output_dim``, ``hidden_dim``, ``num_heads``, and
-    ``num_attention_layers`` remain accepted as compatibility aliases for the
-    original hybrid API.  New configurations should use the native GeoFLARE names
-    ``functional_dim``, ``out_dim``, ``n_hidden``, ``n_head``, and ``n_layers``.
+    stacks over static reference neighborhoods. It needs the datapipe to attach
+    ``knn_index`` (``[N, local_knn_k + 1]`` including the node itself),
+    ``knn_mask``, ``knn_edge_attr`` (``[N, local_knn_k + 1, input_dim_edges]``)
+    and optionally ``knn_metric`` to the graph; ``local_neighborhood`` names the
+    metric those neighborhoods were built with and is checked against
+    ``knn_metric``, and structural ``edge_features`` are ignored. ``"mpnn"``
+    runs MeshGraphNet processors on the finite-element edges instead. The
+    residual gates, FiLM conditioning and backbone are the same in both modes,
+    so the model is exactly GeoFLARE at zero gates.
 
     The arguments below are DeFormer's. The remaining constructor arguments
     (``functional_dim``, ``out_dim``, ``geometry_dim``, ``global_dim``,
@@ -854,13 +838,10 @@ class MeshGeoFLARE(GeoTransolver):
     ----------
     input_dim_edges : int, optional
         Width of the structural edge features (``"mpnn"``) or of the per-slot
-        kNN features (``"knn_attention"``, ``"knn_mpnn"``). Default is 4.
+        kNN features (``"knn_attention"``). Default is 4.
     guard_config : dict, optional
         No longer supported; any value raises (use the external GeoTransolver
         OOD guard API). Default is ``None``.
-    attn_scale : float, optional
-        FLARE attention-logit scale, forwarded to GeoTransolver; ``None`` keeps
-        the backend default. Default is ``None``.
     num_pre_processor_layers : int, optional
         Local processor blocks on the latent before the FLARE blocks. Default
         is 1.
@@ -913,12 +894,8 @@ class MeshGeoFLARE(GeoTransolver):
     mesh_context_use_global : bool, optional
         Also feed the global embedding into that mesh context. Requires
         ``global_dim`` and mesh context fusion. Default is ``False``.
-    input_dim_nodes, output_dim, hidden_dim, num_heads, num_attention_layers : int, optional
-        Compatibility aliases of ``functional_dim``, ``out_dim``, ``n_hidden``,
-        ``n_head`` and ``n_layers``; a conflicting pair raises. Default is
-        ``None``.
-    local_processor : {"mpnn", "knn_attention", "knn_mpnn"}, optional
-        Local operator, see above. Default is ``"mpnn"``.
+    local_processor : {"knn_attention", "mpnn"}, optional
+        Local operator, see above. Default is ``"knn_attention"``.
     local_knn_k : int, optional
         Neighbors per node in the kNN modes, excluding the node's own slot.
         Default is 32.
@@ -938,7 +915,7 @@ class MeshGeoFLARE(GeoTransolver):
         Run the kNN attention with the fused kernel of
         :mod:`~physicsnemo.experimental.models.meshtransolver.fused_neighborhood_attention`
         (same math, no gathered ``[N, K, H, d_h]`` key/value tensors). Default
-        is ``False``.
+        is ``True``.
     local_attention_backend : {"auto", "triton", "torch"}, optional
         Backend of the fused kernel; ``"auto"`` picks Triton on CUDA. Default
         is ``"auto"``.
@@ -947,21 +924,21 @@ class MeshGeoFLARE(GeoTransolver):
         :class:`~physicsnemo.experimental.models.meshtransolver.local_attention.NeighborhoodAttentionBlock`
         as ``value_norm``, ``difference_values``, ``update``, ``bias_fp32``,
         ``split_key_value``, ``dropout`` and ``concrete_dropout``; the defaults
-        (``True``, ``False``, ``"residual"``, ``False``, ``False``, 0.0,
-        ``False``) reproduce the original block.
+        (``False``, ``True``, ``"concat_mlp"``, ``True``, ``True``, 0.0,
+        ``False``) are the DeFormer block.
     """
 
     def __init__(
         self,
-        functional_dim: int | None = None,
-        out_dim: int | None = None,
+        functional_dim: int,
+        out_dim: int,
         input_dim_edges: int = 4,
         geometry_dim: int | None = 3,
         global_dim: int | None = None,
-        n_layers: int | None = None,
-        n_hidden: int | None = None,
+        n_layers: int = 6,
+        n_hidden: int = 256,
         dropout: float = 0.0,
-        n_head: int | None = None,
+        n_head: int = 8,
         act: str = "gelu",
         mlp_ratio: int = 4,
         slice_num: int = 32,
@@ -976,7 +953,6 @@ class MeshGeoFLARE(GeoTransolver):
         attention_type: str = "GALE_FPP",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
-        attn_scale: float | None = None,
         num_pre_processor_layers: int = 1,
         num_post_processor_layers: int = 2,
         mesh_hidden_dim: int | None = None,
@@ -997,53 +973,26 @@ class MeshGeoFLARE(GeoTransolver):
         mesh_post_residual_gate_init: float = 1.0,
         mesh_context_fusion: MeshContextFusionStage = "none",
         mesh_context_use_global: bool = False,
-        input_dim_nodes: int | None = None,
-        output_dim: int | None = None,
-        hidden_dim: int | None = None,
-        num_heads: int | None = None,
-        num_attention_layers: int | None = None,
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
         activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
-        local_processor: LocalProcessor = "mpnn",
+        local_processor: LocalProcessor = "knn_attention",
         local_knn_k: int = 32,
         local_neighborhood: LocalNeighborhoodMetric = "geodesic",
         local_num_heads: int | None = None,
         local_mlp_ratio: int = 2,
         local_edge_dim: int = 32,
         local_activation: str = "gelu",
-        local_attention_fused: bool = False,
+        local_attention_fused: bool = True,
         local_attention_backend: str = "auto",
-        local_value_norm: bool = True,
-        local_difference_values: bool = False,
-        local_update: str = "residual",
-        local_bias_fp32: bool = False,
-        local_split_key_value: bool = False,
+        local_value_norm: bool = False,
+        local_difference_values: bool = True,
+        local_update: str = "concat_mlp",
+        local_bias_fp32: bool = True,
+        local_split_key_value: bool = True,
         local_dropout: float = 0.0,
         local_concrete_dropout: bool = False,
     ) -> None:
-        functional_dim = self._resolve_alias(
-            functional_dim, input_dim_nodes, "functional_dim", "input_dim_nodes"
-        )
-        out_dim = self._resolve_alias(out_dim, output_dim, "out_dim", "output_dim")
-        n_hidden = self._resolve_alias(
-            n_hidden, hidden_dim, "n_hidden", "hidden_dim", default=256
-        )
-        n_head = self._resolve_alias(
-            n_head, num_heads, "n_head", "num_heads", default=8
-        )
-        n_layers = self._resolve_alias(
-            n_layers,
-            num_attention_layers,
-            "n_layers",
-            "num_attention_layers",
-            default=6,
-        )
-
-        if functional_dim is None:
-            raise ValueError("functional_dim (or input_dim_nodes) is required")
-        if out_dim is None:
-            raise ValueError("out_dim (or output_dim) is required")
         if input_dim_edges <= 0:
             raise ValueError("input_dim_edges must be positive")
         if num_pre_processor_layers <= 0:
@@ -1070,9 +1019,9 @@ class MeshGeoFLARE(GeoTransolver):
             )
         if mesh_context_use_global and global_dim is None:
             raise ValueError("global_dim is required for global mesh-context fusion")
-        if local_processor not in {"mpnn", "knn_attention", "knn_mpnn"}:
+        if local_processor not in {"knn_attention", "mpnn"}:
             raise ValueError(
-                "local_processor must be 'mpnn', 'knn_attention' or 'knn_mpnn'; "
+                "local_processor must be 'knn_attention' or 'mpnn'; "
                 f"got {local_processor!r}"
             )
         if local_neighborhood not in {"geodesic", "euclidean"}:
@@ -1127,7 +1076,6 @@ class MeshGeoFLARE(GeoTransolver):
             attention_type=attention_type,
             concrete_dropout=concrete_dropout,
             state_mixing_mode=state_mixing_mode,
-            attn_scale=attn_scale,
             activation_checkpointing=activation_checkpointing,
             checkpointing_ratio=checkpointing_ratio,
             activation_checkpointing_components=activation_checkpointing_components,
@@ -1183,7 +1131,7 @@ class MeshGeoFLARE(GeoTransolver):
                 norm_type=norm_type,
                 recompute_activation=recompute_activation,
             )
-            if local_processor in ("mpnn", "knn_mpnn")
+            if local_processor == "mpnn"
             else None
         )
         # The pre-MPNN consumes GeoTransolver's encoded node latent directly.
@@ -1218,10 +1166,7 @@ class MeshGeoFLARE(GeoTransolver):
             recompute_activation=recompute_activation,
         )
 
-        if local_processor in ("mpnn", "knn_mpnn"):
-            # "knn_mpnn": the same MeshGraphNet processors, run on the static
-            # kNN slots (every valid slot is one directed edge neighbor -> node,
-            # the self slot included) instead of the finite-element edges.
+        if local_processor == "mpnn":
             processor_kwargs = dict(
                 input_dim_node=mesh_hidden_dim,
                 input_dim_edge=mesh_hidden_dim,
@@ -1287,22 +1232,6 @@ class MeshGeoFLARE(GeoTransolver):
                 else None
             )
             self.post_context_film = MeshContextFiLM(mesh_hidden_dim)
-
-    @staticmethod
-    def _resolve_alias(
-        value: int | None,
-        alias: int | None,
-        value_name: str,
-        alias_name: str,
-        default: int | None = None,
-    ) -> int | None:
-        if value is None:
-            return alias if alias is not None else default
-        if alias is not None and value != alias:
-            raise ValueError(
-                f"{value_name}={value} conflicts with {alias_name}={alias}"
-            )
-        return value
 
     def forward(
         self,
@@ -1444,11 +1373,6 @@ class MeshGeoFLARE(GeoTransolver):
         if self.local_processor == "mpnn":
             edge_latent = self.edge_encoder(edge_features)
             neighborhood = None
-        elif self.local_processor == "knn_mpnn":
-            neighborhood = self._local_neighborhood(graph, node_features.shape[0])
-            processor_graph, slot_features = self._knn_slot_graph(neighborhood)
-            edge_latent = self.edge_encoder(slot_features.to(node_features.dtype))
-            neighborhood = None
         else:
             edge_latent = None
             neighborhood = self._local_neighborhood(graph, node_features.shape[0])
@@ -1568,7 +1492,7 @@ class MeshGeoFLARE(GeoTransolver):
         """
         if num_layers < 1:
             raise ValueError("num_layers must be at least 1")
-        if self.local_processor in ("mpnn", "knn_mpnn"):
+        if self.local_processor == "mpnn":
             return MeshGraphNetProcessor(
                 processor_size=num_layers,
                 num_processor_checkpoint_segments=checkpoint_segments,
@@ -1588,29 +1512,6 @@ class MeshGeoFLARE(GeoTransolver):
         graph: GraphType,
         neighborhood: LocalNeighborhood | None,
     ) -> torch.Tensor:
-        if self.local_processor in ("mpnn", "knn_mpnn"):
+        if self.local_processor == "mpnn":
             return processor(latent, edge_latent, graph)
         return processor(latent, neighborhood)
-
-    @staticmethod
-    def _knn_slot_graph(neighborhood: LocalNeighborhood):
-        """Directed edges neighbor -> node for every valid slot, with slot features.
-
-        The self slot (zero displacement before standardization) becomes a self
-        loop, mirroring the self loops of the structural graph. Padded slots are
-        dropped. Returns a PyG graph carrying only connectivity, and the raw
-        standardized slot features ``[E, edge_input_dim]`` in slot order.
-        """
-        index, mask = neighborhood.index, neighborhood.mask
-        num_nodes = index.shape[0]
-        destination = (
-            torch.arange(num_nodes, device=index.device).unsqueeze(1).expand_as(index)
-        )
-        edge_index = torch.stack((index[mask], destination[mask]), dim=0)
-        slot_features = neighborhood.edge_features[mask]
-        if not PYG_AVAILABLE:
-            raise ImportError(
-                "The 'knn_mpnn' local processor builds a PyTorch Geometric graph; "
-                "install torch_geometric and torch_scatter (physicsnemo[gnns])."
-            )
-        return PyGData(edge_index=edge_index, num_nodes=num_nodes), slot_features

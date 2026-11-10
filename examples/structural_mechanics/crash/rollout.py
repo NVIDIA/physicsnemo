@@ -374,6 +374,9 @@ class GeoTransolverTimeConditional(GeoTransolver):
         # Accepted for recipe compatibility (the Yaris datapipe derives its frame
         # interval from ``model.dt``); the backbone itself is time-step agnostic.
         self.dt = dt
+        # Recorded at its default by the released baseline's checkpoint; the
+        # backbone has no such option.
+        kwargs.pop("attn_scale", None)
         super().__init__(**kwargs)
         self.time_embed = TimeEmbedding(time_embedding, time_fourier_bands, time_dim)
         self.time_as_global = bool(time_as_global)

@@ -34,6 +34,13 @@ V2 = dict(
     bias_fp32=True,
     split_key_value=True,
 )
+ORIGINAL = dict(
+    value_norm=True,
+    difference_values=False,
+    update="residual",
+    bias_fp32=False,
+    split_key_value=False,
+)
 
 
 def _inputs(n=40, k=6, dim=32, edge_dim=8, seed=0, dtype=torch.float32):
@@ -55,18 +62,23 @@ def _block(fused, backend="torch", seed=1, **options):
     )
 
 
-def test_legacy_defaults_keep_the_original_parameterization():
-    block = _block(False)
-    names = {name for name, _ in block.named_parameters()}
+def test_defaults_are_the_released_block_and_the_original_stays_available():
+    released = {name for name, _ in _block(False).named_parameters()}
+    assert released == {name for name, _ in _block(False, **V2).named_parameters()}
+    assert any(name.startswith(("update_mlp", "key.", "value.")) for name in released)
+    assert "key_value.weight" not in released
+    original = {name for name, _ in _block(False, **ORIGINAL).named_parameters()}
     assert {
         "key_value.weight",
         "output.weight",
         "edge_value.weight",
         "ffn.0.weight",
-    } <= names
-    assert not any(name.startswith(("update_mlp", "key.", "value.")) for name in names)
+    } <= original
+    assert not any(
+        name.startswith(("update_mlp", "key.", "value.")) for name in original
+    )
     with pytest.raises(ValueError, match="split_key_value"):
-        _block(False, value_norm=False)
+        _block(False, value_norm=False, split_key_value=False)
     with pytest.raises(ValueError, match="update must be"):
         _block(False, update="other")
 
@@ -148,7 +160,7 @@ def test_value_projection_sees_the_raw_stream_when_value_norm_is_off():
 
 
 def test_logit_bias_precision_under_autocast():
-    block_legacy = _block(False)
+    block_legacy = _block(False, **ORIGINAL)
     block_fp32 = _block(False, bias_fp32=True)
     edge_latent = torch.randn(5, 6, 8)
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):

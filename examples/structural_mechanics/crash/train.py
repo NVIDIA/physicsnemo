@@ -68,21 +68,6 @@ from training_state import (
 from utils import build_muon_optimizer, load_warm_start
 
 
-def execution_end_epoch(
-    epoch_init: int, epochs: int, max_epochs_this_run: int | None
-) -> int:
-    """Bound a smoke/allocation without shortening the optimizer's LR schedule."""
-    if max_epochs_this_run is None:
-        return epochs
-    if (
-        isinstance(max_epochs_this_run, bool)
-        or not isinstance(max_epochs_this_run, int)
-        or max_epochs_this_run <= 0
-    ):
-        raise ValueError("max_epochs_this_run must be a positive integer or null")
-    return min(epochs, epoch_init + max_epochs_this_run)
-
-
 class ValidationEarlyStopping:
     """Track validation improvements and stop after a bounded stale period."""
 
@@ -204,8 +189,7 @@ class Trainer:
     the time-conditional DeFormer), ``increment_loss_weight`` (frame pairs),
     ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
     run's weights), ``manual_gradient_allreduce``, ``reproducible_sampling`` /
-    ``sampler_seed``, ``deterministic``, ``early_stopping_*``,
-    ``max_epochs_this_run`` and ``memory_diagnostics``.
+    ``sampler_seed``, ``deterministic`` and ``early_stopping_*``.
     """
 
     def __init__(self, cfg: DictConfig, logger0: RankZeroLoggingWrapper):
@@ -440,13 +424,7 @@ class Trainer:
         if warm_start:
             # Fresh run initialised from another run's weights; a resumed run's
             # own checkpoint (loaded below) takes precedence.
-            report = load_warm_start(
-                self.model,
-                warm_start,
-                allowed_missing_prefixes=tuple(
-                    cfg.training.get("warm_start_allow_missing", [])
-                ),
-            )
+            report = load_warm_start(self.model, warm_start)
             logger0.info(
                 f"Warm start from {warm_start}: {len(report['loaded'])} tensors "
                 f"loaded, {len(report['missing'])} fresh: {report['missing'][:6]}"
@@ -808,11 +786,7 @@ def main(cfg: DictConfig) -> None:
     early_stopping.stale_evaluations = saved_early_stopping.get("stale_evaluations", 0)
     logger0.info("Training started...")
 
-    end_epoch = execution_end_epoch(
-        trainer.epoch_init, cfg.training.epochs, cfg.training.get("max_epochs_this_run")
-    )
-    memory_diagnostics = cfg.training.get("memory_diagnostics", False)
-    for epoch in range(trainer.epoch_init, end_epoch):
+    for epoch in range(trainer.epoch_init, cfg.training.epochs):
         if trainer.sampler is not None:
             trainer.sampler.set_epoch(epoch)
 
@@ -826,19 +800,7 @@ def main(cfg: DictConfig) -> None:
 
         for batch_idx, sample in enumerate(trainer.dataloader):
             sample = sample[0].to(dist.device)  # SimSample .to()
-            if memory_diagnostics and torch.cuda.is_available():
-                torch.cuda.reset_peak_memory_stats()
             loss = trainer.train(sample, epoch)
-            if memory_diagnostics and torch.cuda.is_available():
-                free_bytes, total_bytes = torch.cuda.mem_get_info()
-                logger.info(
-                    f"CUDA_MEMORY rank={dist.rank} epoch={epoch + 1} batch={batch_idx + 1} "
-                    f"allocated={torch.cuda.memory_allocated()} "
-                    f"reserved={torch.cuda.memory_reserved()} "
-                    f"peak_allocated={torch.cuda.max_memory_allocated()} "
-                    f"peak_reserved={torch.cuda.max_memory_reserved()} "
-                    f"driver_used={total_bytes - free_bytes} driver_total={total_bytes}"
-                )
             total_loss += loss.detach().item()
             for component, value in trainer.last_loss_components.items():
                 component_totals[component] = component_totals.get(component, 0.0) + (

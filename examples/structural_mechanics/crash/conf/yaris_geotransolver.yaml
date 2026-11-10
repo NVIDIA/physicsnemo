@@ -45,7 +45,6 @@ model:
   n_hidden: 256
   n_head: 8
   attention_type: GALE_FA
-  attn_scale: null
   time_embedding: fourier
   time_fourier_bands: 8
   time_dim: 32

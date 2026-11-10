@@ -61,6 +61,7 @@ from physicsnemo.experimental.models.meshtransolver.meshtransolver import MeshGe
 # recipes carry them); any other value names a feature of the archive branch.
 _RETIRED_OPTIONS = {
     "norm_conditioning": "none",
+    "attn_scale": None,
     "use_contact": False,
     "contact_dim": 8,
     "contact_gate_init": 1.0e-3,
