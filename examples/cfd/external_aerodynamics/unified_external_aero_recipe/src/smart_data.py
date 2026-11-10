@@ -22,6 +22,8 @@ They preserve the existing recipe's DomainMesh target/force contract.
 
 from __future__ import annotations
 
+import math
+
 import torch
 from merge_global_data import MeshReaderWithGlobalData
 
@@ -31,6 +33,93 @@ from physicsnemo.datapipes.transforms.mesh import CenterMesh as _CenterMesh
 from physicsnemo.datapipes.transforms.mesh import MeshToDomainMesh, SubsampleMesh
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.nn.functional.geometry import signed_distance_field
+
+
+class SMARTInputs(MeshTransform):
+    """Preserve SMART inputs in physical coordinates before recipe transforms.
+
+    The model uses the full CFD cell-centroid bounding-box center and fixed
+    axis scales. Physical export and force integration keep the recipe's own
+    coordinate frame. Query coordinates and native normals remain associated
+    with their field rows through later subsampling.
+
+    Parameters
+    ----------
+    field : {"surface", "volume"}
+        Which field pipeline is being prepared.
+    coordinate_scale : sequence of three positive floats
+        Axis scales in source length units, shared with the model config.
+    conditioning : sequence of floats
+        Fixed benchmark conditioning. These values do not replace physical
+        freestream metadata used to normalize targets or integrate forces.
+    """
+
+    def __init__(self, field, coordinate_scale, conditioning):
+        super().__init__()
+        if field not in ("surface", "volume"):
+            raise ValueError("field must be surface or volume")
+        if len(coordinate_scale) != 3 or any(
+            not math.isfinite(x) or x <= 0 for x in coordinate_scale
+        ):
+            raise ValueError(
+                "coordinate_scale must contain three positive finite values"
+            )
+        if not conditioning or not all(math.isfinite(x) for x in conditioning):
+            raise ValueError("conditioning must contain finite values")
+        self.field = field
+        self.coordinate_scale = tuple(coordinate_scale)
+        self.conditioning = tuple(conditioning)
+
+    def _metadata(self, surface, global_data):
+        centers = surface.cell_centroids.as_subclass(torch.Tensor)
+        data = global_data.clone()
+        data["smart_geometry"] = centers
+        data["smart_center"] = (centers.amin(0) + centers.amax(0)) * 0.5
+        data["smart_parameters"] = centers.new_tensor(self.conditioning)
+        return centers, data
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        """Capture surface inputs before coordinate scaling and query sampling."""
+        if self.field != "surface":
+            raise TypeError("Volume SMART inputs require a DomainMesh")
+        centers, data = self._metadata(mesh, mesh.global_data)
+        fields = mesh.cell_data.clone()
+        fields["smart_queries"] = centers
+        fields["smart_normals"] = mesh.cell_normals.as_subclass(torch.Tensor)
+        return mesh.with_data(cell_data=fields, global_data=data)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Compute unsigned distance and direction from the physical CFD mesh."""
+        if self.field != "volume":
+            raise TypeError("Surface SMART inputs require a Mesh")
+        surface = domain.boundaries["vehicle"]
+        _, data = self._metadata(surface, domain.global_data)
+        queries = domain.interior.points.as_subclass(torch.Tensor)
+        fields = domain.interior.point_data.clone()
+        fields["smart_queries"] = queries
+        center = data["smart_center"]
+        scale = queries.new_tensor(self.coordinate_scale)
+        # Preserve the coordinate reconstruction used in the qualified run.
+        reconstructed = ((queries - center) / scale) * scale + center
+        _, closest, _ = signed_distance_field(
+            surface.points.as_subclass(torch.Tensor),
+            surface.cells.as_subclass(torch.Tensor).flatten(),
+            reconstructed,
+            use_sign_winding_number=False,
+        )
+        delta = reconstructed - closest
+        distance = torch.linalg.vector_norm(delta, dim=-1, keepdim=True)
+        fields["sdf"] = distance
+        # Do not amplify sub-micrometre closest-point roundoff into a direction.
+        fields["sdf_normals"] = torch.where(
+            distance > 1e-6, delta / distance.clamp_min(1e-30), 0
+        )
+        return DomainMesh(
+            interior=domain.interior.with_data(point_data=fields),
+            boundaries=domain.boundaries,
+            global_data=data,
+        )
 
 
 class _SMARTSeeds:

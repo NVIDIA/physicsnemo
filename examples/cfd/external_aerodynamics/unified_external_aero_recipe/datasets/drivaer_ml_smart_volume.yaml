@@ -19,6 +19,7 @@
 # sampling_resolution below controls field queries only.
 train_datadir: ${dataset_paths.drivaer_ml}
 pipeline:
+  augmentation_before: smart_data.SMARTInputs
   reader:
     _target_: smart_data.SMARTVolumeReader
     path: ${train_datadir}
@@ -49,6 +50,10 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
+    - _target_: smart_data.SMARTInputs
+      field: volume
+      coordinate_scale: [12.0, 4.5, 3.25]
+      conditioning: [1.205, 30.0]
     - _target_: smart_data.CenterMesh
       use_area_weighting: false
     - _target_: ${dp:NonDimensionalizeByMetadata}
@@ -57,11 +62,6 @@ pipeline:
         pMeanTrim: pressure
         nutMeanTrim: identity
       association: point_data
-    - _target_: ${dp:ComputeSDFFromBoundary}
-      boundary_name: vehicle
-      sdf_field: sdf
-      normals_field: sdf_normals
-      use_winding_number: false
     - _target_: ${dp:RenameMeshFields}
       point_data:
         UMeanTrim: velocity
@@ -69,11 +69,20 @@ pipeline:
         nutMeanTrim: nut
     - _target_: ${dp:NormalizeMeshFields}
       association: point_data
+      eps: 0.0
       fields:
+        velocity:
+          type: vector
+          mean: [0.38983152820466843, -0.0008580543843955368, 0.008881391103026524]
+          std: [0.3044505987801483, 0.15272179785130596, 0.11712216157497587]
+        pressure:
+          type: scalar
+          mean: -0.2552665920339416
+          std: 0.2413468710341852
         nut:
           type: scalar
           mean: 0.00048
-          std: 0.00094
+          std: 0.00094001
     - _target_: smart_data.SMARTVolumeGeometry
 targets:
   velocity: vector

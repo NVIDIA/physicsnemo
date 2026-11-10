@@ -41,6 +41,7 @@ from tensordict import TensorDict
 from utils import FieldType, align_scalar_shapes, validate_field_coverage
 
 from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 
 ### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
 MetricName: TypeAlias = Literal["mae", "l1", "l2"]
@@ -150,6 +151,9 @@ class MetricCalculator:
         metrics: Names of metrics to compute. Subset of
             ``METRIC_FUNCTIONS``. Defaults to :data:`DEFAULT_METRICS`.
         prefix: Optional prefix on the returned metric keys.
+        normalizer: Optional field standardizer to invert before measuring.
+            Nondimensionalization is retained. Relative errors equal physical
+            relative errors when redimensionalization is purely multiplicative.
     """
 
     def __init__(
@@ -158,6 +162,7 @@ class MetricCalculator:
         n_spatial_dims: int = 3,
         metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
+        normalizer: NormalizeMeshFields | None = None,
     ) -> None:
         ### `target_config` values are required to be lowercase per the
         ### `FieldType` contract; copy verbatim so callers can mutate their
@@ -168,6 +173,7 @@ class MetricCalculator:
             list(metrics) if metrics is not None else list(DEFAULT_METRICS)
         )
         self.prefix = prefix
+        self.normalizer = normalizer
 
         for m in self.metric_names:
             if m not in METRIC_FUNCTIONS:
@@ -248,6 +254,9 @@ class MetricCalculator:
         ### TensorDict's batched ops (``.detach()``, ``.add_()``, ...).
         out: dict[str, torch.Tensor] = {}
         with torch.no_grad():
+            if self.normalizer is not None:
+                pred = self.normalizer.inverse_td(pred)
+                target = self.normalizer.inverse_td(target)
             for name, field_type in self.target_config.items():
                 ### Nested lookup; metric keys keep the config spelling.
                 key = as_nested_key(name)

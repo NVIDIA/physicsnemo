@@ -44,7 +44,8 @@ def _inputs():
         geometry=torch.randn(1, 32, 3),
         queries=torch.randn(1, 7, 3),
         query_features=torch.randn(1, 7, 3),
-        parameters=torch.randn(1, 1, 3),
+        parameters=torch.randn(1, 1, 2),
+        frame_center=torch.randn(1, 1, 3),
         geometry_seed=torch.tensor([[[42]]]),
     )
 
@@ -93,56 +94,36 @@ def test_optional_features_and_conditions_checkpoint(field, tmp_path):
         torch.testing.assert_close(restored(**inputs), expected)
 
 
-def test_explicit_constructor_keeps_legacy_checkpoint_arguments():
-    """Previously flattened adapter kwargs still reconstruct the same model."""
-    model = _model()
-    old_args = model._args.copy()
-    old_args["__args__"] = {
-        key: value
-        for key, value in old_args["__args__"].items()
-        if key
-        in {
-            "field",
-            "out_dim",
-            "query_feature_channels",
-            "hidden_dim",
-            "num_heads",
-            "num_layers",
-            "num_latents",
-            "geometry_subsample",
-            "eval_chunk_size",
-        }
-    }
-    restored = Module.instantiate(old_args)
-    assert restored.parameter_scale == 1.0
-    restored.load_state_dict(model.state_dict())
-    inputs = _inputs()
-    torch.testing.assert_close(restored(**inputs), model(**inputs), rtol=0, atol=0)
-
-
 @pytest.mark.parametrize("field", ["surface", "volume"])
-def test_condition_scaling_preserves_metadata_and_checkpoint(field, tmp_path):
-    """Scale once in training and chunked inference without mutating metadata."""
-    model = _model(field=field, parameter_scale=30.0)
-    reference = _model(field=field)
+def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
+    """Normalize both clouds once and retain the frame across checkpoint reload."""
+    model = _model(field=field, coordinate_scale=(12.0, 4.5, 3.25))
+    reference = _model(field=field, coordinate_scale=(1.0, 1.0, 1.0))
     reference.load_state_dict(model.state_dict())
     inputs = _inputs()
-    raw_parameters = inputs["parameters"].clone()
-    normalized_inputs = {**inputs, "parameters": raw_parameters / 30.0}
+    original = {k: v.clone() for k, v in inputs.items()}
+    scale = inputs["geometry"].new_tensor(model.coordinate_scale)
+    normalized = {
+        **inputs,
+        "geometry": (inputs["geometry"] - inputs["frame_center"]) / scale,
+        "queries": (inputs["queries"] - inputs["frame_center"]) / scale,
+        "frame_center": torch.zeros_like(inputs["frame_center"]),
+    }
     for training in (True, False):
         model.train(training)
         reference.train(training)
-        torch.testing.assert_close(model(**inputs), reference(**normalized_inputs))
-        torch.testing.assert_close(inputs["parameters"], raw_parameters, rtol=0, atol=0)
-    path = tmp_path / "scaled.mdlus"
+        torch.testing.assert_close(model(**inputs), reference(**normalized))
+        for key in inputs:
+            torch.testing.assert_close(inputs[key], original[key], rtol=0, atol=0)
+    path = tmp_path / "coordinates.mdlus"
     model.save(path)
     restored = Module.from_checkpoint(path).eval()
-    assert restored.parameter_scale == 30.0
+    assert restored.coordinate_scale == (12.0, 4.5, 3.25)
     torch.testing.assert_close(restored(**inputs), model(**inputs))
 
 
-@pytest.mark.parametrize("scale", [0, -1, float("nan"), float("inf"), True])
-def test_invalid_condition_scale(scale):
-    """Reject invalid reference scales before constructing the model."""
-    with pytest.raises(ValueError, match="parameter_scale"):
-        _model(parameter_scale=scale)
+@pytest.mark.parametrize("scale", [(0, 1, 1), (1, -1, 1), (1, float("nan"), 1), (1, 2)])
+def test_invalid_coordinate_scale(scale):
+    """Reject an invalid coordinate frame before constructing the model."""
+    with pytest.raises(ValueError, match="coordinate_scale"):
+        _model(coordinate_scale=scale)

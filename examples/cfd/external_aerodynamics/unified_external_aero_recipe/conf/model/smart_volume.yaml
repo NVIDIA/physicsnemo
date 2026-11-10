@@ -22,33 +22,40 @@ compile: false
 # SMART conditioning is sensitive to the generic recipe's input and update scales.
 precision: float32
 training:
+  loss_type: mse
   optimizer:
     lr: 1.0e-3
   scheduler:
     step_size: 100
     gamma: 0.5
+dataloader:
+  num_workers: 2
+  prefetch_factor: 2
+  num_streams: 2
+metrics_before_normalization: true
 independent_validation: true
 forward_kwargs:
-  geometry: boundaries.smart_geometry.points
-  queries: interior.points
+  geometry: global_data.smart_geometry
+  queries: interior.point_data.smart_queries
   query_features:
   - interior.point_data.sdf
   - interior.point_data.sdf_normals
-  parameters: global_data.U_inf
+  parameters: global_data.smart_parameters
+  frame_center: global_data.smart_center
   geometry_seed: global_data.smart_geometry_seed
 model:
   _target_: smart_model.SMARTField
   field: volume
   out_dim: ${out_dim}
   query_feature_channels: 4
-  parameter_channels: 3
-  parameter_scale: 30.0
+  parameter_channels: 2
+  coordinate_scale: [12.0, 4.5, 3.25]
   hidden_dim: 448
   num_heads: 8
   num_layers: 6
   num_latents: 2048
   geometry_subsample: 16384
-  share_weights: false
+  share_weights: true
   qk_normalization: true
   qk_temperature_max: 4.0
   eval_seed: 0

@@ -45,12 +45,11 @@ class SMARTField(SMART):
         Number of normal or SDF/direction channels; zero disables features.
     eval_chunk_size : int, optional, default=8192
         Maximum queries decoded at once during evaluation.
-    parameter_channels : int, optional, default=3
-        Number of global simulation conditions, normally freestream velocity.
-    parameter_scale : float, optional, default=1.0
-        Fixed positive divisor for simulation conditions. The DrivAerML
-        templates use 30 m/s for freestream velocity. Physical metadata is
-        preserved for nondimensionalization and force integration.
+    parameter_channels : int, optional, default=2
+        Number of fixed benchmark conditioning channels.
+    coordinate_scale : sequence of three positive floats, default=(12, 4.5, 3.25)
+        Axis scales applied after subtracting the full CFD centroid-box center.
+        Inputs use physical coordinates. Export and force geometry are unchanged.
     hidden_dim, num_heads, num_layers, num_latents, geometry_subsample, mlp_ratio : int, optional
         Architecture settings with the same defaults as
         :class:`~physicsnemo.experimental.models.smart.SMART`.
@@ -73,6 +72,8 @@ class SMARTField(SMART):
         Aligned geometric features of shape :math:`(1,N_q,C)`.
     parameters : torch.Tensor or None
         Global conditions of shape :math:`(1,1,P)` or :math:`(1,P)`.
+    frame_center : torch.Tensor
+        Full CFD cell-centroid bounding-box center, with three elements.
     geometry_seed : torch.Tensor
         One integer sampling seed, normally of shape :math:`(1,1,1)`.
 
@@ -86,8 +87,8 @@ class SMARTField(SMART):
     >>> model = SMARTField("surface", 4, 3, hidden_dim=24, num_heads=4,
     ...                    num_layers=2, num_latents=8, geometry_subsample=16)
     >>> prediction = model(torch.randn(1, 32, 3), torch.randn(1, 12, 3),
-    ...                    torch.randn(1, 12, 3), torch.randn(1, 1, 3),
-    ...                    torch.tensor([[[42]]]))
+    ...                    torch.randn(1, 12, 3), torch.randn(1, 1, 2),
+    ...                    torch.tensor([[[42]]]), torch.zeros(1, 3))
     >>> prediction.shape
     torch.Size([1, 12, 4])
     """
@@ -98,7 +99,7 @@ class SMARTField(SMART):
         out_dim: int,
         query_feature_channels: int,
         eval_chunk_size: int = 8192,
-        parameter_channels: int = 3,
+        parameter_channels: int = 2,
         hidden_dim: int = 256,
         num_heads: int = 8,
         num_layers: int = 6,
@@ -109,7 +110,7 @@ class SMARTField(SMART):
         eval_seed: int = 0,
         qk_normalization: bool = False,
         qk_temperature_max: float | None = None,
-        parameter_scale: float = 1.0,
+        coordinate_scale: tuple[float, float, float] = (12.0, 4.5, 3.25),
     ):
         if field not in ("surface", "volume"):
             raise ValueError("field must be surface or volume")
@@ -119,13 +120,13 @@ class SMARTField(SMART):
             or eval_chunk_size <= 0
         ):
             raise ValueError("eval_chunk_size must be a positive integer")
-        if (
-            isinstance(parameter_scale, bool)
-            or not isinstance(parameter_scale, (int, float))
-            or not math.isfinite(parameter_scale)
-            or parameter_scale <= 0
+        if len(coordinate_scale) != 3 or any(
+            isinstance(x, bool) or not math.isfinite(x) or x <= 0
+            for x in coordinate_scale
         ):
-            raise ValueError("parameter_scale must be finite and positive")
+            raise ValueError(
+                "coordinate_scale must contain three positive finite values"
+            )
         super().__init__(
             surface_channels=out_dim if field == "surface" else 0,
             volume_channels=out_dim if field == "volume" else 0,
@@ -149,7 +150,10 @@ class SMARTField(SMART):
         )
         self.field = field
         self.eval_chunk_size = eval_chunk_size
-        self.parameter_scale = float(parameter_scale)
+        self.coordinate_scale = tuple(coordinate_scale)
+        # Module records constructor arguments before Hydra's ListConfig is
+        # converted. Store a plain sequence for .mdlus serialization.
+        self._args["__args__"]["coordinate_scale"] = self.coordinate_scale
 
     def forward(
         self,
@@ -158,6 +162,7 @@ class SMARTField(SMART):
         query_features: Float[Tensor, "1 query_points feature_channels"] | None,
         parameters: Float[Tensor, "1 ... parameter_channels"] | None,
         geometry_seed: Int[Tensor, "..."],
+        frame_center: Float[Tensor, "..."],
     ) -> Float[Tensor, "1 query_points out_dim"]:
         r"""Predict aligned field queries with independent geometry randomness.
 
@@ -166,6 +171,15 @@ class SMARTField(SMART):
         the core model's fixed ``eval_seed``, including across query chunks.
         """
         if not torch.compiler.is_compiling():
+            if (
+                frame_center.numel() != 3
+                or not frame_center.is_floating_point()
+                or frame_center.device != geometry.device
+                or not torch.isfinite(frame_center).all()
+            ):
+                raise ValueError(
+                    "frame_center must contain three finite coordinates on the geometry device"
+                )
             self._validate_coordinates(geometry, batch=1)
             self._validate_coordinates(queries, batch=1)
             if queries.device != geometry.device:
@@ -201,8 +215,10 @@ class SMARTField(SMART):
             parameters = parameters.reshape(1, self.parameter_channels)
         if not torch.compiler.is_compiling():
             self._validate_parameters(parameters, 1, geometry.device)
-        if parameters is not None:
-            parameters = parameters / self.parameter_scale
+        center = frame_center.reshape(1, 1, 3)
+        scale = geometry.new_tensor(self.coordinate_scale)
+        geometry = (geometry - center) / scale
+        queries = (queries - center) / scale
         generator = None
         if self.training:
             generator = torch.Generator(device=geometry.device).manual_seed(

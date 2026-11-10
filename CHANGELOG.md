@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds an experimental, independently implemented SMART operator with opt-in
   surface and volume support in the unified external aerodynamics recipe,
   full CFD geometry, independent online field-query sampling, and chunked inference.
+  DrivAerML templates use shared refinements, physical CFD query features,
+  per-field normalization, and MSE training.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside

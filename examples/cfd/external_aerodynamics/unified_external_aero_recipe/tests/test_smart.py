@@ -144,14 +144,26 @@ def test_pipeline_geometry_alignment_rng_and_resume(native_cases, field):
         torch.testing.assert_close(
             sample.interior.points, sample.boundaries["vehicle"].cell_centroids
         )
-        pressure = sample.interior.point_data["pressure"]
-        shear = sample.interior.point_data["wss"]
-        torch.testing.assert_close(shear[:, 0], pressure.flatten() * 0.01 / 0.00313)
+        from datasets import find_normalizer
+
+        unscaled = find_normalizer([ds]).inverse_td(sample.interior.point_data)
+        pressure, shear = unscaled["pressure"], unscaled["wss"]
+        torch.testing.assert_close(
+            shear[:, 0], pressure.flatten() * 0.01, atol=1e-8, rtol=1e-5
+        )
         assert "pressure" not in sample.boundaries["vehicle"].cell_data
     else:
         assert sample.boundaries["vehicle"].n_cells == 8
         assert "stl_geometry" not in sample.boundaries
         assert sample.interior.point_data["sdf"].shape == (4, 1)
+    raw = DomainMesh.load(native_cases / "run_0/domain_0.pdmsh")
+    torch.testing.assert_close(
+        sample.global_data["smart_geometry"], raw.boundaries["vehicle"].cell_centroids
+    )
+    torch.testing.assert_close(
+        sample.global_data["smart_parameters"], torch.tensor([1.205, 30.0])
+    )
+    torch.testing.assert_close(sample.global_data["U_inf"], raw.global_data["U_inf"])
     before_seed = sample.global_data["smart_geometry_seed"].clone()
     ds.set_epoch(4)
     changed, _ = ds[0]
@@ -205,6 +217,22 @@ def test_actual_pipeline_forward_backward_checkpoint_and_chunking(
     result = loss(
         normalize_output_to_tensordict(output, targets, "tensors"), batch["targets"]
     )
+    from datasets import find_normalizer
+    from metrics import MetricCalculator
+
+    normalizer = find_normalizer([ds])
+    prediction = normalize_output_to_tensordict(output, targets, "tensors")
+    before = batch["targets"].clone()
+    measured = MetricCalculator(targets, metrics=["l2"], normalizer=normalizer)(
+        prediction, batch["targets"]
+    )
+    expected = MetricCalculator(targets, metrics=["l2"])(
+        normalizer.inverse_td(prediction), normalizer.inverse_td(batch["targets"])
+    )
+    for name in expected.keys():
+        torch.testing.assert_close(measured[name], expected[name])
+    for name in before.keys():
+        torch.testing.assert_close(batch["targets"][name], before[name], rtol=0, atol=0)
     total = result[0]
     total.backward()
     assert any(
@@ -346,6 +374,12 @@ def test_augmentation_keeps_geometry_and_features_aligned(native_cases, field):
         )
         torch.testing.assert_close(
             domain.interior.point_data["sdf_normals"].norm(dim=-1), torch.ones(4)
+        )
+    # Retained raw coordinates must receive the same rotation as targets.
+    if field == "surface":
+        torch.testing.assert_close(
+            domain.boundaries["vehicle"].cell_data["smart_normals"],
+            domain.boundaries["vehicle"].cell_normals,
         )
     ds.close()
 

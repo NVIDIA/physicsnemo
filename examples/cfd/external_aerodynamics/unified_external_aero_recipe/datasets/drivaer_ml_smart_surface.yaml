@@ -19,6 +19,7 @@
 # sampling_resolution below controls field queries only.
 train_datadir: ${dataset_paths.drivaer_ml}
 pipeline:
+  augmentation_before: smart_data.SMARTInputs
   reader:
     _target_: smart_data.SMARTSurfaceReader
     path: ${train_datadir}
@@ -46,6 +47,10 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
+    - _target_: smart_data.SMARTInputs
+      field: surface
+      coordinate_scale: [12.0, 4.5, 3.25]
+      conditioning: [1.205, 30.0]
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
     - _target_: ${dp:NonDimensionalizeByMetadata}
@@ -59,11 +64,16 @@ pipeline:
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
       association: cell_data
+      eps: 0.0
       fields:
+        pressure:
+          type: scalar
+          mean: -0.2843972522592281
+          std: 0.25477916084022034
         wss:
           type: vector
-          mean: [0.0, 0.0, 0.0]
-          std: 0.00313
+          mean: [-0.0014902472648493541, 1.7990168638299372e-06, -8.717814674974937e-05]
+          std: [0.0019502962838457926, 0.0012712102363446481, 0.0010463527655731398]
     - _target_: ${dp:ComputeSurfaceNormals}
       store_as: cell_data
       field_name: normals

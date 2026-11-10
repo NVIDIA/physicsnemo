@@ -613,79 +613,58 @@ attention is opt-in, not the default).
 
 ### SMART with independent geometry and query sampling
 
-SMART uses the same trainer, Muon/AdamW optimizer, loss, field normalization,
-metrics, checkpointing, and physical-unit inference as the other models. Select
-its CFD-only dataset variant explicitly:
+SMART reuses the unified trainer, Muon/AdamW optimizer, checkpointing, and
+physical-unit inference. Train separate surface and volume models:
 
 ```bash
-python src/train.py model=smart_surface dataset=drivaer_ml_smart_surface
-python src/train.py model=smart_volume dataset=drivaer_ml_smart_volume
-
-# Same commands with torchrun for distributed training.
 torchrun --standalone --nproc_per_node=4 src/train.py \
     model=smart_surface dataset=drivaer_ml_smart_surface
+torchrun --standalone --nproc_per_node=4 src/train.py \
+    model=smart_volume dataset=drivaer_ml_smart_volume
 
 python src/infer.py model=smart_surface dataset=drivaer_ml_smart_surface \
-    run_id=<training_run_id> infer_split=test
+    run_id=<training_run_id> infer_split=val sampling_resolution=200000000
 ```
 
-Set `datasets/dataset_paths.yaml` as for the other DrivAerML recipes. The native
-CFD files must contain the `vehicle` boundary and the usual freestream metadata.
-These variants do not read CAD or auxiliary STL files.
+Set `datasets/dataset_paths.yaml` as for the other DrivAerML recipes. The CFD files
+must contain the `vehicle` boundary and freestream metadata. No CAD or STL files
+are used. The reference split has 435 training and 48 validation cases selected
+by the dataset manifest.
 
-Three counts have different meanings:
+- **Geometry:** all CFD vehicle cell centroids, without an intermediate cap.
+  Each encoder layer samples 16,384 points. The 2,048 initial latents are sampled
+  from the same full cloud. The entire cloud is never embedded or attended to.
+- **Queries:** 200,000 field points per training case. Surface coordinates,
+  normals, targets, and integration areas are sampled together. Volume reads use
+  cyclic blocks, so a spatially shuffled on-disk order is preferable.
+- **Validation:** separate readers keep validation sampling fixed. Inference
+  encodes geometry once and decodes in chunks of 8,192 queries. Set the query cap
+  above the mesh size for full fields and forces. Full input and output arrays
+  still occupy memory.
 
-- **Full geometry pool:** all CFD vehicle cell centroids, with no outer cap.
-  Coordinates are retained, but the full cloud is never embedded or attended to.
-- **Encoder sample:** `model.geometry_subsample=16384`, freshly sampled per layer
-  and training case/epoch, with `model.num_latents=2048` selected from the same
-  full cloud. Changing this count does not change field-query samples.
-- **Field queries:** `sampling_resolution=200000` during training. Surface queries
-  are sampled online with coordinates, normals, targets, and integration measures
-  kept aligned. Volume queries reuse the reader's efficient cyclic block sampling.
-  A spatially shuffled on-disk point order is preferable. The CFD boundary is
-  retained in full regardless of the query budget.
+Reader-derived case/epoch seeds isolate geometry and query randomness. Model
+coordinates use the full CFD centroid bounding-box center and axis scales
+`[12, 4.5, 3.25]`. Keep `coordinate_scale` equal in the model and `SMARTInputs`
+transform. Surface features are native normals. Volume features are unsigned CFD
+triangle distances in metres and closest-surface-to-query directions, set to zero
+within one micrometre of the surface. Physical export and force integration keep
+the recipe's original geometry and freestream metadata.
 
-Reader-derived case/epoch seeds isolate geometry and query randomness. SMART's
-`independent_validation=true` gives validation a separate reader at epoch zero.
-Training resamples each epoch. Inference inherits the recipe's large query cap
-(`sampling_resolution=100000000`), while `model.eval_chunk_size=8192` bounds
-SMART decoder activations. Geometry is encoded once per case and reused across
-all chunks. Ensure the query cap exceeds the case size for full-mesh fields and
-surface drag/lift integration. Full query arrays and predictions still occupy
-memory. Chunking does not make data loading out-of-core.
+The templates use shared refinement weights (about 29.4M parameters), fixed
+benchmark conditioning `[1.205, 30]`, MSE, and the normalization statistics in the
+dataset YAMLs. Conditioning does not replace physical density or velocity.
+Training uses FP32, seed 42, 500 epochs, one case per GPU, learning rate 0.001, and
+StepLR with a factor of 0.5 every 100 epochs. Use
+`TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=0 NVIDIA_TF32_OVERRIDE=0` for the reference FP32
+setting. These templates require fresh training with this input contract.
 
-Surface normals enter the existing additive query projection. Volume features
-use the recipe's signed SDF/closest-point direction operation on the **CFD**
-boundary. The fast pseudo-normal sign depends on boundary orientation. It does
-not make an open or non-manifold surface watertight. Freestream velocity supplies
-three global conditioning channels, divided by the fixed 30 m/s reference in
-`model.parameter_scale`. This preserves speed and direction information. Raw
-`U_inf` metadata remains unchanged for physical-unit export and forces. The
-adapter default is 1.0 for compatibility with earlier checkpoints. Geometry and
-queries are centered together
-on the complete CFD boundary and scaled by `L_ref`, so the coordinate frame does
-not change with query sampling. Full surface data is loaded before online query
-selection. Volume target reads remain subsampled. Existing model/dataset configs
-and their sampling behavior are unchanged.
+`metrics_before_normalization=true` undoes field standardization for metrics only.
+For DrivAerML's zero reference pressure, relative errors then equal physical-unit
+relative errors. Final comparisons should use full-mesh inference.
 
-SMART templates use FP32, a Muon/AdamW learning rate of 0.001, and a StepLR
-factor of 0.5 every 100 epochs. The recipe's Huber objective and field
-normalization remain unchanged. These settings need dataset-specific learning
-validation. Finite loss alone does not rule out spatially constant predictions
-or zero gradients through the output head.
-
-The implementation was developed independently from the published
-paper and PhysicsNeMo components. The CFD geometry source, query features,
-global conditioning, and sample counts above are recipe choices. These configs
-do not claim to reproduce the paper's experiments or another model's accuracy.
-`compile=false` is the SMART default because sampling uses an explicit per-case
-generator.
-
-The shared trainer saves the final epoch and checkpoints optimizer, scheduler,
-and gradient-scaler states after the epoch scheduler update. Checkpoints created
-by older recipe versions retain their historical scheduler state. Loading them
-does not automatically correct that state.
+This independent implementation uses the published paper and PhysicsNeMo
+components. CFD inputs, conditioning, and sample counts are recipe choices.
+Existing model configurations and sampling defaults are unchanged.
 
 ### Dataset config anatomy
 

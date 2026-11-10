@@ -392,6 +392,12 @@ def build_dataset(
                 ),
                 len(resolved),
             )
+            before = cfg.pipeline.get("augmentation_before")
+            if before is not None:
+                targets = [t.get("_target_", "") for t in cfg.pipeline.transforms]
+                if before not in targets:
+                    raise ValueError(f"Unknown augmentation insertion target: {before}")
+                insert_idx = targets.index(before)
             resolved[insert_idx:insert_idx] = aug
 
     transforms = resolved if resolved else None
