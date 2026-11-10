@@ -53,17 +53,29 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+from jaxtyping import Bool, Float, Int
 
-try:  # Triton ships with CUDA builds of PyTorch; CPU builds fall back to Torch.
+from physicsnemo.core.version_check import check_version_spec
+
+# Triton ships with the CUDA builds of PyTorch (distribution ``triton``, or
+# ``pytorch-triton`` for nightly builds); CPU builds fall back to the Torch
+# backend. Availability is read from the package metadata, so an installed but
+# broken Triton raises at import instead of silently disabling the kernel.
+TRITON_AVAILABLE = check_version_spec(
+    "triton", "3.0.0", hard_fail=False
+) or check_version_spec("pytorch-triton", "3.0.0", hard_fail=False)
+
+if TRITON_AVAILABLE:
     import triton
     import triton.language as tl
-except Exception:  # pragma: no cover - exercised only where Triton is absent
+else:  # pragma: no cover - exercised only where Triton is absent
     triton = None
     tl = None
 
 Backend = Literal["auto", "triton", "torch"]
 
 __all__ = [
+    "TRITON_AVAILABLE",
     "Backend",
     "neighborhood_attention",
     "resolve_backend",
@@ -769,17 +781,27 @@ class _NeighborhoodAttention(torch.autograd.Function):
 
 
 def neighborhood_attention(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    bias: torch.Tensor,
-    edge_latent: torch.Tensor,
-    index: torch.Tensor,
-    mask: torch.Tensor,
+    query: Float[torch.Tensor, "num_nodes heads head_dim"],
+    key: Float[torch.Tensor, "num_nodes heads head_dim"],
+    value: Float[torch.Tensor, "num_nodes heads head_dim"],
+    bias: Float[torch.Tensor, "num_nodes slots heads"],
+    edge_latent: Float[torch.Tensor, "num_nodes slots edge_dim"],
+    index: Int[torch.Tensor, "num_nodes slots"],
+    mask: Bool[torch.Tensor, "num_nodes slots"],
     scale: float,
     backend: Backend = "auto",
     return_lse: bool = False,
-) -> tuple[torch.Tensor, ...]:
+) -> (
+    tuple[
+        Float[torch.Tensor, "num_nodes heads head_dim"],
+        Float[torch.Tensor, "num_nodes heads edge_dim"],
+    ]
+    | tuple[
+        Float[torch.Tensor, "num_nodes heads head_dim"],
+        Float[torch.Tensor, "num_nodes heads edge_dim"],
+        Float[torch.Tensor, "num_nodes heads"],
+    ]
+):
     r"""Masked softmax attention over static neighbor slots without gathered tensors.
 
     Parameters

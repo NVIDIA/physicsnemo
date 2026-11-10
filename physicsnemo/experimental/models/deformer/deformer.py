@@ -31,7 +31,7 @@ from typing import Literal, NamedTuple
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
 from physicsnemo.models.geotransolver import GeoTransolver
 from physicsnemo.nn import get_activation
@@ -52,9 +52,9 @@ class BackboneState(NamedTuple):
     the three-channel output.
     """
 
-    point_features: torch.Tensor
+    point_features: Float[torch.Tensor, "num_nodes backbone_dim"]
     neighborhood: LocalNeighborhood
-    mesh_context: torch.Tensor | None
+    mesh_context: Float[torch.Tensor, "num_nodes mesh_hidden_dim"] | None
 
 
 LocalNeighborhoodMetric = Literal["geodesic", "euclidean"]
@@ -67,6 +67,39 @@ class MeshGeometryContextEncoder(nn.Module):
     geometry tokens provide a simulation-level shape summary. Optional normalized
     global parameters can be added for recipe-specific conditioning. The returned
     tensor is aligned with flattened graph nodes and can condition any mesh stage.
+
+    Parameters
+    ----------
+    geometry_dim : int
+        Width :math:`C_{geo}` of the pointwise geometry features.
+    geometry_token_dim : int
+        Width :math:`D_{tok}` of the GALE geometry tokens.
+    hidden_dim : int
+        Width :math:`D` of the returned mesh context.
+    global_dim : int, optional
+        Width :math:`C_g` of the global embedding; ``None`` disables the global
+        branch. Default is ``None``.
+    activation : str, optional
+        Activation of the three encoder MLPs. Default is ``"gelu"``.
+
+    Forward
+    -------
+    geometry : torch.Tensor
+        Pointwise geometry of shape :math:`(N, C_{geo})` over the flattened
+        graph batch.
+    batch : torch.Tensor
+        Graph index of every node, shape :math:`(N,)` (``int64``).
+    geometry_context : torch.Tensor
+        Live GALE geometry tokens of shape :math:`(B, H, S, D_{tok})`, one row
+        per graph.
+    global_embedding : torch.Tensor, optional
+        Global embedding of shape :math:`(B, T, C_g)`; required when
+        ``global_dim`` is set and rejected otherwise. Default is ``None``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Node-aligned mesh context of shape :math:`(N, D)`.
     """
 
     def __init__(
@@ -116,7 +149,7 @@ class MeshGeometryContextEncoder(nn.Module):
     def forward(
         self,
         geometry: Float[torch.Tensor, "num_nodes geometry_dim"],
-        batch: torch.Tensor,
+        batch: Int[torch.Tensor, "num_nodes"],  # noqa: F821
         geometry_context: Float[
             torch.Tensor, "batch heads context_slices geometry_token_dim"
         ],
@@ -171,7 +204,29 @@ class MeshGeometryContextEncoder(nn.Module):
 
 
 class MeshContextFiLM(nn.Module):
-    r"""Zero-initialized residual FiLM adapter for a mesh latent state."""
+    r"""Zero-initialized residual FiLM adapter for a mesh latent state.
+
+    The adapter adds ``tanh(scale) * LayerNorm(latent) + shift`` to the latent,
+    with ``scale`` and ``shift`` predicted from the context by one linear layer
+    that starts at zero, so a fresh adapter is the identity.
+
+    Parameters
+    ----------
+    hidden_dim : int
+        Width :math:`D` of the latent and of the context.
+
+    Forward
+    -------
+    latent : torch.Tensor
+        Node latent of shape :math:`(N, D)`.
+    context : torch.Tensor
+        Node-aligned mesh context of shape :math:`(N, D)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Modulated latent of shape :math:`(N, D)`.
+    """
 
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
@@ -400,6 +455,43 @@ class DeFormer(GeoTransolver):
         Forwarded to every
         :class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionBlock`
         as ``dropout`` and ``concrete_dropout``.
+
+    Forward
+    -------
+    node_features : torch.Tensor
+        Node inputs of shape :math:`(N, D_{in})` over the flattened graph batch
+        (``functional_dim`` channels).
+    graph : PyGData
+        Graph carrying the static neighborhoods: ``knn_index`` of shape
+        :math:`(N, K + 1)` (``local_knn_k`` neighbors plus the node itself),
+        ``knn_mask`` of shape :math:`(N, K + 1)`, ``knn_edge_attr`` of shape
+        :math:`(N, K + 1, D_e)` and optionally ``knn_metric``; a batch of
+        graphs carries ``batch`` of shape :math:`(N,)`.
+    geometry : torch.Tensor, optional
+        Geometry features of shape :math:`(N, C_{geo})` or
+        :math:`(B, N_b, C_{geo})`; required when ``geometry_dim`` is set.
+        Default is ``None``.
+    global_embedding : torch.Tensor, optional
+        Global parameters of shape :math:`(B, T, C_g)` (``(T, C_g)`` or
+        ``(C_g,)`` for a single graph); required when ``global_dim`` is set.
+        Default is ``None``.
+    local_positions : torch.Tensor, optional
+        Positions for the ball-query local features, shape :math:`(N, 3)` or
+        :math:`(B, N_b, 3)`; defaults to ``geometry``. Default is ``None``.
+    return_backbone : bool, optional
+        Return the full-width backbone state instead of the outputs. Default
+        is ``False``.
+
+    Outputs
+    -------
+    torch.Tensor or BackboneState
+        Node outputs of shape :math:`(N, D_{out})`; with
+        ``return_backbone=True`` a :class:`BackboneState` whose
+        ``point_features`` have shape :math:`(N, D_{bb})` (``n_hidden`` plus
+        the local-feature width), whose ``neighborhood`` is the validated
+        :class:`~physicsnemo.experimental.models.deformer.local_attention.LocalNeighborhood`
+        of the graph and whose ``mesh_context`` has shape :math:`(N, D_{mesh})`
+        or is ``None`` without mesh-context fusion.
     """
 
     def __init__(
@@ -865,7 +957,8 @@ class DeFormer(GeoTransolver):
                 f"{tuple(index.shape)}"
             )
         neighborhood = LocalNeighborhood(index, mask, edge_attr)
-        neighborhood.validate(num_nodes, self.input_dim_edges)
+        if not torch.compiler.is_compiling():
+            neighborhood.validate(num_nodes, self.input_dim_edges)
         return neighborhood
 
     def make_local_processor(

@@ -474,7 +474,7 @@ def main(cfg: DictConfig) -> None:
     if warm_start:
         from utils import load_warm_start
 
-        load_warm_start(model, warm_start, allowed_missing_prefixes=())
+        load_warm_start(model, warm_start)
         logger0.info(f"Weights from {warm_start}")
     else:
         if dist.world_size > 1:

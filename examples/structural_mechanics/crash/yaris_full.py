@@ -35,6 +35,7 @@ features (``mesh_edges``) and the rigid wall plane (``rigid_wall_position``).
 
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import json
@@ -532,14 +533,14 @@ class YarisFullGraphDataset(Dataset):
     stats_workers : int, optional
         Processes used to compute the frozen statistics.
     contact_surface : bool
-        Attach the shell facets, the nodal thickness and the one-ring
+        Attach the shell facets, each design's nodal thickness and the one-ring
         exclusions (``graph.contact_faces``, ``shell_thickness``,
         ``contact_surface_exclusions``) for the contact search of the corrector
         and the penetration metrics.
     rigid_wall_position : float, optional
         Analytic rigid wall plane ``x = position`` in millimetres
         (``graph.rigid_wall``; Yaris: 100), for the wall clamp and the wall
-        penetration metrics; also attaches the nodal thickness.
+        penetration metrics; also attaches each design's nodal thickness.
     mesh_edges : bool
         Attach the structural shell connectivity in both directions with its
         standardized reference features (``graph.mesh_edge_index``,
@@ -795,10 +796,11 @@ class YarisFullGraphDataset(Dataset):
             graph.mesh_edge_attr = (attr - graph.mesh_edge_mean) / (
                 graph.mesh_edge_std + EPS
             )
-        if self.contact_surface or self.rigid_wall_position is not None:
-            store = self.reader.open(self.paths[0])
-            graph.shell_thickness = torch.from_numpy(self.reader.thickness(store))
         if self.contact_surface:
+            # Facets and exclusions are mesh topology, shared by every design;
+            # the nodal thickness is the design variable and is attached per
+            # case by _case_graph.
+            store = self.reader.open(self.paths[0])
             graph.contact_faces = self.reader.contact_faces(store)
             graph.contact_surface_exclusions = self._contact_exclusions(
                 graph.contact_faces
@@ -829,6 +831,20 @@ class YarisFullGraphDataset(Dataset):
         return exclusions
 
     # ----- Dataset protocol -----
+    def _case_graph(self, store):
+        """The shared graph with this design's physical thickness ``[N]`` attached.
+
+        The thickness varies between designs, so it is read per case and set on
+        a shallow copy of the shared graph (``Data.__copy__`` copies the
+        attribute store, not the tensors) for the contact search of the
+        corrector and the penetration metrics.
+        """
+        if not (self.contact_surface or self.rigid_wall_position is not None):
+            return self.graph
+        graph = copy.copy(self.graph)
+        graph.shell_thickness = torch.from_numpy(self.reader.thickness(store))
+        return graph
+
     def __len__(self):
         if self.sample_type == "one_time_step":
             return self.num_pairs
@@ -861,7 +877,7 @@ class YarisFullGraphDataset(Dataset):
         sample = SimSample(
             node_features=dict(coords=pos[0], features=features),
             node_target=pos[1:].transpose(0, 1).contiguous(),
-            graph=self.graph,
+            graph=self._case_graph(store),
             global_features=None,
         )
         sample.yaris_case_name = path.stem
@@ -886,7 +902,7 @@ class YarisFullGraphDataset(Dataset):
         sample = SimSample(
             node_features=node_features,
             node_target=pos[1].contiguous(),
-            graph=self.graph,
+            graph=self._case_graph(store),
             global_features=None,
         )
         sample.yaris_case_name = path.stem

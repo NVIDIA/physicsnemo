@@ -322,8 +322,8 @@ class YarisFullTrainer(Trainer):
         meta = self.validation_dir / "node_meta.npz"
         if not meta.exists():
             reader = self.validation_dataset.reader
+            store = reader.open(self.validation_dataset.paths[0])
             try:
-                store = reader.open(self.validation_dataset.paths[0])
                 part_id = np.asarray(store["nodes/part_id"][:]).reshape(-1)[
                     reader.keep_ids
                 ]
@@ -334,11 +334,8 @@ class YarisFullTrainer(Trainer):
                 part_id=part_id,
                 reference=np.asarray(reader.reference, dtype=np.float32),
                 keep_ids=np.asarray(reader.keep_ids, dtype=np.int64),
-                thickness=np.asarray(
-                    getattr(
-                        self.validation_dataset.graph, "shell_thickness", np.zeros(0)
-                    )
-                ),
+                # the first validation design's thickness (it varies per design)
+                thickness=np.asarray(reader.thickness(store), dtype=np.float32),
             )
         return percentiles
 

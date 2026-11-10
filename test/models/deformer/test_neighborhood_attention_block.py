@@ -208,3 +208,18 @@ def test_processor_checkpoints_match_plain_execution():
     with torch.no_grad():
         z = processor(x, neighborhood)
     torch.testing.assert_close(y.detach(), z, rtol=1e-5, atol=1e-6)
+
+
+def test_block_rejects_mismatched_inputs():
+    block = _block(False)
+    x, index, mask, edge_latent = _inputs()
+    with pytest.raises(ValueError, match="Expected x of shape"):
+        block(x[:, :-1], index, mask, edge_latent)
+    with pytest.raises(ValueError, match="Expected int64 index"):
+        block(x, index[:-1], mask[:-1], edge_latent[:-1])
+    with pytest.raises(ValueError, match="Expected int64 index"):
+        block(x, index.to(torch.int32), mask, edge_latent)
+    with pytest.raises(ValueError, match="Expected bool mask"):
+        block(x, index, mask.float(), edge_latent)
+    with pytest.raises(ValueError, match="Expected edge_latent of shape"):
+        block(x, index, mask, edge_latent[..., :-1])

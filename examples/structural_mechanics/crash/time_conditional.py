@@ -121,6 +121,11 @@ class DeFormerTimeConditional(DeFormer):
             enabled=clamp_to_wall, axis=wall_axis, sign=wall_sign
         )
         super().__init__(**kwargs)
+        # This model reads the backbone's full-width features (return_backbone)
+        # and never its three-channel output head. The head is frozen so that no
+        # trainable parameter is left without a gradient: DDP with
+        # find_unused_parameters=False would otherwise fail on the second step.
+        self.ln_mlp_out.requires_grad_(False)
         self.rollout_steps = int(num_time_steps) - 1
         self.dt = None if dt is None else float(dt)
         self.time_embed = TimeEmbedding(time_embedding, time_fourier_bands, time_dim)

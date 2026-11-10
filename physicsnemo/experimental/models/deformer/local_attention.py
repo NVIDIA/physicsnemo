@@ -239,6 +239,31 @@ class NeighborhoodAttentionBlock(nn.Module):
         mask: Bool[torch.Tensor, "num_nodes slots"],
         edge_latent: Float[torch.Tensor, "num_nodes slots edge_dim"],
     ) -> Float[torch.Tensor, "num_nodes hidden_dim"]:
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2 or x.shape[1] != self.hidden_dim:
+                raise ValueError(
+                    f"Expected x of shape (N, {self.hidden_dim}) but got tensor of "
+                    f"shape {tuple(x.shape)}"
+                )
+            if (
+                index.ndim != 2
+                or index.shape[0] != x.shape[0]
+                or index.dtype != torch.long
+            ):
+                raise ValueError(
+                    f"Expected int64 index of shape ({x.shape[0]}, K) but got "
+                    f"{index.dtype} tensor of shape {tuple(index.shape)}"
+                )
+            if mask.shape != index.shape or mask.dtype != torch.bool:
+                raise ValueError(
+                    f"Expected bool mask of shape {tuple(index.shape)} but got "
+                    f"{mask.dtype} tensor of shape {tuple(mask.shape)}"
+                )
+            if edge_latent.shape != (*index.shape, self.edge_dim):
+                raise ValueError(
+                    f"Expected edge_latent of shape {(*index.shape, self.edge_dim)} "
+                    f"but got tensor of shape {tuple(edge_latent.shape)}"
+                )
         num_nodes, slots = index.shape
         heads, head_dim = self.num_heads, self.head_dim
         normalized, query, key, value = self._projections(x)
@@ -428,9 +453,13 @@ class NeighborhoodAttentionProcessor(nn.Module):
         x: Float[torch.Tensor, "num_nodes hidden_dim"],
         neighborhood: LocalNeighborhood,
     ) -> Float[torch.Tensor, "num_nodes hidden_dim"]:
-        if x.ndim != 2 or x.shape[1] != self.hidden_dim:
-            raise ValueError(f"x must have shape [N, {self.hidden_dim}]")
-        neighborhood.validate(x.shape[0], self.edge_input_dim)
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2 or x.shape[1] != self.hidden_dim:
+                raise ValueError(
+                    f"Expected x of shape (N, {self.hidden_dim}) but got tensor of "
+                    f"shape {tuple(x.shape)}"
+                )
+            neighborhood.validate(x.shape[0], self.edge_input_dim)
         index, mask = neighborhood.index, neighborhood.mask
         edge_latent = self.edge_encoder(neighborhood.edge_features.to(x.dtype))
         use_checkpoint = (
