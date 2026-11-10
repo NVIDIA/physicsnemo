@@ -431,11 +431,11 @@ class Mesh(
 
     Caches are populated lazily on first access (e.g., the first call to
     ``mesh.cell_normals`` computes and caches the result; subsequent calls
-    return the cached value). Because ``Mesh`` is effectively immutable (see
-    above), cached values never go stale -- they remain valid for the
-    lifetime of the ``Mesh`` instance. Under ``torch.compile``, and when the
-    points require gradients, geometric properties compute from ``points``
-    and ``cells`` on every access, without reading or filling ``_cache``.
+    return the cached value). Because ``Mesh`` is effectively immutable,
+cached values never go stale. They remain valid for the
+    lifetime of the ``Mesh`` instance. Under ``torch.compile` or when the
+    points require gradients, ``Mesh`` computes geometric properties from ``points``
+    and ``cells`` on every access without reading or filling ``_cache``.
 
     Geometric transforms (``translate``, ``rotate``, ``scale``, ``transform``)
     carry forward applicable cache entries to the new ``Mesh`` rather than
@@ -2715,9 +2715,9 @@ class Mesh(
         caches meanwhile, which carry cell areas through transforms.
 
         When ``points`` require gradients, it also always calls ``compute()``
-        and leaves ``_cache`` alone: an entry made under ``torch.no_grad()``
-        has no gradient, and one made with gradients holds a graph that the
-        first ``backward()`` frees.
+        and leaves ``_cache`` unchanged. Caching a value under ``torch.no_grad()``
+        produces an entry without a gradient. Caching a value with gradients retains
+        its computation graph until the first ``backward()`` frees it.
         """
         if is_tracing() or self.points.requires_grad:
             return compute()
