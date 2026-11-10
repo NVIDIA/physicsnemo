@@ -34,10 +34,15 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from physicsnemo import ModelMetaData, Module
-from physicsnemo.nn import Mlp
+from physicsnemo.nn import FourierPositionalEmbedding, Mlp
 from physicsnemo.nn.functional import radius_search
+from physicsnemo.nn.module.rope import (
+    apply_rotary_pos_emb,
+    build_rope_cos_sin_1d_continuous,
+)
 
 _KV = tuple[Tensor, Tensor]
+_RoPE = tuple[Tensor, Tensor]
 
 
 @dataclass(frozen=True)
@@ -78,26 +83,6 @@ class ABUPTContext:
     conditioning: Tensor | None
 
 
-class _Coordinates(nn.Module):
-    r"""Axis-wise sinusoidal encoding used by this AB-UPT implementation."""
-
-    def __init__(self, width: int):
-        super().__init__()
-        self.width = width
-        pairs = width // 6
-        self.register_buffer("frequencies", 10000.0 ** (-torch.arange(pairs) / pairs))
-
-    def forward(self, positions: Tensor) -> Tensor:
-        # Preserve phase accuracy under autocast, including large coordinates.
-        dtype = torch.float64 if positions.dtype == torch.float64 else torch.float32
-        phase = positions.to(dtype).unsqueeze(-1) * self.frequencies.to(dtype)
-        encoded = torch.stack((phase.sin(), phase.cos()), dim=-1).flatten(-3)
-        # Keep the same frequency bands for all three axes at any token width.
-        if self.width % 6:
-            encoded = F.pad(encoded, (0, self.width % 6))
-        return encoded.to(positions.dtype)
-
-
 class _AnchorBlock(nn.Module):
     r"""AB-UPT pre-norm block with externally supplied anchor keys/values."""
 
@@ -112,46 +97,29 @@ class _AnchorBlock(nn.Module):
         self.output = nn.Linear(width, width)
         self.mlp_norm = nn.LayerNorm(width)
         self.mlp = Mlp(width, mlp_ratio * width, width)
-        pairs = self.head_dim // 6
-        self.register_buffer("frequencies", 10000.0 ** (-torch.arange(pairs) / pairs))
 
-    def _rotate(self, features: Tensor, positions: Tensor) -> Tensor:
-        r"""Rotate ``(B,H,N,D_h)`` features at ``(B,N,3)`` positions; retain shape."""
-        # Allocate equal rotary pairs to x/y/z; leave remaining head channels
-        # unchanged when the head width is not divisible by six.
-        pairs = self.frequencies.numel()
-        rotary_width = 6 * pairs
-        dtype = (
-            torch.float64
-            if torch.float64 in (positions.dtype, features.dtype)
-            else torch.float32
-        )
-        phase = positions.to(dtype).unsqueeze(1).unsqueeze(-1) * self.frequencies.to(
-            dtype
-        )
-        # Keep the rotation arithmetic, not just its phases, in fp32 (paper
-        # Appendix A.6). Round once at the end to retain the attention dtype.
-        cosine, sine = phase.cos(), phase.sin()
-        rotated = features[..., :rotary_width].to(dtype).unflatten(-1, (3, pairs, 2))
-        even, odd = rotated.unbind(-1)
-        rotated = torch.stack(
-            (even * cosine - odd * sine, even * sine + odd * cosine), -1
-        )
+    @staticmethod
+    def _rotate(features: Tensor, tables: _RoPE) -> Tensor:
+        r"""Rotate ``(B,H,N,D_h)`` features using shared tables; retain tail channels."""
+        width = tables[0].shape[-1]
         return torch.cat(
-            (rotated.flatten(-3).to(features.dtype), features[..., rotary_width:]),
+            (
+                apply_rotary_pos_emb(features[..., :width], *tables),
+                features[..., width:],
+            ),
             dim=-1,
         )
 
-    def _key_value(self, features: Tensor, positions: Tensor) -> _KV:
+    def _key_value(self, features: Tensor, tables: _RoPE) -> _KV:
         kv = self.key_value(self.context_norm(features))
         key, value = kv.unflatten(-1, (2, self.heads, self.head_dim)).unbind(-3)
-        return self._rotate(key.transpose(1, 2), positions), value.transpose(1, 2)
+        return self._rotate(key.transpose(1, 2), tables), value.transpose(1, 2)
 
-    def forward(self, features: Tensor, positions: Tensor, context: _KV) -> Tensor:
+    def forward(self, features: Tensor, tables: _RoPE, context: _KV) -> Tensor:
         query = self.query(self.norm(features)).unflatten(
             -1, (self.heads, self.head_dim)
         )
-        query = self._rotate(query.transpose(1, 2), positions)
+        query = self._rotate(query.transpose(1, 2), tables)
         attended = F.scaled_dot_product_attention(query, *context)
         features = features + self.output(attended.transpose(1, 2).flatten(-2))
         return features + self.mlp(self.mlp_norm(features))
@@ -330,7 +298,17 @@ class ABUPT(Module):
         self.pooling_message_fp32 = pooling_message_fp32
         self.pooling_radius = pooling_radius
         self.radius_search_backend = radius_search_backend
-        self.position = _Coordinates(hidden_dim)
+        pairs = hidden_dim // 6
+        self.position = FourierPositionalEmbedding(
+            in_dim=3,
+            include_input=False,
+            freqs=10000.0 ** (-torch.arange(pairs) / pairs),
+        )
+        rotary_pairs = (hidden_dim // num_heads) // 6
+        self.register_buffer(
+            "rotary_frequencies",
+            10000.0 ** (-torch.arange(rotary_pairs) / rotary_pairs),
+        )
         self.message = Mlp(4, hidden_dim, hidden_dim)
         self.pool_projection = Mlp(2 * hidden_dim, hidden_dim, hidden_dim)
         self.geometry_block = _AnchorBlock(hidden_dim, num_heads, mlp_ratio)
@@ -375,6 +353,30 @@ class ABUPT(Module):
         )
         self.volume_head = (
             nn.Linear(hidden_dim, volume_channels) if volume_channels else None
+        )
+
+    def _embed_positions(self, positions: Tensor) -> Tensor:
+        r"""Interleave shared Fourier features per axis and pad to the token width."""
+        dtype = torch.float64 if positions.dtype == torch.float64 else torch.float32
+        encoded = self.position(positions.to(dtype))
+        encoded = encoded.unflatten(-1, (3, 2, self.position.num_bands))
+        encoded = encoded.transpose(-1, -2).flatten(-3)
+        if self.hidden_dim % 6:
+            encoded = F.pad(encoded, (0, self.hidden_dim % 6))
+        return encoded.to(positions.dtype)
+
+    def _rope_tables(self, positions: Tensor) -> _RoPE:
+        r"""Build shared axial tables of shape ``(B,1,N,6 * pairs)`` once per point set."""
+        cos, sin = build_rope_cos_sin_1d_continuous(positions, self.rotary_frequencies)
+        return cos.flatten(-2).unsqueeze(1), sin.flatten(-2).unsqueeze(1)
+
+    def _encode_geometry(
+        self, geometry: Tensor, supernodes: Tensor, tables: _RoPE
+    ) -> Tensor:
+        r"""Encode geometry with the caller's supernode rotation tables."""
+        features = self._pool(geometry, supernodes)
+        return self.geometry_block(
+            features, tables, self.geometry_block._key_value(features, tables)
         )
 
     @staticmethod
@@ -476,7 +478,7 @@ class ABUPT(Module):
             .to(geometry.dtype)
         )
         return self.pool_projection(
-            torch.cat((pooled, self.position(supernodes)), dim=-1)
+            torch.cat((pooled, self._embed_positions(supernodes)), dim=-1)
         )
 
     def encode_geometry(
@@ -501,9 +503,8 @@ class ABUPT(Module):
         if not torch.compiler.is_compiling():
             self._validate_points(geometry, "geometry")
             self._validate_points(supernodes, "supernodes", geometry)
-        features = self._pool(geometry, supernodes)
-        return self.geometry_block(
-            features, supernodes, self.geometry_block._key_value(features, supernodes)
+        return self._encode_geometry(
+            geometry, supernodes, self._rope_tables(supernodes)
         )
 
     def encode(
@@ -567,8 +568,17 @@ class ABUPT(Module):
                     raise ValueError("parameters must match geometry device and dtype")
             elif parameters is not None:
                 raise ValueError("parameters requires parameter_channels > 0")
-        geometry_features = self.encode_geometry(geometry, supernodes)
-        geometry_kv = self.geometry_attention._key_value(geometry_features, supernodes)
+        geometry_tables = self._rope_tables(supernodes)
+        surface_tables = (
+            self._rope_tables(surface_anchors) if self.surface_channels else None
+        )
+        volume_tables = (
+            self._rope_tables(volume_anchors) if self.volume_channels else None
+        )
+        geometry_features = self._encode_geometry(geometry, supernodes, geometry_tables)
+        geometry_kv = self.geometry_attention._key_value(
+            geometry_features, geometry_tables
+        )
         conditioning = (
             self.conditioning(parameters).unsqueeze(1)
             if self.conditioning is not None
@@ -577,43 +587,43 @@ class ABUPT(Module):
         surface = volume = None
         surface_context, volume_context = [], []
         if self.surface_embedding is not None:
-            surface = self.surface_embedding(self.position(surface_anchors))
+            surface = self.surface_embedding(self._embed_positions(surface_anchors))
             if conditioning is not None:
                 surface = surface + conditioning
-            surface = self.geometry_attention(surface, surface_anchors, geometry_kv)
+            surface = self.geometry_attention(surface, surface_tables, geometry_kv)
             surface_context.append(geometry_kv)
         if self.volume_embedding is not None:
-            volume = self.volume_embedding(self.position(volume_anchors))
+            volume = self.volume_embedding(self._embed_positions(volume_anchors))
             if conditioning is not None:
                 volume = volume + conditioning
-            volume = self.geometry_attention(volume, volume_anchors, geometry_kv)
+            volume = self.geometry_attention(volume, volume_tables, geometry_kv)
             volume_context.append(geometry_kv)
         for block, cross in zip(self.shared_blocks, self.cross_branch):
             surface_kv = (
-                block._key_value(surface, surface_anchors)
+                block._key_value(surface, surface_tables)
                 if surface is not None
                 else None
             )
             volume_kv = (
-                block._key_value(volume, volume_anchors) if volume is not None else None
+                block._key_value(volume, volume_tables) if volume is not None else None
             )
             if cross:
                 surface_kv, volume_kv = volume_kv, surface_kv
             # Form both contexts before updating either branch (Eq. 8).
             if surface is not None:
                 surface_context.append(surface_kv)
-                surface = block(surface, surface_anchors, surface_kv)
+                surface = block(surface, surface_tables, surface_kv)
             if volume is not None:
                 volume_context.append(volume_kv)
-                volume = block(volume, volume_anchors, volume_kv)
+                volume = block(volume, volume_tables, volume_kv)
         for block in self.surface_decoder:
-            kv = block._key_value(surface, surface_anchors)
+            kv = block._key_value(surface, surface_tables)
             surface_context.append(kv)
-            surface = block(surface, surface_anchors, kv)
+            surface = block(surface, surface_tables, kv)
         for block in self.volume_decoder:
-            kv = block._key_value(volume, volume_anchors)
+            kv = block._key_value(volume, volume_tables)
             volume_context.append(kv)
-            volume = block(volume, volume_anchors, kv)
+            volume = block(volume, volume_tables, kv)
         return ABUPTContext(
             tuple(surface_context),
             tuple(volume_context),
@@ -692,11 +702,12 @@ class ABUPT(Module):
                 raise ValueError(
                     f"Expected tensor of shape (B, 1, {self.hidden_dim}) for conditioning but got tensor of shape {tuple(context.conditioning.shape)}"
                 )
-        features = embedding(self.position(queries))
+        features = embedding(self._embed_positions(queries))
         if context.conditioning is not None:
             features = features + context.conditioning
+        tables = self._rope_tables(queries)
         for block, kv in zip(blocks, contexts):
-            features = block(features, queries, kv)
+            features = block(features, tables, kv)
         return head(features)
 
     def decode_vorticity(

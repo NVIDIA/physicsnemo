@@ -24,7 +24,7 @@ import torch
 
 from physicsnemo import Module
 from physicsnemo.experimental.models.ab_upt import ABUPT, ABUPTContext
-from physicsnemo.experimental.models.ab_upt.model import _AnchorBlock, _Coordinates
+from physicsnemo.experimental.models.ab_upt.model import _AnchorBlock
 from test.common import (
     validate_amp,
     validate_checkpoint,
@@ -305,10 +305,12 @@ def test_anchor_block_against_explicit_softmax_equation():
     queries = torch.randn(2, 8, 24, dtype=torch.float64)
     apos = torch.randn(2, 5, 3, dtype=torch.float64)
     qpos = torch.randn(2, 8, 3, dtype=torch.float64)
-    kv = block._key_value(anchors, apos)
-    result = block(queries, qpos, kv)
+    model = ABUPT(**SMALL).double()
+    atables, qtables = model._rope_tables(apos), model._rope_tables(qpos)
+    kv = block._key_value(anchors, atables)
+    result = block(queries, qtables, kv)
     q = block.query(block.norm(queries)).reshape(2, 8, 3, 8).transpose(1, 2)
-    q = block._rotate(q, qpos)
+    q = block._rotate(q, qtables)
     weights = (q @ kv[0].transpose(-2, -1) / (8**0.5)).softmax(-1)
     expected = queries + block.output((weights @ kv[1]).transpose(1, 2).flatten(-2))
     expected = expected + block.mlp(block.mlp_norm(expected))
@@ -316,10 +318,11 @@ def test_anchor_block_against_explicit_softmax_equation():
     # A dense attention mask excludes every query from the key/value set.
     all_values = torch.cat((anchors, queries), dim=1)
     all_pos = torch.cat((apos, qpos), dim=1)
-    all_kv = block._key_value(all_values, all_pos)
+    all_tables = model._rope_tables(all_pos)
+    all_kv = block._key_value(all_values, all_tables)
     all_q = block._rotate(
         block.query(block.norm(all_values)).reshape(2, 13, 3, 8).transpose(1, 2),
-        all_pos,
+        all_tables,
     )
     logits = all_q @ all_kv[0].transpose(-2, -1) / (8**0.5)
     logits[..., 5:] = float("-inf")
@@ -333,7 +336,8 @@ def test_anchor_block_against_explicit_softmax_equation():
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_rotary_mixed_precision_matches_float32_complex_rotation(dtype, device):
     """RoPE rounds the completed rotation, not its trigonometric factors."""
-    block = _AnchorBlock(192, 3, 4).to(device)
+    model = ABUPT().to(device)
+    block = model.geometry_block
     features = (
         torch.linspace(-4, 4, 2 * 3 * 5 * 64, device=device)
         .reshape(2, 3, 5, 64)
@@ -344,14 +348,14 @@ def test_rotary_mixed_precision_matches_float32_complex_rotation(dtype, device):
     # Complex multiplication supplies an independent reference for each planar
     # rotation. Four channels per head are outside the three rotary axes.
     pairs = torch.view_as_complex(features[..., :60].float().reshape(2, 3, 5, 3, 10, 2))
-    phase = positions[:, None, :, :, None] * block.frequencies
+    phase = positions[:, None, :, :, None] * model.rotary_frequencies
     reference = pairs * torch.complex(phase.cos(), phase.sin())
     reference = torch.cat(
         (torch.view_as_real(reference).flatten(-3).to(dtype), features[..., 60:]),
         dim=-1,
     )
     with torch.autocast(device_type=torch.device(device).type, dtype=dtype):
-        result = block._rotate(features, positions)
+        result = block._rotate(features, model._rope_tables(positions))
     assert result.dtype == dtype
     torch.testing.assert_close(result, reference, rtol=0, atol=0)
     actual_grad = torch.autograd.grad(result.float().square().mean(), features)[0]
@@ -375,7 +379,9 @@ def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients(
     mask = distance < model.pooling_radius
     messages = model.message(torch.cat((delta, distance), dim=-1))
     mean = (messages * mask).sum(2) / mask.sum(2).clamp_min(1)
-    dense = model.pool_projection(torch.cat((mean, model.position(supernodes)), dim=-1))
+    dense = model.pool_projection(
+        torch.cat((mean, model._embed_positions(supernodes)), dim=-1)
+    )
     torch.testing.assert_close(
         model._pool(g, supernodes), dense, rtol=1e-12, atol=1e-12
     )
@@ -637,7 +643,8 @@ def test_warp_pooling_matches_torch(pooling_message_fp32, device):
 
 @pytest.mark.parametrize("width", [7, 8, 64])
 def test_coordinates_encode_all_axes_equally(width):
-    encoding = _Coordinates(width).double()
+    model = ABUPT(**(SMALL | {"hidden_dim": width, "num_heads": 1})).double()
+    encoding = model._embed_positions
     origin = encoding(torch.zeros(1, 3, dtype=torch.float64))
     shifted = encoding(torch.eye(3, dtype=torch.float64))
     changes = (shifted - origin).square().sum(-1)
