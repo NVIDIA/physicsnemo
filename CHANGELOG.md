@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Indexing a mesh `Adjacency` with indices, a mask, or a slice returns the
   neighbor lists of those sources, so
   `mesh.get_point_to_points_adjacency()[points]` gives the neighbors of sampled
-  points. Mesh Tutorial 6 shows how to sample points with their neighbors.
+  points. Passing `indices=points` to the `get_*_adjacency` methods gives the
+  same lists without building them for the whole mesh, and Mesh Tutorial 6
+  shows how to sample points with their neighbors.
 - Groups experimental scalar and field GP heads under `experimental.uq.gp`.
   Both this namespace and `experimental.uq` expose the heads without `gpytorch`;
   constructing a head raises an installation error if it is missing.
