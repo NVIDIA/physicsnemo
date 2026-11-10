@@ -54,10 +54,9 @@ Definitions (physical millimetres, per held-out case and future frame):
   and a histogram (percentiles are bin upper edges).
 * Everything is accumulated per future frame and per reference-``x`` region
   (``region_bounds_mm`` splits the mesh; ``all`` is the whole mesh), summed
-  over the held-out cases. The legacy ``prediction``/``target`` blocks of the
-  previous probe (crossed pairs, penetrating fraction, mean depth over all
-  nodes with the tolerance subtracted, maximum depth) are reproduced exactly
-  from the same per-node depths.
+  over the held-out cases. The absolute ``prediction``/``target`` blocks
+  (crossed pairs, penetrating fraction, mean depth over all nodes with the
+  tolerance subtracted, maximum depth) come from the same per-node depths.
 
 Validation diagnostic only: any failure disables the metrics and zeroes them,
 it never fails validation. Results are written under ``penetration`` in the
@@ -88,16 +87,16 @@ BASE_COUNTS = (
     "missed",
     "spurious_depth_sum",
     "excess_sum",
-    "legacy_prediction_depth_sum",
-    "legacy_target_depth_sum",
+    "absolute_prediction_depth_sum",
+    "absolute_target_depth_sum",
 )
 MAXIMA = (
     "prediction_max",
     "target_max",
     "spurious_max",
     "excess_max",
-    "legacy_prediction_max",
-    "legacy_target_max",
+    "absolute_prediction_max",
+    "absolute_target_max",
 )
 PAIRS = ("crossed_pairs", "active_pairs")
 
@@ -272,8 +271,8 @@ class PenetrationMetrics:
         missed = true_pen & ~pred_pen
         excess = (d_pred - d_true).clamp_min(0.0)
         spurious_depth = torch.where(spurious, d_pred, torch.zeros_like(d_pred))
-        legacy_pred = (d_pred - tol).clamp_min(0.0)
-        legacy_true = (d_true - tol).clamp_min(0.0)
+        absolute_pred = (d_pred - tol).clamp_min(0.0)
+        absolute_true = (d_true - tol).clamp_min(0.0)
         columns = [
             torch.ones_like(d_pred),
             pred_pen.to(d_pred.dtype),
@@ -282,8 +281,8 @@ class PenetrationMetrics:
             missed.to(d_pred.dtype),
             spurious_depth,
             excess,
-            legacy_pred,
-            legacy_true,
+            absolute_pred,
+            absolute_true,
         ] + [(spurious & (d_pred > t)).to(d_pred.dtype) for t in self.thresholds]
         table = torch.stack(columns, dim=1).double()
         self.counts[step, :, family] += masks.double() @ table
@@ -301,8 +300,12 @@ class PenetrationMetrics:
                             mask, spurious_depth, torch.zeros_like(d_pred)
                         ).max(),
                         torch.where(mask, excess, torch.zeros_like(excess)).max(),
-                        torch.where(mask, legacy_pred, torch.zeros_like(d_pred)).max(),
-                        torch.where(mask, legacy_true, torch.zeros_like(d_true)).max(),
+                        torch.where(
+                            mask, absolute_pred, torch.zeros_like(d_pred)
+                        ).max(),
+                        torch.where(
+                            mask, absolute_true, torch.zeros_like(d_true)
+                        ).max(),
                     ]
                 ).double(),
             )
@@ -469,17 +472,17 @@ class PenetrationMetrics:
         )
         return out
 
-    def _legacy(self, horizon, which):
-        """The previous probe's block for the prediction (0) or the target (1)."""
+    def _absolute(self, horizon, which):
+        """The absolute block for the prediction (0) or the target (1)."""
         r = self.regions.index("all")
         c = self._column
         t = self.counts[:horizon, r, 0].cpu()
         nodes = t[:, c("nodes")].clamp_min(1.0)
         pen = c("prediction_penetrating") if which == 0 else c("target_penetrating")
         depth = (
-            c("legacy_prediction_depth_sum")
+            c("absolute_prediction_depth_sum")
             if which == 0
-            else c("legacy_target_depth_sum")
+            else c("absolute_target_depth_sum")
         )
         maxima = self.maxima[:horizon, r, 0, 4 + which].cpu()
         pairs = self.pairs[:horizon, which, 0].cpu()
@@ -495,11 +498,11 @@ class PenetrationMetrics:
         )
 
     def summary(self, nodes_w_time):
-        """JSON-ready statistics: legacy blocks plus the target-relative families."""
+        """JSON-ready statistics: the absolute blocks plus the target-relative families."""
         horizon = int(nodes_w_time.numel())
         out = dict(self.settings(), complete=not self.disabled)
-        out["prediction"] = self._legacy(horizon, 0)
-        out["target"] = self._legacy(horizon, 1)
+        out["prediction"] = self._absolute(horizon, 0)
+        out["target"] = self._absolute(horizon, 1)
         out["pairs_per_time"] = {
             f"{PAIRS[k]}_{name}": self.pairs[:horizon, which, k].cpu().tolist()
             for which, name in ((0, "prediction"), (1, "target"))

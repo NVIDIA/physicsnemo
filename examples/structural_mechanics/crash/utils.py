@@ -122,17 +122,13 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
         return torch.optim.AdamW(other_params, lr=lr, weight_decay=weight_decay)
 
 
-def load_warm_start(
-    model: torch.nn.Module, path, allowed_missing_prefixes=()
-) -> dict[str, list[str]]:
+def load_warm_start(model: torch.nn.Module, path) -> dict[str, list[str]]:
     """Initialise ``model`` from another run's ``.mdlus`` (or state-dict ``.pt``) file.
 
-    Every tensor of the checkpoint must exist in the model (no unexpected keys);
-    tensors the checkpoint lacks must belong to modules named by
-    ``allowed_missing_prefixes``, which keep their fresh initialisation. Returns
-    the loaded and missing key lists. Used to initialise a run from a finished
-    one (``training.warm_start_model``) and to load the frozen teacher of the
-    corrector.
+    Every tensor of the checkpoint must exist in the model and every tensor of
+    the model must be in the checkpoint. Returns the loaded key list. Used to
+    initialise a run from a finished one (``training.warm_start_model``) and to
+    load the frozen teacher of the corrector.
     """
     import io
     import zipfile
@@ -157,17 +153,9 @@ def load_warm_start(
             f"warm start {path} has unexpected tensors not in the model: "
             f"{sorted(result.unexpected_keys)[:8]}"
         )
-    strangers = [
-        key
-        for key in result.missing_keys
-        if not key.startswith(tuple(allowed_missing_prefixes))
-    ]
-    if strangers:
+    if result.missing_keys:
         raise ValueError(
-            f"warm start {path} is missing tensors outside {allowed_missing_prefixes}: "
-            f"{strangers[:8]}"
+            f"warm start {path} is missing tensors of the model: "
+            f"{sorted(result.missing_keys)[:8]}"
         )
-    return {
-        "loaded": sorted(state.keys()),
-        "missing": sorted(result.missing_keys),
-    }
+    return {"loaded": sorted(state.keys())}

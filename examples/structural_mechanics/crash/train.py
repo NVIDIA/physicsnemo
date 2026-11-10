@@ -426,8 +426,7 @@ class Trainer:
             # own checkpoint (loaded below) takes precedence.
             report = load_warm_start(self.model, warm_start)
             logger0.info(
-                f"Warm start from {warm_start}: {len(report['loaded'])} tensors "
-                f"loaded, {len(report['missing'])} fresh: {report['missing'][:6]}"
+                f"Warm start from {warm_start}: {len(report['loaded'])} tensors loaded"
             )
         self.model.to(self.dist.device)
         self.model.train()
@@ -564,13 +563,6 @@ class Trainer:
                     states, self.dist.rank, self.dist.world_size, self.loader_generators
                 )
 
-    def _unwrapped_model(self):
-        return (
-            self.model.module
-            if isinstance(self.model, DistributedDataParallel)
-            else self.model
-        )
-
     def _configure_position_loss(self, cfg):
         """``training.loss`` / ``loss_space`` / ``loss_scale_mm``."""
         self.position_loss = PositionLoss(
@@ -628,11 +620,11 @@ class Trainer:
         """One optimizer step on ``sample``; returns the detached loss."""
         self.optimizer.zero_grad()
         self._apply_lr_warmup(epoch)
-        loss = self.forward(sample, epoch)
+        loss = self.forward(sample)
         self.backward(loss)
         return loss.detach()
 
-    def forward(self, sample: SimSample, epoch: int = 0):
+    def forward(self, sample: SimSample):
         """The training loss of one sample (every model family)."""
         with autocast(device_type="cuda", enabled=self.amp, dtype=self.amp_dtype):
             model_kwargs = {}
@@ -704,7 +696,7 @@ class Trainer:
             self.target_channels,
             device=self.dist.device,
         )
-        for idx, sample in enumerate(self.val_dataloader):
+        for sample in self.val_dataloader:
             sample = sample[0].to(self.dist.device)  # SimSample .to()
 
             # Model forward - returns [N, T, Fo]
@@ -946,12 +938,7 @@ def main(cfg: DictConfig) -> None:
         if should_stop:
             break
 
-    if end_epoch < cfg.training.epochs:
-        logger0.info(
-            f"Execution limit reached at epoch {end_epoch}; target remains {cfg.training.epochs}."
-        )
-    else:
-        logger0.info("Training completed!")
+    logger0.info("Training completed!")
     if dist.rank == 0:
         trainer.writer.close()
 

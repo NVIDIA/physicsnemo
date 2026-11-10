@@ -27,7 +27,7 @@ from physicsnemo.experimental.models.meshtransolver.local_attention import (
     NeighborhoodAttentionProcessor,
 )
 
-V2 = dict(
+RELEASED = dict(
     value_norm=False,
     difference_values=True,
     update="concat_mlp",
@@ -64,7 +64,9 @@ def _block(fused, backend="torch", seed=1, **options):
 
 def test_defaults_are_the_released_block_and_the_original_stays_available():
     released = {name for name, _ in _block(False).named_parameters()}
-    assert released == {name for name, _ in _block(False, **V2).named_parameters()}
+    assert released == {
+        name for name, _ in _block(False, **RELEASED).named_parameters()
+    }
     assert any(name.startswith(("update_mlp", "key.", "value.")) for name in released)
     assert "key_value.weight" not in released
     original = {name for name, _ in _block(False, **ORIGINAL).named_parameters()}
@@ -83,8 +85,8 @@ def test_defaults_are_the_released_block_and_the_original_stays_available():
         _block(False, update="other")
 
 
-def test_v2_block_parameterization_and_shapes():
-    block = _block(False, **V2)
+def test_released_block_parameterization_and_shapes():
+    block = _block(False, **RELEASED)
     names = {name for name, _ in block.named_parameters()}
     assert {
         "key.weight",
@@ -106,7 +108,8 @@ def test_v2_block_parameterization_and_shapes():
 
 
 @pytest.mark.parametrize(
-    "options", [dict(), V2, dict(difference_values=True), dict(update="concat_mlp")]
+    "options",
+    [dict(), RELEASED, dict(difference_values=True), dict(update="concat_mlp")],
 )
 def test_fused_torch_backend_matches_gather_path(options):
     """Both execution paths implement the same block, forward and backward."""
@@ -160,11 +163,11 @@ def test_value_projection_sees_the_raw_stream_when_value_norm_is_off():
 
 
 def test_logit_bias_precision_under_autocast():
-    block_legacy = _block(False, **ORIGINAL)
+    block_original = _block(False, **ORIGINAL)
     block_fp32 = _block(False, bias_fp32=True)
     edge_latent = torch.randn(5, 6, 8)
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-        assert block_legacy._logit_bias(edge_latent).dtype == torch.bfloat16
+        assert block_original._logit_bias(edge_latent).dtype == torch.bfloat16
         assert block_fp32._logit_bias(edge_latent).dtype == torch.float32
 
 
@@ -236,10 +239,10 @@ def test_kernel_returns_detached_lse():
     assert q.grad is not None and k.grad is not None and v.grad is not None
 
 
-def test_processor_forwards_v2_options_and_checkpoints():
+def test_processor_forwards_block_options_and_checkpoints():
     torch.manual_seed(2)
     processor = NeighborhoodAttentionProcessor(
-        2, 32, 4, edge_input_dim=4, edge_dim=8, checkpoint_segments=2, **V2
+        2, 32, 4, edge_input_dim=4, edge_dim=8, checkpoint_segments=2, **RELEASED
     ).train()
     assert all(
         block.update == "concat_mlp" and block.split_key_value

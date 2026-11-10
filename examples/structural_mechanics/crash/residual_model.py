@@ -136,7 +136,7 @@ class ResidualTimeConditional(physicsnemo.Module):
                 "model.teacher_weights at the network's .mdlus file, or pass "
                 'override_args={"teacher_weights": ...} to Module.from_checkpoint'
             )
-        load_warm_start(teacher, teacher_weights, allowed_missing_prefixes=())
+        load_warm_start(teacher, teacher_weights)
         teacher.requires_grad_(False)
         teacher.eval()
         self.teacher = teacher

@@ -25,8 +25,7 @@ after attention.
 
 The broader mesh-attention family is inspired by ``arXiv:2605.11784``; DeFormer's
 latent integration is an independent extension, not a claim of exact
-reproduction. Historical class names and constructor options are retained for
-checkpoint/configuration compatibility.
+reproduction.
 """
 
 from dataclasses import dataclass
@@ -1401,9 +1400,9 @@ class MeshGeoFLARE(GeoTransolver):
         point_features = None
         for (
             node_index,
-            geometry_i,
-            positions_i,
-            global_i,
+            _geometry,
+            _positions,
+            _global,
             context_state,
         ) in per_graph_inputs:
             embedding_states, local_features, _ = context_state

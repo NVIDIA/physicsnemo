@@ -72,37 +72,6 @@ def part_means(
     return sums / counts.to(values.dtype)[:, None]
 
 
-def _skew(vectors: torch.Tensor) -> torch.Tensor:
-    """``[..., 3]`` to the cross-product matrices ``[..., 3, 3]``."""
-    x, y, z = vectors.unbind(-1)
-    zero = torch.zeros_like(x)
-    return torch.stack(
-        (
-            torch.stack((zero, -z, y), dim=-1),
-            torch.stack((z, zero, -x), dim=-1),
-            torch.stack((-y, x, zero), dim=-1),
-        ),
-        dim=-2,
-    )
-
-
-def rotation_matrix(axis_angle: torch.Tensor) -> torch.Tensor:
-    """Rodrigues' formula: axis-angle vectors ``[..., 3]`` (radians) to proper
-    rotation matrices ``[..., 3, 3]``, with the series limits at zero angle so
-    the map and its gradient are finite there."""
-    theta2 = axis_angle.square().sum(dim=-1, keepdim=True)
-    small = theta2 < 1e-8
-    # The closed form is evaluated at a safe angle where the series is used, so
-    # neither branch produces a NaN that the selection would leak into the gradient.
-    safe2 = torch.where(small, torch.ones_like(theta2), theta2)
-    safe = safe2.sqrt()
-    sine = torch.where(small, 1.0 - theta2 / 6.0, torch.sin(safe) / safe)
-    cosine = torch.where(small, 0.5 - theta2 / 24.0, (1.0 - torch.cos(safe)) / safe2)
-    skew = _skew(axis_angle)
-    eye = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype)
-    return eye + sine[..., None] * skew + cosine[..., None] * (skew @ skew)
-
-
 def fit_part_rigid_motion(
     reference: torch.Tensor,
     target: torch.Tensor,
@@ -155,22 +124,6 @@ def fit_part_rigid_motion(
     correction[:, 2] = sign
     rotation = (v * correction[:, None, :]) @ u.transpose(-1, -2)
     return rotation, target_centroid - centroid, centroid
-
-
-def rigid_displacement(
-    reference: torch.Tensor,
-    part_index: torch.Tensor,
-    rotation: torch.Tensor,
-    translation: torch.Tensor,
-    centroid: torch.Tensor,
-) -> torch.Tensor:
-    """Displacement ``[N, 3]`` of every node under its part's rigid motion,
-    ``t_p + (R_p - I)(x - c_p)``, in the units of ``reference``."""
-    part_index = part_index.reshape(-1)
-    dtype = rotation.dtype
-    relative = reference.to(dtype) - centroid.to(dtype)[part_index]
-    turned = torch.bmm(rotation[part_index], relative[:, :, None]).squeeze(-1)
-    return (translation.to(dtype)[part_index] + turned - relative).to(reference.dtype)
 
 
 class KinematicsReadout:

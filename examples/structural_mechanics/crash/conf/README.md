@@ -51,7 +51,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `local_processor`, `local_neighborhood`, `local_knn_k` | `knn_attention`, `euclidean`, 32 | static kNN neighbourhood attention; the Yaris store edges cover shells only, so Euclidean neighbours |
 | `local_num_heads`, `local_mlp_ratio`, `local_edge_dim`, `local_activation` | 8, 2, 32, `gelu` | attention block |
 | `local_attention_fused`, `local_attention_backend` | true, `auto` | the fused kernel (Triton on CUDA) |
-| `local_value_norm`, `local_difference_values`, `local_update`, `local_bias_fp32`, `local_split_key_value` | false, true, `concat_mlp`, true, true | the second kNN-attention design (difference values, concatenate-then-MLP update, float32 geometric bias) |
+| `local_value_norm`, `local_difference_values`, `local_update`, `local_bias_fp32`, `local_split_key_value` | false, true, `concat_mlp`, true, true | the DeFormer attention block (raw-stream values, difference values, concatenate-then-MLP update, float32 geometric bias, separate key and value projections) |
 | `activation_checkpointing`, `checkpointing_ratio`, `activation_checkpointing_components`, `num_*_processor_checkpoint_segments` | true, 1.0, `[blocks, context]`, 1 | memory policy of the 1.48M-node forward |
 | `clamp_to_wall`, `wall_axis`, `wall_sign` | false, 0, 1 | evaluation-time rigid-wall clamp (needs `datapipe.rigid_wall_position`) |
 | `penetration_projection_*` | iterations 0 | evaluation-time envelope projection (band, clearance, damping, tolerance, crossed-only, symmetric side test, search backend and budget) |
