@@ -650,8 +650,13 @@ class SMART(Module):
                     or not query_features.is_floating_point()
                     or query_features.device != queries.device
                 ):
+                    actual_shape = (
+                        None if query_features is None else tuple(query_features.shape)
+                    )
                     raise ValueError(
-                        "query_features must have aligned (B, M, C) floating-point values on the query device"
+                        f"Expected tensor of shape (B, M, {self.query_feature_channels}) "
+                        f"but got tensor of shape {actual_shape} for query_features. "
+                        f"Expected floating-point values on {queries.device}"
                     )
             elif query_features is not None:
                 raise ValueError("query_features are disabled")
@@ -661,7 +666,11 @@ class SMART(Module):
                 geometry_seed.numel() != 1
                 or geometry_seed.dtype not in (torch.int32, torch.int64)
             ):
-                raise ValueError("geometry_seed must contain one int32 or int64 seed")
+                raise ValueError(
+                    "Expected tensor of shape () or singleton dimensions "
+                    f"but got tensor of shape {tuple(geometry_seed.shape)} for geometry_seed. "
+                    f"Expected one int32 or int64 value, got {geometry_seed.dtype}"
+                )
             if frame_center is not None and (
                 frame_center.shape
                 not in ((3,), (1, 3), (1, 1, 3), (batch, 3), (batch, 1, 3))
@@ -670,13 +679,19 @@ class SMART(Module):
                 or not torch.isfinite(frame_center).all()
             ):
                 raise ValueError(
-                    "frame_center must contain finite (B, 3) coordinates on the geometry device"
+                    "Expected tensor of shape (B, 3) or (B, 1, 3), including B=1, or (3,) "
+                    f"but got tensor of shape {tuple(frame_center.shape)} for frame_center. "
+                    f"Expected finite floating-point coordinates on {geometry.device}"
                 )
             if parameters is not None and parameters.shape not in (
                 (batch, self.parameter_channels),
                 (batch, 1, self.parameter_channels),
             ):
-                raise ValueError("Expected parameters of shape (B, P) or (B, 1, P)")
+                raise ValueError(
+                    f"Expected tensor of shape (B, {self.parameter_channels}) or "
+                    f"(B, 1, {self.parameter_channels}) but got tensor of shape "
+                    f"{tuple(parameters.shape)} for parameters"
+                )
         if parameters is not None:
             parameters = parameters.reshape(batch, self.parameter_channels)
         if not torch.compiler.is_compiling():
