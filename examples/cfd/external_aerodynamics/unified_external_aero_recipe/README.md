@@ -334,20 +334,19 @@ include the weight). Leave it unset by default: the surface dataset YAMLs
 already bring every target to unit scale via `NormalizeMeshFields`, so
 per-field losses are directly comparable without weighting.
 
-#### Measure-weighted loss and metrics
-
-When a dataset puts its targets at cell centroids
+**`measure_weighted`** sets how much each target point counts. When a
+dataset puts its targets at cell centroids
 (`MeshToDomainMesh(interior_points=cell_centroids)`, as the surface
 dataset YAMLs do), each target point stands for one cell, and the
 transform stores that cell's measure (its area on a surface, its volume in
 a volume) beside the targets. By default (`measure_weighted: true` in
 `conf/base.yaml`) the loss and the metrics weight each point by this
 measure, so they approximate integrals over the domain and do not depend
-on how finely the mesh resolves each region. Datasets whose targets are a
-native point cloud carry no measure, and their points always count alike.
-To count every target point alike on every dataset, as earlier versions
-of the recipe did, pass `measure_weighted=false` on the command line (to
-`train.py` and `infer.py` alike).
+on how finely the mesh resolves each region. Datasets whose targets are
+points without cells carry no measure, and their points always count
+alike. To count every target point alike on every dataset, as earlier
+versions of the recipe did, pass `measure_weighted=false` on the command
+line (to `train.py` and `infer.py` alike).
 
 **`batch_size > 1`** is not supported by any model in the recipe today;
 the YAML field is reserved for future use, and the recipe raises

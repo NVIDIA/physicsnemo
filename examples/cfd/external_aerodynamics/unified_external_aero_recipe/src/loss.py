@@ -77,15 +77,6 @@ _VALID_LOSS_TYPES = ("huber", "mse", "relative_mse", "rmse")
 ### ---------------------------------------------------------------------------
 
 
-def _weighted_query_mean(
-    values: torch.Tensor,
-    target_measure: torch.Tensor,
-) -> Float[torch.Tensor, ""]:
-    """Measure-weighted mean over the point axis, averaged over leading axes."""
-    denominator = target_measure.sum(dim=-1).clamp_min(torch.finfo(values.dtype).tiny)
-    return ((values * target_measure).sum(dim=-1) / denominator).mean()
-
-
 def _scalar_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -109,13 +100,15 @@ def _scalar_loss(
             f"target_config field type matches the actual tensor rank."
         )
     if target_measure is not None:
+        ### Mean-one weights, measure / mean(measure), as in the metrics: a
+        ### weighted mean over the points is then a plain mean of weights * values.
+        weights = normalize_target_measure(target_measure)
         if loss_type == "huber":
             values = F.huber_loss(pred, target, reduction="none", delta=delta)
-            return _weighted_query_mean(values, target_measure)
+            return torch.mean(weights * values)
         if loss_type == "mse":
-            return _weighted_query_mean((pred - target) ** 2, target_measure)
+            return torch.mean(weights * (pred - target) ** 2)
         if loss_type == "relative_mse":
-            weights = normalize_target_measure(target_measure)
             dim = -1 if pred.ndim > 0 else None
             return relative_mse(pred, target, dim=dim, weights=weights, eps=eps).mean()
     if loss_type == "huber":
