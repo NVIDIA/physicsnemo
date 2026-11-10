@@ -35,16 +35,16 @@ dataloader:
 metrics_before_normalization: true
 independent_validation: true
 forward_kwargs:
-  geometry: global_data.smart_geometry
-  queries: interior.point_data.smart_queries
+  geometry: global_data.geometry_points
+  queries: interior.point_data.query_coordinates
   query_features:
   - interior.point_data.sdf
   - interior.point_data.sdf_normals
-  parameters: global_data.smart_parameters
-  frame_center: global_data.smart_center
-  geometry_seed: global_data.smart_geometry_seed
+  parameters: global_data.parameters
+  frame_center: global_data.geometry_center
+  geometry_seed: global_data.geometry_seed
 model:
-  _target_: physicsnemo.experimental.models.smart.SMARTField
+  _target_: physicsnemo.experimental.models.smart.SMART
   field: volume
   out_dim: ${out_dim}
   query_feature_channels: 4

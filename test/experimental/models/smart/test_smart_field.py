@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo import Module
-from physicsnemo.experimental.models.smart import SMARTField
+from physicsnemo.experimental.models.smart import SMART
 
 
 def _model(**overrides):
@@ -36,7 +36,7 @@ def _model(**overrides):
         eval_chunk_size=3,
     )
     options.update(overrides)
-    return SMARTField(**options)
+    return SMART(**options)
 
 
 def _inputs():
@@ -44,7 +44,7 @@ def _inputs():
         geometry=torch.randn(1, 32, 3),
         queries=torch.randn(1, 7, 3),
         query_features=torch.randn(1, 7, 3),
-        parameters=torch.randn(1, 1, 2),
+        parameters=None,
         frame_center=torch.randn(1, 1, 3),
         geometry_seed=torch.tensor([[[42]]]),
     )
@@ -57,7 +57,7 @@ def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
     reference = _model(field=field, coordinate_scale=(1.0, 1.0, 1.0))
     reference.load_state_dict(model.state_dict())
     inputs = _inputs()
-    original = {k: v.clone() for k, v in inputs.items()}
+    original = {k: v.clone() for k, v in inputs.items() if v is not None}
     scale = inputs["geometry"].new_tensor(model.coordinate_scale)
     normalized = {
         **inputs,
@@ -69,7 +69,7 @@ def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
         model.train(training)
         reference.train(training)
         torch.testing.assert_close(model(**inputs), reference(**normalized))
-        for key in inputs:
+        for key in original:
             torch.testing.assert_close(inputs[key], original[key], rtol=0, atol=0)
     path = tmp_path / "field.mdlus"
     model.save(path)

@@ -19,9 +19,10 @@
 # sampling_resolution below controls field queries only.
 train_datadir: ${dataset_paths.drivaer_ml}
 pipeline:
-  augmentation_before: physicsnemo.experimental.datapipes.smart.SMARTInputs
+  augmentation_before: ${dp:CaptureGeometry}
   reader:
-    _target_: physicsnemo.experimental.datapipes.smart.SMARTSurfaceReader
+    _target_: ${dp:MeshReaderWithGlobalData}
+    seed_fields: [query_seed, geometry_seed]
     path: ${train_datadir}
     pattern: run_*/*.pdmsh/_tensordict/boundaries/vehicle
     subsample_n_cells: null
@@ -47,10 +48,10 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
-    - _target_: physicsnemo.experimental.datapipes.smart.SMARTInputs
-      field: surface
-      coordinate_scale: [12.0, 4.5, 3.25]
-      conditioning: [1.205, 30.0]
+    - _target_: ${dp:CaptureGeometry}
+    - _target_: ${dp:SetGlobalField}
+      fields:
+        parameters: [1.205, 30.0]
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
     - _target_: ${dp:NonDimensionalizeByMetadata}
@@ -77,9 +78,12 @@ pipeline:
     - _target_: ${dp:ComputeSurfaceNormals}
       store_as: cell_data
       field_name: normals
-    - _target_: physicsnemo.experimental.datapipes.smart.SMARTSurfaceMeshToDomainMesh
-      interior_points: cell_centroids
+    - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
+      seed_field: query_seed
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
+      copy_boundary: true
 targets:
   pressure: scalar
   wss: vector

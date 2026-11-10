@@ -32,7 +32,8 @@ from typing import Any, Iterator, Literal
 import torch
 
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
-from physicsnemo.datapipes._rng import spawn_generator
+from physicsnemo.datapipes._rng import derive_seed, spawn_generator
+from physicsnemo.datapipes.keys import as_nested_keys
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, scale_measures
@@ -43,6 +44,23 @@ logger = logging.getLogger(__name__)
 # Do not hardcode elsewhere so format can evolve.
 DEFAULT_MESH_EXTENSION = ".pmsh"
 DEFAULT_DOMAIN_MESH_EXTENSION = ".pdmsh"
+
+
+def _with_sample_seeds(sample, names, seed_base, epoch, index):
+    """Attach independent stateless streams without consuming the reader RNG."""
+    if not names:
+        return sample
+    data = sample.global_data.clone()
+    for stream, name in enumerate(names):
+        if name in data:
+            raise ValueError(f"Sampling seed field already exists: {name}")
+        seed = derive_seed(seed_base or 0, epoch, index, stream)
+        data[name] = torch.tensor(seed & ((1 << 63) - 1), dtype=torch.int64)
+    if isinstance(sample, DomainMesh):
+        return DomainMesh(
+            interior=sample.interior, boundaries=sample.boundaries, global_data=data
+        )
+    return sample.with_data(global_data=data)
 
 
 def _subsample_mesh_points(
@@ -250,6 +268,7 @@ class MeshReader:
         pattern: str = f"**/*{DEFAULT_MESH_EXTENSION}",
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
+        seed_fields: list[str] | None = None,
         subsample_n_points: int | None = None,
         subsample_n_cells: int | None = None,
     ) -> None:
@@ -267,6 +286,9 @@ class MeshReader:
             async CPU→GPU transfers.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
+        seed_fields : list of str or None, optional
+            Global-data fields populated with independent integer seeds derived
+            from base seed, epoch, sample index, and position in this list.
         subsample_n_points : int, optional
             If set, subsample the mesh to this many points *before*
             ``pin_memory``.  Uses cyclic contiguous block reads for
@@ -291,6 +313,9 @@ class MeshReader:
         self._pattern = pattern
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
+        self.seed_fields = tuple(as_nested_keys(seed_fields))
+        if len(set(self.seed_fields)) != len(self.seed_fields):
+            raise ValueError("seed_fields must be unique")
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
         # Base seed + epoch for deterministic per-index RNG (see
@@ -384,6 +409,9 @@ class MeshReader:
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
         mesh = self._load_sample(index)
+        mesh = _with_sample_seeds(
+            mesh, self.seed_fields, self._seed_base, self._epoch, index
+        )
 
         generator = (
             None
@@ -413,6 +441,10 @@ class MeshReader:
                 logger.error("Sample %s failed: %s", i, e)
                 raise RuntimeError(f"Sample {i} failed: {e}") from e
 
+    def close(self) -> None:
+        """Release cached Zarr store references."""
+        getattr(self, "_zarr_groups", {}).clear()
+
     def __repr__(self) -> str:
         return f"MeshReader(path={self._root!r}, len={len(self)})"
 
@@ -434,6 +466,7 @@ class DomainMeshReader:
         pattern: str = f"**/*{DEFAULT_DOMAIN_MESH_EXTENSION}",
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
+        seed_fields: list[str] | None = None,
         subsample_n_points: int | None = None,
         subsample_n_cells: int | None = None,
         boundary_subsample: Literal["both", "cells", "points"] = "both",
@@ -456,6 +489,9 @@ class DomainMeshReader:
             async CPU→GPU transfers.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
+        seed_fields : list of str or None, optional
+            Global-data fields populated with independent integer seeds derived
+            from base seed, epoch, sample index, and position in this list.
         subsample_n_points : int, optional
             If set, subsample the interior and each boundary mesh to
             at most this many points *before* ``pin_memory``.  Uses
@@ -530,6 +566,9 @@ class DomainMeshReader:
         self._pattern = pattern
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
+        self.seed_fields = tuple(as_nested_keys(seed_fields))
+        if len(set(self.seed_fields)) != len(self.seed_fields):
+            raise ValueError("seed_fields must be unique")
         self.drop_interior_cells = drop_interior_cells
         self.drop_in_file_boundaries = drop_in_file_boundaries
         self.subsample_n_points = subsample_n_points
@@ -651,6 +690,9 @@ class DomainMeshReader:
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
         dm = self._load_sample(index)
+        dm = _with_sample_seeds(
+            dm, self.seed_fields, self._seed_base, self._epoch, index
+        )
 
         # Trim unused data before subsample/pin. Both references are lazy (no
         # memmap materialization here):
@@ -766,6 +808,10 @@ class DomainMeshReader:
             except Exception as e:
                 logger.error("Sample %s failed: %s", i, e)
                 raise RuntimeError(f"Sample {i} failed: {e}") from e
+
+    def close(self) -> None:
+        """Release cached Zarr store references."""
+        getattr(self, "_zarr_groups", {}).clear()
 
     def __repr__(self) -> str:
         return f"DomainMeshReader(path={self._root!r}, len={len(self)})"

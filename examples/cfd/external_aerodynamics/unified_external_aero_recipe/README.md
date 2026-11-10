@@ -613,9 +613,9 @@ attention is opt-in, not the default).
 
 ### SMART with independent geometry and query sampling
 
-SMART uses library models and datapipes with the unified trainer, Muon/AdamW
-optimizer, checkpointing, and physical-unit inference. Train separate surface
-and volume models:
+SMART connects directly to the unified trainer through YAML `forward_kwargs`.
+Shared dataset transforms prepare geometry and query features. Train separate
+surface and volume models:
 
 ```bash
 torchrun --standalone --nproc_per_node=4 src/train.py \
@@ -645,9 +645,9 @@ by the dataset manifest.
 
 Reader-derived case/epoch seeds isolate geometry and query randomness. Model
 coordinates use the full CFD centroid bounding-box center and axis scales
-`[12, 4.5, 3.25]`. Keep `coordinate_scale` equal in the model and `SMARTInputs`
-transform. Surface features are native normals. Volume features are unsigned CFD
-triangle distances in metres and closest-surface-to-query directions, set to zero
+`[12, 4.5, 3.25]`. Keep `coordinate_scale` equal in the model and the volume
+`ComputeUnsignedDistance` transform. Surface features are native normals. Volume
+features are unsigned CFD triangle distances in metres and closest-surface-to-query directions, set to zero
 within one micrometre of the surface. Physical export and force integration keep
 the recipe's original geometry and freestream metadata.
 

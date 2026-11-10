@@ -131,7 +131,7 @@ def test_pipeline_geometry_alignment_rng_and_resume(native_cases, field):
     sample, _ = ds[0]
     again, _ = ds[0]
     assert sample.interior.n_points == 4
-    assert sample.boundaries["smart_geometry"].n_points == 8
+    assert sample.global_data["geometry_points"].shape[0] == 8
     for key in sample.interior.point_data.keys():
         torch.testing.assert_close(
             sample.interior.point_data[key],
@@ -158,16 +158,16 @@ def test_pipeline_geometry_alignment_rng_and_resume(native_cases, field):
         assert sample.interior.point_data["sdf"].shape == (4, 1)
     raw = DomainMesh.load(native_cases / "run_0/domain_0.pdmsh")
     torch.testing.assert_close(
-        sample.global_data["smart_geometry"], raw.boundaries["vehicle"].cell_centroids
+        sample.global_data["geometry_points"], raw.boundaries["vehicle"].cell_centroids
     )
     torch.testing.assert_close(
-        sample.global_data["smart_parameters"], torch.tensor([1.205, 30.0])
+        sample.global_data["parameters"], torch.tensor([1.205, 30.0])
     )
     torch.testing.assert_close(sample.global_data["U_inf"], raw.global_data["U_inf"])
-    before_seed = sample.global_data["smart_geometry_seed"].clone()
+    before_seed = sample.global_data["geometry_seed"].clone()
     ds.set_epoch(4)
     changed, _ = ds[0]
-    assert changed.global_data["smart_geometry_seed"] != before_seed
+    assert changed.global_data["geometry_seed"] != before_seed
     ds.set_epoch(3)
     restored, _ = ds[0]
     torch.testing.assert_close(
@@ -264,14 +264,14 @@ def test_full_query_mode_and_sampling_budgets(native_cases, field):
     b, _ = full[0]
     assert b.interior.n_points == (8 if field == "surface" else 48)
     assert (
-        a.boundaries["smart_geometry"].n_points
-        == b.boundaries["smart_geometry"].n_points
+        a.global_data["geometry_points"].shape[0]
+        == b.global_data["geometry_points"].shape[0]
         == 8
     )
-    assert a.global_data["smart_geometry_seed"] == b.global_data["smart_geometry_seed"]
+    assert a.global_data["geometry_seed"] == b.global_data["geometry_seed"]
     torch.testing.assert_close(
-        a.boundaries["smart_geometry"].points,
-        b.boundaries["smart_geometry"].points,
+        a.global_data["geometry_points"],
+        b.global_data["geometry_points"],
         rtol=0,
         atol=0,
     )
@@ -332,7 +332,7 @@ def test_augmentation_keeps_geometry_and_features_aligned(native_cases, field):
     )
     ds.set_generator(torch.Generator().manual_seed(9))
     domain, _ = ds[0]
-    assert domain.boundaries["smart_geometry"].n_points == 8
+    assert domain.global_data["geometry_points"].shape[0] == 8
     if field == "surface":
         torch.testing.assert_close(
             domain.interior.points, domain.boundaries["vehicle"].cell_centroids
@@ -342,9 +342,9 @@ def test_augmentation_keeps_geometry_and_features_aligned(native_cases, field):
             domain.boundaries["vehicle"].cell_normals,
         )
     else:
-        torch.testing.assert_close(
-            domain.boundaries["smart_geometry"].points,
-            domain.boundaries["vehicle"].cell_centroids,
+        assert (
+            domain.global_data["geometry_points"].shape
+            == domain.boundaries["vehicle"].cell_centroids.shape
         )
         torch.testing.assert_close(
             domain.interior.point_data["sdf_normals"].norm(dim=-1), torch.ones(4)
@@ -352,7 +352,7 @@ def test_augmentation_keeps_geometry_and_features_aligned(native_cases, field):
     # Retained raw coordinates must receive the same rotation as targets.
     if field == "surface":
         torch.testing.assert_close(
-            domain.boundaries["vehicle"].cell_data["smart_normals"],
+            domain.boundaries["vehicle"].cell_data["query_normals"],
             domain.boundaries["vehicle"].cell_normals,
         )
     ds.close()

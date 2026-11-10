@@ -19,12 +19,12 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.datapipes.smart import (
-    SMARTSurfaceMeshToDomainMesh,
-    SMARTSurfaceReader,
-    SMARTVolumeReader,
+from physicsnemo.datapipes.transforms.mesh import (
+    CaptureGeometry,
+    MeshToDomainMesh,
+    SubsampleMesh,
 )
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import cell_measures, point_measures
 
 
@@ -45,16 +45,18 @@ def cfd_surface():
         points=points,
         cells=torch.tensor([[0, 1, 2], [0, 3, 4], [0, 2, 5]]),
         cell_data={"pressure": torch.arange(3.0).unsqueeze(-1)},
-        global_data={"smart_query_seed": torch.tensor(27)},
+        global_data={"query_seed": torch.tensor(27)},
     )
 
 
 @pytest.mark.parametrize("query_count", [1, 100])
 def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
     """Query sampling transfers aligned inverse-inclusion areas to the targets."""
-    domain = SMARTSurfaceMeshToDomainMesh(
-        n_cells=query_count, cell_data_targets=["pressure"]
-    )(cfd_surface)
+    captured = CaptureGeometry()(cfd_surface)
+    sampled = SubsampleMesh(n_cells=query_count, seed_field="query_seed")(captured)
+    domain = MeshToDomainMesh(cell_data_targets=["pressure"], copy_boundary=True)(
+        sampled
+    )
     boundary = domain.boundaries["vehicle"]
     rows = domain.interior.point_data["pressure"].flatten().long()
     expected = cfd_surface.cell_areas[rows] * 3 / min(3, query_count)
@@ -62,25 +64,36 @@ def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
     torch.testing.assert_close(point_measures(domain.interior), expected)
     torch.testing.assert_close(domain.interior.points, cfd_surface.cell_centroids[rows])
     torch.testing.assert_close(
-        domain.boundaries["smart_geometry"].points, cfd_surface.cell_centroids
+        domain.global_data["geometry_points"], cfd_surface.cell_centroids
     )
     assert "pressure" not in boundary.cell_data
 
 
-@pytest.mark.parametrize("field", ["surface", "volume"])
-@pytest.mark.parametrize("cap", ["subsample_n_cells", "subsample_n_points"])
-def test_reader_rejects_geometry_truncation(cfd_surface, tmp_path, field, cap):
-    """Reject reader settings that would cap geometry before online sampling."""
-    if field == "surface":
-        cfd_surface.save(tmp_path / "surface.pmsh")
-        reader = SMARTSurfaceReader
-        kwargs = {"pattern": "*.pmsh"}
-    else:
-        DomainMesh(
-            interior=Mesh(points=torch.zeros(2, 3)),
-            boundaries={"vehicle": cfd_surface},
-        ).save(tmp_path / "domain.pdmsh")
-        reader = SMARTVolumeReader
-        kwargs = {"pattern": "*.pdmsh", "boundary_subsample": "both"}
-    with pytest.raises(ValueError, match="geometry|complete"):
-        reader(path=tmp_path, **kwargs, **{cap: 1})
+def test_unsigned_boundary_distance_and_physical_coordinates(device):
+    """Distances stay unsigned and directions vanish at the surface."""
+    from physicsnemo.datapipes.transforms.mesh import ComputeUnsignedDistance
+    from physicsnemo.mesh import DomainMesh
+
+    surface = Mesh(
+        points=torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device=device
+        ),
+        cells=torch.tensor([[0, 1, 2]], device=device),
+    )
+    points = torch.tensor(
+        [[0.2, 0.2, 0.5], [0.2, 0.2, -0.5], [0.2, 0.2, 0.0]], device=device
+    )
+    domain = DomainMesh(interior=Mesh(points=points), boundaries={"vehicle": surface})
+    captured = CaptureGeometry().apply_to_domain(domain)
+    result = ComputeUnsignedDistance(
+        coordinate_scale=(12.0, 4.5, 3.25)
+    ).apply_to_domain(captured)
+    fields = result.interior.point_data
+    torch.testing.assert_close(fields["query_coordinates"], points, rtol=0, atol=0)
+    torch.testing.assert_close(
+        fields["sdf"].flatten(), points[:, 2].abs(), rtol=0, atol=1e-6
+    )
+    expected = torch.tensor(
+        [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 0.0, 0.0]], device=device
+    )
+    torch.testing.assert_close(fields["sdf_normals"], expected, rtol=0, atol=1e-6)

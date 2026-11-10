@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface and volume support in the unified external aerodynamics recipe,
   full CFD geometry, independent online field-query sampling, and chunked inference.
   DrivAerML templates use shared refinements, physical CFD query features,
-  per-field normalization, and MSE training. SMART field models and CFD datapipes
-  live in the experimental library. The shared metadata-merging mesh reader is
+  per-field normalization, and MSE training. SMART exposes a direct tensor interface
+  with seeded sampling and chunked inference. The recipe uses shared mesh readers
+  and geometry transforms. The shared metadata-merging mesh reader is
   available as `physicsnemo.datapipes.MeshReaderWithGlobalData`.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned

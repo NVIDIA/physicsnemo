@@ -16,6 +16,7 @@
 
 """Tests for the global-data mesh reader."""
 
+import pytest
 import torch
 from tensordict import TensorDict
 
@@ -50,3 +51,32 @@ def test_merge_global_data_preserves_geometry_caches(tmp_path):
         leaves_only=True,
     )
     torch.testing.assert_close(result.cell_centroids, expected_centroids)
+
+
+@pytest.mark.parametrize("domain", [False, True])
+def test_reader_seed_fields_are_independent_and_repeatable(tmp_path, domain):
+    """Case/epoch seed metadata is opt-in and leaves the global RNG untouched."""
+    from physicsnemo.datapipes import DomainMeshReader, MeshReader
+    from physicsnemo.mesh import DomainMesh
+
+    mesh = Mesh(points=torch.randn(5, 3))
+    sample = DomainMesh(interior=mesh) if domain else mesh
+    sample.save(tmp_path / ("sample.pdmsh" if domain else "sample.pmsh"))
+    reader_type = DomainMeshReader if domain else MeshReader
+    reader = reader_type(tmp_path, seed_fields=["sampling.query", "sampling.geometry"])
+    reader.set_generator(torch.Generator().manual_seed(42))
+    state = torch.get_rng_state().clone()
+    first, _ = reader[0]
+    reader.set_epoch(1)
+    changed, _ = reader[0]
+    reader.set_epoch(0)
+    repeated, _ = reader[0]
+    torch.testing.assert_close(torch.get_rng_state(), state, rtol=0, atol=0)
+    for key in reader.seed_fields:
+        assert first.global_data[key] == repeated.global_data[key]
+        assert first.global_data[key] != changed.global_data[key]
+    assert (
+        first.global_data["sampling", "query"]
+        != first.global_data["sampling", "geometry"]
+    )
+    assert not reader_type(tmp_path)[0][0].global_data.keys()

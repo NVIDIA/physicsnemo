@@ -19,9 +19,10 @@
 # sampling_resolution below controls field queries only.
 train_datadir: ${dataset_paths.drivaer_ml}
 pipeline:
-  augmentation_before: physicsnemo.experimental.datapipes.smart.SMARTInputs
+  augmentation_before: ${dp:CaptureGeometry}
   reader:
-    _target_: physicsnemo.experimental.datapipes.smart.SMARTVolumeReader
+    _target_: ${dp:DomainMeshReader}
+    seed_fields: [query_seed, geometry_seed]
     path: ${train_datadir}
     pattern: run_*/domain_*.pdmsh
     subsample_n_points: ${sampling_resolution}
@@ -50,12 +51,16 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
-    - _target_: physicsnemo.experimental.datapipes.smart.SMARTInputs
-      field: volume
+    - _target_: ${dp:CaptureGeometry}
+    - _target_: ${dp:SetGlobalField}
+      fields:
+        parameters: [1.205, 30.0]
+    - _target_: ${dp:ComputeUnsignedDistance}
+      boundary_name: vehicle
       coordinate_scale: [12.0, 4.5, 3.25]
-      conditioning: [1.205, 30.0]
-    - _target_: physicsnemo.experimental.datapipes.smart.CenterOnBoundary
+    - _target_: ${dp:CenterMesh}
       use_area_weighting: false
+      boundary_name: vehicle
     - _target_: ${dp:NonDimensionalizeByMetadata}
       fields:
         UMeanTrim: velocity
@@ -83,7 +88,6 @@ pipeline:
           type: scalar
           mean: 0.00048
           std: 0.00094001
-    - _target_: physicsnemo.experimental.datapipes.smart.SMARTVolumeGeometry
 targets:
   velocity: vector
   pressure: scalar

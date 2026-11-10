@@ -35,14 +35,14 @@ dataloader:
 metrics_before_normalization: true
 independent_validation: true
 forward_kwargs:
-  geometry: global_data.smart_geometry
-  queries: boundaries.vehicle.cell_data.smart_queries
-  query_features: boundaries.vehicle.cell_data.smart_normals
-  parameters: global_data.smart_parameters
-  frame_center: global_data.smart_center
-  geometry_seed: global_data.smart_geometry_seed
+  geometry: global_data.geometry_points
+  queries: boundaries.vehicle.cell_data.query_coordinates
+  query_features: boundaries.vehicle.cell_data.query_normals
+  parameters: global_data.parameters
+  frame_center: global_data.geometry_center
+  geometry_seed: global_data.geometry_seed
 model:
-  _target_: physicsnemo.experimental.models.smart.SMARTField
+  _target_: physicsnemo.experimental.models.smart.SMART
   field: surface
   out_dim: ${out_dim}
   query_feature_channels: 3

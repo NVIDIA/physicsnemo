@@ -207,11 +207,18 @@ class RotateMesh(MeshTransform):
 
 @register()
 class CenterMesh(MeshTransform):
-    r"""Translate mesh so its center of mass is at the origin."""
+    r"""Translate a mesh to its center of mass.
 
-    def __init__(self, use_area_weighting: bool = True) -> None:
+    For domains, ``boundary_name`` optionally selects a boundary to determine
+    the common translation. The default uses the interior.
+    """
+
+    def __init__(
+        self, use_area_weighting: bool = True, boundary_name: str | None = None
+    ) -> None:
         super().__init__()
         self.use_area_weighting = use_area_weighting
+        self.boundary_name = boundary_name
 
     def _compute_com(self, mesh: Mesh) -> Float[torch.Tensor, " spatial_dims"]:
         """Compute center of mass for a single mesh."""
@@ -241,7 +248,12 @@ class CenterMesh(MeshTransform):
         DomainMesh
             Centered domain mesh.
         """
-        com = self._compute_com(domain.interior)
+        reference = (
+            domain.interior
+            if self.boundary_name is None
+            else domain.boundaries[self.boundary_name]
+        )
+        com = self._compute_com(reference)
         return domain.translate(-com)
 
     def extra_repr(self) -> str:
@@ -278,7 +290,9 @@ class SubsampleMesh(MeshTransform):
     Sampling multiplies explicit effective measures by the stage's inverse
     inclusion probability. Cell measures default to geometric measures;
     point measures remain absent unless supplied explicitly. Point sampling
-    does not correct cell measures for cells removed indirectly.
+    does not correct cell measures for cells removed indirectly. If ``seed_field``
+    names a scalar integer in ``global_data``, each call uses that independent
+    seed instead of advancing the transform generator.
     """
 
     def __init__(
@@ -286,6 +300,7 @@ class SubsampleMesh(MeshTransform):
         n_cells: int | None = None,
         n_points: int | None = None,
         compact: bool = True,
+        seed_field: str | None = None,
     ) -> None:
         super().__init__()
         if n_cells is None and n_points is None:
@@ -293,11 +308,23 @@ class SubsampleMesh(MeshTransform):
         self.n_cells = n_cells
         self.n_points = n_points
         self.compact = compact
+        self.seed_field = as_nested_key(seed_field) if seed_field is not None else None
         self._generator: torch.Generator | None = None
 
+    @property
+    def stochastic(self) -> bool:
+        """Metadata-seeded sampling does not consume the pipeline RNG."""
+        return self.seed_field is None
+
     def _random_indices(
-        self, total: int, k: int, device: torch.device
+        self,
+        total: int,
+        k: int,
+        device: torch.device,
+        generator: torch.Generator | None = None,
     ) -> Int[torch.Tensor, " k"]:
+        if generator is None:
+            generator = self._generator
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
@@ -306,20 +333,30 @@ class SubsampleMesh(MeshTransform):
                 k,
                 strategy="poisson_gap",
                 device=device,
-                generator=self._generator,
+                generator=generator,
             )
         return weighted_multinomial(
             total,
             k,
             strategy="exact",
             device=device,
-            generator=self._generator,
+            generator=generator,
         )
 
     def __call__(self, mesh: Mesh) -> Mesh:
+        generator = self._generator
+        if self.seed_field is not None:
+            seed = mesh.global_data[self.seed_field]
+            if seed.numel() != 1 or seed.dtype not in (torch.int32, torch.int64):
+                raise ValueError("seed_field must contain one integer")
+            generator = torch.Generator(device=mesh.points.device).manual_seed(
+                int(seed.item())
+            )
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
             n_before = mesh.n_cells
-            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
+            indices = self._random_indices(
+                n_before, self.n_cells, mesh.cells.device, generator
+            )
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
@@ -331,7 +368,7 @@ class SubsampleMesh(MeshTransform):
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(
-                mesh.n_points, self.n_points, mesh.points.device
+                mesh.n_points, self.n_points, mesh.points.device, generator
             )
             n_before = mesh.n_points
             mesh = mesh.slice_points(indices)
@@ -1102,6 +1139,9 @@ class MeshToDomainMesh(MeshTransform):
         more descriptive name when working outside that convention (e.g.
         ``'wing'``, ``'turbine_blade'``).
 
+    copy_boundary : bool, default=False
+        Copy the output boundary to detach file-backed storage before export.
+
     Raises
     ------
     NotImplementedError
@@ -1148,6 +1188,7 @@ class MeshToDomainMesh(MeshTransform):
         point_data_targets: list[str] | None = None,
         interior_points: Literal["cell_centroids", "vertices"] = "cell_centroids",
         boundary_name: str = "vehicle",
+        copy_boundary: bool = False,
     ) -> None:
         super().__init__()
         ### Defensive runtime check: YAML / Hydra inputs bypass static
@@ -1169,6 +1210,7 @@ class MeshToDomainMesh(MeshTransform):
             )
         self._interior_points = interior_points
         self._boundary_name = boundary_name
+        self._copy_boundary = copy_boundary
 
     def __call__(self, mesh: Mesh) -> DomainMesh:  # type: ignore[override]
         ### v1 supports two diagonal corners:
@@ -1230,7 +1272,11 @@ class MeshToDomainMesh(MeshTransform):
         boundary = mesh.with_data(cell_data=boundary_cell_data)
         return DomainMesh(
             interior=interior,
-            boundaries={self._boundary_name: boundary},
+            boundaries={
+                self._boundary_name: boundary.clone()
+                if self._copy_boundary
+                else boundary
+            },
             global_data=mesh.global_data,
         )
 
@@ -1261,7 +1307,11 @@ class MeshToDomainMesh(MeshTransform):
         boundary = mesh.with_data(point_data=boundary_point_data)
         return DomainMesh(
             interior=interior,
-            boundaries={self._boundary_name: boundary},
+            boundaries={
+                self._boundary_name: boundary.clone()
+                if self._copy_boundary
+                else boundary
+            },
             global_data=mesh.global_data,
         )
 
