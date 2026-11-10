@@ -445,7 +445,7 @@ class ABUPT(Module):
                     else:
                         message = self.message(message_input)
                     ids = b * count + q
-                    pooled = pooled.index_add(0, ids, message.to(pooled.dtype))
+                    pooled.index_add_(0, ids, message.to(pooled.dtype))
                     counts.index_add_(0, ids, counts.new_ones(ids.shape[0], 1))
         # Empty neighborhoods contribute zero local information; absolute
         # supernode coordinates still identify their geometry tokens.

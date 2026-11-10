@@ -382,13 +382,17 @@ def test_pooling_chunk_independence_empty_neighbors_and_coordinate_gradients(
     model = ABUPT(**(SMALL | {"pooling_message_fp32": pooling_message_fp32})).double()
     args = inputs(dtype=torch.float64)
     g = args[0].clone().requires_grad_()
-    result = model.encode_geometry(g, args[1])
+    supernodes = args[1].clone().requires_grad_()
+    variables = (g, supernodes, *model.message.parameters())
+    result = model.encode_geometry(g, supernodes)
+    gradients = torch.autograd.grad(result.square().mean(), variables)
     model.pooling_chunk_size = 4096
-    torch.testing.assert_close(
-        result, model.encode_geometry(g, args[1]), rtol=1e-12, atol=1e-12
-    )
-    result.square().mean().backward()
-    assert torch.isfinite(g.grad).all() and g.grad.abs().sum() > 0
+    reference = model.encode_geometry(g, supernodes)
+    torch.testing.assert_close(result, reference, rtol=1e-12, atol=1e-12)
+    reference_gradients = torch.autograd.grad(reference.square().mean(), variables)
+    for actual, expected in zip(gradients, reference_gradients):
+        torch.testing.assert_close(actual, expected, rtol=1e-10, atol=1e-12)
+    assert torch.isfinite(gradients[0]).all() and gradients[0].abs().sum() > 0
     distant = model.encode_geometry(g, args[1] + 100)
     assert torch.isfinite(distant).all()
 
