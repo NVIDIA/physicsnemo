@@ -46,7 +46,7 @@ import math
 import torch
 from local_neighborhoods import mesh_edge_features
 from rollout import TimeEmbedding
-from time_conditional import TimeConditionalOutput, drop_retired_options
+from time_conditional import TimeConditionalOutput
 from torch import nn
 
 import physicsnemo
@@ -65,8 +65,6 @@ MESH_EDGE_INPUT_DIM = 12
 """Reference geometry (4) + predicted geometry (4) + their difference (4)."""
 CONTACT_EDGE_INPUT_DIM = CONTACT_FEATURE_DIM + 2
 """Contact geometry (8) + barycentric weight + direction sign."""
-
-_RETIRED_OPTIONS = {"contact_oracle": False}
 
 
 class MeshGraphNetCorrector(physicsnemo.Module):
@@ -149,12 +147,8 @@ class MeshGraphNetCorrector(physicsnemo.Module):
         activation_checkpointing: bool = False,
         local_knn_k: int | None = None,
         local_neighborhood: str | None = None,
-        **retired,
     ) -> None:
         super().__init__()
-        unknown = drop_retired_options(retired, _RETIRED_OPTIONS, {})
-        if unknown:
-            raise TypeError(f"unexpected arguments: {sorted(unknown)}")
         if num_time_steps < 2:
             raise ValueError("num_time_steps must be at least 2")
         if functional_dim <= 0 or hidden_dim <= 0:

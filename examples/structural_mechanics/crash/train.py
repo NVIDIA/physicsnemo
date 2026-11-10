@@ -553,7 +553,7 @@ class Trainer:
                         "Reproducible restart requires a v2 RNG checkpoint"
                     )
                 logger0.warning(
-                    "Legacy checkpoint has no RNG state; restart is not replay-equivalent"
+                    "Checkpoint has no RNG state; restart is not replay-equivalent"
                 )
             elif not cfg.training.get("restore_rng", True):
                 # Evaluation (or a restart at another world size) loads weights

@@ -27,7 +27,7 @@ def configure_deterministic_training(enabled):
     """Configure before CUDA initialization; fail closed on unsupported kernels.
 
     Saving RNG state is insufficient for CUDA scatter/attention reductions. Keep
-    this opt-in so historical recipes retain their original execution policy.
+    this opt-in; the released recipes train without it.
     """
     if not enabled:
         return

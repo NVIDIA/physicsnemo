@@ -200,8 +200,9 @@ with `+training.warm_start_model=<file>.mdlus`; `training.ckpt_path` may then
 point at an empty directory. The corrector's `.mdlus` can also be loaded
 directly with
 `physicsnemo.Module.from_checkpoint(path, override_args={"teacher_weights": "<network .mdlus>"})`;
-without the override it looks for the network's weights at the path recorded
-when it was trained.
+without the override it looks for the network's `.mdlus` under the file name
+recorded in the checkpoint (the delivered corrector records
+`MeshGeoFLARETimeConditional.0.60.mdlus`, resolved from the working directory).
 
 #### The network on the body-in-white data
 

@@ -37,10 +37,8 @@ features and a time code to the deformed positions:
 
 Evaluation-time geometric corrections (:mod:`shape_corrections`) are
 available but off by default: the envelope projection of penetrating nodes and
-the rigid-wall clamp. The checkpoint format of the model is the base model's;
-the constructor accepts the settings of the research options that were removed
-from this release as long as they hold their defaults, so stored checkpoints
-still open with ``physicsnemo.Module.from_checkpoint``.
+the rigid-wall clamp. The checkpoint format is the base model's
+(``physicsnemo.Module.from_checkpoint``).
 """
 
 from __future__ import annotations
@@ -54,82 +52,6 @@ from shape_corrections import PenetrationProjection, RigidWallClamp, correct_sha
 from torch import nn
 
 from physicsnemo.experimental.models.meshtransolver.meshtransolver import MeshGeoFLARE
-
-# Constructor options of the research arms that are not part of the released
-# model, with the values the released model corresponds to. They are accepted
-# and dropped when they hold these values (checkpoints saved by the research
-# recipes carry them); any other value names a feature of the archive branch.
-_RETIRED_OPTIONS = {
-    "norm_conditioning": "none",
-    "attn_scale": None,
-    "use_contact": False,
-    "contact_dim": 8,
-    "contact_gate_init": 1.0e-3,
-    "contact_aggregation": "mean",
-    "contact_activation_distance": 5.0,
-    "node_contact_radius": 10.0,
-    "contact_normal_epsilon": 0.1,
-    "contact_surface_material_fan": True,
-    "contact_include_velocity": False,
-    "contact_surface_predictive": False,
-    "contact_side_from_reference": False,
-    "contact_reference_clearance": None,
-    "contact_side_symmetric": False,
-    "contact_crossing_radius": None,
-    "contact_clearance_approach_only": False,
-    "contact_iterations": 1,
-    "contact_source": "surface",
-    "global_motion": False,
-    "global_motion_scale_mm": 10.0,
-    "global_motion_lever_mm": 2000.0,
-    "rigid_parts": False,
-    "rigid_parts_scale_mm": 10.0,
-    "rigid_parts_lever_mm": 500.0,
-    "rigid_parts_teacher_forcing": True,
-    "part_tokens": False,
-    "part_token_dim": 5,
-    "design_dim": 32,
-    "head_init_std": 0.0,
-    "two_stage": True,
-    "num_refinement_layers": None,
-    "refinement_input_displacement": False,
-    "refiner": False,
-    "refiner_layers": 2,
-    "refiner_contact": True,
-    "refiner_contact_activation_distance": 5.0,
-    "refiner_contact_reference_clearance": 10.0,
-    "refiner_input_displacement": True,
-    "refiner_detach_input": False,
-}
-# Old names of the projection's search settings.
-_RENAMED_OPTIONS = {
-    "contact_search_implementation": "penetration_projection_implementation",
-    "contact_surface_max_pairs": "penetration_projection_max_pairs",
-}
-
-
-def drop_retired_options(kwargs: dict, retired: dict, renamed: dict) -> dict:
-    """Remove retired constructor options from ``kwargs`` (a copy is returned).
-
-    A retired option at its released value is dropped silently; another value
-    raises, since the model it describes is not in this release. Renamed
-    options are moved to their new name unless the new name is given too.
-    """
-    kwargs = dict(kwargs)
-    for key, value in retired.items():
-        if key in kwargs:
-            if kwargs[key] != value:
-                raise ValueError(
-                    f"{key}={kwargs[key]!r} belongs to a research option that is not "
-                    f"part of this release (the released model uses {value!r}); the "
-                    "implementation is kept on the research archive branch"
-                )
-            del kwargs[key]
-    for old, new in renamed.items():
-        if old in kwargs:
-            kwargs.setdefault(new, kwargs[old])
-            del kwargs[old]
-    return kwargs
 
 
 class TimeConditionalOutput(NamedTuple):
@@ -200,28 +122,15 @@ class MeshGeoFLARETimeConditional(MeshGeoFLARE):
         penetration_projection_clearance_mm: float | None = 10.0,
         penetration_projection_crossed_only: bool = False,
         penetration_projection_side_symmetric: bool = False,
-        penetration_projection_implementation: str | None = None,
-        penetration_projection_max_pairs: int | None = None,
+        penetration_projection_implementation: str = "warp",
+        penetration_projection_max_pairs: int = 8_000_000,
         **kwargs,
     ) -> None:
-        kwargs = drop_retired_options(kwargs, _RETIRED_OPTIONS, _RENAMED_OPTIONS)
-        # A renamed option arrives through kwargs; an explicit new-name argument
-        # wins over it, and the defaults are warp / 8e6 pairs.
-        renamed_implementation = kwargs.pop(
-            "penetration_projection_implementation", None
-        )
-        renamed_max_pairs = kwargs.pop("penetration_projection_max_pairs", None)
-        if penetration_projection_implementation is None:
-            penetration_projection_implementation = renamed_implementation or "warp"
-        if penetration_projection_max_pairs is None:
-            penetration_projection_max_pairs = (
-                8_000_000 if renamed_max_pairs is None else renamed_max_pairs
-            )
         if num_time_steps < 2:
             raise ValueError("num_time_steps must be at least 2")
         if dt is not None and not dt > 0:
             raise ValueError("dt must be positive when given")
-        if kwargs.get("out_dim", kwargs.get("output_dim", 3)) != 3:
+        if kwargs.get("out_dim", 3) != 3:
             raise ValueError("This recipe predicts positions only (out_dim=3)")
         if kwargs.get("use_te", False):
             raise ValueError("The time-conditional DeFormer requires use_te=False")

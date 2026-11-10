@@ -35,11 +35,6 @@ Options:
 * ``final_clamp_to_wall`` and ``final_projection_*`` apply the evaluation-time
   geometric corrections of :mod:`shape_corrections` to the corrected shape
   (the teacher's own prediction stays as the student was trained on).
-
-Checkpoints saved by the research recipes (one teacher in a ``teachers``
-list, a ``student_class`` and ``teacher_sampling`` setting) load into this
-class: the state-dict keys are migrated and the retired options accepted at
-their released values.
 """
 
 from __future__ import annotations
@@ -49,33 +44,11 @@ from pathlib import Path
 import torch
 from mgn_corrector import MeshGraphNetCorrector
 from shape_corrections import PenetrationProjection, RigidWallClamp, correct_shape
-from time_conditional import TimeConditionalOutput, drop_retired_options
+from time_conditional import TimeConditionalOutput
 from torch import nn
 from utils import load_warm_start
 
 import physicsnemo
-
-_RETIRED_OPTIONS = {
-    "teacher_sampling": "final",
-    "student_class": "mgn_corrector.MeshGraphNetCorrector",
-}
-# Keys of the research recipes' attention-model chain that reached the wrapper
-# through Hydra and described nothing here; accepted and dropped.
-_RECIPE_LEAK_KEYS = frozenset(
-    {
-        "local_processor",
-        "local_num_heads",
-        "local_mlp_ratio",
-        "local_edge_dim",
-        "local_activation",
-        "local_attention_fused",
-        "local_attention_backend",
-        "num_pre_processor_checkpoint_segments",
-        "num_post_processor_checkpoint_segments",
-        "checkpointing_ratio",
-        "activation_checkpointing_components",
-    }
-)
 
 
 class ResidualTimeConditional(physicsnemo.Module):
@@ -141,9 +114,6 @@ class ResidualTimeConditional(physicsnemo.Module):
         **student_kwargs,
     ) -> None:
         super().__init__()
-        student_kwargs = drop_retired_options(student_kwargs, _RETIRED_OPTIONS, {})
-        for key in _RECIPE_LEAK_KEYS & set(student_kwargs):
-            del student_kwargs[key]
         self.projection = PenetrationProjection(
             iterations=final_projection_iterations,
             tolerance_mm=final_projection_tolerance_mm,
@@ -158,13 +128,6 @@ class ResidualTimeConditional(physicsnemo.Module):
         self.wall_clamp = RigidWallClamp(
             enabled=final_clamp_to_wall, axis=wall_axis, sign=wall_sign
         )
-        if isinstance(teacher_weights, (list, tuple)):
-            if len(teacher_weights) != 1:
-                raise ValueError(
-                    "teacher_weights names one checkpoint (teacher mixtures are not "
-                    "part of this release)"
-                )
-            teacher_weights = teacher_weights[0]
         if not teacher_weights:
             raise ValueError("teacher_weights must name the teacher's checkpoint")
         if not Path(str(teacher_weights)).is_file():
@@ -192,19 +155,6 @@ class ResidualTimeConditional(physicsnemo.Module):
         super().train(mode)
         self.teacher.eval()
         return self
-
-    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
-        """Load a state dict, migrating the ``teachers.0.`` keys of checkpoints
-        written by the research recipes to ``teacher.``."""
-        migrated = {
-            (
-                "teacher." + key[len("teachers.0.") :]
-                if key.startswith("teachers.0.")
-                else key
-            ): value
-            for key, value in state_dict.items()
-        }
-        return super().load_state_dict(migrated, strict=strict, assign=assign)
 
     # ----- teacher fields -----
     def _frame(self, sample, data_stats, label: float) -> torch.Tensor:

@@ -365,18 +365,12 @@ class GeoTransolverTimeConditional(GeoTransolver):
         time_dim: int = 32,
         time_as_global: bool = False,
         dt: float | None = None,
-        args=(),
         **kwargs,
     ):
-        if len(args):
-            raise TypeError("GeoTransolverTimeConditional takes keyword arguments only")
         self.rollout_steps: int = int(num_time_steps) - 1
-        # Accepted for recipe compatibility (the Yaris datapipe derives its frame
-        # interval from ``model.dt``); the backbone itself is time-step agnostic.
+        # The Yaris datapipe derives its frame interval from ``model.dt``; the
+        # backbone itself is time-step agnostic.
         self.dt = dt
-        # Recorded at its default by the released baseline's checkpoint; the
-        # backbone has no such option.
-        kwargs.pop("attn_scale", None)
         super().__init__(**kwargs)
         self.time_embed = TimeEmbedding(time_embedding, time_fourier_bands, time_dim)
         self.time_as_global = bool(time_as_global)
