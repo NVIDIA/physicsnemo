@@ -68,11 +68,16 @@ Conventions and assumptions:
   YAML declares its convention with the top-level key
   ``wall_shear_acts_on``: ``body`` (the default) or ``fluid``. With the
   wrong side, the friction force is subtracted where it must be added.
-- **Checking a dataset.** A wrong declaration changes the absolute
-  coefficients, and barely changes the predicted-vs-reference error,
-  because both are integrated identically. Two physical tests tell the
-  conventions apart: the pressure drag of a bluff body is positive, and
-  the friction force on a body points downstream.
+- **Checking a dataset.** A wrong declaration gives wrong absolute
+  coefficients, and the predicted-vs-reference error does not reveal it,
+  because both are integrated the same way. To find a dataset's
+  conventions, call :func:`force_moment_coefficients` on one stored case
+  with the defaults, once with zero shear and once with zero pressure.
+  With zero shear, ``CD`` must be positive for a car, and ``CL`` for a
+  wing at a positive angle of attack; if it is negative, the normals
+  point ``inward``. With zero pressure, ``CD`` must be positive, because
+  the friction force on a body points downstream; if it is negative, the
+  wall shear stress acts on the ``fluid``.
 - **Reference area / length** are physical-unit quantities supplied by
   the caller. ``CD``/``CL``/``CM`` magnitudes are only physically
   meaningful when ``reference_area`` matches the dataset's convention;
@@ -113,7 +118,7 @@ from typing import Any, Literal
 import torch
 from jaxtyping import Float
 from nondim import NondimFieldType
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.keys import as_nested_key
@@ -351,14 +356,14 @@ class ForceContext:
         force_cfg: DictConfig | None,
         field_types: dict[str, NondimFieldType],
         device: torch.device | str,
-        surface_normals_point: NormalsOrientation = "outward",
-        wall_shear_acts_on: WallShearSide = "body",
+        dataset_cfg: DictConfig | None = None,
     ) -> "ForceContext | None":
         """Build a context from the ``force_coefficients`` config block.
 
-        ``surface_normals_point`` and ``wall_shear_acts_on`` are the
-        dataset's conventions (the top-level keys of the same names in its
-        YAML; see the module docstring).
+        ``dataset_cfg`` is the dataset YAML. Its top-level keys
+        ``surface_normals_point`` and ``wall_shear_acts_on`` declare the
+        conventions of the stored surface (see the module docstring). A
+        missing key, or no dataset config, means ``outward`` and ``body``.
 
         Returns ``None`` when the block is absent, disabled, or the
         dataset declares no pressure + shear surface fields (so callers
@@ -370,6 +375,15 @@ class ForceContext:
         if fields is None:
             return None
         pressure_field, shear_field = fields
+        conventions = {
+            key: default
+            if dataset_cfg is None
+            else OmegaConf.select(dataset_cfg, key, default=default)
+            for key, default in (
+                ("surface_normals_point", "outward"),
+                ("wall_shear_acts_on", "body"),
+            )
+        }
         ref_len = force_cfg.get("reference_length", None)
         ### `list()` resolves a ListConfig (iteration resolves any
         ### interpolations) and passes a plain-list default through
@@ -389,8 +403,7 @@ class ForceContext:
                 dtype=torch.float32,
                 device=device,
             ),
-            surface_normals_point=surface_normals_point,
-            wall_shear_acts_on=wall_shear_acts_on,
+            **conventions,
         )
 
     def coefficients(

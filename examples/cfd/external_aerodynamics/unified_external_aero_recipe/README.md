@@ -391,13 +391,13 @@ ${output_dir}/${run_id}/
   physical-scale coordinates (the lost `CenterMesh` offset leaves them
   centered at the origin).
 - **Force / moment coefficients** (surface cases): integrates the
-  predicted and reference surface traction (`-Cp*n + Cf` for outward
-  normals and a wall shear stress on the body; the dataset YAML's
-  `surface_normals_point` and `wall_shear_acts_on` declare its
-  conventions) over
+  predicted and reference surface traction over
   the `vehicle` boundary into `CD`/`CL`/`CS` (drag/lift/side) and
   `CMR`/`CMP`/`CMY` (roll/pitch/yaw), logged as a per-coefficient
-  pred / true / MAE table. Set `force_coefficients.reference_area` (and
+  pred / true / MAE table. The traction is `-Cp*n + Cf` for outward
+  normals and a wall shear stress on the body. The dataset YAML's
+  `surface_normals_point` and `wall_shear_acts_on` declare other
+  conventions. Set `force_coefficients.reference_area` (and
   optionally `reference_length` / `moment_center`) for physically
   meaningful magnitudes; the predicted-vs-reference comparison is
   independent of the reference area. Volume runs (no Cp/Cf) auto-skip.
@@ -796,12 +796,17 @@ dataset indices and handles distributed sampling across ranks.
 8. For surface data with pressure and wall shear stress, declare the
    conventions that the integrated force coefficients need:
    - `surface_normals_point: inward` when the surface is wound so that
-     its normals point into the body. The default is `outward`. Test: the
-     pressure drag of a bluff body is positive.
+     its normals point into the body. The default is `outward`.
    - `wall_shear_acts_on: fluid` when the wall shear stress is the stress
      the wall exerts on the fluid, as in OpenFOAM's `wallShearStress`. The
-     default is `body`. Test: the friction force on a body points
-     downstream.
+     default is `body`.
+
+   To find them, call `force_moment_coefficients` (`src/forces.py`) on one
+   stored case with the defaults, once with zero shear and once with zero
+   pressure. With zero shear, `CD` must be positive for a car, and `CL`
+   for a wing at a positive angle of attack. If it is negative, set
+   `inward`. With zero pressure, `CD` must be positive. If it is negative,
+   set `fluid`.
 9. Run `python src/train.py model=<some_model> dataset=<your_new_dataset>`.
 
 No Python code changes are needed.
