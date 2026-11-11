@@ -26,6 +26,10 @@ analytic:
 - A uniform skin-friction coefficient :math:`C_f = [c, 0, 0]` integrates
   to a force :math:`[c \\cdot A_\\text{total}, 0, 0]`, so with the flow
   along x the drag is :math:`c \\cdot A_\\text{total}` and lift/side are 0.
+  That holds when the wall shear stress acts on the body; when it acts on
+  the fluid, the force on the body has the opposite sign.
+- A surface wound inward, declared as such, gives the same coefficients as
+  the same surface wound outward.
 
 The rest pins the config/aggregation glue (`build_axis_frame`,
 `surface_force_fields`, `ForceContext`, `ForceAccumulator`).
@@ -94,6 +98,70 @@ def test_uniform_shear_gives_drag_equal_to_c_times_area():
     res = forces.force_moment_coefficients(vehicle, torch.zeros(n), cf, **_COMMON)
     assert res["CD"] == pytest.approx(c * area_total, abs=1e-3)
     assert abs(res["CL"]) < 1e-4 and abs(res["CS"]) < 1e-4
+
+
+def test_wall_shear_on_the_fluid_gives_the_opposite_friction_force():
+    """A stress on the fluid along -x (OpenFOAM's sign) is a drag along +x."""
+    vehicle = _closed_tetrahedron()
+    n = vehicle.n_cells
+    area_total = float(vehicle.cell_areas.sum())
+    c = 2.0
+    ### The wall pulls the fluid upstream, so the fluid pulls the body downstream.
+    cf_on_fluid = torch.tensor([[-c, 0.0, 0.0]]).repeat(n, 1)
+    res = forces.force_moment_coefficients(
+        vehicle, torch.zeros(n), cf_on_fluid, **_COMMON, wall_shear_acts_on="fluid"
+    )
+    assert res["CD"] == pytest.approx(c * area_total, abs=1e-3)
+    assert abs(res["CL"]) < 1e-4 and abs(res["CS"]) < 1e-4
+
+    ### The pressure force does not depend on the wall-shear side.
+    cp = torch.arange(n, dtype=torch.float32)
+    on_body = forces.force_moment_coefficients(
+        vehicle, cp, torch.zeros(n, 3), **_COMMON
+    )
+    on_fluid = forces.force_moment_coefficients(
+        vehicle, cp, torch.zeros(n, 3), **_COMMON, wall_shear_acts_on="fluid"
+    )
+    assert on_body == on_fluid
+
+
+def test_inward_normals_declared_give_the_outward_result():
+    """A surface wound inward integrates like its outward twin once declared."""
+    outward = _closed_tetrahedron()
+    ### Swapping two vertices of every face reverses the winding.
+    inward = Mesh(points=outward.points, cells=outward.cells[:, [0, 2, 1]])
+    assert ((inward.cell_normals * inward.cell_centroids).sum(-1) < 0).all()
+
+    n = outward.n_cells
+    cp = torch.arange(1, n + 1, dtype=torch.float32)
+    cf = torch.tensor([[2.0, -1.0, 0.5]]).repeat(n, 1)
+    reference = forces.force_moment_coefficients(outward, cp, cf, **_COMMON)
+    declared = forces.force_moment_coefficients(
+        inward, cp, cf, **_COMMON, surface_normals_point="inward"
+    )
+    undeclared = forces.force_moment_coefficients(inward, cp, cf, **_COMMON)
+    ### The friction part does not depend on the orientation; without the
+    ### declaration only the pressure part changes sign.
+    friction = forces.force_moment_coefficients(outward, torch.zeros(n), cf, **_COMMON)
+    assert abs(reference["CD"] - friction["CD"]) > 0.1  # a real pressure force
+    for name in forces.COEFFICIENT_NAMES:
+        assert declared[name] == pytest.approx(reference[name], abs=1e-4)
+        pressure = reference[name] - friction[name]
+        assert undeclared[name] == pytest.approx(friction[name] - pressure, abs=1e-4)
+
+
+def test_conventions_must_be_spelled_right():
+    """A misspelled value fails loudly, in the function and at context setup."""
+    vehicle = _closed_tetrahedron()
+    n = vehicle.n_cells
+    ft = {"pressure": "pressure", "wss": "stress"}
+    for key, bad in (("wall_shear_acts_on", "wall"), ("surface_normals_point", "in")):
+        with pytest.raises(ValueError, match=key):
+            forces.force_moment_coefficients(
+                vehicle, torch.zeros(n), torch.zeros(n, 3), **_COMMON, **{key: bad}
+            )
+        with pytest.raises(ValueError, match=key):
+            forces.ForceContext.from_config(_force_cfg(), ft, "cpu", **{key: bad})
 
 
 @pytest.mark.parametrize("length_scale", [1.0, 3.0])
@@ -232,6 +300,18 @@ def test_force_context_from_config_variants():
     ctx = forces.ForceContext.from_config(_force_cfg(), ft, "cpu")
     assert ctx is not None
     assert ctx.pressure_field == "pressure" and ctx.shear_field == "wss"
+    # outward normals and wall shear on the body unless the dataset says otherwise
+    assert ctx.surface_normals_point == "outward"
+    assert ctx.wall_shear_acts_on == "body"
+    declared = forces.ForceContext.from_config(
+        _force_cfg(),
+        ft,
+        "cpu",
+        surface_normals_point="inward",
+        wall_shear_acts_on="fluid",
+    )
+    assert declared.surface_normals_point == "inward"
+    assert declared.wall_shear_acts_on == "fluid"
     # disabled / absent / no-surface-fields all yield None
     assert forces.ForceContext.from_config(_force_cfg(enabled=False), ft, "cpu") is None
     assert forces.ForceContext.from_config(None, ft, "cpu") is None
@@ -255,6 +335,29 @@ def test_force_context_coefficients_surface_and_volume():
     # pred == true here (same input), so MAE-relevant diffs are zero
     for name in forces.COEFFICIENT_NAMES:
         assert pred[name] == true[name]
+
+    # The context passes the dataset's conventions on: wall shear on the fluid
+    # changes the sign of the friction part, inward normals that of the
+    # pressure part, and both together that of every coefficient.
+    zero_shear = coeff.clone()
+    zero_shear["wss"] = torch.zeros_like(coeff["wss"])
+    total, _ = out
+    pressure_part, _ = ctx.coefficients(surf, zero_shear, zero_shear, normalizer=None)
+
+    def integrated(**conventions):
+        declared = forces.ForceContext.from_config(
+            _force_cfg(), ft, "cpu", **conventions
+        )
+        return declared.coefficients(surf, coeff, coeff, normalizer=None)[0]
+
+    on_fluid = integrated(wall_shear_acts_on="fluid")
+    inward = integrated(surface_normals_point="inward")
+    both = integrated(surface_normals_point="inward", wall_shear_acts_on="fluid")
+    for name in forces.COEFFICIENT_NAMES:
+        p, f = pressure_part[name], total[name] - pressure_part[name]
+        assert on_fluid[name] == pytest.approx(p - f, rel=1e-5, abs=1e-4)
+        assert inward[name] == pytest.approx(-p + f, rel=1e-5, abs=1e-4)
+        assert both[name] == pytest.approx(-total[name], rel=1e-5, abs=1e-4)
 
     # A volume DomainMesh (interior points != vehicle cells) is skipped.
     vol = make_volume_domain_mesh(n_pts=120)
@@ -308,3 +411,25 @@ def test_force_accumulator_keys_are_rank_invariant():
     ### no-op in the all-reduced sums.
     assert set(fresh.totals.values()) == {0.0}
     assert fresh.count == 0
+
+
+@pytest.mark.parametrize(
+    ("dataset", "normals", "wall_shear"),
+    [
+        ("drivaer_ml_surface", "inward", "fluid"),  # OpenFOAM
+        ("highlift_surface", "inward", "body"),
+        ("shift_suv_estate_surface", "outward", "body"),
+        ("shift_suv_fastback_surface", "outward", "body"),
+    ],
+)
+def test_shipped_dataset_yamls_declare_their_conventions(dataset, normals, wall_shear):
+    """The surface datasets declare the conventions measured on their data."""
+    from pathlib import Path
+
+    datasets_dir = Path(__file__).resolve().parent.parent / "datasets"
+    ds_yaml = OmegaConf.load(datasets_dir / f"{dataset}.yaml")
+    assert ds_yaml.surface_normals_point == normals
+    assert ds_yaml.wall_shear_acts_on == wall_shear
+    ### Both values are ones the force integration accepts.
+    forces.normal_sign(ds_yaml.surface_normals_point)
+    forces.friction_sign(ds_yaml.wall_shear_acts_on)

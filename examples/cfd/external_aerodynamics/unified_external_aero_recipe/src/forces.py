@@ -25,9 +25,13 @@ aerodynamic load on the body follows from integrating the surface
 traction over the vehicle:
 
 .. math::
-    \\mathbf{t} = -C_p\\,\\mathbf{n} + \\mathbf{C}_f
+    \\mathbf{t} = -C_p\\,\\mathbf{n} + s\\,\\mathbf{C}_f
 
-where :math:`\\mathbf{n}` is the outward unit normal. The force and
+where :math:`\\mathbf{n}` is the unit normal that points out of the body,
+and :math:`s` is :math:`+1` when the dataset's wall shear stress is the
+stress the fluid exerts on the body and :math:`-1` when it is the stress
+the wall exerts on the fluid. Stored surfaces differ in both respects (see
+"Normal orientation" and "Wall shear side" below). The force and
 moment coefficient vectors are
 
 .. math::
@@ -51,12 +55,24 @@ and a global "up" reference, yielding the conventional scalars:
 
 Conventions and assumptions:
 
-- **Outward normals.** ``Mesh.cell_normals`` are unique only up to
-  orientation (they follow the cell winding). Forces assume a
-  consistently *outward*-oriented surface; if a mesh is wound inward the
-  pressure contribution flips sign. Because predicted and reference
-  coefficients are integrated identically, the *error* between them is
-  unaffected by a global orientation flip.
+- **Normal orientation.** ``Mesh.cell_normals`` follow the cell winding,
+  and stored surfaces are wound either way. A dataset YAML declares where
+  its surface's normals point with the top-level key
+  ``surface_normals_point``: ``outward`` (the default) or ``inward``.
+  With the wrong orientation the pressure force has the wrong sign. The
+  surface must be wound consistently.
+- **Wall shear side.** Solvers do not agree on which side the wall shear
+  stress acts on. OpenFOAM's ``wallShearStress`` is the stress the wall
+  exerts on the fluid, so the friction force on the body is its negative.
+  Other solvers write the stress the fluid exerts on the body. A dataset
+  YAML declares its convention with the top-level key
+  ``wall_shear_acts_on``: ``body`` (the default) or ``fluid``. With the
+  wrong side, the friction force is subtracted where it must be added.
+- **Checking a dataset.** A wrong declaration changes the absolute
+  coefficients, and barely changes the predicted-vs-reference error,
+  because both are integrated identically. Two physical tests tell the
+  conventions apart: the pressure drag of a bluff body is positive, and
+  the friction force on a body points downstream.
 - **Reference area / length** are physical-unit quantities supplied by
   the caller. ``CD``/``CL``/``CM`` magnitudes are only physically
   meaningful when ``reference_area`` matches the dataset's convention;
@@ -92,7 +108,7 @@ Conventions and assumptions:
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from jaxtyping import Float
@@ -106,6 +122,60 @@ from physicsnemo.mesh import DomainMesh, Mesh
 ### Coefficient keys returned by :func:`force_moment_coefficients`, in a
 ### stable order so callers can build tables / accumulators against them.
 COEFFICIENT_NAMES: tuple[str, ...] = ("CD", "CL", "CS", "CMR", "CMP", "CMY")
+
+### Conventions a dataset YAML declares for its stored surface (see the
+### module docstring): where the cell normals point, and which side the wall
+### shear stress acts on.
+NormalsOrientation = Literal["outward", "inward"]
+WallShearSide = Literal["body", "fluid"]
+
+
+def _convention_sign(value: str, *, positive: str, negative: str, key: str) -> float:
+    """Return ``+1.0`` or ``-1.0`` for a declared convention, or raise."""
+    if value == positive:
+        return 1.0
+    if value == negative:
+        return -1.0
+    raise ValueError(f"{key} must be {positive!r} or {negative!r}, got {value!r}.")
+
+
+def normal_sign(surface_normals_point: str) -> float:
+    """Sign that turns the stored cell normals into outward normals.
+
+    Args:
+        surface_normals_point: ``"outward"`` or ``"inward"``.
+
+    Returns:
+        ``+1.0`` for ``"outward"`` and ``-1.0`` for ``"inward"``.
+
+    Raises:
+        ValueError: If ``surface_normals_point`` is neither value.
+    """
+    return _convention_sign(
+        surface_normals_point,
+        positive="outward",
+        negative="inward",
+        key="surface_normals_point",
+    )
+
+
+def friction_sign(wall_shear_acts_on: str) -> float:
+    """Sign of the wall shear stress in the traction on the body.
+
+    Args:
+        wall_shear_acts_on: ``"body"`` if the wall shear stress is the stress
+            the fluid exerts on the body, ``"fluid"`` if it is the stress the
+            wall exerts on the fluid (OpenFOAM's ``wallShearStress``).
+
+    Returns:
+        ``+1.0`` for ``"body"`` and ``-1.0`` for ``"fluid"``.
+
+    Raises:
+        ValueError: If ``wall_shear_acts_on`` is neither value.
+    """
+    return _convention_sign(
+        wall_shear_acts_on, positive="body", negative="fluid", key="wall_shear_acts_on"
+    )
 
 
 def build_axis_frame(
@@ -160,6 +230,8 @@ def force_moment_coefficients(
     reference_area: float,
     reference_length: float,
     length_scale: float = 1.0,
+    surface_normals_point: NormalsOrientation = "outward",
+    wall_shear_acts_on: WallShearSide = "body",
 ) -> dict[str, float]:
     r"""Integrate per-cell surface coefficients into force/moment scalars.
 
@@ -172,7 +244,7 @@ def force_moment_coefficients(
             ``(n_cells,)`` (a trailing singleton dim, e.g. ``(n_cells, 1)``,
             is flattened internally). Must align 1:1 with ``vehicle`` cells.
         shear_coeff: Per-cell skin-friction coefficient vector
-            :math:`C_f`, shape ``(n_cells, 3)``.
+            :math:`C_f`, shape ``(n_cells, 3)``, with the dataset's sign.
         flow_direction: Freestream velocity for the sample, shape ``(3,)``
             (defines the drag axis).
         up_direction: Global "up" reference, shape ``(3,)`` (defines the
@@ -185,6 +257,11 @@ def force_moment_coefficients(
         length_scale: Factor applied to the mesh geometry before
             integration (pass the pipeline's ``L_ref`` to recover a
             physical-scale surface from non-dimensionalized coordinates).
+        surface_normals_point: Where the cell normals of ``vehicle`` point:
+            ``"outward"`` (out of the body) or ``"inward"``.
+        wall_shear_acts_on: Which side ``shear_coeff`` acts on: ``"body"``
+            (the friction force on the body is :math:`+C_f`) or ``"fluid"``
+            (it is :math:`-C_f`, as for OpenFOAM's ``wallShearStress``).
 
     Returns:
         ``{name: float}`` for each of :data:`COEFFICIENT_NAMES`
@@ -194,14 +271,16 @@ def force_moment_coefficients(
     device = mesh.points.device
     dtype = torch.float32
 
-    normals = mesh.cell_normals.to(dtype)  # (C, 3) unit, outward (assumed)
+    ### (C, 3) unit normals, pointing out of the body.
+    normals = normal_sign(surface_normals_point) * mesh.cell_normals.to(dtype)
     centroids = mesh.cell_centroids.to(dtype)  # (C, 3)
 
     cp = pressure_coeff.to(device=device, dtype=dtype).reshape(-1)  # (C,)
     cf = shear_coeff.to(device=device, dtype=dtype).reshape(cp.shape[0], -1)  # (C, 3)
 
-    ### Surface traction coefficient t = -Cp n + Cf (force per area / q_inf).
-    traction = -cp.unsqueeze(-1) * normals + cf  # (C, 3)
+    ### Surface traction coefficient on the body, t = -Cp n +/- Cf (force per
+    ### area / q_inf); the friction sign follows the dataset's convention.
+    traction = -cp.unsqueeze(-1) * normals + friction_sign(wall_shear_acts_on) * cf
 
     ### Quadrature: Mesh.integrate sums field_c * effective_measure_c.
     force = mesh.integrate(traction, data_source="cells")  # (3,)
@@ -258,6 +337,13 @@ class ForceContext:
     reference_length: float | None
     moment_center: torch.Tensor
     up_direction: torch.Tensor
+    surface_normals_point: NormalsOrientation = "outward"
+    wall_shear_acts_on: WallShearSide = "body"
+
+    def __post_init__(self) -> None:
+        ### Fail at setup, not on the first sample, for a misspelled value.
+        normal_sign(self.surface_normals_point)
+        friction_sign(self.wall_shear_acts_on)
 
     @classmethod
     def from_config(
@@ -265,8 +351,14 @@ class ForceContext:
         force_cfg: DictConfig | None,
         field_types: dict[str, NondimFieldType],
         device: torch.device | str,
+        surface_normals_point: NormalsOrientation = "outward",
+        wall_shear_acts_on: WallShearSide = "body",
     ) -> "ForceContext | None":
         """Build a context from the ``force_coefficients`` config block.
+
+        ``surface_normals_point`` and ``wall_shear_acts_on`` are the
+        dataset's conventions (the top-level keys of the same names in its
+        YAML; see the module docstring).
 
         Returns ``None`` when the block is absent, disabled, or the
         dataset declares no pressure + shear surface fields (so callers
@@ -297,6 +389,8 @@ class ForceContext:
                 dtype=torch.float32,
                 device=device,
             ),
+            surface_normals_point=surface_normals_point,
+            wall_shear_acts_on=wall_shear_acts_on,
         )
 
     def coefficients(
@@ -341,6 +435,8 @@ class ForceContext:
             reference_area=self.reference_area,
             reference_length=ref_len,
             length_scale=length_scale,
+            surface_normals_point=self.surface_normals_point,
+            wall_shear_acts_on=self.wall_shear_acts_on,
         )
         ### Field names come from the dataset YAML and may spell nested
         ### leaves ("solution.pressure"); resolve them to TensorDict keys.
