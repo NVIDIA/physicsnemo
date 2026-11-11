@@ -192,9 +192,18 @@ def test_surface_point_measures_transform_on_reduced_precision(dtype):
     torch.testing.assert_close(
         enlarged, torch.full((5,), 2.0**-10 * 300.0**2, dtype=dtype)
     )
-    stretch = torch.diag(torch.tensor([1.0, 1.1, 1.0], dtype=dtype))
-    with pytest.raises(ValueError, match="support geometry"):
-        cloud.transform(stretch)
+    # A 2% stretch, given as a list or as a tensor, and a 2% shear are not
+    # similarities
+    stretch = [1.0, 1.0, 1.02]
+    shear = torch.eye(3, dtype=dtype)
+    shear[0, 1] = 0.02
+    for move in (
+        lambda: cloud.scale(stretch),
+        lambda: cloud.scale(torch.tensor(stretch, dtype=dtype)),
+        lambda: cloud.transform(shear),
+    ):
+        with pytest.raises(ValueError, match="support geometry"):
+            move()
 
 
 def test_rigid_transforms_and_dtype_preserve_point_measures():

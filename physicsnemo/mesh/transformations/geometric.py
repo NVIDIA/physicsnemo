@@ -463,14 +463,17 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
     The test divides :math:`M` by its largest absolute entry, then compares
     :math:`M^\top M / c` with :math:`I`, so its outcome is independent of the
     overall scale. The zero map (:math:`c = 0`) passes, as a uniform scale by
-    zero; maps with non-finite entries fail. For float16 and bfloat16, whose
-    rounding alone moves the Gram matrix by up to about two epsilons, ``atol``
-    is raised to four epsilons; float32 and float64 keep ``atol``.
+    zero; maps with non-finite entries fail. The test computes in at least
+    float32. Float16 and bfloat16 rounding moves the Gram matrix of a
+    similarity by up to about 1.5 epsilons, so for those dtypes ``atol`` is
+    raised to two epsilons; float32 and float64 keep ``atol``.
     """
     n = matrix.shape[-1]
+    if matrix.is_floating_point():
+        atol = max(atol, 2 * torch.finfo(matrix.dtype).eps)
+    matrix = matrix.to(torch.promote_types(matrix.dtype, torch.float32))
     peak = matrix.abs().amax()
-    matrix = matrix / torch.where(peak > 0, peak, 1)  # floating point from here on
-    atol = max(atol, 4 * torch.finfo(matrix.dtype).eps)
+    matrix = matrix / torch.where(peak > 0, peak, 1)
     gram = matrix.T @ matrix
     scale = gram.diagonal(dim1=-2, dim2=-1).mean()
     nonzero = scale != 0

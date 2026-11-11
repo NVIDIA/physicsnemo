@@ -222,6 +222,22 @@ def test_similarity_test_is_independent_of_overall_scale(device):
     assert not _is_similarity_transform(torch.full((3, 3), torch.inf, device=device))
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_similarity_test_tolerates_only_16_bit_rounding(dtype):
+    """Regression: orthogonal maps rounded to 16 bits, once or twice, are
+    similarities, but 2% stretches and shears are not (at a tolerance of four
+    epsilons, bfloat16 took them for similarities)."""
+    generator = torch.Generator().manual_seed(0)
+    for _ in range(500):
+        q = torch.linalg.qr(torch.randn(3, 3, generator=generator).double()).Q
+        assert _is_similarity_transform(q.to(dtype))
+        assert _is_similarity_transform(300.0 * q.to(dtype))
+    assert not _is_similarity_transform(torch.diag(torch.tensor([1.0, 1.02])).to(dtype))
+    assert not _is_similarity_transform(
+        torch.tensor([[1.0, 0.02], [0.0, 1.0]]).to(dtype)
+    )
+
+
 def test_rotation_axis_validation(device):
     mesh = _surface(device)
     for axis in ([0.0, 0.0, 0.0], torch.zeros(3, device=device)):
