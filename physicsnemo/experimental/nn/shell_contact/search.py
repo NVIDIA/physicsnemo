@@ -34,7 +34,7 @@ contact, and a crossing sweep discovers crossings deeper than the band.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import torch
 
@@ -58,10 +58,8 @@ class ShellContactSearch:
     Parameters
     ----------
     activation_distance : float
-        Positive shell-clearance band: a pair is active while its activation
-        gap lies below it (and the taper of
-        :func:`~physicsnemo.experimental.nn.shell_contact.smooth_contact_cutoff`
-        reaches zero there). Physical length.
+        Positive shell-clearance band: a pair is active while its shell
+        clearance lies below it. Physical length.
     implementation : {"warp", "torch"}
         Broad-phase backend: a Warp BVH (float32 positions only; runs on CPU
         and CUDA) or the chunked Torch reference.
@@ -83,21 +81,15 @@ class ShellContactSearch:
         Transport the reference centre fan of four-node facets with the
         vertices (the material surface contract) instead of validating the
         live quad shapes. Requires ``reference_positions``.
-    prediction_horizon : float
-        Nonnegative causal forecast time: with a positive horizon the
-        activation gap is the closest approach of a linear forecast over the
-        horizon (two anchored material points), which needs ``velocities``.
     side_from_reference : bool
         Sign the gap of pairs whose node has crossed the facet plane since the
         reference configuration (negative, with the normal flipped), so that a
         node that has passed through a shell is distinguishable from one
         approaching its far side. Needs ``reference_positions``.
     reference_clearance : float, optional
-        Drop pairs whose activation gap in the reference configuration is
+        Drop pairs whose shell clearance in the reference configuration is
         below this length: flanges and in-plane neighbours that are assembled
-        close together are structure, what remains is new contact. The
-        reference gap is always the static one (zero horizon), so the option
-        combines freely with ``prediction_horizon``.
+        close together are structure, what remains is new contact.
     side_symmetric : bool
         Declare a crossing only when the reference configuration shows an
         interior projection as well (a node that was beside the facet and
@@ -106,8 +98,7 @@ class ShellContactSearch:
         Crossing sweep: candidates with an unsigned gap between the band and
         this radius are kept when the side test certifies a crossing, so the
         depth ceiling ``band + half thickness`` is lifted without widening the
-        approach neighbourhood. Needs ``side_from_reference`` and a zero
-        horizon.
+        approach neighbourhood. Needs ``side_from_reference``.
     clearance_approach_only : bool
         Apply ``reference_clearance`` to approaching pairs only: a certified
         crossing of two assembled panels is kept.
@@ -119,7 +110,6 @@ class ShellContactSearch:
     max_pairs: int = 2_000_000
     candidate_chunk_size: int = 1 << 20
     material_fan: bool = False
-    prediction_horizon: float = 0.0
     side_from_reference: bool = False
     reference_clearance: float | None = None
     side_symmetric: bool = False
@@ -145,8 +135,6 @@ class ShellContactSearch:
             or self.candidate_chunk_size <= 0
         ):
             raise ValueError("candidate_chunk_size must be a positive integer")
-        if not math.isfinite(self.prediction_horizon) or self.prediction_horizon < 0:
-            raise ValueError("prediction_horizon must be finite and nonnegative")
         if self.reference_clearance is not None and (
             not math.isfinite(self.reference_clearance) or self.reference_clearance < 0
         ):
@@ -162,12 +150,9 @@ class ShellContactSearch:
                 )
             if not self.side_from_reference:
                 raise ValueError("crossing_radius needs side_from_reference=True")
-            if self.prediction_horizon > 0:
-                raise ValueError("crossing_radius needs prediction_horizon=0")
         if self.clearance_approach_only and not self.side_from_reference:
             raise ValueError("clearance_approach_only needs side_from_reference=True")
         object.__setattr__(self, "activation_distance", float(self.activation_distance))
-        object.__setattr__(self, "prediction_horizon", float(self.prediction_horizon))
         object.__setattr__(self, "material_fan", bool(self.material_fan))
         object.__setattr__(self, "side_from_reference", bool(self.side_from_reference))
         object.__setattr__(self, "side_symmetric", bool(self.side_symmetric))
@@ -221,9 +206,6 @@ class ShellContactPairs:
     gap : torch.Tensor
         ``[E]`` signed shell clearance ``s * distance - half_thickness`` with
         ``s = -1`` for a crossed pair and ``+1`` otherwise.
-    activation_gap : torch.Tensor
-        ``[E]`` the gap that drives the activation taper: the forecast-aware
-        clearance of approaching pairs, the signed gap of crossed pairs.
     crossed : torch.Tensor
         ``[E]`` boolean crossing flags (all false without the reference side test).
     signed : bool
@@ -246,7 +228,6 @@ class ShellContactPairs:
     distance: torch.Tensor
     half_thickness: torch.Tensor
     gap: torch.Tensor
-    activation_gap: torch.Tensor
     crossed: torch.Tensor
     signed: bool
     stats: dict
@@ -255,39 +236,6 @@ class ShellContactPairs:
     def num_pairs(self) -> int:
         """Number of active pairs."""
         return int(self.query.shape[0])
-
-
-def linear_closest_approach(
-    relative: torch.Tensor, relative_velocity: torch.Tensor, horizon: float
-) -> torch.Tensor:
-    r"""Distance to a transported material point over a causal linear forecast.
-
-    ``relative`` is source minus query and ``relative_velocity`` uses the same
-    sign; the source's barycentric weights are frozen in time but live in
-    autograd. This is not the closest point on the evolving facet, a time of
-    impact, or a continuous collision detection guarantee. Zero relative speed
-    selects time zero without dividing by zero.
-
-    Parameters
-    ----------
-    relative : torch.Tensor
-        ``[E, 3]`` current relative position.
-    relative_velocity : torch.Tensor
-        ``[E, 3]`` relative velocity.
-    horizon : float
-        Nonnegative forecast time.
-
-    Returns
-    -------
-    torch.Tensor
-        ``[E]`` closest approach distance over ``[0, horizon]``.
-    """
-    speed_sq = relative_velocity.square().sum(-1)
-    denominator = torch.where(speed_sq > 0, speed_sq, torch.ones_like(speed_sq))
-    time = (-(relative * relative_velocity).sum(-1) / denominator).clamp(0, horizon)
-    return torch.linalg.vector_norm(
-        relative + time[:, None] * relative_velocity, dim=-1
-    )
 
 
 def uses_fused_narrow_phase(
@@ -316,79 +264,32 @@ def uses_fused_narrow_phase(
     )
 
 
-def _activation_gap(
-    positions,
-    velocities,
-    thickness,
-    query,
-    source,
-    projection: TriangleProjection,
-    search: ShellContactSearch,
-):
-    """Forecast-aware activation gap of pairs from their live projection."""
+def _membership_gap(thickness, query, source, projection: TriangleProjection):
+    """Shell clearance of pairs from a projection: distance minus the half thicknesses."""
     surface_thickness = (thickness[source] * projection.barycentric).sum(-1)
     half_thickness = (thickness[query] + surface_thickness) * 0.5
-    if search.prediction_horizon == 0:
-        return projection.distance - half_thickness
-    relative = projection.closest - positions[query]
-    relative_velocity = (velocities[source] * projection.barycentric[..., None]).sum(
-        1
-    ) - velocities[query]
-    distance = linear_closest_approach(
-        relative, relative_velocity, search.prediction_horizon
-    )
-    gap = torch.minimum(distance, projection.distance) - half_thickness
-    # The nearest material point can slide along a face/edge. Add the point
-    # closest at the forecast endpoint as a second anchor; analytically sweep
-    # BOTH material points over the entire interval. This catches crossings
-    # between samples, but two anchors are still not full moving-facet CCD.
-    future = project_onto_facets(
-        positions,
-        query,
-        source,
-        material_fan=search.material_fan,
-        velocities=velocities,
-        horizon=search.prediction_horizon,
-    )
-    future_relative = (positions[source] * future.barycentric[..., None]).sum(
-        1
-    ) - positions[query]
-    future_velocity = (velocities[source] * future.barycentric[..., None]).sum(
-        1
-    ) - velocities[query]
-    future_distance = linear_closest_approach(
-        future_relative, future_velocity, search.prediction_horizon
-    )
-    future_thickness = (thickness[source] * future.barycentric).sum(-1)
-    future_gap = future_distance - (thickness[query] + future_thickness) * 0.5
-    return torch.minimum(gap, future_gap)
+    return projection.distance - half_thickness
 
 
-def _reference_candidate_gaps(positions, velocities, thickness, faces, pairs, search):
+def _reference_candidate_gaps(positions, thickness, faces, pairs, search):
     """Torch reference of the membership gaps of candidate pairs."""
     query, face_id = pairs
     source = faces[face_id]
     projection = project_onto_facets(
         positions, query, source, material_fan=search.material_fan
     )
-    return _activation_gap(
-        positions, velocities, thickness, query, source, projection, search
-    )
+    return _membership_gap(thickness, query, source, projection)
 
 
-def _fused_candidate_gaps(positions, velocities, thickness, faces, pairs, search):
+def _fused_candidate_gaps(positions, thickness, faces, pairs, search):
     """Fused Warp membership gaps and the ambiguity mask of candidate pairs."""
-    from ._narrow_phase_warp import (
-        fused_activation_gaps,
-    )
+    from ._narrow_phase_warp import fused_activation_gaps
 
     return fused_activation_gaps(
         positions,
-        velocities,
         thickness,
         faces,
         pairs,
-        search.prediction_horizon,
         search.activation_distance,
         search.crossing_radius,
     )
@@ -397,75 +298,15 @@ def _fused_candidate_gaps(positions, velocities, thickness, faces, pairs, search
 def _fused_reference_gaps(reference_positions, thickness, faces, pairs, search):
     """Fused Warp reference gaps of kept pairs and their ambiguity mask.
 
-    The reference carries no forecast, and the membership boundary the kernel
-    guards is the reference clearance (not the live activation band): the
-    pairs it leaves ambiguous are exactly those near the clearance decision.
+    The membership boundary the kernel guards is the reference clearance (not
+    the live activation band): the pairs it leaves ambiguous are exactly those
+    near the clearance decision.
     """
-    from ._narrow_phase_warp import (
-        fused_activation_gaps,
-    )
+    from ._narrow_phase_warp import fused_activation_gaps
 
     return fused_activation_gaps(
-        reference_positions,
-        None,
-        thickness,
-        faces,
-        pairs,
-        0.0,
-        search.reference_clearance,
+        reference_positions, thickness, faces, pairs, search.reference_clearance
     )
-
-
-def candidate_activation_gaps(
-    positions: torch.Tensor,
-    velocities: torch.Tensor | None,
-    thickness: torch.Tensor,
-    faces: torch.Tensor,
-    pairs: torch.Tensor,
-    search: ShellContactSearch,
-) -> tuple[torch.Tensor, int]:
-    r"""Membership gaps of candidate pairs, fused where available.
-
-    Discrete membership only: the fused kernel marks numerically ambiguous
-    pairs (near a membership boundary, ill-conditioned fans, ties between
-    material regions), which are recomputed by the Torch reference. Live
-    outputs of a search are always recomputed in Torch afterwards.
-
-    Parameters
-    ----------
-    positions : torch.Tensor
-        ``[N, 3]`` node positions.
-    velocities : torch.Tensor, optional
-        ``[N, 3]`` velocities, required for a positive forecast horizon.
-    thickness : torch.Tensor
-        ``[N]`` nodal shell thickness.
-    faces : torch.Tensor
-        ``[F, 3|4]`` facet connectivity.
-    pairs : torch.Tensor
-        ``[2, E]`` candidate ``(node, face)`` pairs.
-    search : ShellContactSearch
-        The search settings.
-
-    Returns
-    -------
-    tuple[torch.Tensor, int]
-        ``[E]`` activation gaps and the number of pairs the reference decided.
-    """
-    if not uses_fused_narrow_phase(search, positions):
-        return _reference_candidate_gaps(
-            positions, velocities, thickness, faces, pairs, search
-        ), 0
-    gaps, ambiguous = _fused_candidate_gaps(
-        positions, velocities, thickness, faces, pairs, search
-    )
-    reference_ids = ambiguous.nonzero().flatten()
-    if not len(reference_ids):
-        return gaps, 0
-    reference_gap = _reference_candidate_gaps(
-        positions, velocities, thickness, faces, pairs[:, reference_ids], search
-    )
-    gaps.index_copy_(0, reference_ids, reference_gap)
-    return gaps, len(reference_ids)
 
 
 @torch.no_grad()
@@ -502,7 +343,6 @@ def _pages(rows: int, size: int):
 
 def _live_pair_geometry(
     positions,
-    velocities,
     thickness,
     reference_positions,
     query,
@@ -512,8 +352,8 @@ def _live_pair_geometry(
     """Live, differentiable geometry of one page of active pairs.
 
     Returns barycentric weights, closest points, distances, half thicknesses,
-    signed gaps, activation gaps and crossing flags; every quantity is per
-    pair, so a page holds exactly what the unpaged computation would.
+    signed gaps and crossing flags; every quantity is per pair, so a page
+    holds exactly what the unpaged computation would.
     """
     projection = project_onto_facets(
         positions, query, source_nodes, material_fan=search.material_fan
@@ -521,9 +361,6 @@ def _live_pair_geometry(
     source_thickness = (thickness[source_nodes] * projection.barycentric).sum(-1)
     half_thickness = (thickness[query] + source_thickness) * 0.5
     gap = projection.distance - half_thickness
-    activation_gap = _activation_gap(
-        positions, velocities, thickness, query, source_nodes, projection, search
-    )
     crossed = torch.zeros(len(query), dtype=torch.bool, device=positions.device)
     if search.side_from_reference:
         # A node that changed side of the facet plane since the reference
@@ -545,21 +382,17 @@ def _live_pair_geometry(
         )
         side = torch.where(crossed, -1.0, 1.0).to(positions.dtype)
         gap = side * projection.distance - half_thickness
-        activation_gap = torch.where(crossed, gap, activation_gap)
     return (
         projection.barycentric,
         projection.closest,
         projection.distance,
         half_thickness,
         gap,
-        activation_gap,
         crossed,
     )
 
 
-def _validate_inputs(
-    positions, faces, thickness, reference_positions, velocities, search
-):
+def _validate_inputs(positions, faces, thickness, reference_positions, search):
     n = len(positions)
     if thickness is None or thickness.shape != (n,):
         raise ValueError(
@@ -572,14 +405,6 @@ def _validate_inputs(
         raise ValueError(
             "shell contact requires faces, the facet element connectivity [F, 3|4]"
         )
-    if search.prediction_horizon > 0 and (
-        velocities is None
-        or velocities.shape != positions.shape
-        or velocities.dtype != positions.dtype
-        or velocities.device != positions.device
-        or not torch.isfinite(velocities).all()
-    ):
-        raise ValueError("live physical velocities must match positions")
     # Validate connectivity before using it to index thickness.
     if (
         faces.ndim != 2
@@ -619,10 +444,6 @@ def _validate_inputs(
                 closest_point_triangle(tri[:, 0], tri)
     else:
         geometries = [("current", positions)]
-        if search.prediction_horizon > 0:
-            geometries.append(
-                ("forecast", positions + search.prediction_horizon * velocities)
-            )
     # Validate every reference/strict quad, including distant facets.
     if faces.shape[1] == 4:
         with torch.no_grad():
@@ -645,7 +466,6 @@ def shell_contact_pairs(
     thickness: torch.Tensor,
     *,
     reference_positions: torch.Tensor | None = None,
-    velocities: torch.Tensor | None = None,
     excluded_pairs: torch.Tensor | None = None,
     batch: torch.Tensor | None = None,
     search: ShellContactSearch | None = None,
@@ -657,8 +477,8 @@ def shell_contact_pairs(
     Membership is decided on detached geometry and the live geometry of the
     selected pairs is recomputed afterwards in canonical ``(node, face)``
     order, so the returned closest points, weights, distances and gaps are
-    differentiable in ``positions`` (and ``velocities``). The active-pair
-    budget of the search raises instead of truncating.
+    differentiable in ``positions``. The active-pair budget of the search
+    raises instead of truncating.
 
     Parameters
     ----------
@@ -672,8 +492,6 @@ def shell_contact_pairs(
     reference_positions : torch.Tensor, optional
         ``[N, 3]`` reference configuration; required by the material fan, the
         reference side test and the reference clearance.
-    velocities : torch.Tensor, optional
-        ``[N, 3]`` nodal velocities; required by a positive forecast horizon.
     excluded_pairs : torch.Tensor, optional
         ``[2, X]`` int64 ``(node, face)`` pairs that are never active (for
         example the one-ring exclusions of the mesh).
@@ -689,30 +507,17 @@ def shell_contact_pairs(
     """
     if search is None:
         search = ShellContactSearch()
-    n = len(positions)
     thickness = _validate_inputs(
-        positions, faces, thickness, reference_positions, velocities, search
+        positions, faces, thickness, reference_positions, search
     )
     node_pad = thickness * 0.5 + search.search_band
     face_pad = thickness[faces].amax(1) * 0.5
-    search_end = None
-    if search.prediction_horizon > 0:
-        with torch.no_grad():
-            # A common Galilean translation preserves relative geometry at
-            # every forecast time, avoiding huge boxes from rigid car motion.
-            # One global reference also works for batched graphs; cross-batch
-            # exclusion remains the candidate functional's responsibility.
-            reference = velocities.mean(0) if n else velocities.new_zeros(3)
-            search_end = positions + search.prediction_horizon * (
-                velocities - reference
-            )
     chunks = node_triangle_candidate_chunks(
         positions,
         faces,
         node_pad,
         face_pad,
         batch=batch,
-        previous_positions=search_end,
         excluded_pairs=excluded_pairs,
         implementation=search.implementation,
         pair_chunk_size=search.candidate_chunk_size,
@@ -736,9 +541,6 @@ def shell_contact_pairs(
         clearance_pending_sweep = []
         clearance_pending_count = 0
         use_fused = uses_fused_narrow_phase(search, positions)
-        # The reference carries no forecast, so a positive horizon of the live
-        # search must not be applied to it.
-        static_search = replace(search, prediction_horizon=0.0)
 
         def finish(kept, from_sweep, passes):
             """Certify, accept and record pairs whose membership is decided."""
@@ -821,7 +623,7 @@ def shell_contact_pairs(
                     page,
                     page_sweep,
                     _reference_candidate_gaps(
-                        reference_positions, None, thickness, faces, page, static_search
+                        reference_positions, thickness, faces, page, search
                     ),
                 )
             remainder = combined[:, end:]
@@ -856,7 +658,7 @@ def shell_contact_pairs(
                     kept,
                     from_sweep,
                     _reference_candidate_gaps(
-                        reference_positions, None, thickness, faces, kept, static_search
+                        reference_positions, thickness, faces, kept, search
                     ),
                 )
                 return
@@ -888,7 +690,7 @@ def shell_contact_pairs(
             reference_pages += 1
             largest_reference_page = max(largest_reference_page, pair_ids.shape[1])
             gaps = _reference_candidate_gaps(
-                positions, velocities, thickness, faces, pair_ids, search
+                positions, thickness, faces, pair_ids, search
             )
             select_live(pair_ids, gaps)
 
@@ -898,7 +700,7 @@ def shell_contact_pairs(
             largest_page = max(largest_page, pairs.shape[1])
             if use_fused:
                 candidate_gap, ambiguous = _fused_candidate_gaps(
-                    positions, velocities, thickness, faces, pairs, search
+                    positions, thickness, faces, pairs, search
                 )
                 reference_pairs = pairs[:, ambiguous]
                 count = reference_pairs.shape[1]
@@ -925,7 +727,7 @@ def shell_contact_pairs(
                 del ambiguous, reference_pairs
             else:
                 candidate_gap = _reference_candidate_gaps(
-                    positions, velocities, thickness, faces, pairs, search
+                    positions, thickness, faces, pairs, search
                 )
                 select_live(pairs, candidate_gap)
             del candidate_gap, pairs
@@ -964,7 +766,6 @@ def shell_contact_pairs(
     pieces = [
         _live_pair_geometry(
             positions,
-            velocities,
             thickness,
             reference_positions,
             query[start:stop],
@@ -973,7 +774,7 @@ def shell_contact_pairs(
         )
         for start, stop in _pages(query.shape[0], search.candidate_chunk_size)
     ]
-    barycentric, closest, distance, half_thickness, gap, activation_gap, crossed = (
+    barycentric, closest, distance, half_thickness, gap, crossed = (
         parts[0] if len(parts) == 1 else torch.cat(parts) for parts in zip(*pieces)
     )
     if search.side_from_reference:
@@ -987,7 +788,6 @@ def shell_contact_pairs(
         distance=distance,
         half_thickness=half_thickness,
         gap=gap,
-        activation_gap=activation_gap,
         crossed=crossed,
         signed=search.side_from_reference,
         stats=stats,

@@ -266,10 +266,10 @@ from physicsnemo.experimental.models.deformer.local_attention import (  # noqa: 
 BF16_TOLERANCE = dict(atol=5e-2, rtol=5e-2)
 BF16_RELATIVE_SLACK, BF16_RELATIVE_FLOOR, BF16_RELATIVE_MAX = 1.5, 1e-3, 5e-2
 # With the log-sum-exp detached the softmax is shift invariant per row, so the
-# key bias and the edge-bias bias receive no gradient, and the value bias
-# cancels in the neighbour difference: these three are zero analytically and
-# only collect rounding noise.
-ZERO_GRADIENT_PARAMETERS = frozenset({"key.bias", "value.bias", "edge_bias.bias"})
+# key bias receives no gradient (it only shifts the detached lse feature): its
+# gradient is zero analytically and only collects rounding noise. The value and
+# edge-bias projections have no bias any more.
+ZERO_GRADIENT_PARAMETERS = frozenset({"key.bias"})
 
 cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 triton_only = pytest.mark.skipif(

@@ -480,6 +480,14 @@ class DeFormer(GeoTransolver):
         Forwarded to every
         :class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionBlock`
         as ``dropout`` and ``concrete_dropout``.
+    output_head : bool, optional
+        Build the output path: GeoTransolver's output projection, the post
+        node encoder, the post-processor with its FiLM, the node decoder and
+        the post gate. With ``False`` only the backbone and the pre-processor
+        are built, :meth:`forward` requires ``return_backbone=True`` and
+        recipes attach their own stages with :meth:`make_local_processor`,
+        :meth:`make_node_decoder` and :class:`MeshContextFiLM`, so that no
+        unused parameter is left in the model. Default is ``True``.
 
     Forward
     -------
@@ -572,6 +580,7 @@ class DeFormer(GeoTransolver):
         local_attention_backend: str = "auto",
         local_dropout: float = 0.0,
         local_concrete_dropout: bool = False,
+        output_head: bool = True,
     ) -> None:
         if input_dim_edges <= 0:
             raise ValueError("input_dim_edges must be positive")
@@ -618,6 +627,8 @@ class DeFormer(GeoTransolver):
             raise ValueError("local_num_heads must be a positive integer or None")
         if not isinstance(local_attention_fused, bool):
             raise ValueError("local_attention_fused must be a bool")
+        if not isinstance(output_head, bool):
+            raise ValueError("output_head must be a bool")
         if local_attention_backend not in {"auto", "triton", "torch"}:
             raise ValueError(
                 "local_attention_backend must be 'auto', 'triton' or 'torch'; "
@@ -692,12 +703,28 @@ class DeFormer(GeoTransolver):
         self.mesh_hidden_dim = mesh_hidden_dim
         self.num_pre_processor_layers = num_pre_processor_layers
         self.num_post_processor_layers = num_post_processor_layers
+        self.num_pre_processor_checkpoint_segments = (
+            num_pre_processor_checkpoint_segments
+        )
+        self.num_post_processor_checkpoint_segments = (
+            num_post_processor_checkpoint_segments
+        )
+        self.mesh_post_residual_gate_init = float(mesh_post_residual_gate_init)
+        self.output_head = output_head
+        # Width of the backbone state (hidden plus the local-feature width),
+        # read from the output projection GeoTransolver built.
+        self.backbone_width = int(self.ln_mlp_out[0][0].normalized_shape[0])
         self.mesh_pre_residual_gate = nn.Parameter(
             torch.tensor(float(mesh_pre_residual_gate_init))
         )
-        self.mesh_post_residual_gate = nn.Parameter(
-            torch.tensor(float(mesh_post_residual_gate_init))
-        )
+        if output_head:
+            self.mesh_post_residual_gate = nn.Parameter(
+                torch.tensor(float(mesh_post_residual_gate_init))
+            )
+        else:
+            self.register_parameter("mesh_post_residual_gate", None)
+            # The backbone's output projection is never used without a head.
+            self.ln_mlp_out = None
         self.mesh_context_fusion = mesh_context_fusion
         self.mesh_context_use_global = mesh_context_use_global
 
@@ -713,6 +740,14 @@ class DeFormer(GeoTransolver):
             )
 
         mesh_activation_fn = get_activation(mesh_activation)
+        self._node_decoder_kwargs = dict(
+            output_dim=out_dim,
+            hidden_dim=mesh_hidden_dim,
+            hidden_layers=num_layers_node_decoder,
+            activation_fn=mesh_activation_fn,
+            norm_type=None,
+            recompute_activation=recompute_activation,
+        )
         # The pre-processor consumes GeoTransolver's encoded node latent directly.
         # Optional linear adapters retain support for a mesh width that differs
         # from n_hidden without ever projecting through functional_dim.
@@ -726,24 +761,20 @@ class DeFormer(GeoTransolver):
             if mesh_hidden_dim == n_hidden
             else nn.Linear(mesh_hidden_dim, n_hidden, bias=False)
         )
-        self.post_node_encoder = MeshGraphMLP(
-            out_dim,
-            output_dim=mesh_hidden_dim,
-            hidden_dim=mesh_hidden_dim,
-            hidden_layers=num_layers_node_encoder,
-            activation_fn=mesh_activation_fn,
-            norm_type=norm_type,
-            recompute_activation=recompute_activation,
-        )
-        self.post_node_decoder = MeshGraphMLP(
-            mesh_hidden_dim,
-            output_dim=out_dim,
-            hidden_dim=mesh_hidden_dim,
-            hidden_layers=num_layers_node_decoder,
-            activation_fn=mesh_activation_fn,
-            norm_type=None,
-            recompute_activation=recompute_activation,
-        )
+        if output_head:
+            self.post_node_encoder = MeshGraphMLP(
+                out_dim,
+                output_dim=mesh_hidden_dim,
+                hidden_dim=mesh_hidden_dim,
+                hidden_layers=num_layers_node_encoder,
+                activation_fn=mesh_activation_fn,
+                norm_type=norm_type,
+                recompute_activation=recompute_activation,
+            )
+            self.post_node_decoder = self.make_node_decoder()
+        else:
+            self.post_node_encoder = None
+            self.post_node_decoder = None
 
         # Static reference-neighborhood attention before and after the backbone.
         # Checkpoint segments are contiguous block groups recomputed during
@@ -764,8 +795,12 @@ class DeFormer(GeoTransolver):
         self.pre_processor = self.make_local_processor(
             num_pre_processor_layers, num_pre_processor_checkpoint_segments
         )
-        self.post_processor = self.make_local_processor(
-            num_post_processor_layers, num_post_processor_checkpoint_segments
+        self.post_processor = (
+            self.make_local_processor(
+                num_post_processor_layers, num_post_processor_checkpoint_segments
+            )
+            if output_head
+            else None
         )
         if mesh_context_fusion == "none":
             self.mesh_context_encoder = None
@@ -784,7 +819,9 @@ class DeFormer(GeoTransolver):
                 if mesh_context_fusion == "pre_post"
                 else None
             )
-            self.post_context_film = MeshContextFiLM(mesh_hidden_dim)
+            self.post_context_film = (
+                MeshContextFiLM(mesh_hidden_dim) if output_head else None
+            )
 
     def forward(
         self,
@@ -805,6 +842,11 @@ class DeFormer(GeoTransolver):
         processor inputs are returned instead (see :class:`BackboneState`).
         """
 
+        if not self.output_head and not return_backbone:
+            raise ValueError(
+                "this DeFormer was built with output_head=False and has no output "
+                "path; call forward(..., return_backbone=True)"
+            )
         if not torch.compiler.is_compiling():
             if (
                 node_features.ndim != 2
@@ -954,16 +996,18 @@ class DeFormer(GeoTransolver):
                 embedding_states,
                 local_features,
                 return_point_features=True,
+                compute_outputs=self.output_head,
             )
-            output_i = outputs_i[0].squeeze(0)
-            if core_output is None:
-                # Autocast may make the GeoFLARE output fp16/bf16 while the
-                # datapipe input remains fp32. Allocate from the actual core
-                # output so index_copy never mixes dtypes.
-                core_output = output_i.new_zeros(
-                    (node_features.shape[0], self.output_dim)
-                )
-            core_output = core_output.index_copy(0, node_index, output_i)
+            if outputs_i is not None:
+                output_i = outputs_i[0].squeeze(0)
+                if core_output is None:
+                    # Autocast may make the GeoFLARE output fp16/bf16 while the
+                    # datapipe input remains fp32. Allocate from the actual core
+                    # output so index_copy never mixes dtypes.
+                    core_output = output_i.new_zeros(
+                        (node_features.shape[0], self.output_dim)
+                    )
+                core_output = core_output.index_copy(0, node_index, output_i)
             if return_backbone:
                 features_i = features_i[0].squeeze(0)
                 if point_features is None:
@@ -972,7 +1016,7 @@ class DeFormer(GeoTransolver):
                     )
                 point_features = point_features.index_copy(0, node_index, features_i)
 
-        if core_output is None:
+        if core_output is None and point_features is None:
             raise ValueError("The graph batch contains no nodes")
         if return_backbone:
             return BackboneState(point_features, neighborhood, mesh_context)
@@ -1061,6 +1105,14 @@ class DeFormer(GeoTransolver):
         if not torch.compiler.is_compiling():
             neighborhood.validate(num_nodes, self.input_dim_edges)
         return neighborhood
+
+    def make_node_decoder(self) -> nn.Module:
+        """A fresh node decoder of the output head's shape (mesh width to ``out_dim``).
+
+        Built for the model's own head and by recipes that attach their own
+        head to a backbone-only model (``output_head=False``).
+        """
+        return MeshGraphMLP(self.mesh_hidden_dim, **self._node_decoder_kwargs)
 
     def make_local_processor(
         self, num_layers: int, checkpoint_segments: int = 0

@@ -26,7 +26,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | Key | Value | Meaning |
 | --- | --- | --- |
 | `yaris.data_root`, `yaris.split_manifest`, `yaris.outlier_mask`, `yaris.work_dir` | required | stores, `splits.csv`, `outlier_nodes.npz` (or `null`), run directory (an absolute path: Hydra changes into it) |
-| `yaris.stride` | 5 | every fifth 1 ms frame (5 ms); `model.dt` and `reader.raw_dt * stride` must agree |
+| `yaris.stride`, `yaris.dt` | 5, 0.005 | every fifth 1 ms frame; the frame interval in seconds (`stride * reader.raw_dt`), read by the datapipe and, through it, by the time-conditional models |
 | `training.trainer_class` | `px_yaris.trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
 | `training.num_training_samples` / `num_validation_samples` | 69 / 20 | the manifest's split sizes |
 | `training.num_time_steps` | 31 | frame bound per case (`ceil(152 / 5)`); the time label `k / 30` is normalized by it |
@@ -39,7 +39,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `training.auxiliary_loss_weight` | 0.1 | weight of the position loss on the provisional head |
 | `training.validation_freq`, `save_checkpoint_freq` | 5, 5 | epochs |
 | `datapipe.sample_type` | `one_time_step` | one (case, future frame) pair per sample, from the initial frame |
-| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | from the model, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash |
+| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | 32, `euclidean`, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash; the neighbourhood-attention models read `k` and the metric from here |
 | `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | false, false, null | graph attachments the corrector and the metrics need (see below) |
 
 ### Keys of `model/deformer_time_conditional.yaml`
@@ -49,18 +49,19 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `functional_dim`, `out_dim`, `global_dim` | 36, 3, 32 | coords + thickness + 32-channel time code; the time code as the global token |
 | `n_hidden`, `n_head`, `n_layers`, `slice_num`, `attention_type` | 256, 8, 6, 128, `GALE_FA` | the FLARE backbone (original FLARE, not FLARE++) |
 | `time_embedding`, `time_fourier_bands`, `time_dim`, `time_as_global` | `fourier`, 8, 32, true | the learned Fourier time code |
-| `num_time_steps`, `dt` | `${training.num_time_steps}`, 0.005 | frame bound and frame interval (the datapipe reads `dt`) |
+| `num_time_steps`, `dt` | `${training.num_time_steps}`, `${oc.select:datapipe.dt,null}` | frame bound and the dataset's frame interval (null for a datapipe without one) |
 | `mesh_hidden_dim`, `num_pre_processor_layers`, `num_post_processor_layers` | 256, 1, 1 | width and depth of the local stages (stage B is an independent copy of stage A) |
 | `mesh_pre_residual_gate_init`, `mesh_post_residual_gate_init`, `mesh_context_fusion` | 0, 1, `pre_post` | residual gates and FiLM conditioning on the mesh context |
-| `local_neighborhood`, `local_knn_k` | `euclidean`, 32 | static kNN neighbourhood attention; the Yaris store edges cover shells only, so Euclidean neighbours |
+| `local_neighborhood`, `local_knn_k` | `${datapipe.local_knn_metric}`, `${datapipe.local_knn_k}` | static kNN neighbourhood attention over the datapipe's neighbourhoods (Euclidean for the Yaris stores, whose edges cover shells only) |
 | `local_num_heads`, `local_mlp_ratio`, `local_edge_dim`, `local_activation` | 8, 2, 32, `gelu` | attention block |
 | `local_attention_fused`, `local_attention_backend` | true, `auto` | the fused kernel (Triton on CUDA) |
 | `activation_checkpointing`, `checkpointing_ratio`, `activation_checkpointing_components`, `num_*_processor_checkpoint_segments` | true, 1.0, `[blocks, context]`, 1 | memory policy of the 1.48M-node forward |
 | `clamp_to_wall`, `wall_axis`, `wall_sign` | false, 0, 1 | evaluation-time rigid-wall clamp (needs `datapipe.rigid_wall_position`) |
 
-The body-in-white recipe `biw_yaris_deformer` uses the same
-model file with `local_neighborhood=geodesic`, no activation checkpointing and
-`dt=null`.
+The body-in-white recipe `biw_yaris_deformer` uses the same model file over
+the datapipe's geodesic neighbourhoods (`datapipe.local_knn_metric=geodesic`)
+without activation checkpointing; its `dt` is null because the VTP datapipe
+has no frame interval.
 
 ### Keys of `px_yaris_deformer_corrector` and `model/deformer_corrector.yaml`
 
@@ -73,7 +74,7 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | `model.use_contact`, `contact_activation_distance`, `contact_reference_clearance`, `node_contact_radius` | true, 5, 10, 10 | contact edges from the crossing-aware search on the predicted shape: 5 mm band, 10 mm reference clearance, features over 10 mm |
 | `model.contact_side_from_reference`, `contact_side_symmetric`, `contact_crossing_radius`, `contact_clearance_approach_only` | true, false, null, false | the side test and its corrections (see `physicsnemo.experimental.nn.shell_contact.ShellContactSearch`) |
 | `model.contact_bidirectional`, `contact_search_implementation`, `contact_surface_max_pairs` | true, `warp`, 8e6 | both message directions; search backend and budget |
-| `model.dt`, `local_knn_k`, `local_neighborhood` | 0.005, 32, `euclidean` | read by the datapipe (the network's neighbourhoods) |
+| `model.dt`, `local_knn_k`, `local_neighborhood` | from the datapipe | the teacher's frame interval and neighbourhoods (`${oc.select:datapipe.dt,null}`, `${datapipe.local_knn_k}`, `${datapipe.local_knn_metric}`) |
 | `model.final_clamp_to_wall`, `wall_axis`, `wall_sign` | true (recipe), 0, 1 | wall clamp of the corrected shape at evaluation |
 | `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | true, true, 100 | shell facets and exclusions, mesh edges, the Yaris barrier plane |
 | `training.epochs`, `lr_warmup_epochs`, `validation_freq`, `save_checkpoint_freq` | 30, 1, 2, 1 | the corrector's budget |
@@ -81,14 +82,18 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm, no crossing sweep | target-relative penetration metrics in the validation record; the crossing depth the search can still see is bounded (band plus half thicknesses, recorded as `crossing_depth_ceiling_mm`), `crossing_radius_mm` lifts the bound at a large cost |
 
 `px_yaris_geotransolver` sets the point model's time code, width and memory policy
-to the network's and the datapipe's neighbourhood keys explicitly (the point
-model has none); it ignores the neighbourhoods.
+to the network's; the datapipe still builds the neighbourhoods (a dataset
+product shared with the network's work directory), which the point model
+ignores.
 
 ### Evaluation keys (`evaluate_px_yaris.py`)
 
 | Override | Effect |
 | --- | --- |
 | `training.validation_output_dir=<dir>` | where the record goes (required; the run's own records are never written) |
+| `hydra.run.dir=<dir>/hydra` | required inside the output directory: the recipe's run directory is the training run, whose `.hydra` files an evaluation must not overwrite |
+| `training.evaluation_split=test` | score the manifest's test split instead of the validation split |
+| `datapipe.stats_dir=<run>/stats` | the run's statistics and neighbourhood cache (default `${yaris.work_dir}/stats`), loaded and never recomputed |
 | `training.ckpt_path=<run>/checkpoints`, `training.load_epoch=<E>` | the checkpoint to score |
 | `datapipe.contact_surface=true` | shell facets for the penetration metrics of a contact-free model |
 | `training.validation_penetration.wall_position_mm=100` | wall family for models whose recipe has no `rigid_wall_position` |
@@ -98,7 +103,11 @@ model has none); it ignores the neighbourhoods.
 | `training.warm_start_model=<file>.mdlus` | score a model-only checkpoint (no `checkpoint.0.<E>.pt` next to it); `training.ckpt_path` may then be an empty directory |
 
 Every key above is declared in `training/default.yaml`, so plain overrides
-compose on every recipe. The record is `<dir>/epoch_<EEEE>.json` (zero-padded,
+compose on every recipe. Only the requested split is built, in load mode (the
+frozen statistics, the kNN statistics and the neighbourhood cache are read from
+`datapipe.stats_dir`; a missing one fails instead of being rebuilt, and nothing
+is written there); no training dataset, optimizer or TensorBoard writer is
+created. The record is `<dir>/epoch_<EEEE>.json` (zero-padded,
 e.g. `epoch_0030.json`); its `penetration` block carries `complete: false`,
 the ranks' `failure_reasons` and `null` values when the probe failed anywhere,
 and `evaluate_px_yaris.py` then exits with an error.
@@ -118,6 +127,7 @@ and `evaluate_px_yaris.py` then exits with an error.
 | `training.trainer_class` | null | dotted path of a `train.Trainer` subclass (null: `train.Trainer`) |
 | `training.load_epoch`, `warm_start_model` | null, null | the checkpoint epoch to load (null: the latest); `.mdlus` weights to start from when `ckpt_path` holds no training checkpoint |
 | `training.validation_output_dir`, `validation_node_errors`, `validation_region_bounds`, `validation_penetration` | null, false, null, off | the validation suite's keys (see [Evaluation keys](#evaluation-keys-evaluate_px_yarispy)); the recipes that use them set their values |
+| `training.evaluation_split` | `validation` | the manifest split `evaluate_px_yaris.py` scores (`validation` or `test`) |
 | `reader.include_contact_topology` (`reader/vtp.yaml`) | false | also cache the shell cells of the VTP files, for `datapipe.contact_surface` |
 | `datapipe.contact_surface`, `contact_surface_exclusion`, `rigid_wall_position` (`datapipe/graph.yaml`) | false, `incidence`, null | contact topology and rigid wall on the structural graph |
 | `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` (`datapipe/graph.yaml`) | null, `geodesic`, null | static kNN neighbourhoods for neighbourhood attention; null keeps the MeshGraphNet graph unchanged |
@@ -131,18 +141,22 @@ Re-running a training command resumes from `<work_dir>/checkpoints`.
 
 | Recipe | Model | Purpose |
 | --- | --- | --- |
-| `biw_yaris_deformer` | `model/deformer_time_conditional.yaml` with `local_neighborhood=geodesic`, no activation checkpointing and `dt=null` | the DeFormer network on the body-in-white data: 26 frames, 127 training and 8 validation cases, 100 epochs, Muon, normalized MSE with provisional-head loss 0.1 |
+| `biw_yaris_deformer` | `model/deformer_time_conditional.yaml` over the datapipe's geodesic neighbourhoods, no activation checkpointing (`dt` null: the VTP datapipe has no frame interval) | the DeFormer network on the body-in-white data: 26 frames, 127 training and 8 validation cases, 100 epochs, Muon, normalized MSE with provisional-head loss 0.1 |
 | `biw_yaris_geoflare_oneshot`, `biw_yaris_geotransolver_oneshot`, `bumper_*` | one-shot and time-conditional point models | the original body-in-white (formerly `crash_*`) and bumper examples |
 
 The recipe is self-contained (reader `vtp`, datapipe `graph`, training defaults
 plus its own keys); the required paths are `training.raw_data_dir` and
 `training.raw_data_dir_validation` (`inference.raw_data_dir_test` for
-`inference.py`). `model.local_neighborhood=euclidean` and `model.local_knn_k=16`
-change the neighbourhood metric and size; the datapipe builds the matching
-neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
+`inference.py`). `datapipe.local_knn_metric=euclidean` and `datapipe.local_knn_k=16`
+change the neighbourhood metric and size (the model reads both from the
+datapipe); the datapipe builds the matching neighbourhoods and caches them
+under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw.py` scores a body-in-white time-conditional checkpoint with
-the PX Yaris validation suite; the penetration metrics need the shell facets
+the PX Yaris validation suite (one implementation, `validation_suite.py`,
+serves the Yaris trainer and both evaluators; both evaluators require
+`hydra.run.dir` inside `training.validation_output_dir`); the penetration
+metrics need the shell facets
 (`reader.include_contact_topology=true datapipe.contact_surface=true
 datapipe.contact_surface_exclusion=one_ring datapipe.rigid_wall_position=-29.8`,
 see the script's docstring). Its per-region readouts follow the recipe's

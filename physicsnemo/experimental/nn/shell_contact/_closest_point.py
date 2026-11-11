@@ -268,7 +268,6 @@ def node_triangle_candidate_chunks(
     face_padding: torch.Tensor,
     *,
     batch: torch.Tensor | None = None,
-    previous_positions: torch.Tensor | None = None,
     excluded_pairs: torch.Tensor | None = None,
     implementation: str = "warp",
     max_pairs: int | None = None,
@@ -278,9 +277,8 @@ def node_triangle_candidate_chunks(
     """Return an iterator of exhaustive [2,E] pair chunks, E <= pair_chunk_size.
 
     BVH boxes cover the WHOLE facet, not only its vertices/centroid. Padding is
-    nonnegative physical length. With previous_positions, boxes cover the full
-    linear sweep of each node/facet; this alone is NOT continuous detection.
-    Supports three-node triangles and four-node facets. Incidence and cross-batch
+    nonnegative physical length. Supports three-node triangles and four-node
+    facets. Incidence and cross-batch
     pairs are excluded; optional [2,E] exclusions refer
     to node and face IDs, not graph hops. Pairs are unique across all chunks,
     but chunk ordering is backend-dependent. Sort after narrow-phase selection
@@ -345,15 +343,6 @@ def node_triangle_candidate_chunks(
         raise ValueError("batch must be device-matched nonnegative int64 [N]")
     if torch.any(batch[faces] != batch[faces[:, :1]]):
         raise ValueError("a surface face cannot span batch graphs")
-    if previous_positions is None:
-        previous_positions = positions
-    if (
-        previous_positions.shape != positions.shape
-        or previous_positions.device != positions.device
-        or previous_positions.dtype != positions.dtype
-        or not torch.isfinite(previous_positions).all()
-    ):
-        raise ValueError("previous_positions must match positions and be finite")
     if excluded_pairs is not None:
         if (
             excluded_pairs.ndim != 2
@@ -372,16 +361,10 @@ def node_triangle_candidate_chunks(
         raise ValueError("implementation must be 'torch' or 'warp'")
     if not n or not f:
         return iter(())
-    lower = (
-        torch.minimum(positions[faces].amin(1), previous_positions[faces].amin(1))
-        - face_padding[:, None]
-    )
-    upper = (
-        torch.maximum(positions[faces].amax(1), previous_positions[faces].amax(1))
-        + face_padding[:, None]
-    )
-    query_lower = torch.minimum(positions, previous_positions) - node_padding[:, None]
-    query_upper = torch.maximum(positions, previous_positions) + node_padding[:, None]
+    lower = positions[faces].amin(1) - face_padding[:, None]
+    upper = positions[faces].amax(1) + face_padding[:, None]
+    query_lower = positions - node_padding[:, None]
+    query_upper = positions + node_padding[:, None]
     # Outward rounding ensures touching boxes survive floating point arithmetic.
     lower, query_lower = [
         torch.nextafter(x, torch.full_like(x, -float("inf")))

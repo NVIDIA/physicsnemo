@@ -38,7 +38,12 @@ Definitions (physical millimetres, per held-out case and future frame):
   ``+1`` otherwise. A crossing requires the node to project onto the facet's
   interior in BOTH the initial and the current configuration, so a node that
   was beside the facet and slid under its edge is not a crossing (the records
-  carry this as ``sidedness: symmetric``, ``metric_version`` 2).
+  carry this as ``sidedness: symmetric``, ``metric_version`` 2). The rule is
+  deliberately stricter than the one-sided side test of the corrector's
+  contact features: on the reference trajectories most deep one-sided
+  "crossings" are nodes sliding past a facet edge, not penetrations, so the
+  metric counts only certified crossings and under-counts a node that slides
+  by more than about one element before it crosses.
 * Envelope depth of a node: ``d_env = max over its pairs of relu(-g)``, the
   deepest violation of the thickness envelope; ``crossing depth``
   ``d_x = max over its pairs of relu(-s * delta)``, the distance it has

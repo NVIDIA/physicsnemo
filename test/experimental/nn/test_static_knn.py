@@ -127,6 +127,50 @@ def test_geodesic_stays_on_the_sheet_but_euclidean_crosses_the_gap():
     )
 
 
+@requires_scipy
+def test_euclidean_matches_a_brute_force_ranking_without_ties():
+    """Random points: the KD-tree result equals a float64 all-pairs ranking."""
+    generator = torch.Generator().manual_seed(0)
+    pos = torch.rand(300, 3, generator=generator, dtype=torch.float64).float()
+    k = 7
+    xyz = pos.double().numpy()
+    distances = np.linalg.norm(xyz[:, None] - xyz[None], axis=-1)
+    np.fill_diagonal(distances, np.inf)
+    ranked = np.sort(distances, axis=1)
+    assert (ranked[:, k] - ranked[:, k - 1] > 1e-9).all(), "the test needs no ties"
+    order = np.argsort(distances, axis=1, kind="stable")[:, :k]
+    result = euclidean_knn(pos, k)
+    assert result.mask.all()
+    assert result.index.numpy().tolist() == order.tolist()
+    np.testing.assert_allclose(
+        result.distance.numpy(),
+        np.take_along_axis(distances, order, axis=1),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+@requires_scipy
+def test_euclidean_ties_at_the_k_boundary_follow_the_kd_tree():
+    """Documents the tie rule: boundary ties are the KD-tree's choice, returned
+    candidates at equal distance are ordered by node ID, and runs are
+    deterministic."""
+    pos, _ = grid(5, 5)
+    first, second = euclidean_knn(pos, 1), euclidean_knn(pos, 1)
+    torch.testing.assert_close(first.index, second.index)
+    # Corner node 0 has nodes 1 and 5 at distance 1: one of them is returned.
+    assert first.index[0].item() in (1, 5)
+    torch.testing.assert_close(first.distance[0], torch.tensor([1.0]))
+    # Centre node 12 has four nodes at distance 1, listed by node ID.
+    assert euclidean_knn(pos, 4).index[12].tolist() == [7, 11, 13, 17]
+
+
+@pytest.mark.skipif(_has_scipy(), reason="documents the error without SciPy")
+def test_euclidean_names_scipy_when_it_is_missing():
+    with pytest.raises(Exception, match="SciPy"):
+        euclidean_knn(torch.zeros(3, 3), 2)
+
+
 PADDED_POSITIONS = torch.tensor(
     [[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [50, 0, 0], [51, 0, 0]]
 )

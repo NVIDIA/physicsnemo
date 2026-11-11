@@ -34,6 +34,7 @@ from .local_attention import (
     LocalNeighborhood,
     NeighborhoodAttentionBlock,
     NeighborhoodAttentionProcessor,
+    fold_legacy_block_biases,
 )
 
 __all__ = [
@@ -46,5 +47,6 @@ __all__ = [
     "LocalNeighborhoodData",
     "NeighborhoodAttentionBlock",
     "NeighborhoodAttentionProcessor",
+    "fold_legacy_block_biases",
     "mesh_edge_features",
 ]

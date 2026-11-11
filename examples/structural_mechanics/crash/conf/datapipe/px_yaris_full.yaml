@@ -18,7 +18,7 @@ _convert_: all
 data_dir: ${yaris.data_root}
 num_samples: ${training.num_training_samples}
 num_steps: ${training.num_time_steps}
-dt: ${model.dt}
+dt: ${yaris.dt}
 stats_dir: ${yaris.work_dir}/stats
 # one (case, future frame) pair per sample, predicted from the initial frame
 sample_type: one_time_step
@@ -27,8 +27,10 @@ dynamic_features: []
 dynamic_targets: []
 global_features: null
 # static reference kNN neighbourhoods of the local attention (built once, cached)
-local_knn_k: ${model.local_knn_k}
-local_knn_metric: ${model.local_neighborhood}
+# static reference kNN neighbourhoods (a dataset product, cached by content hash);
+# the neighbourhood-attention models read these two keys from here
+local_knn_k: 32
+local_knn_metric: euclidean  # the Yaris store edges cover shells only
 local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
 # shell facets, nodal thickness and one-ring exclusions on the graph, for the
 # contact search of the corrector and the penetration metrics

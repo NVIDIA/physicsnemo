@@ -143,7 +143,10 @@ def clamp_to_wall(
     Nothing but the wall coordinate changes, and only for points beyond the
     plane: ``min(x[axis], wall)`` for ``sign=+1``, ``max`` for ``sign=-1``.
     The plane position is taken in the coordinates of ``positions``
-    (physical or normalized alike).
+    (physical or normalized alike). The clamp targets the crossing family
+    of :func:`wall_penetration_depths`: it puts the mid-surface on the plane,
+    so a clamped node still reports a thickness-envelope depth of half its
+    thickness, as the envelope is measured there.
 
     Parameters
     ----------

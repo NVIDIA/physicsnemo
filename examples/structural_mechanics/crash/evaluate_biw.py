@@ -39,7 +39,9 @@ environment, sharded over GPUs like training::
 
 Only the validation split is built; the normalization statistics are loaded
 from ``datapipe.stats_dir`` (the run's ``stats`` directory, written when the
-training split was built), so nothing is ever written next to the run. The
+training split was built), so nothing is ever written next to the run, and
+``hydra.run.dir`` must lie inside ``training.validation_output_dir``. The suite
+is :mod:`validation_suite`, shared with the Yaris trainer and evaluator. The
 record goes to ``<out>/epoch_<E>.json`` with the keys of the PX Yaris validation
 JSON, plus ``node_rmse_epoch_<E>.npy``.
 
@@ -58,50 +60,31 @@ contact model (they change its searcher).
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 import hydra
-import numpy as np
 import torch
-from datapipe import EPS, simsample_collate
-from deformer.penetration_metrics import PenetrationMetrics
+from datapipe import EPS
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf, open_dict
-from px_yaris.trainer import (
-    ExactShardSampler,
-    accumulate_validation,
-    summarize_cases,
-    summarize_validation,
+from validation_suite import (
+    amp_settings,
+    atomic_json,
+    data_stats_of,
+    load_evaluation_weights,
+    log_summary,
+    metric_fields,
+    region_names,
+    require_output_run_dir,
+    run_suite,
+    save_node_rmse,
 )
-from torch.utils.data import DataLoader, Dataset
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils import load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 # Reference-x regions of the body-in-white mesh: rear (x < -3000), middle, front (x >= -1500).
 DEFAULT_REGION_BOUNDS = (-3000.0, -1500.0)
-
-
-class NamedCases(Dataset):
-    """Serve a dataset's samples with the case name the shared accumulator reads
-    (``yaris_case_name``; the VTP datapipe keeps its records by position)."""
-
-    def __init__(self, dataset, names):
-        if len(names) != len(dataset) or len(set(names)) != len(names):
-            raise ValueError("one unique name per held-out case is required")
-        self.dataset = dataset
-        self.names = list(names)
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, index):
-        sample = self.dataset[index]
-        sample.yaris_case_name = self.names[index]
-        return sample
 
 
 def case_names(data_dir, count: int) -> list[str]:
@@ -113,16 +96,6 @@ def case_names(data_dir, count: int) -> list[str]:
     except Exception:  # noqa: BLE001 - names are labels only
         names = []
     return names + [str(index) for index in range(len(names), count)]
-
-
-def atomic_json(path, payload) -> None:
-    """Write ``payload`` as JSON through a temporary file."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    with open(temporary, "w") as handle:
-        json.dump(payload, handle, indent=1)
-    os.replace(temporary, path)
 
 
 def build_validation(cfg, logger0):
@@ -141,26 +114,6 @@ def build_validation(cfg, logger0):
         sample_type="all_time_steps",
         data_dir=cfg.training.raw_data_dir_validation,
         num_samples=count,
-    )
-
-
-def data_stats_of(dataset, device) -> dict:
-    """The statistics dictionary the models take (as in :class:`train.Trainer`)."""
-    return dict(
-        node={k: torch.as_tensor(v).to(device) for k, v in dataset.node_stats.items()},
-        edge={
-            k: torch.as_tensor(v).to(device)
-            for k, v in getattr(dataset, "edge_stats", {}).items()
-        },
-        feature={
-            k: torch.as_tensor(v).to(device)
-            for k, v in getattr(dataset, "feature_stats", {}).items()
-        },
-        global_features={
-            "mean": dataset.global_stats["global_mean"].to(device),
-            "std": dataset.global_stats["global_std"].to(device),
-            "keys": list(dataset.global_features_keys or []),
-        },
     )
 
 
@@ -184,259 +137,6 @@ def reference_mm(dataset, index: int = 0) -> torch.Tensor:
     return dataset.mesh_pos_seq[index][0].double() * (std + EPS) + mean
 
 
-def region_masks(x: torch.Tensor, bounds) -> torch.Tensor:
-    """``[R, N]`` bool: the reference-axis regions and the whole mesh last."""
-    edges = [-float("inf"), *[float(b) for b in bounds], float("inf")]
-    return torch.stack(
-        [(x >= lo) & (x < hi) for lo, hi in zip(edges[:-1], edges[1:])]
-        + [torch.ones_like(x, dtype=torch.bool)]
-    )
-
-
-def region_names(bounds) -> list[str]:
-    """Name the x-regions delimited by ``bounds`` plus the pooled ``all``."""
-    edges = [-float("inf"), *[float(b) for b in bounds], float("inf")]
-    return [f"x_{lo:g}_to_{hi:g}" for lo, hi in zip(edges[:-1], edges[1:])] + ["all"]
-
-
-def region_summary(masks, totals, per_case, bounds, horizon) -> dict:
-    """Translational share of the error per reference-x region (JSON-ready), as
-    :meth:`px_yaris.trainer.YarisFullTrainer._region_summary`."""
-    totals = totals[:horizon].cpu()
-    names = region_names(bounds)
-    out = {"per_case_mean_error_mm": sorted(per_case, key=lambda r: r["case"])}
-    for r in range(masks.shape[0]):
-        t = totals[:, r]
-        frames = t[:, 5].clamp_min(1.0)
-        mse = t[:, 4].sum() / frames.sum()
-        mean2 = t[:, 0].sum() / frames.sum()
-        out[names[r]] = dict(
-            nodes=int(masks[r].sum()),
-            rmse_mm=float(mse.sqrt()),
-            translational_rmse_mm=float(mean2.sqrt()),
-            translational_share=float(mean2 / mse) if mse > 0 else 0.0,
-            translational_rms_xyz_mm=(t[:, 1:4].sum(0) / frames.sum()).sqrt().tolist(),
-            rmse_mm_per_time=(t[:, 4] / frames).sqrt().tolist(),
-            translational_rmse_mm_per_time=(t[:, 0] / frames).sqrt().tolist(),
-        )
-    return out
-
-
-def node_error_percentiles(node_errors: torch.Tensor) -> tuple[dict, torch.Tensor]:
-    """Percentiles of the per-node RMSE (mm) over every validated frame and the
-    share of the squared error carried by the worst 1% and 10% of the nodes."""
-    rmse = torch.sqrt(node_errors[:, 0] / node_errors[:, 1].clamp_min(1.0))
-    values = rmse.double()
-    sq = values.square()
-    order = torch.argsort(sq, descending=True)
-    total = float(sq.sum()) or 1.0
-    worst = {}
-    for frac in (0.01, 0.10):
-        k = max(1, int(frac * values.numel()))
-        worst[f"worst_{int(frac * 100)}pct_share"] = float(sq[order[:k]].sum() / total)
-    percentiles = dict(
-        p50=float(values.quantile(0.5)),
-        p90=float(values.quantile(0.9)),
-        p99=float(values.quantile(0.99)),
-        max=float(values.max()),
-        **worst,
-    )
-    return percentiles, rmse
-
-
-def run_suite(
-    model,
-    dataset,
-    names,
-    data_stats,
-    rollout_steps: int,
-    device,
-    *,
-    world_size: int = 1,
-    rank: int = 0,
-    amp: bool = False,
-    amp_dtype=None,
-    penetration_cfg=None,
-    region_bounds=DEFAULT_REGION_BOUNDS,
-    node_errors: bool = True,
-    logger=None,
-) -> dict:
-    """Evaluate ``model`` on every case of ``dataset`` (sharded over the ranks).
-
-    Returns the JSON-ready record of the suite (identical on every rank after
-    the reductions) and the accumulators behind it (``node_rmse`` ``[N]`` in mm
-    or ``None`` and the penetration probe or ``None``)
-    for the files written next to the record."""
-    device = torch.device(device)
-    loader = DataLoader(
-        NamedCases(dataset, names),
-        batch_size=1,
-        sampler=ExactShardSampler(len(dataset), world_size, rank),
-        collate_fn=simsample_collate,
-        num_workers=0,
-        pin_memory=device.type == "cuda",
-    )
-    notes = {}
-    shared = shared_mesh(dataset)
-    if not shared:
-        notes["mesh"] = (
-            "held-out cases do not share one mesh: node maps and regions skipped"
-        )
-    first = dataset.graphs[0]
-    bounds = [float(b) for b in region_bounds]
-
-    probe = None
-    penetration_enabled = penetration_cfg is None or bool(
-        dict(penetration_cfg).get("enabled", True)
-    )
-    if penetration_enabled:
-        if any(
-            getattr(first, name, None) is None
-            for name in (
-                "contact_faces",
-                "contact_surface_exclusions",
-                "shell_thickness",
-            )
-        ):
-            notes["penetration"] = (
-                "no shell facets on the graph (datapipe.contact_surface=false): "
-                "penetration metrics skipped"
-            )
-        else:
-            probe = PenetrationMetrics(
-                penetration_cfg,
-                rollout_steps,
-                device,
-                logger=logger,
-                region_bounds=bounds,
-            )
-            if (
-                getattr(first, "rigid_wall", None) is None
-                and dict(penetration_cfg or {}).get("wall_position_mm") is None
-            ):
-                notes["wall"] = (
-                    "no rigid wall (datapipe.rigid_wall_position unset): wall "
-                    "penetration statistics skipped"
-                )
-
-    errors = None
-    regions = None
-    if node_errors and shared:
-        n = int(first.num_nodes)
-        errors = torch.zeros((n, 2), dtype=torch.float64, device=device)
-        x = reference_mm(dataset)[:, 0].to(device)
-        masks = region_masks(x, bounds)
-        regions = (
-            masks,
-            torch.zeros(
-                (int(rollout_steps), masks.shape[0], 6),
-                dtype=torch.float64,
-                device=device,
-            ),
-            [],
-        )
-
-    case_records = []
-    totals, seen = accumulate_validation(
-        model,
-        loader,
-        data_stats,
-        rollout_steps,
-        device,
-        amp=amp,
-        amp_dtype=amp_dtype,
-        probe=probe,
-        node_errors=errors,
-        regions=regions,
-        per_case=case_records,
-    )
-    if probe is not None:
-        probe.reduce(world_size)
-    if world_size > 1:
-        torch.distributed.all_reduce(totals)
-        if errors is not None:
-            torch.distributed.all_reduce(errors)
-            torch.distributed.all_reduce(regions[1])
-            gathered_regions = [None] * world_size
-            torch.distributed.all_gather_object(gathered_regions, regions[2])
-            regions = (
-                regions[0],
-                regions[1],
-                [record for records in gathered_regions for record in records],
-            )
-        gathered = [None] * world_size
-        torch.distributed.all_gather_object(gathered, seen)
-        seen = [case for cases in gathered for case in cases]
-        gathered_records = [None] * world_size
-        torch.distributed.all_gather_object(gathered_records, case_records)
-        case_records = [r for records in gathered_records for r in records]
-    if sorted(seen) != sorted(names):
-        raise RuntimeError("Validation must cover every held-out case exactly once")
-    if not torch.isfinite(totals).all():
-        raise ValueError("Non-finite validation accumulation")
-    stats = summarize_validation(totals)
-    horizon = int(stats["nodes_w_time"].numel())
-    per_case = summarize_cases(case_records)
-    penetration = None if probe is None else probe.summary(stats["nodes_w_time"])
-    percentiles, node_rmse = (None, None)
-    if errors is not None:
-        percentiles, node_rmse = node_error_percentiles(errors)
-    # The datapipe's frame interval (its default of 5 ms when the recipe sets
-    # model.dt to null); the time labels of the record follow it.
-    dt_ms = float(getattr(dataset, "dt", 5e-3)) * 1000.0
-    history = 1  # the targets start one frame after the observed initial one
-    record = dict(
-        penetration=penetration,
-        regions=(
-            None
-            if regions is None
-            else region_summary(regions[0], regions[1], regions[2], bounds, horizon)
-        ),
-        node_error_percentiles=percentiles,
-        notes=notes,
-        cases=sorted(seen),
-        kept_nodes=int(first.num_nodes),
-        mesh_shared=shared,
-        region_bounds_mm=bounds,
-        dt_s=dt_ms / 1000.0,
-        metric=(
-            "normalized position MSE pooled over every held-out "
-            "(case, step, node, channel) entry"
-        ),
-        MSE=stats["MSE"].item(),
-        MSE_per_channel=stats["MSE_w_channel"].tolist(),
-        MSE_per_time=stats["MSE_w_time"].tolist(),
-        vector_RMSE_mm=stats["vector_RMSE_mm"].item(),
-        vector_RMSE_mm_per_time=stats["vector_RMSE_mm_w_time"].tolist(),
-        target_time_ms=[(t + history) * dt_ms for t in range(horizon)],
-        nodes_per_time=stats["nodes_w_time"].tolist(),
-        per_case=per_case,
-        pos_std_mm=(torch.as_tensor(data_stats["node"]["pos_std"]).cpu() + EPS)
-        .reshape(-1)
-        .tolist(),
-    )
-    return record, dict(node_rmse=node_rmse, probe=probe)
-
-
-def log_summary(logger, epoch, record, extras) -> None:
-    """Log pooled errors, best and worst cases and the penetration summary."""
-    ranked = sorted(record["per_case"], key=lambda r: r["vector_RMSE_mm"], reverse=True)
-    logger.info(
-        f"Validation epoch {epoch}: MSE: {record['MSE']:.6f}, vector RMSE "
-        f"{record['vector_RMSE_mm']:.3f} mm; per-case worst "
-        + ", ".join(f"{r['case']} {r['vector_RMSE_mm']:.3f}" for r in ranked[:3])
-        + " | best "
-        + ", ".join(f"{r['case']} {r['vector_RMSE_mm']:.3f}" for r in ranked[-3:])
-    )
-    if record["penetration"] is not None:
-        logger.info(
-            f"Validation epoch {epoch}: penetration "
-            + extras["probe"].log_line(record["penetration"])
-        )
-    for key, note in record["notes"].items():
-        logger.warning(f"{key}: {note}")
-
-
 @hydra.main(
     version_base="1.3",
     config_path="conf",
@@ -447,13 +147,7 @@ def main(cfg: DictConfig) -> None:
     DistributedManager.initialize()
     dist = DistributedManager()
     logger0 = RankZeroLoggingWrapper(PythonLogger("evaluate"), dist)
-    output_dir = cfg.training.get("validation_output_dir")
-    if not output_dir:
-        raise ValueError(
-            "pass training.validation_output_dir=<dir>; nothing is written "
-            "next to the run"
-        )
-    output_dir = Path(output_dir)
+    output_dir = require_output_run_dir(cfg.training.get("validation_output_dir"))
     with open_dict(cfg):
         if "stats_dir" not in cfg.datapipe or cfg.datapipe.stats_dir in (None, "stats"):
             # Hydra's run dir is the output dir here; the run's statistics live
@@ -470,38 +164,12 @@ def main(cfg: DictConfig) -> None:
     data_stats = data_stats_of(dataset, dist.device)
     rollout_steps = int(cfg.training.num_time_steps) - 1
 
-    model = instantiate(cfg.model).to(dist.device)
-    warm_start = cfg.training.get("warm_start_model")
-    epoch = 0
-    if warm_start:
-        from utils import load_warm_start
-
-        load_warm_start(model, warm_start)
-        logger0.info(f"Weights from {warm_start}")
-    else:
-        if dist.world_size > 1:
-            torch.distributed.barrier()
-        epoch = load_checkpoint(
-            cfg.training.ckpt_path,
-            models=model,
-            epoch=cfg.training.get("load_epoch"),
-            device=dist.device,
-        )
-        if epoch <= 0:
-            raise RuntimeError(
-                f"No training checkpoint (checkpoint.0.<E>.pt) under "
-                f"{cfg.training.ckpt_path}; pass training.warm_start_model=<file>.mdlus "
-                "for a weights-only file"
-            )
-    model.eval()
-    amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
-    amp_dtype_name = str(cfg.training.get("amp_dtype", "bfloat16"))
-    if amp_dtype_name not in amp_dtypes:
-        raise ValueError(
-            "training.amp_dtype must be 'float16' or 'bfloat16'; "
-            f"got {amp_dtype_name!r}"
-        )
-    amp_dtype = amp_dtypes[amp_dtype_name]
+    model = instantiate(cfg.model)
+    epoch = load_evaluation_weights(
+        model, cfg, dist.device, logger0, world_size=dist.world_size
+    )
+    model.to(dist.device).eval()
+    amp, amp_dtype = amp_settings(cfg)
     penetration_cfg = cfg.training.get("validation_penetration")
     penetration_cfg = (
         {"enabled": True}
@@ -510,39 +178,75 @@ def main(cfg: DictConfig) -> None:
     )
     bounds = cfg.training.get("validation_region_bounds")
     bounds = DEFAULT_REGION_BOUNDS if bounds is None else [float(v) for v in bounds]
+    shared = shared_mesh(dataset)
+    first = dataset.graphs[0]
+    facets_present = all(
+        getattr(first, name, None) is not None
+        for name in ("contact_faces", "contact_surface_exclusions", "shell_thickness")
+    )
     logger0.info(
         f"Evaluating epoch {epoch} of {cfg.training.ckpt_path} on {dist.world_size} "
         f"rank(s): {len(dataset)} held-out cases, regions {region_names(bounds)}; "
         f"records under {output_dir}"
     )
     with torch.no_grad():
-        record, extras = run_suite(
+        result = run_suite(
             model,
             dataset,
             names,
             data_stats,
             rollout_steps,
             dist.device,
+            num_nodes=int(first.num_nodes),
             world_size=dist.world_size,
             rank=dist.rank,
-            amp=bool(cfg.training.get("amp", True)),
+            amp=amp,
             amp_dtype=amp_dtype,
             penetration_cfg=penetration_cfg,
             region_bounds=bounds,
+            reference_x=reference_mm(dataset)[:, 0] if shared else None,
             node_errors=bool(cfg.training.get("validation_node_errors", True)),
+            facets_present=facets_present,
             logger=logger0,
         )
+    if (
+        result.probe is not None
+        and getattr(first, "rigid_wall", None) is None
+        and dict(penetration_cfg).get("wall_position_mm") is None
+    ):
+        result.notes["wall"] = (
+            "no rigid wall (datapipe.rigid_wall_position unset): wall "
+            "penetration statistics skipped"
+        )
+    # The datapipe's frame interval (its default of 5 ms when the recipe sets
+    # model.dt to null); the time labels of the record follow it.
+    dt_s = float(getattr(dataset, "dt", 5e-3))
+    record = dict(
+        penetration=result.penetration,
+        regions=result.regions,
+        node_error_percentiles=result.node_percentiles,
+        notes=result.notes,
+        cases=result.cases,
+        kept_nodes=result.kept_nodes,
+        mesh_shared=shared,
+        region_bounds_mm=[float(b) for b in bounds],
+        dt_s=dt_s,
+        metric=(
+            "normalized position MSE pooled over every held-out "
+            "(case, step, node, channel) entry"
+        ),
+        **metric_fields(result, data_stats["node"]["pos_std"], dt_s),
+    )
     record["epoch"] = int(epoch)
     record["checkpoint"] = str(cfg.training.ckpt_path)
     record["config"] = OmegaConf.to_container(cfg.model, resolve=True)
-    log_summary(logger0, epoch, record, extras)
+    log_summary(logger0, epoch, result)
     if dist.rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
         atomic_json(output_dir / f"epoch_{epoch:04d}.json", record)
-        if extras["node_rmse"] is not None:
-            np.save(
-                output_dir / f"node_rmse_epoch_{epoch:04d}.npy",
-                extras["node_rmse"].cpu().numpy().astype(np.float32),
+        if result.node_rmse is not None:
+            save_node_rmse(
+                output_dir / f"node_rmse_epoch_{epoch:04d}.npy", result.node_rmse
             )
         logger0.info(f"Record written to {output_dir / f'epoch_{epoch:04d}.json'}")
 

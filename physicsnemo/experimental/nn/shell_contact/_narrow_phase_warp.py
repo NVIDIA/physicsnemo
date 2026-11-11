@@ -15,15 +15,17 @@
 # limitations under the License.
 """Fused, discrete contact membership; live geometry still uses Torch autograd.
 
-This kernel follows the same closed-triangle/arithmetic-center-fan projection,
-variable shell allowance, and two-anchor forecast as the reference. Numerically
-ambiguous pairs are marked for reference recomputation, NOT dropped. Collapsed
+This kernel follows the same closed-triangle/arithmetic-center-fan projection
+and variable shell allowance as the reference. Numerically ambiguous pairs are
+marked for reference recomputation, NOT dropped. Collapsed
 fans and nearly tied projections with different material coordinates also use
 the reference. No approximate nearest-neighbor search or contact truncation.
 """
 
 import torch
 import warp as wp
+
+from physicsnemo.core.function_spec import FunctionSpec
 
 wp.set_module_options({"enable_backward": False, "fast_math": False})
 
@@ -167,29 +169,12 @@ def _facet(
     return result
 
 
-@wp.func
-def _interpolate(weights: wp.vec4, a: wp.vec3, b: wp.vec3, c: wp.vec3, d: wp.vec3):
-    return weights[0] * a + weights[1] * b + weights[2] * c + weights[3] * d
-
-
-@wp.func
-def _sweep(relative: wp.vec3, velocity: wp.vec3, horizon: float):
-    speed_sq = wp.dot(velocity, velocity)
-    denominator = 1.0
-    if speed_sq > 0.0:
-        denominator = speed_sq
-    time = wp.clamp(-wp.dot(relative, velocity) / denominator, 0.0, horizon)
-    return wp.length(relative + time * velocity)
-
-
 @wp.kernel
 def _activation_gaps(
     positions: wp.array(dtype=wp.vec3),
-    velocities: wp.array(dtype=wp.vec3),
     thickness: wp.array(dtype=float),
     faces: wp.array2d(dtype=wp.int64),
     pairs: wp.array2d(dtype=wp.int64),
-    horizon: float,
     band: float,
     sweep_band: float,
     gaps: wp.array(dtype=float),
@@ -219,42 +204,6 @@ def _activation_gaps(
         _maxabs(p),
         wp.max(_maxabs(a), wp.max(_maxabs(b), wp.max(_maxabs(c), _maxabs(d)))),
     )
-    if horizon > 0.0:
-        vp = velocities[query]
-        va, vb, vc, vd = velocities[i0], velocities[i1], velocities[i2], velocities[i3]
-        relative = projection.closest - p
-        relative_velocity = _interpolate(projection.bary, va, vb, vc, vd) - vp
-        gap = (
-            wp.min(_sweep(relative, relative_velocity, horizon), projection.distance)
-            - half_thickness
-        )
-        future = _facet(
-            p + horizon * vp,
-            a + horizon * va,
-            b + horizon * vb,
-            c + horizon * vc,
-            d + horizon * vd,
-            faces.shape[1],
-            triangle,
-        )
-        ambiguous = ambiguous or future.uncertain != 0
-        future_relative = _interpolate(future.bary, a, b, c, d) - p
-        future_velocity = _interpolate(future.bary, va, vb, vc, vd) - vp
-        future_thickness = (
-            future.bary[0] * thickness[i0]
-            + future.bary[1] * thickness[i1]
-            + future.bary[2] * thickness[i2]
-            + future.bary[3] * thickness[i3]
-        )
-        future_gap = (
-            _sweep(future_relative, future_velocity, horizon)
-            - (thickness[query] + future_thickness) * 0.5
-        )
-        gap = wp.min(gap, future_gap)
-        coordinate_scale = coordinate_scale + horizon * wp.max(
-            _maxabs(vp),
-            wp.max(_maxabs(va), wp.max(_maxabs(vb), wp.max(_maxabs(vc), _maxabs(vd)))),
-        )
     # Conservative roundoff neighborhood: reference decides every ambiguous
     # boundary. Include absolute translation and thickness, not just tiny gaps.
     thickness_scale = wp.max(
@@ -280,9 +229,7 @@ def _activation_gaps(
 
 
 @torch.no_grad()
-def fused_activation_gaps(
-    positions, velocities, thickness, faces, pairs, horizon, band, sweep_band=None
-):
+def fused_activation_gaps(positions, thickness, faces, pairs, band, sweep_band=None):
     """Return detached gaps and a reference-recompute mask on the Torch stream.
 
     Caller validates physical FP32 inputs/connectivity. This is ONLY discrete
@@ -300,17 +247,12 @@ def fused_activation_gaps(
             0, device=positions.device, dtype=torch.bool
         )
     wp.init()
-    stream = wp.stream_from_torch(torch.cuda.current_stream(positions.device))
-    device = wp.device_from_torch(positions.device)
-    if velocities is None:
-        if horizon > 0:
-            raise ValueError("positive forecast horizon requires velocities")
-        # No velocity access occurs at horizon zero: alias instead of allocating
-        # an O(N) zero tensor for every candidate page.
-        velocities = positions
+    # Launch on Torch's current stream of the positions' device, scoped so
+    # that Warp's stream-ordered cleanup waits for the launch.
+    device, stream = FunctionSpec.warp_launch_context(positions)
     gaps = thickness.new_empty(pairs.shape[1])
     uncertain = torch.empty(pairs.shape[1], device=positions.device, dtype=torch.bool)
-    with wp.ScopedDevice(device), wp.ScopedStream(stream):
+    with FunctionSpec.warp_stream_scope(stream):
         wp.launch(
             _activation_gaps,
             dim=pairs.shape[1],
@@ -318,13 +260,9 @@ def fused_activation_gaps(
                 wp.from_torch(
                     positions.detach().contiguous(), dtype=wp.vec3, requires_grad=False
                 ),
-                wp.from_torch(
-                    velocities.detach().contiguous(), dtype=wp.vec3, requires_grad=False
-                ),
                 wp.from_torch(thickness.detach().contiguous(), requires_grad=False),
                 wp.from_torch(faces.contiguous()),
                 wp.from_torch(pairs.contiguous()),
-                float(horizon),
                 float(band),
                 float(sweep_band),
                 wp.from_torch(gaps),

@@ -485,6 +485,55 @@ def test_mesh_context_checkpointing_matches_plain_execution(tmp_path):
     assert "blocks" in restored._activation_checkpointing_components
 
 
+def test_backbone_only_model_builds_no_output_head(tmp_path):
+    """``output_head=False`` keeps the backbone and the pre-processor only."""
+    torch.manual_seed(23)
+    model = _model(output_head=False, mesh_context_fusion="pre_post").train()
+    names = {name.split(".")[0] for name, _ in model.named_parameters()}
+    for absent in (
+        "ln_mlp_out",
+        "post_node_encoder",
+        "post_processor",
+        "post_node_decoder",
+        "post_context_film",
+        "mesh_post_residual_gate",
+    ):
+        assert absent not in names, absent
+    assert {"pre_processor", "pre_context_film", "mesh_context_encoder"} <= names
+    graph = _graph(7)
+    global_embedding = torch.randn(1, 1, 2)
+    with pytest.raises(ValueError, match="output_head=False"):
+        _forward(model, graph, global_embedding)
+    state = model(
+        node_features=graph.x,
+        graph=graph,
+        geometry=graph.x[:, :3],
+        global_embedding=global_embedding,
+        return_backbone=True,
+    )
+    assert state.point_features.shape == (7, model.backbone_width)
+    state.point_features.square().mean().backward()
+    missing = [
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and parameter.grad is None
+    ]
+    assert missing == []
+    decoder = model.make_node_decoder()
+    assert decoder(
+        state.point_features.new_zeros((7, model.mesh_hidden_dim))
+    ).shape == (
+        7,
+        5,
+    )
+    path = tmp_path / "backbone.mdlus"
+    model.save(path)
+    restored = DeFormer.from_checkpoint(path)
+    assert not restored.output_head and restored.ln_mlp_out is None
+    with pytest.raises(ValueError, match="output_head"):
+        _model(output_head="no")
+
+
 def test_checkpoint_roundtrip(tmp_path):
     model = _model()
     checkpoint = tmp_path / "DeFormer.mdlus"

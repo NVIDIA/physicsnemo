@@ -39,8 +39,6 @@ def project_onto_facets(
     source_nodes: torch.Tensor,
     *,
     material_fan: bool,
-    velocities: torch.Tensor | None = None,
-    horizon: float = 0.0,
 ) -> TriangleProjection:
     r"""Live closest point of every query node on its paired facet.
 
@@ -57,12 +55,6 @@ def project_onto_facets(
         Transport the reference centre fan of four-node facets with the
         vertices (the material surface contract) instead of validating the
         current quad shape.
-    velocities : torch.Tensor, optional
-        ``[N, 3]`` nodal velocities; with ``horizon`` the projection is taken
-        at the linearly forecast positions ``positions + horizon * velocities``
-        of the pair's nodes.
-    horizon : float, optional
-        Forecast time of the velocities.
 
     Returns
     -------
@@ -77,9 +69,6 @@ def project_onto_facets(
     )
     points = positions[query]
     facets = positions[source_nodes]
-    if velocities is not None and horizon:
-        points = points + horizon * velocities[query]
-        facets = facets + horizon * velocities[source_nodes]
     return closest_point_facet(
         points,
         facets,

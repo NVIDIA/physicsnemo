@@ -20,15 +20,15 @@
 # passing on the shell mesh edges and on contact edges discovered on the
 # teacher's predicted shape). The recipe adds model.teacher (the teacher's
 # architecture) and model.teacher_weights (its checkpoint). dt, local_knn_k
-# and local_neighborhood describe the teacher's datapipe (the datapipe config
-# interpolates them).
+# and local_neighborhood are the teacher's datapipe properties, interpolated
+# from the datapipe config.
 _target_: deformer.residual.ResidualTimeConditional
 _convert_: all
 teacher_weights: ???
 num_time_steps: ${training.num_time_steps}
-dt: 0.005
-local_knn_k: 32
-local_neighborhood: euclidean
+dt: ${oc.select:datapipe.dt,null}  # the dataset's frame interval (s); null without one
+local_knn_k: ${datapipe.local_knn_k}  # the datapipe's neighbourhoods
+local_neighborhood: ${datapipe.local_knn_metric}
 # node inputs: coords (3) + thickness (1) + fourier time code (time_dim) + teacher displacement (3)
 functional_dim: 39
 time_embedding: fourier

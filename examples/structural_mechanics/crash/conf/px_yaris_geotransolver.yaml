@@ -31,11 +31,6 @@ experiment_name: PX-Yaris-GeoTransolver
 training:
   auxiliary_loss_weight: 0.0   # the point model has no provisional head
 
-datapipe:
-  # the kNN neighbourhoods are a datapipe product shared with the DeFormer
-  # work dir; the point model does not read them
-  local_knn_k: 32
-  local_knn_metric: euclidean
 
 model:
   # coords (3) + thickness (1) + fourier time code (32)
@@ -49,7 +44,6 @@ model:
   time_fourier_bands: 8
   time_dim: 32
   time_as_global: true
-  dt: 0.005   # the datapipe derives its 5 ms frame interval from it
   activation_checkpointing: true
   checkpointing_ratio: 1.0
   activation_checkpointing_components: [blocks, context]

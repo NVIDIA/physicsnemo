@@ -42,6 +42,8 @@ yaris:
   work_dir: ???        # ABSOLUTE path: statistics, neighbourhood caches, checkpoints, records
                        # (Hydra changes into it; a relative path would nest the outputs)
   stride: 5            # 5 ms frames from the 1 ms stores
+  dt: 0.005            # frame interval in seconds (= stride * reader.raw_dt); the datapipe
+                       # and the time-conditional models read it from here
 
 hydra:
   job:

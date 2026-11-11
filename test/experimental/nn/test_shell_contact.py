@@ -20,19 +20,35 @@ import math
 import pytest
 import torch
 
+from physicsnemo.experimental.nn import shell_contact
 from physicsnemo.experimental.nn.shell_contact import (
     CONTACT_FEATURE_DIM,
-    KINEMATIC_CONTACT_FEATURE_DIM,
     ShellContactSearch,
     clamp_to_wall,
-    contact_edge_features,
-    node_maximum,
+    project_onto_facets,
     shell_contact_edge_features,
     shell_contact_pairs,
     shell_penetration_depths,
-    smooth_contact_cutoff,
-    uses_fused_narrow_phase,
     wall_penetration_depths,
+)
+from physicsnemo.experimental.nn.shell_contact.features import contact_edge_features
+from physicsnemo.experimental.nn.shell_contact.penetration import node_maximum
+from physicsnemo.experimental.nn.shell_contact.search import uses_fused_narrow_phase
+
+# What the package exports: the names its consumers use plus the projection
+# type ``project_onto_facets`` returns. The helpers stay in their modules.
+PUBLIC_API = (
+    "CONTACT_FEATURE_DIM",
+    "ShellContactPairs",
+    "ShellContactSearch",
+    "TriangleProjection",
+    "clamp_to_wall",
+    "project_onto_facets",
+    "shell_contact_edge_features",
+    "shell_contact_pairs",
+    "shell_penetration_depths",
+    "supported_quad_mask",
+    "wall_penetration_depths",
 )
 
 TORCH = dict(implementation="torch")
@@ -77,10 +93,8 @@ def test_search_settings_are_validated_and_coerced():
         ShellContactSearch(side_symmetric=True)
     with pytest.raises(ValueError, match="crossing_radius"):
         ShellContactSearch(side_from_reference=True, crossing_radius=1.0)
-    with pytest.raises(ValueError, match="prediction_horizon=0"):
-        ShellContactSearch(
-            side_from_reference=True, crossing_radius=10.0, prediction_horizon=0.1
-        )
+    with pytest.raises(TypeError):  # the forecast horizon is no setting
+        ShellContactSearch(prediction_horizon=0.1)
     with pytest.raises(ValueError, match="clearance_approach_only"):
         ShellContactSearch(clearance_approach_only=True)
     swept = ShellContactSearch(side_from_reference=True, crossing_radius=12.0)
@@ -105,7 +119,6 @@ def test_pairs_sign_crossed_nodes_against_the_reference():
         search=ShellContactSearch(side_from_reference=True, **TORCH),
     )
     torch.testing.assert_close(sided.gap, torch.tensor([1.0, -1.0]))
-    torch.testing.assert_close(sided.activation_gap, torch.tensor([1.0, -1.0]))
     assert sided.crossed.tolist() == [False, True]
     assert sided.stats["crossed_pairs"] == 1
     # The live geometry is unsigned and identical in both searches.
@@ -145,20 +158,6 @@ def test_features_flip_the_normal_of_crossed_pairs_and_carry_gradients():
     torch.testing.assert_close(features[1, 7], torch.tensor(-expected_normal))
     features.square().sum().backward()
     assert torch.isfinite(current.grad).all() and current.grad.abs().sum() > 0
-    velocities = torch.randn(5, 3)
-    kinematic = shell_contact_edge_features(
-        pairs,
-        current.detach(),
-        feature_scale=10.0,
-        normal_epsilon=0.1,
-        velocities=velocities,
-        velocity_scale=100.0,
-    )
-    assert kinematic.shape == (2, KINEMATIC_CONTACT_FEATURE_DIM)
-    relative_velocity = (
-        velocities[faces[0]] * pairs.barycentric.detach()[0, :3, None]
-    ).sum(0) - velocities[3]
-    torch.testing.assert_close(kinematic[0, 8:11], relative_velocity / 100.0)
 
 
 def test_reference_clearance_drops_assembled_pairs():
@@ -304,12 +303,9 @@ def test_input_validation():
         shell_contact_pairs(
             current, torch.tensor([[0, 1, 9]]), torch.zeros(5), search=search
         )
-    with pytest.raises(ValueError, match="velocities"):
+    with pytest.raises(TypeError):  # no forecast: velocities are not an input
         shell_contact_pairs(
-            current,
-            faces,
-            torch.zeros(5),
-            search=ShellContactSearch(prediction_horizon=0.1, **TORCH),
+            current, faces, torch.zeros(5), velocities=current, search=search
         )
 
 
@@ -366,32 +362,29 @@ def test_wall_depths_and_clamp():
         wall_penetration_depths(positions, torch.ones(4), 100.0)
 
 
-def test_taper_and_feature_helpers():
-    gaps = torch.tensor([-1.0, 0.0, 2.5, 5.0, 7.0])
-    weights = smooth_contact_cutoff(gaps, 5.0)
-    torch.testing.assert_close(weights, torch.tensor([1.0, 1.0, 0.5625, 0.0, 0.0]))
-    with pytest.raises(ValueError, match="radius"):
-        smooth_contact_cutoff(gaps, 0.0)
+def test_feature_helpers():
     relative = torch.tensor([[0.0, 0, 2.0]])
     features = contact_edge_features(
         relative, torch.tensor([1.0]), 10.0, normal_epsilon=0.1
     )
     assert features.shape == (1, CONTACT_FEATURE_DIM)
     torch.testing.assert_close(features[0, 3], torch.tensor(0.2))
-    # The scale checks reject NaN and infinity as well as nonpositive values.
+    # The scale check rejects NaN and infinity as well as nonpositive values.
     for bad in (0.0, -1.0, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="feature_scale"):
             contact_edge_features(relative, torch.tensor([1.0]), bad)
-        with pytest.raises(ValueError, match="velocity_scale"):
-            contact_edge_features(
-                relative,
-                torch.tensor([1.0]),
-                10.0,
-                relative_velocity=relative,
-                velocity_scale=bad,
-            )
-        with pytest.raises(ValueError, match="radius"):
-            smooth_contact_cutoff(gaps, bad)
+
+
+def test_public_api_is_the_consumed_surface():
+    assert tuple(sorted(shell_contact.__all__)) == PUBLIC_API
+    for name in PUBLIC_API:
+        assert getattr(shell_contact, name) is not None, name
+    for gone in (
+        "smooth_contact_cutoff",
+        "linear_closest_approach",
+        "candidate_activation_gaps",
+    ):
+        assert not hasattr(shell_contact, gone), gone
 
 
 def test_narrow_phase_selection():
@@ -445,37 +438,6 @@ def test_quad_facets_and_batches():
             batch=batch,
             search=ShellContactSearch(**TORCH),
         )
-
-
-@pytest.mark.parametrize("settings", [TORCH, dict(implementation="warp")])
-def test_reference_clearance_combines_with_a_prediction_horizon(settings):
-    """The reference gap is static: a forecast horizon needs no reference velocity."""
-    reference, current, faces = _crossing_scene()
-    reference = reference.clone()
-    reference[4, 2] = 30.0  # node 4 was far away: its pair is new contact
-    thickness = torch.zeros(5)
-    velocities = torch.zeros_like(current)
-    velocities[3, 2] = -0.5  # node 3 keeps approaching the shell
-    common = dict(side_from_reference=True, reference_clearance=5.0, **settings)
-    static = shell_contact_pairs(
-        current,
-        faces,
-        thickness,
-        reference_positions=reference,
-        search=ShellContactSearch(**common),
-    )
-    forecast = shell_contact_pairs(
-        current,
-        faces,
-        thickness,
-        reference_positions=reference,
-        velocities=velocities,
-        search=ShellContactSearch(prediction_horizon=1.0, **common),
-    )
-    for pairs in (static, forecast):
-        assert pairs.query.tolist() == [4]
-        assert pairs.stats["reference_excluded_pairs"] == 1
-    torch.testing.assert_close(forecast.gap, static.gap)  # node 4 does not move
 
 
 def test_warp_broad_phase_matches_the_torch_reference_on_cpu():
@@ -559,8 +521,6 @@ def _brute_force_pairs(reference, current, faces, thickness, nodes, band, cleara
     Returns the certain active pairs and the pairs within ``tol`` of either
     membership boundary, whose float32 decision may legitimately differ.
     """
-    from physicsnemo.experimental.nn.shell_contact import project_onto_facets
-
     tol = 1.0e-3
     reference, current = reference.double(), current.double()
     thickness = thickness.double()
@@ -679,7 +639,6 @@ def test_live_geometry_paging_changes_no_value():
         "distance",
         "half_thickness",
         "gap",
-        "activation_gap",
         "crossed",
     ):
         assert torch.equal(getattr(paged, name), getattr(whole, name)), name
@@ -703,18 +662,17 @@ def test_deferred_fused_decisions_match_the_torch_reference(monkeypatch):
         ambiguous = torch.rand(gaps.shape, generator=generator) < 0.3
         return gaps.masked_fill(ambiguous, -1.0e6), ambiguous
 
-    def fake_candidate_gaps(positions, velocities, thickness, faces, pairs, search):
+    def fake_candidate_gaps(positions, thickness, faces, pairs, search):
         return spoiled(
             search_module._reference_candidate_gaps(
-                positions, velocities, thickness, faces, pairs, search
+                positions, thickness, faces, pairs, search
             )
         )
 
     def fake_reference_gaps(reference_positions, thickness, faces, pairs, search):
-        static = search_module.replace(search, prediction_horizon=0.0)
         return spoiled(
             search_module._reference_candidate_gaps(
-                reference_positions, None, thickness, faces, pairs, static
+                reference_positions, thickness, faces, pairs, search
             )
         )
 

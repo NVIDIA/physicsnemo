@@ -23,7 +23,12 @@ lengths; it never crosses between disconnected parts and ranks folded or
 stacked sheets by their path distance. ``metric="euclidean"`` ranks by
 straight-line reference distance and can therefore connect spatially adjacent
 but materially separate shells. Selection is discrete and carries no autograd
-graph. Ties are broken by the smaller node ID so results are deterministic.
+graph. Results are deterministic. Geodesic ties are broken by the smaller node
+ID, at the ``k`` boundary as well. The Euclidean query is a SciPy KD-tree with
+a pinned leaf size: among the candidates it returns, equal distances are
+ordered by node ID, but which of several candidates tied at the ``k``
+boundary is returned is the tree's choice (it depends on the leaf size), not
+the smaller ID.
 """
 
 from __future__ import annotations
@@ -44,6 +49,12 @@ _scipy_spatial = OptionalImport(
         "pip install 'nvidia-physicsnemo[nn-extras]' or pip install scipy."
     ),
 )
+# Which of several candidates tied at the k boundary a KD-tree returns depends
+# on its structure, hence on the leaf size. Pinned to cKDTree's default so
+# cached neighborhoods reproduce across SciPy releases; this is also why the
+# query is not physicsnemo.nn.functional.knn, whose KD-tree has leaf size 10
+# and resolves those ties differently.
+_KDTREE_LEAFSIZE = 16
 
 NeighborhoodMetric = Literal["geodesic", "euclidean"]
 
@@ -101,9 +112,13 @@ def _padded(
 def euclidean_knn(reference_positions: torch.Tensor, k: int) -> StaticNeighborhood:
     r"""Return the ``k`` nearest other nodes by straight-line reference distance.
 
-    Coincident duplicate nodes are ordinary neighbors at zero distance; only the
-    query's own ID is removed. Fewer than ``k`` other nodes are padded. Among
-    the returned candidates, equal distances are ordered by node ID.
+    A SciPy ``cKDTree`` (leaf size pinned, float64 positions) returns ``k + 1``
+    candidates per node; this function removes the node itself, orders the
+    candidates by ``(distance, node ID)`` and pads short rows. Coincident
+    duplicate nodes are ordinary neighbors at zero distance; only the query's
+    own ID is removed. Fewer than ``k`` other nodes are padded. Which of
+    several candidates tied at the ``k`` boundary is returned is the tree's
+    choice, not the smaller node ID.
     """
     xyz = _validate_positions(reference_positions)
     k = _validate_k(k)
@@ -112,7 +127,7 @@ def euclidean_knn(reference_positions: torch.Tensor, k: int) -> StaticNeighborho
         return _padded(0, k, [], [])
     cKDTree = _scipy_spatial.cKDTree
     queries = min(k + 1, n)
-    distance, index = cKDTree(xyz).query(xyz, k=queries)
+    distance, index = cKDTree(xyz, leafsize=_KDTREE_LEAFSIZE).query(xyz, k=queries)
     distance = np.asarray(distance, dtype=np.float64).reshape(n, queries)
     index = np.asarray(index, dtype=np.int64).reshape(n, queries)
     own = np.arange(n, dtype=np.int64)[:, None]
@@ -122,9 +137,24 @@ def euclidean_knn(reference_positions: torch.Tensor, k: int) -> StaticNeighborho
     index = np.take_along_axis(index, order, axis=1)[:, :k]
     distance = np.take_along_axis(distance, order, axis=1)[:, :k]
     valid = (index != own) & (index < n) & np.isfinite(distance)
-    rows = [index[q, valid[q]].tolist() for q in range(n)]
-    dists = [distance[q, valid[q]].tolist() for q in range(n)]
-    return _padded(n, k, rows, dists)
+    # Valid candidates first (stable), the padding after them: the query's
+    # own ID, zero distance and mask=False, as for the geodesic path.
+    compact = np.argsort(~valid, axis=1, kind="stable")
+    index = np.take_along_axis(index, compact, axis=1)
+    distance = np.take_along_axis(distance, compact, axis=1)
+    valid = np.take_along_axis(valid, compact, axis=1)
+    width = index.shape[1]
+    out_index = np.repeat(own, k, axis=1)
+    out_distance = np.zeros((n, k), dtype=np.float32)
+    out_mask = np.zeros((n, k), dtype=bool)
+    out_index[:, :width] = np.where(valid, index, own)
+    out_distance[:, :width] = np.where(valid, distance, 0.0).astype(np.float32)
+    out_mask[:, :width] = valid
+    return StaticNeighborhood(
+        torch.from_numpy(out_index),
+        torch.from_numpy(out_distance),
+        torch.from_numpy(out_mask),
+    )
 
 
 def _reference_adjacency(xyz: np.ndarray, edge_index: torch.Tensor, n: int):

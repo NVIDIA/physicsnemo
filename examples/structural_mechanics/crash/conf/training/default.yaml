@@ -84,6 +84,7 @@ warm_start_model: null          # .mdlus weights to start from when ckpt_path ho
 # └───────────────────────────────────────────┘
 
 validation_output_dir: null     # Where the evaluators write their records (they require it)
+evaluation_split: validation    # evaluate_px_yaris.py: the manifest split to score (validation or test)
 validation_node_errors: false   # Per-node RMSE map and per-region translational share
 validation_region_bounds: null  # Reference-x bounds (mm) of the per-region readouts (null: the suite's default)
 validation_penetration:         # Target-relative penetration metrics (deformer/penetration_metrics.py)

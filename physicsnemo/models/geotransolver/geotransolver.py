@@ -730,12 +730,16 @@ class GeoTransolver(Module):
         local_features: list[torch.Tensor] | None,
         *,
         return_point_features: bool = False,
-    ) -> list[torch.Tensor] | tuple[list[torch.Tensor], list[torch.Tensor]]:
+        compute_outputs: bool = True,
+    ) -> list[torch.Tensor] | tuple[list[torch.Tensor] | None, list[torch.Tensor]]:
         r"""Process native hidden states, allowing hybrid mesh refinement.
 
         Each input is ``[B, N, n_hidden]``. This seam lets mesh processors
         refine the projected state without a bottleneck back to raw features.
         Both regular and hybrid forwards share checkpointing and output heads.
+        With ``compute_outputs=False`` the output projection is skipped and
+        ``None`` stands in for the outputs, for callers that consume the
+        hidden states only (requires ``return_point_features=True``).
         Extension point relied on by
         :class:`~physicsnemo.experimental.models.deformer.DeFormer` together with
         :meth:`_build_context`.
@@ -752,6 +756,12 @@ class GeoTransolver(Module):
                 embeddings = block(tuple(embeddings), context)
 
         point_features = list(embeddings)
+        if not compute_outputs:
+            if not return_point_features:
+                raise ValueError(
+                    "compute_outputs=False requires return_point_features=True"
+                )
+            return None, point_features
         outputs = [
             self._run_checkpointed_component("output", self.ln_mlp_out[i], value)
             for i, value in enumerate(embeddings)

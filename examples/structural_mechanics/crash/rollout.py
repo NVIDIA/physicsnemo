@@ -386,7 +386,8 @@ class GeoTransolverTimeConditional(GeoTransolver):
         **kwargs,
     ):
         self.rollout_steps: int = int(num_time_steps) - 1
-        # The Yaris datapipe derives its frame interval from ``model.dt``; the
+        # Bookkeeping only: the Yaris recipes set the frame interval on the
+        # dataset side (``yaris.dt``) and the model reads it from there; the
         # backbone itself is time-step agnostic.
         self.dt = dt
         super().__init__(**kwargs)

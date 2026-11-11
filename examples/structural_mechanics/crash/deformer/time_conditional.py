@@ -42,14 +42,13 @@ and off by default. The checkpoint format is the base model's
 
 from __future__ import annotations
 
-import copy
 from typing import NamedTuple
 
 import torch
 from rollout import TimeEmbedding, global_tokens
 from torch import nn
 
-from physicsnemo.experimental.models.deformer import DeFormer
+from physicsnemo.experimental.models.deformer import DeFormer, MeshContextFiLM
 
 from .shape_corrections import RigidWallClamp, correct_shape
 
@@ -92,7 +91,10 @@ class DeFormerTimeConditional(DeFormer):
     **kwargs
         :class:`~physicsnemo.experimental.models.deformer.DeFormer`
         settings (backbone, local operator, context fusion, activation
-        checkpointing). ``out_dim`` must be 3 and ``use_te`` false.
+        checkpointing). ``out_dim`` must be 3 and ``use_te`` false. The base
+        model is built without its output head (``output_head=False``):
+        ``num_post_processor_layers``, ``num_post_processor_checkpoint_segments``
+        and ``mesh_post_residual_gate_init`` size the two stages here.
     """
 
     input_kind = "graph"
@@ -119,23 +121,25 @@ class DeFormerTimeConditional(DeFormer):
             raise ValueError("This recipe predicts positions only (out_dim=3)")
         if kwargs.get("use_te", False):
             raise ValueError("The time-conditional DeFormer requires use_te=False")
+        if "output_head" in kwargs:
+            raise ValueError(
+                "DeFormerTimeConditional builds its own decoder stages; "
+                "output_head is not a setting of this model"
+            )
         # Validated settings of the evaluation-time wall clamp.
         self.wall_clamp = RigidWallClamp(
             enabled=clamp_to_wall, axis=wall_axis, sign=wall_sign
         )
-        super().__init__(**kwargs)
-        # This model reads the backbone's full-width features (return_backbone)
-        # and never its three-channel output head. The head is frozen so that no
-        # trainable parameter is left without a gradient: DDP with
-        # find_unused_parameters=False would otherwise fail on the second step.
-        self.ln_mlp_out.requires_grad_(False)
+        # The base model supplies the backbone state and the pre-processor only
+        # (no output head); the two decoder stages below are this model's.
+        super().__init__(output_head=False, **kwargs)
         self.rollout_steps = int(num_time_steps) - 1
         self.dt = None if dt is None else float(dt)
         self.time_embed = TimeEmbedding(time_embedding, time_fourier_bands, time_dim)
         self.time_as_global = bool(time_as_global)
         # Full-width backbone output (hidden plus optional local features) to the
         # mesh width, never through the three-channel output.
-        effective_dim = self.ln_mlp_out[0][0].normalized_shape[0]
+        effective_dim = self.backbone_width
         self.post_latent_input = (
             nn.Identity()
             if effective_dim == self.mesh_hidden_dim
@@ -148,18 +152,27 @@ class DeFormerTimeConditional(DeFormer):
             nn.Linear(self.mesh_hidden_dim, self.output_dim),
         )
         self._zero_head(self.coarse_decoder[-1])
-        # Stage B: a fresh processor of stage A's shape from the base model's
-        # factory (the same initialisation as the stages it builds) and a copy
-        # of stage A's FiLM.
-        self.refinement_processor = self.make_local_processor(
-            self.post_processor.num_layers, self.post_processor.checkpoint_segments
+        # Stage A: a local processor of the configured post-stage depth on the
+        # backbone latent, FiLM-conditioned on the mesh context when fusion is
+        # on. Stage B: an independent processor and FiLM of the same shape
+        # whose gated correction gives the final shape.
+        fusion = self.mesh_context_fusion != "none"
+        self.coarse_processor = self.make_local_processor(
+            self.num_post_processor_layers, self.num_post_processor_checkpoint_segments
         )
-        self.refinement_context_film = copy.deepcopy(self.post_context_film)
-        # The base model's post stage re-encodes the output space; this model
-        # keeps the latent instead, so that encoder is unused.
-        del self.post_node_encoder
+        self.coarse_context_film = (
+            MeshContextFiLM(self.mesh_hidden_dim) if fusion else None
+        )
+        self.refinement_processor = self.make_local_processor(
+            self.num_post_processor_layers, self.num_post_processor_checkpoint_segments
+        )
+        self.refinement_context_film = (
+            MeshContextFiLM(self.mesh_hidden_dim) if fusion else None
+        )
+        self.final_decoder = self.make_node_decoder()
+        self.final_gate = nn.Parameter(torch.tensor(self.mesh_post_residual_gate_init))
         last_linear = [
-            m for m in self.post_node_decoder.modules() if isinstance(m, nn.Linear)
+            m for m in self.final_decoder.modules() if isinstance(m, nn.Linear)
         ][-1]
         self._zero_head(last_linear)
         self.__name__ = "DeFormerTimeConditional"
@@ -203,10 +216,10 @@ class DeFormerTimeConditional(DeFormer):
             return_backbone=True,
         )
         latent = self.post_latent_input(state.point_features)
-        if self.post_context_film is not None:
-            latent = self.post_context_film(latent, state.mesh_context)
+        if self.coarse_context_film is not None:
+            latent = self.coarse_context_film(latent, state.mesh_context)
         latent = self._run_local_processor(
-            self.post_processor, latent, state.neighborhood
+            self.coarse_processor, latent, state.neighborhood
         )
         coarse = coords + self.coarse_decoder(latent).to(coords.dtype)
         return coarse, latent, state
@@ -218,7 +231,7 @@ class DeFormerTimeConditional(DeFormer):
         latent = self._run_local_processor(
             self.refinement_processor, latent, state.neighborhood
         )
-        return self.mesh_post_residual_gate * self.post_node_decoder(latent)
+        return self.final_gate * self.final_decoder(latent)
 
     def predict_frame(self, sample, data_stats) -> TimeConditionalOutput:
         """Final and provisional position at the sample's time label.

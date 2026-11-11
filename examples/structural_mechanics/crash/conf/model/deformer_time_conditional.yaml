@@ -37,7 +37,7 @@ time_input: false
 include_local_features: true
 attention_type: GALE_FA
 num_time_steps: ${training.num_time_steps}
-dt: 0.005               # frame interval in seconds (the datapipe reads it)
+dt: ${oc.select:datapipe.dt,null}  # the dataset's frame interval (s); null without one
 time_embedding: fourier
 time_fourier_bands: 8
 time_dim: 32
@@ -51,8 +51,8 @@ mesh_pre_residual_gate_init: 0.0
 mesh_post_residual_gate_init: 1.0
 mesh_context_fusion: pre_post
 mesh_context_use_global: false
-local_neighborhood: euclidean  # the Yaris store edges cover shells only
-local_knn_k: 32
+local_neighborhood: ${datapipe.local_knn_metric}  # the datapipe's neighbourhoods
+local_knn_k: ${datapipe.local_knn_k}
 local_num_heads: 8
 local_mlp_ratio: 2
 local_edge_dim: 32

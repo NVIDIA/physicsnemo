@@ -19,60 +19,37 @@
   mesh (Warp BVH broad phase, fused Warp or Torch narrow phase, optional
   reference side test, clearance and crossing sweep) with live geometry;
 * :func:`shell_contact_edge_features` turns pairs into the contact features of
-  the mesh-attention models, :func:`smooth_contact_cutoff` into their taper;
+  the mesh-attention models;
 * :func:`shell_penetration_depths`, :func:`wall_penetration_depths` give
   per-node penetration fields for metrics;
 * :func:`clamp_to_wall` caps a predicted shape at an analytic rigid wall.
+
+The search and its narrow phase are functionals with a Torch and a Warp
+implementation selected by a string of the settings; they are meant to be
+brought under :class:`physicsnemo.core.function_spec.FunctionSpec` before
+they graduate from the experimental namespace.
 """
 
-from ._closest_point import supported_quad_mask
-from .features import (
-    CONTACT_FEATURE_DIM,
-    KINEMATIC_CONTACT_FEATURE_DIM,
-    contact_edge_features,
-    shell_contact_edge_features,
-    smooth_contact_cutoff,
-)
-from .geometry import (
-    crossing_flags,
-    facet_side,
-    project_onto_facets,
-    reference_facet_projection,
-)
+from ._closest_point import TriangleProjection, supported_quad_mask
+from .features import CONTACT_FEATURE_DIM, shell_contact_edge_features
+from .geometry import project_onto_facets
 from .penetration import (
     clamp_to_wall,
-    node_maximum,
     shell_penetration_depths,
     wall_penetration_depths,
 )
-from .search import (
-    ShellContactPairs,
-    ShellContactSearch,
-    candidate_activation_gaps,
-    linear_closest_approach,
-    shell_contact_pairs,
-    uses_fused_narrow_phase,
-)
+from .search import ShellContactPairs, ShellContactSearch, shell_contact_pairs
 
 __all__ = [
     "CONTACT_FEATURE_DIM",
-    "KINEMATIC_CONTACT_FEATURE_DIM",
     "ShellContactPairs",
     "ShellContactSearch",
-    "candidate_activation_gaps",
+    "TriangleProjection",
     "clamp_to_wall",
-    "contact_edge_features",
-    "crossing_flags",
-    "facet_side",
-    "linear_closest_approach",
-    "node_maximum",
     "project_onto_facets",
-    "reference_facet_projection",
     "shell_contact_edge_features",
     "shell_contact_pairs",
     "shell_penetration_depths",
-    "smooth_contact_cutoff",
     "supported_quad_mask",
-    "uses_fused_narrow_phase",
     "wall_penetration_depths",
 ]

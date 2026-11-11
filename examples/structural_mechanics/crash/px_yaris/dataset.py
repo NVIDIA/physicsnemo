@@ -43,7 +43,6 @@ import logging
 import math
 import os
 import re
-import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -53,6 +52,9 @@ import torch
 import zarr
 from datapipe import EPS, KNN_EDGE_STATS_FILE, SimSample
 from torch.utils.data import Dataset
+from validation_suite import (
+    atomic_json,  # noqa: F401 (re-exported for px_yaris_prepare)
+)
 
 STATS_FILE = "yaris_full_stats.json"
 NORMALIZATION = "yaris-full-train-equal-case-axis-std-v1"
@@ -65,37 +67,6 @@ def file_sha256(path):
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def atomic_json(path, value):
-    """Write ``value`` as JSON to ``path`` via a temporary file and atomic replace.
-
-    The result gets the permissions a plain ``open(path, "w")`` would give it
-    (the umask applied to 0o666, or the mode of the file it replaces), not the
-    0o600 of the temporary file, so a shared statistics directory stays
-    readable; a failed dump leaves no temporary file behind.
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(name)
-    try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream, indent=2, allow_nan=False)
-            stream.write("\n")
-        if path.exists():
-            mode = path.stat().st_mode & 0o777
-        else:
-            umask = os.umask(0)
-            os.umask(umask)
-            mode = 0o666 & ~umask
-        os.chmod(temporary, mode)
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
 
 
 # The Yaris store layout; every array is checked where the recipe reads it.
@@ -627,6 +598,7 @@ class YarisFullGraphDataset(Dataset):
         if isinstance(local_knn_k, bool) or int(local_knn_k) <= 0:
             raise ValueError("local_knn_k must be a positive integer")
         self.dt, self.sample_type = float(dt), sample_type
+        self._stats_mode = stats_mode
         self.num_steps = int(num_steps)
         self.local_knn_k, self.local_knn_metric = int(local_knn_k), local_knn_metric
         self.paths = reader.paths(data_dir, split, num_samples)
@@ -748,10 +720,26 @@ class YarisFullGraphDataset(Dataset):
             edge_index = self.reader.structural_edges(self.reader.open(self.paths[0]))
         else:
             edge_index = torch.zeros((2, 0), dtype=torch.long)
+        if stats_mode == "load" and cache_dir is not None:
+            entries = (
+                list(Path(cache_dir).glob("*.pt")) if Path(cache_dir).is_dir() else []
+            )
+            if not entries:
+                raise FileNotFoundError(
+                    f"{cache_dir} holds no cached neighbourhoods; build the training "
+                    "split (px_yaris_prepare.py or train.py) with the same local_knn "
+                    "settings first"
+                )
         cache = LocalNeighborhoodCache(cache_dir, logger=self.logger)
         neighborhood = cache.get(
             reference, edge_index, self.local_knn_k, self.local_knn_metric
         )
+        if stats_mode == "load" and cache.counts["computed"]:
+            self.logger.warning(
+                f"{cache_dir} had no neighbourhoods for k={self.local_knn_k} "
+                f"({self.local_knn_metric}); an entry was computed and added. Do "
+                "the local_knn settings match the training split's?"
+            )
         knn_index, knn_mask = with_self_slot(neighborhood)
         normalized_reference = (reference - self.node_stats["pos_mean"]) / (
             self.node_stats["pos_std"] + EPS
@@ -849,9 +837,13 @@ class YarisFullGraphDataset(Dataset):
             return torch.load(path, map_location="cpu", weights_only=True)
         started = time.monotonic()
         exclusions = surface_one_ring_exclusions(faces, self.num_nodes)
-        tmp = path.with_suffix(".tmp")
-        torch.save(exclusions, tmp)
-        os.replace(tmp, path)
+        if self._stats_mode == "compute":
+            # The training split caches the exclusions next to the statistics;
+            # a load-mode dataset (validation, the evaluators) keeps them in
+            # memory and writes nothing into the work directory.
+            tmp = path.with_suffix(".tmp")
+            torch.save(exclusions, tmp)
+            os.replace(tmp, path)
         self.logger.info(
             f"Yaris contact exclusions: {exclusions.shape[1]} node-facet pairs for "
             f"{len(faces)} facets in {time.monotonic() - started:.0f}s"

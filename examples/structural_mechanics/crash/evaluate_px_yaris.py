@@ -15,9 +15,10 @@
 # limitations under the License.
 """Score a Yaris checkpoint with the exact held-out validation suite.
 
-Runs the validation of :class:`px_yaris.trainer.YarisFullTrainer` on a
-trained checkpoint, inside the training environment and sharded over GPUs
-like training: pooled and per-frame vector RMSE in millimetres, per-case and
+Runs the suite of :mod:`validation_suite` (the one
+:class:`px_yaris.trainer.YarisFullTrainer` validates with) on a trained
+checkpoint, inside the training environment and sharded over GPUs like
+training: pooled and per-frame vector RMSE in millimetres, per-case and
 per-region breakdowns, the target-relative penetration statistics of the
 prediction and the ground truth (shell surface and, with
 ``datapipe.rigid_wall_position``, the rigid wall) and optionally node-error
@@ -26,26 +27,48 @@ maps::
     torchrun --standalone --nproc_per_node=4 evaluate_px_yaris.py \\
         --config-name px_yaris_deformer \\
         yaris.data_root=... yaris.split_manifest=... yaris.outlier_mask=... \\
-        yaris.work_dir=... training.ckpt_path=<run>/checkpoints \\
-        training.validation_output_dir=<out> hydra.run.dir=<out> \\
+        yaris.work_dir=<run> training.ckpt_path=<run>/checkpoints \\
+        training.validation_output_dir=<out> hydra.run.dir=<out>/hydra \\
         datapipe.contact_surface=true [training.load_epoch=30] \\
-        [training.validation_node_errors=true]
+        [training.evaluation_split=test] [training.validation_node_errors=true]
 
-The run's own validation records are untouched: the JSON goes to
-``<out>/epoch_<E>.json`` where ``E`` is the loaded checkpoint's epoch.
-``datapipe.contact_surface=true`` gives contact-free models the shell facets the
-penetration metrics need; such models ignore them. For the corrector recipe pass
-``model.teacher_weights=<teacher .mdlus>`` as in training. The penetration
-metrics are this script's purpose, so it exits with an error (after writing the
-record, whose penetration block then holds ``null`` values and the reasons)
-when the probe was disabled on any rank.
+Only the requested split (``training.evaluation_split``: ``validation`` by
+default, or ``test``) is built, in load mode: the frozen statistics, the kNN
+statistics and the neighbourhood cache are read from the run's work directory
+(``datapipe.stats_dir``, ``${yaris.work_dir}/stats`` by default) and never
+recomputed, so a missing or foreign work directory fails instead of silently
+rebuilding statistics; no training dataset, optimizer or TensorBoard writer is
+created. ``hydra.run.dir`` must lie inside ``training.validation_output_dir``
+(the recipe's run directory is the training run, whose ``.hydra`` files would
+otherwise be overwritten). The JSON goes to ``<out>/epoch_<E>.json`` where
+``E`` is the loaded checkpoint's epoch (0 for a weights-only file given as
+``training.warm_start_model``). ``datapipe.contact_surface=true`` gives
+contact-free models the shell facets the penetration metrics need; such models
+ignore them. For the corrector recipe pass ``model.teacher_weights=<teacher
+.mdlus>`` as in training. The penetration metrics are this script's purpose, so
+it exits with an error (after writing the record, whose penetration block then
+holds ``null`` values and the reasons) when the probe was disabled on any rank.
 """
 
 from pathlib import Path
 
 import hydra
-from omegaconf import DictConfig, open_dict
-from train import resolve_trainer_class
+import torch
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf, open_dict
+from px_yaris.trainer import (
+    SPLITS,
+    build_split_dataset,
+    evaluate_split,
+    log_summary,
+    write_outputs,
+)
+from validation_suite import (
+    amp_settings,
+    data_stats_of,
+    load_evaluation_weights,
+    require_output_run_dir,
+)
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -53,42 +76,69 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="px_yaris_deformer")
 def main(cfg: DictConfig) -> None:
-    """Evaluate the checkpoint of ``training.ckpt_path`` and write the record."""
+    """Score the checkpoint of ``training.ckpt_path`` on one split and write the record."""
     DistributedManager.initialize()
     dist = DistributedManager()
     logger0 = RankZeroLoggingWrapper(PythonLogger("evaluate"), dist)
-    output_dir = cfg.training.get("validation_output_dir")
-    if not output_dir:
+    output_dir = require_output_run_dir(cfg.training.get("validation_output_dir"))
+    split = str(cfg.training.get("evaluation_split", "validation"))
+    if split not in SPLITS:
         raise ValueError(
-            "pass training.validation_output_dir=<dir>; the run's own validation "
-            "directory is never written by this script"
+            f"training.evaluation_split must be one of {SPLITS}; got {split!r}"
         )
     with open_dict(cfg):
-        if "validation_penetration" not in cfg.training:
-            cfg.training.validation_penetration = {"enabled": True}
-        else:
-            cfg.training.validation_penetration.enabled = True
-        cfg.training.tensorboard_log_dir = str(Path(output_dir) / "tensorboard")
-        # Weights only: the run's RNG checkpoint belongs to its own world size.
-        cfg.training.restore_rng = False
-    trainer = resolve_trainer_class(cfg.training.get("trainer_class"))(cfg, logger0)
-    if trainer.epoch_init <= 0 and not cfg.training.get("warm_start_model"):
-        raise RuntimeError(
-            f"No training checkpoint (checkpoint.0.<E>.pt) under "
-            f"{cfg.training.ckpt_path}; pass training.warm_start_model=<file>.mdlus "
-            "for a weights-only file"
+        # The penetration metrics are the script's purpose.
+        cfg.training.validation_penetration.enabled = True
+    if "teacher_weights" in cfg.model and not OmegaConf.is_missing(
+        cfg.model, "teacher_weights"
+    ):
+        # A corrector recipe names the frozen network's checkpoint; a wrong path
+        # fails here, before the dataset is read.
+        teacher_weights = str(cfg.model.teacher_weights)
+        if not Path(teacher_weights).is_file():
+            raise FileNotFoundError(
+                f"model.teacher_weights={teacher_weights} does not exist; it must "
+                "be the trained network's .mdlus file"
+            )
+    stats_dir = Path(str(cfg.datapipe.stats_dir))
+    if not stats_dir.is_dir():
+        raise FileNotFoundError(
+            f"datapipe.stats_dir={stats_dir} does not exist; point it at the "
+            "training run's statistics directory (nothing is recomputed here)"
         )
-    logger0.info(
-        f"Evaluating epoch {trainer.epoch_init} of {cfg.training.ckpt_path} "
-        f"on {dist.world_size} rank(s); records under {output_dir}"
+
+    reader = instantiate(cfg.reader)
+    dataset = build_split_dataset(cfg, reader, split, logger0)
+    data_stats = data_stats_of(dataset, dist.device)
+    model = instantiate(cfg.model)
+    epoch = load_evaluation_weights(
+        model, cfg, dist.device, logger0, world_size=dist.world_size
     )
-    # A warm-started evaluation (external weights) has no training checkpoint;
-    # its record is written as epoch 0.
-    stats = trainer.validate(max(trainer.epoch_init - 1, -1))
+    model.to(dist.device).eval()
+    amp, amp_dtype = amp_settings(cfg)
     logger0.info(
-        f"Validation epoch {trainer.epoch_init}: MSE: {stats['MSE'].item():.6f}"
+        f"Evaluating epoch {epoch} of {cfg.training.ckpt_path} on the {split} split "
+        f"({len(dataset)} cases, {dataset.num_nodes} kept nodes) over "
+        f"{dist.world_size} rank(s); records under {output_dir}"
     )
-    penetration = trainer.last_penetration_summary
+    with torch.no_grad():
+        result = evaluate_split(
+            model,
+            dataset,
+            data_stats,
+            cfg,
+            dist.device,
+            world_size=dist.world_size,
+            rank=dist.rank,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            logger=logger0,
+        )
+    log_summary(logger0, epoch, result)
+    if dist.rank == 0:
+        write_outputs(result, dataset, data_stats, epoch, output_dir)
+        logger0.info(f"Record written to {output_dir / f'epoch_{epoch:04d}.json'}")
+    penetration = result.penetration
     if penetration is None or not penetration["complete"]:
         # The record is written (with null penetration values and the reasons);
         # the numbers this script exists for are missing, so fail loudly.

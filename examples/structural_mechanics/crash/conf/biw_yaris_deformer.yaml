@@ -77,14 +77,14 @@ datapipe:
   dynamic_targets: []
   global_features: null
   sample_type: one_time_step
-  # static reference kNN neighbourhoods of the local attention (built once, cached)
-  local_knn_k: ${model.local_knn_k}
-  local_knn_metric: ${model.local_neighborhood}
+  # static reference kNN neighbourhoods of the local attention (built once, cached);
+  # the model reads k and the metric from here
+  local_knn_k: 32
+  local_knn_metric: geodesic  # the VTP structural edges
   local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
 
 model:
-  local_neighborhood: geodesic
-  dt: null
+  # dt stays null: the VTP datapipe has no frame interval
   activation_checkpointing: false
   activation_checkpointing_components: [blocks]
   num_pre_processor_checkpoint_segments: 0

@@ -193,9 +193,18 @@ torchrun --nproc_per_node=<NUM_GPUS> evaluate_px_yaris.py \
   model.teacher_weights=/runs/network/checkpoints/DeFormerTimeConditional.0.60.mdlus \
   training.ckpt_path=/runs/corrector/checkpoints training.load_epoch=30 \
   training.validation_output_dir=/runs/eval/corrector \
-  hydra.run.dir=/runs/eval/corrector \
+  hydra.run.dir=/runs/eval/corrector/hydra \
   training.validation_node_errors=true
 ```
+
+Only the requested split (`training.evaluation_split`, `validation` by default
+or `test`) is built, in load mode: the frozen statistics, the kNN statistics and
+the neighbourhood cache are read from `datapipe.stats_dir` and never recomputed
+or written, and no training dataset, optimizer or TensorBoard writer is created.
+`hydra.run.dir` must lie inside the output directory, since the recipe's own run
+directory is the training run. The suite is one implementation
+(`validation_suite.py`) shared by the Yaris trainer's validation epochs and both
+evaluators.
 
 For the network or the baseline use their recipe with `datapipe.contact_surface=true`
 (the penetration metrics need the shell facets; the models ignore them) and

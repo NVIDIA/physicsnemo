@@ -19,6 +19,8 @@
 import torch
 import warp as wp
 
+from physicsnemo.core.function_spec import FunctionSpec
+
 
 @wp.kernel
 def _count(
@@ -92,13 +94,10 @@ def bvh_pair_chunks(
     host bisect implementation, including empty queries and dense single nodes.
     """
     wp.init()
-    device = wp.device_from_torch(lower.device)
-    stream = (
-        wp.stream_from_torch(torch.cuda.current_stream(lower.device))
-        if lower.is_cuda
-        else None
-    )
-    with wp.ScopedDevice(device), wp.ScopedStream(stream):
+    # Warp work runs on Torch's current stream of the geometry's device; the
+    # scope orders Warp's stream-ordered cleanup after every launch.
+    device, stream = FunctionSpec.warp_launch_context(lower)
+    with FunctionSpec.warp_stream_scope(stream):
         wl = wp.from_torch(lower.contiguous(), dtype=wp.vec3)
         wu = wp.from_torch(upper.contiguous(), dtype=wp.vec3)
         tree = wp.Bvh(wl, wu)
@@ -128,9 +127,9 @@ def bvh_pair_chunks(
     for page, (first, last) in enumerate(ranges):
         start = page * pair_chunk_size
         stop = min(start + pair_chunk_size, total)
-        # Never keep a Warp device/stream context active while yielding to the
-        # caller (which may launch other work or abandon the iterator).
-        with wp.ScopedDevice(device), wp.ScopedStream(stream):
+        # Never keep a Warp stream scope active while yielding to the caller
+        # (which may launch other work or abandon the iterator).
+        with FunctionSpec.warp_stream_scope(stream):
             pairs = torch.empty(
                 (2, stop - start), device=lower.device, dtype=torch.long
             )

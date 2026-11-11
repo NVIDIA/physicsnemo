@@ -116,6 +116,14 @@ class NeighborhoodAttentionBlock(nn.Module):
     the aggregated edge latent and the attention log-sum-exp and applies one
     MLP with an output LayerNorm, the MeshGraphNet node-update form.
 
+    The value and edge-bias projections carry no bias. With the log-sum-exp
+    detached the softmax is shift invariant per row, so an edge-bias bias only
+    shifts the lse feature by a per-head constant, and a value bias cancels in
+    the neighbor difference: neither received a gradient, and both fold exactly
+    into the node update (see :func:`fold_legacy_block_biases` for checkpoints
+    written with them). The key bias shifts the lse by a per-node amount and
+    is kept.
+
     Parameters
     ----------
     hidden_dim : int
@@ -201,8 +209,8 @@ class NeighborhoodAttentionBlock(nn.Module):
         self.attention_norm = nn.LayerNorm(hidden_dim)
         self.query = nn.Linear(hidden_dim, hidden_dim)
         self.key = nn.Linear(hidden_dim, hidden_dim)
-        self.value = nn.Linear(hidden_dim, hidden_dim)
-        self.edge_bias = nn.Linear(edge_dim, num_heads)
+        self.value = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.edge_bias = nn.Linear(edge_dim, num_heads, bias=False)
         # Node update on [LN(x_i), message_i, edge_message_i, lse_i], the
         # self-plus-aggregate concatenation of a MeshGraphNet node block.
         update_in = 2 * hidden_dim + num_heads * edge_dim + num_heads
@@ -335,6 +343,57 @@ class NeighborhoodAttentionBlock(nn.Module):
             dim=-1,
         )
         return x + self.dropout(self.update_mlp(features))
+
+
+def fold_legacy_block_biases(
+    state_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    r"""Migrate a state dict written when the blocks still had value and edge biases.
+
+    Earlier revisions of :class:`NeighborhoodAttentionBlock` gave ``value`` and
+    ``edge_bias`` a bias. Neither changed the attention weights (the softmax is
+    shift invariant per row) and neither received a gradient; the value bias
+    cancelled in the neighbor difference and the edge-bias bias only shifted
+    the detached log-sum-exp feature by a per-head constant. This folds both
+    exactly: ``value.bias`` is dropped, and ``edge_bias.bias`` is dropped
+    after adding its effect on the lse feature, ``W_lse @ b``, to the bias of
+    the first node-update layer (whose last ``num_heads`` input columns read
+    the lse). Every other entry is returned unchanged; a state dict without
+    the legacy keys is returned as is.
+
+    Parameters
+    ----------
+    state_dict : dict[str, torch.Tensor]
+        State dict of any module containing attention blocks (the block
+        prefixes are found through their ``edge_bias.weight`` entries).
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        A new state dict loadable into the current modules with ``strict=True``.
+    """
+    marker = "edge_bias.weight"
+    # Block prefixes keep their trailing dot; a bare block has the empty prefix.
+    prefixes = [
+        key[: -len(marker)]
+        for key in state_dict
+        if key == marker or key.endswith("." + marker)
+    ]
+    folded = dict(state_dict)
+    for prefix in prefixes:
+        folded.pop(f"{prefix}value.bias", None)
+        edge_bias = folded.pop(f"{prefix}edge_bias.bias", None)
+        if edge_bias is None:
+            continue
+        weight_key, bias_key = (
+            f"{prefix}update_mlp.0.weight",
+            f"{prefix}update_mlp.0.bias",
+        )
+        weight, bias = folded[weight_key], folded[bias_key]
+        heads = edge_bias.numel()
+        shift = weight[:, -heads:].double() @ edge_bias.double().to(weight.device)
+        folded[bias_key] = (bias.double() + shift).to(bias.dtype)
+    return folded
 
 
 class NeighborhoodAttentionProcessor(nn.Module):
