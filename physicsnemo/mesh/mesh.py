@@ -869,6 +869,53 @@ class Mesh(
 
         return moved.apply(_cast)
 
+    def save(
+        self,
+        prefix: str | Path | None = None,
+        copy_existing: bool = True,
+        **kwargs: Any,
+    ) -> Self:
+        """Save the mesh to disk as memory-mapped tensors.
+
+        Writes ``points``, ``cells``, ``point_data``, ``cell_data``,
+        ``global_data``, and ``_cache`` to a directory tree of
+        ``.memmap`` files.  Wraps the tensorclass ``save()`` method.
+
+        This is the recommended serialization method. Compared to
+        ``torch.save`` (pickle-based), memmap serialization is
+        faster (parallel I/O across files), safer (no arbitrary code
+        execution on load), and supports partial loading.
+
+        Parameters
+        ----------
+        prefix : str, Path, or None
+            Directory path where the memory-mapped files will be
+            written.  If ``None``, the mesh is written into its own
+            directory if it is already memory-mapped there, as after
+            :meth:`load`, and otherwise into anonymous shared memory,
+            with no files.
+        copy_existing : bool, default=True
+            Copy tensors that are memory-mapped to another file, such as
+            those of a mesh read with :meth:`load`. If ``False``, ``save``
+            raises a ``RuntimeError`` for such a tensor, as the tensorclass
+            method does.
+        **kwargs : Any
+            Keyword arguments of the tensorclass ``save()`` method, such as
+            ``num_threads`` (threads for parallel I/O, 0 = sequential),
+            ``return_early``, and ``share_non_tensor``.
+
+        Returns
+        -------
+        Mesh
+            A new Mesh backed by the on-disk memory-mapped storage.
+
+        Examples
+        --------
+        >>> mesh.save("/path/to/mesh")  # doctest: +SKIP
+        >>> reloaded = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+        """
+        return super().save(prefix, copy_existing, **kwargs)
+
     if TYPE_CHECKING:
         # Type stubs for methods that TensorClass adds to the class.
         def clone(self) -> Self:
@@ -876,54 +923,6 @@ class Mesh(
 
             All tensors are copied (independent storage); the clone can
             be modified without affecting the original.
-            """
-            ...
-
-        def save(
-            self,
-            prefix: str | Path | None = None,
-            copy_existing: bool = False,
-            *,
-            num_threads: int = 0,
-            return_early: bool = False,
-            share_non_tensor: bool = False,
-        ) -> Self:
-            """Save the mesh to disk as memory-mapped tensors.
-
-            Writes ``points``, ``cells``, ``point_data``, ``cell_data``,
-            ``global_data``, and ``_cache`` to a directory tree of
-            ``.memmap`` files.  Proxy for the tensorclass ``memmap()``
-            method.
-
-            This is the recommended serialization method. Compared to
-            ``torch.save`` (pickle-based), memmap serialization is
-            faster (parallel I/O across files), safer (no arbitrary code
-            execution on load), and supports partial loading.
-
-            Parameters
-            ----------
-            prefix : str, Path, or None
-                Directory path where the memory-mapped files will be
-                written.  If ``None``, a temporary directory is used.
-            copy_existing : bool
-                If ``True``, copy tensors that are already memory-mapped
-                to the new location.
-            num_threads : int
-                Number of threads for parallel I/O (0 = sequential).
-            return_early : bool
-                If ``True``, return before all data is flushed to disk.
-            share_non_tensor : bool
-                If ``True``, share non-tensor data across processes.
-
-            Returns
-            -------
-            Mesh
-                A new Mesh backed by the on-disk memory-mapped storage.
-
-            Examples
-            --------
-            >>> mesh.save("/path/to/mesh")  # doctest: +SKIP
-            >>> reloaded = Mesh.load("/path/to/mesh")  # doctest: +SKIP
             """
             ...
 

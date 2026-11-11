@@ -434,6 +434,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
+  path. They used to raise unless `copy_existing=True` was passed, because the
+  loaded tensors are memory-mapped to the original files.
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.
