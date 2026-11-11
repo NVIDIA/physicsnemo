@@ -15,7 +15,9 @@ full-resolution Toyota Yaris frontal-impact dataset (99 thickness-variation
 designs, 1.48M nodes per design, 5 ms frames) the network reaches a pooled
 validation RMSE of 7.6 mm against 10.1 mm for a GeoTransolver baseline of the
 same width and depth, and the corrector lowers it to 7.5 mm while cutting the
-spurious shell crossings about sevenfold. The paper, "DeFormer: Deformation
+spurious shell crossings about sevenfold within the metric's 5 mm search band
+(about fivefold when crossings up to 15 mm deep are swept as well, see
+[Evaluate](#evaluate)). The paper, "DeFormer: Deformation
 Transformers with Contact-Aware Local Corrections for Full-Vehicle Crash
 Simulation", is in preparation; a link will follow.
 
@@ -228,7 +230,14 @@ with the mean thickness of the validated designs). The opt-in key
 `training.validation_penetration.crossing_radius_mm=<mm>` turns on the crossing
 sweep of the search, which keeps candidates beyond the band up to that radius
 when the side test certifies a crossing and lifts the ceiling accordingly, at
-about thirty times the search cost at full-vehicle scale.
+a multiple of the search cost (the Yaris suite took about twice as long with a
+15 mm radius). Measured on the 20 validation designs with that radius
+(ceiling 16.4 mm instead of 6.4 mm), the spurious shell crossings of the network
+rise from 61,930 to 75,342 node-frames and those of the corrector from 9,091 to
+15,111: 18 % of the network's and 40 % of the corrector's spurious crossings lie
+below the band's ceiling, so the corrector's reduction is about fivefold with
+the sweep and about sevenfold within the band. The reference solution's own
+crossed pairs rise from 78,371 to 109,870 in the same way.
 
 A model-only checkpoint, the `.mdlus` file without the `checkpoint.0.<E>.pt`
 training state (the form in which trained weights are distributed), is scored
