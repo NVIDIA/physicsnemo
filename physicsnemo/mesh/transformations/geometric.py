@@ -491,16 +491,19 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
 def _scale_assumptions(
     factor: float | Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
     n_spatial_dims: int,
+    dtype: torch.dtype,
 ) -> tuple[bool | None, bool | None]:
     """Whether a scale is invertible and a similarity, where knowable on the host.
 
     :func:`transform` otherwise tests both at runtime, and each test reads a
     device scalar back to the host. For Python factors, this applies the same
     tests to ``diag(factor)`` in Python arithmetic: ``|det| > 1e-10``, and the
-    ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`. A scalar
-    factor is an isotropic scale, hence a similarity, whatever its value.
-    Products use ``*``, which overflows to ``inf`` as tensor arithmetic does,
-    where Python's ``**`` raises :class:`OverflowError`.
+    ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`, with its
+    tolerance for ``dtype``, the dtype the matrix is applied in. Factors that
+    round to zero in ``dtype`` count as zero. A scalar factor is an isotropic
+    scale, hence a similarity, whatever its value. Products use ``*``, which
+    overflows to ``inf`` as tensor arithmetic does, where Python's ``**``
+    raises :class:`OverflowError`.
 
     Returns
     -------
@@ -510,16 +513,22 @@ def _scale_assumptions(
     """
     if isinstance(factor, torch.Tensor):
         return None, (True if factor.ndim == 0 else None)
+    # A value rounds to zero in dtype up to half its smallest subnormal. Rounding
+    # each value through a CPU tensor instead would break torch.compile, where
+    # .item() of a traced float is data-dependent.
+    finfo = torch.finfo(dtype)
+    underflow = finfo.tiny * finfo.eps / 2
     if isinstance(factor, numbers.Real):
+        factor = factor if abs(factor) > underflow else 0.0
         return abs(math.prod([factor] * n_spatial_dims)) > 1e-10, True
-    values = [float(f) for f in factor]
+    values = [v if abs(v) > underflow else 0.0 for v in map(float, factor)]
     peak = max(abs(v) for v in values)
     squares = [(v / peak) * (v / peak) if peak > 0 else v * v for v in values]
     mean = sum(squares) / len(squares)
-    # _is_similarity_transform's torch.allclose(..., I, atol=1e-6, rtol=1e-5)
-    # bounds each diagonal entry by atol + rtol * 1: its float32/float64
-    # tolerance, stricter than the one it uses at runtime for 16-bit dtypes.
-    is_similarity = mean == 0 or all(abs(s / mean - 1) <= 1e-6 + 1e-5 for s in squares)
+    # _is_similarity_transform's torch.allclose(..., I, atol, rtol=1e-5) bounds
+    # each diagonal entry by atol + rtol * 1, with atol raised for 16-bit dtypes
+    atol = max(1e-6, 2 * finfo.eps)
+    is_similarity = mean == 0 or all(abs(s / mean - 1) <= atol + 1e-5 for s in squares)
     return abs(math.prod(values)) > 1e-10, is_similarity
 
 
@@ -975,7 +984,9 @@ def scale(
             center,
         )
 
-    is_invertible, is_similarity = _scale_assumptions(factor, mesh.n_spatial_dims)
+    is_invertible, is_similarity = _scale_assumptions(
+        factor, mesh.n_spatial_dims, mesh.points.dtype
+    )
     return transform(
         mesh,
         matrix=M,

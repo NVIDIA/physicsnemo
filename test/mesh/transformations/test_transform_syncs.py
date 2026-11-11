@@ -89,7 +89,7 @@ def _assert_same_mesh(actual: Mesh, expected: Mesh) -> None:
     ],
 )
 def test_scale_assumptions(factor, expected):
-    assert _scale_assumptions(factor, 3) == expected
+    assert _scale_assumptions(factor, 3, torch.float64) == expected
 
 
 @pytest.mark.parametrize(
@@ -118,7 +118,27 @@ def test_extreme_scale_assumptions_match_runtime_tests(factor):
         bool(torch.linalg.det(matrix).abs() > 1e-10),
         _is_similarity_transform(matrix),
     )
-    assert _scale_assumptions(factor, 3) == runtime
+    assert _scale_assumptions(factor, 3, torch.float64) == runtime
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "factor",
+    [
+        [1e-8, 3000.0, 3000.0],  # 1e-8 rounds to zero in float16
+        [1.0, 1.0, 1.02],  # anisotropic in each dtype
+        [1.0, 1.0, 1.01],  # within bfloat16 rounding of isotropic
+        [1.0, 1.0, 1.001],  # within float16 rounding of isotropic
+        [2.0, -2.0, 2.0],
+    ],
+)
+def test_scale_assumptions_match_runtime_tests_in_mesh_dtype(factor, dtype):
+    """Python factors decide as the runtime tests do on their matrix in the mesh
+    dtype, so a list and a tensor of these factors scale a mesh alike."""
+    matrix = scale_matrix(factor, 3, torch.device("cpu"), dtype)
+    det = torch.linalg.det(matrix.to(torch.promote_types(dtype, torch.float32)))
+    runtime = (bool(det.abs() > 1e-10), _is_similarity_transform(matrix))
+    assert _scale_assumptions(factor, 3, dtype) == runtime
 
 
 @pytest.mark.parametrize("axis", [[0.0, 0.0, 2.0], "z", (1.0, 1.0, 0.0)])

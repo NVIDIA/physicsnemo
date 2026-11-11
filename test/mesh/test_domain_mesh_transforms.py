@@ -353,6 +353,22 @@ class TestScale:
             boundary_dtype,
         )
 
+    def test_factor_that_rounds_to_zero_in_one_component(self):
+        """Regression: 1e-8 rounds to zero in a float16 boundary, though not in
+        the float32 interior. The boundary's scale is singular, so its cached
+        area and normal are recomputed instead of turning NaN."""
+        dm = DomainMesh(
+            interior=two_tetrahedra.load(),
+            boundaries={"wall": single_triangle_3d.load().to(torch.float16)},
+        )
+        _ = dm.boundaries["wall"].cell_areas, dm.boundaries["wall"].cell_normals
+
+        wall = dm.scale([1e-8, 3000.0, 3000.0]).boundaries["wall"]
+
+        fresh = Mesh(points=wall.points, cells=wall.cells)
+        torch.testing.assert_close(wall.cell_areas, fresh.cell_areas)
+        torch.testing.assert_close(wall.cell_normals, fresh.cell_normals)
+
 
 class TestTransform:
     """Tests for DomainMesh.transform passthrough."""

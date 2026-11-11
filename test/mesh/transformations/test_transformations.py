@@ -618,6 +618,19 @@ class TestScale:
         expected_area = original_area * 6.0
         assert torch.allclose(scaled.cell_areas, expected_area, atol=1e-5)
 
+    def test_scale_factor_that_rounds_to_zero(self):
+        """Regression: 1e-8 rounds to zero in float16, so the scale is singular,
+        and the cached areas and normals are recomputed instead of turning NaN."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]])
+        mesh = Mesh(points=points.half(), cells=torch.tensor([[0, 1, 2]]))
+        _ = mesh.cell_areas, mesh.cell_normals
+
+        scaled = scale(mesh, [1e-8, 3000.0, 3000.0])
+
+        fresh = Mesh(points=scaled.points, cells=scaled.cells)
+        torch.testing.assert_close(scaled.cell_areas, fresh.cell_areas)
+        torch.testing.assert_close(scaled.cell_normals, fresh.cell_normals)
+
 
 class TestNonIsotropicAreaScaling:
     """Tests for per-element area scaling under non-isotropic transforms."""
