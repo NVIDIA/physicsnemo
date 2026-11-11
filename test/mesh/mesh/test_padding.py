@@ -150,6 +150,26 @@ class TestPadBasic:
         assert torch.all(padded.cells[1] == 2)
         assert torch.all(padded.cells[2] == 2)
 
+    def test_pad_cells_use_padding_point_when_points_padded(self):
+        """Padding cells sit on a padding point, so real points are unaffected."""
+        # Two triangles sharing the edge (1, 3); point 3 is the last real point
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(points=points, cells=cells)
+        mesh.cell_data["p"] = torch.tensor([1.0, 3.0])
+        _ = mesh.cell_centroids
+
+        padded = mesh.pad(target_n_points=6, target_n_cells=5)
+
+        assert torch.all(padded.cells[2:] == 4)  # the first padding point
+        # Cell-to-point averages at real points: point 3 touches only cell 1
+        c2p = padded.cell_data_to_point_data().point_data["p"]
+        torch.testing.assert_close(c2p[:4], torch.tensor([1.0, 2.0, 2.0, 3.0]))
+        neighbors = padded.get_point_to_points_adjacency().to_list()
+        assert sorted(neighbors[3]) == [1, 2]
+        uncached = Mesh(points=padded.points, cells=padded.cells)
+        torch.testing.assert_close(padded.cell_centroids, uncached.cell_centroids)
+
     def test_cached_padded_cell_centroids_match_geometry(self):
         """Padding must not make cell centroids depend on prior cache access."""
         mesh = Mesh(

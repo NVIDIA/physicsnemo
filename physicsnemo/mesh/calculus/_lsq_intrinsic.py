@@ -106,6 +106,10 @@ def _compute_point_gradients_lsq_intrinsic(
     n_manifold_dims = mesh.n_manifold_dims
     device = mesh.points.device
 
+    for field in point_values:
+        if not torch.is_floating_point(field):
+            raise TypeError("values must be floating-point")
+
     if mesh.codimension == 0:
         # No manifold structure: use standard LSQ
         from physicsnemo.mesh.calculus._lsq_reconstruction import (
