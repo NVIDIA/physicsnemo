@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the global-data mesh reader."""
+"""Tests for the recipe-local global-data mesh reader."""
 
 import torch
+from merge_global_data import MeshReaderWithGlobalData
 from tensordict import TensorDict
 
-from physicsnemo.datapipes import MeshReaderWithGlobalData
 from physicsnemo.mesh import Mesh
 
 

@@ -64,6 +64,7 @@ if _SRC_DIR not in sys.path:
 ### Recipe-local modules are imported by bare name, which only resolves
 ### after the sys.path insertion above (hence the E402 suppressions). The
 ### side-effect `import`s also register datapipe components.
+import merge_global_data  # noqa: F401, E402  (registers MeshReaderWithGlobalData)
 import nondim  # noqa: F401, E402  (registers NonDimensionalizeByMetadata)
 import sdf  # noqa: F401, E402  (registers ComputeSDFFromBoundary, DropBoundary)
 from collate import build_collate_fn  # noqa: E402
@@ -644,10 +645,9 @@ def _build_manifest_val_dataset(
     is ``False`` the train and val transform chains are identical, so this
     returns ``None`` and the caller lets validation share the train dataset
     (avoiding a redundant second reader). ``independent=True`` also builds
-    a separate dataset, keeping validation sampling fixed at epoch zero.
+    a separate dataset so training epoch changes do not affect validation readers.
     """
-    # Independent readers keep online validation samples at epoch zero even
-    # while the training loader advances its case/epoch sampling streams.
+    # Keep validation reader epochs independent of training epochs.
     if not augment and not independent:
         return None
     return build_dataset(

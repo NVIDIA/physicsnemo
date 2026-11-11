@@ -862,9 +862,9 @@ rather than physical constants, and lets `RandomRotateMesh` rotate
 `U_inf` together with the geometry through its existing
 `transform_global_data: true` path. The conditions are stored at the
 **domain level** of each file; surface configs that read a boundary
-`Mesh` directly use `physicsnemo.datapipes.MeshReaderWithGlobalData` to merge
-the parent's `global_data` onto each boundary at load time, so downstream
-transforms see a uniform
+`Mesh` directly use the recipe-local `MeshReaderWithGlobalData`
+(`src/merge_global_data.py`) to merge the parent's `global_data` onto
+each boundary at load time, so downstream transforms see a uniform
 shape regardless of whether the entry point was the domain or a
 boundary.
 
