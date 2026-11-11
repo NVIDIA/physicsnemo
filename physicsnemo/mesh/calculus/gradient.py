@@ -26,6 +26,7 @@ Both methods support intrinsic (tangent space) and extrinsic (ambient space)
 gradients for manifolds embedded in higher-dimensional spaces.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 import torch
@@ -97,20 +98,33 @@ def compute_gradient_points_lsq(
         Gradient vectors at vertices, shape
         ``(n_points, n_spatial_dims, ...)``.
     """
+    return _compute_gradients_points_lsq(mesh, [point_values], weight_power, intrinsic)[
+        0
+    ]
+
+
+def _compute_gradients_points_lsq(
+    mesh: "Mesh",
+    point_values: Sequence[Float[torch.Tensor, "n_points ..."]],
+    weight_power: float = 2.0,
+    intrinsic: bool = False,
+) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
+    """Gradients of several fields of one dtype at vertices, by
+    :func:`compute_gradient_points_lsq`, sharing their LSQ systems."""
     if intrinsic and mesh.codimension > 0:
         # Use intrinsic LSQ (solves in tangent space)
         from physicsnemo.mesh.calculus._lsq_intrinsic import (
-            compute_point_gradient_lsq_intrinsic,
+            _compute_point_gradients_lsq_intrinsic,
         )
 
-        return compute_point_gradient_lsq_intrinsic(mesh, point_values, weight_power)
+        return _compute_point_gradients_lsq_intrinsic(mesh, point_values, weight_power)
     else:
         # Use standard ambient-space LSQ
         from physicsnemo.mesh.calculus._lsq_reconstruction import (
-            compute_point_gradient_lsq,
+            _compute_point_gradients_lsq,
         )
 
-        return compute_point_gradient_lsq(mesh, point_values, weight_power)
+        return _compute_point_gradients_lsq(mesh, point_values, weight_power)
 
 
 def compute_gradient_cells_lsq(
@@ -135,9 +149,21 @@ def compute_gradient_cells_lsq(
         Gradient vectors at cells, shape
         ``(n_cells, n_spatial_dims, ...)``.
     """
-    from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
+    return _compute_gradients_cells_lsq(mesh, [cell_values], weight_power)[0]
 
-    return compute_cell_gradient_lsq(mesh, cell_values, weight_power)
+
+def _compute_gradients_cells_lsq(
+    mesh: "Mesh",
+    cell_values: Sequence[Float[torch.Tensor, "n_cells ..."]],
+    weight_power: float = 2.0,
+) -> list[Float[torch.Tensor, "n_cells n_spatial_dims ..."]]:
+    """Gradients of several fields of one dtype at cells, by
+    :func:`compute_gradient_cells_lsq`, sharing their LSQ systems."""
+    from physicsnemo.mesh.calculus._lsq_reconstruction import (
+        _compute_cell_gradients_lsq,
+    )
+
+    return _compute_cell_gradients_lsq(mesh, cell_values, weight_power)
 
 
 def project_to_tangent_space(
@@ -172,8 +198,9 @@ def project_to_tangent_space(
     2. project the gradient,
        :math:`\nabla_\text{int} f = \nabla f - (\nabla f \cdot \hat{n}) \, \hat{n}`.
 
-    For higher codimension, PCA on a local neighborhood is used to estimate
-    the tangent space.
+    For higher codimension, each cell's gradient is projected onto the span of
+    that cell's edges (for a segment, its direction); at points, PCA on a local
+    neighborhood is used to estimate the tangent space.
     """
     if mesh.codimension == 0:
         # Manifold fills the space: intrinsic = extrinsic
@@ -219,8 +246,20 @@ def project_to_tangent_space(
 
         return grad_intrinsic
 
+    elif location == "cells":
+        ### Higher codimension at cells: project onto each cell's own span
+        cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_spatial_dims)
+        edge_vectors = cell_vertices[:, 1:] - cell_vertices[:, :1]
+        # Orthonormal tangent basis: (n_cells, n_spatial_dims, n_manifold_dims)
+        tangents, _ = torch.linalg.qr(edge_vectors.transpose(1, 2))
+        projector = tangents @ tangents.transpose(1, 2)  # (n_cells, n_s, n_s)
+        dtype = torch.promote_types(gradients.dtype, projector.dtype)
+        return torch.einsum(
+            "nij,nj...->ni...", projector.to(dtype), gradients.to(dtype)
+        )
+
     else:
-        ### Higher codimension: use PCA to estimate tangent space
+        ### Higher codimension at points: use PCA to estimate tangent space
         from physicsnemo.mesh.calculus._pca_tangent import (
             project_gradient_to_tangent_space_pca,
         )

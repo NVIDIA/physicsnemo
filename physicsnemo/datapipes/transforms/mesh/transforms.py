@@ -53,7 +53,7 @@ from physicsnemo.mesh.calculus.measure import (
     scale_measures,
     set_point_measures,
 )
-from physicsnemo.nn.functional import weighted_multinomial
+from physicsnemo.utils import weighted_multinomial
 
 
 @register()
@@ -207,18 +207,40 @@ class RotateMesh(MeshTransform):
 
 @register()
 class CenterMesh(MeshTransform):
-    r"""Translate a mesh to its center of mass.
+    r"""Translate mesh so its center of mass is at the origin.
 
-    For domains, ``boundary_name`` optionally selects a boundary to determine
-    the common translation. The default uses the interior.
+    Parameters
+    ----------
+    use_area_weighting : bool, default ``True``
+        Weight cell centroids by cell area when computing the center. If
+        ``False``, use the arithmetic mean of the mesh points.
+    boundary_name : str or None, default ``None``
+        Optional boundary used to determine the common domain translation.
+        The default uses the interior.
+    store_center_as : str or None, default ``None``
+        Optional ``global_data`` key under which to store the center that was
+        subtracted, so inference can shift results back. A dotted name is a
+        nested key, as in the other mesh transforms. For a
+        :class:`DomainMesh`, the center is stored in the domain-level
+        ``global_data``. A later origin-fixed :class:`RotateMesh` or
+        :class:`ScaleMesh` with ``transform_global_data={<key>: True}``
+        transforms the stored center too; translations and non-origin pivots
+        do not update it. The default preserves the historical
+        behavior without adding metadata.
     """
 
     def __init__(
-        self, use_area_weighting: bool = True, boundary_name: str | None = None
+        self,
+        use_area_weighting: bool = True,
+        store_center_as: str | None = None,
+        boundary_name: str | None = None,
     ) -> None:
         super().__init__()
         self.use_area_weighting = use_area_weighting
         self.boundary_name = boundary_name
+        self.store_center_as = (
+            None if store_center_as is None else as_nested_key(store_center_as)
+        )
 
     def _compute_com(self, mesh: Mesh) -> Float[torch.Tensor, " spatial_dims"]:
         """Compute center of mass for a single mesh."""
@@ -226,11 +248,25 @@ class CenterMesh(MeshTransform):
             areas = mesh.cell_areas  # (n_cells,)
             centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
             total_area = areas.sum()
-            return (centroids * areas.unsqueeze(-1)).sum(dim=0) / total_area
-        return mesh.points.mean(dim=0)
+            com = (centroids * areas.unsqueeze(-1)).sum(dim=0) / total_area
+        else:
+            com = mesh.points.mean(dim=0)
+        # On a sharded mesh the reduction yields a ShardTensor. Materialize
+        # it: the offset broadcasts against plain and sharded tensors alike,
+        # whereas a ShardTensor offset would promote every plain sub-mesh it
+        # touches (e.g. a replicated SDF reference surface) into ShardTensors.
+        if hasattr(com, "full_tensor"):
+            com = com.full_tensor()
+        return com
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        return mesh.translate(-self._compute_com(mesh))
+        com = self._compute_com(mesh)
+        centered = mesh.translate(-com)
+        if self.store_center_as is not None:
+            global_data = centered.global_data.copy()
+            global_data[self.store_center_as] = com
+            centered.global_data = global_data
+        return centered
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Translate a :class:`DomainMesh` so its interior center of mass is at the origin.
@@ -254,10 +290,18 @@ class CenterMesh(MeshTransform):
             else domain.boundaries[self.boundary_name]
         )
         com = self._compute_com(reference)
-        return domain.translate(-com)
+        centered = domain.translate(-com)
+        if self.store_center_as is not None:
+            global_data = centered.global_data.copy()
+            global_data[self.store_center_as] = com
+            centered.global_data = global_data
+        return centered
 
     def extra_repr(self) -> str:
-        return f"use_area_weighting={self.use_area_weighting}"
+        parts = [f"use_area_weighting={self.use_area_weighting}"]
+        if self.store_center_as is not None:
+            parts.append(f"store_center_as={self.store_center_as!r}")
+        return ", ".join(parts)
 
 
 def _compact_points(mesh: Mesh) -> Mesh:

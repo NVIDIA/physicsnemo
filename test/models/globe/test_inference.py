@@ -49,11 +49,10 @@ def test_communication_meshes_have_independent_cache_containers(monkeypatch) -> 
     )
     cached_centroids = mesh.cell_centroids
 
-    def _fake_evaluate_hyperlayer(**kwargs) -> TensorDict:
-        target_points = kwargs["target_points"]
-        return TensorDict(
-            {"latent": torch.ones(target_points.shape[0])},
-            batch_size=[target_points.shape[0]],
+    def _fake_evaluate_hyperlayer(**kwargs) -> torch.Tensor:
+        ### Packed kernel outputs: one row per target, one column per feature.
+        return torch.ones(
+            kwargs["target_points"].shape[0], model._intermediate_layout.numel
         )
 
     monkeypatch.setattr(model, "_evaluate_hyperlayer", _fake_evaluate_hyperlayer)
@@ -63,14 +62,16 @@ def test_communication_meshes_have_independent_cache_containers(monkeypatch) -> 
         reference_lengths={},
         global_data=None,
         cluster_trees={"no_slip": None},
-        comm_plans={"no_slip": {}},
+        comm_plans={"no_slip": None},
+        comm_target_centroids={"no_slip": None},
         source_areas={},
     )["no_slip"]
 
     # The historical reconstruction intentionally retained only cell data.
     assert not list(result.point_data.keys())
     assert not list(result.global_data.keys())
-    assert set(result.cell_data.keys()) == {"physical", "latent"}
+    assert set(result.cell_data.keys()) == {"physical", "latent", "strengths"}
+    assert result.cell_data["latent", "vectors", "0"].shape == (mesh.n_cells, 3)
 
     # Geometry caches remain reusable, while structural mutations on the
     # communication result cannot leak back into its input mesh.

@@ -117,6 +117,24 @@ class TestScatterAggregateMeanWithWeights:
 
         assert torch.allclose(result_weighted, result_unweighted)
 
+    @pytest.mark.parametrize(
+        "dtype", [torch.float32, torch.float64, torch.complex64, torch.int32]
+    )
+    def test_unweighted_fast_path_matches_unit_weights_exactly(self, dtype):
+        """The unweighted-mean fast path equals the weighted path with unit weights."""
+        torch.manual_seed(0)
+        randn_dtype = dtype if dtype.is_complex else torch.float64
+        src_data = (torch.randn(12, 3, dtype=randn_dtype) * 10).to(dtype)
+        src_to_dst = torch.tensor([0, 1, 1, 2, 2, 2, 0, 1, 2, 4, 4, 0])  # 3 empty
+
+        result_unweighted = scatter_aggregate(src_data, src_to_dst, n_dst=5)
+        result_weighted = scatter_aggregate(
+            src_data, src_to_dst, n_dst=5, weights=torch.ones(12)
+        )
+
+        assert result_unweighted.dtype == result_weighted.dtype
+        assert torch.equal(result_unweighted, result_weighted)
+
     def test_mean_with_zero_weight_ignored(self):
         """Test that zero-weighted sources are effectively ignored."""
         src_data = torch.tensor([1.0, 2.0, 100.0])  # 100 should be ignored

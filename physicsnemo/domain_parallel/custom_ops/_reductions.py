@@ -493,7 +493,7 @@ class ShardedSum(ShardedReductionBase):
                 tensor._local_tensor, dim=dim_n, keepdim=keepdim_n, dtype=dtype
             )
 
-            placements = compute_result_placements(tensor, dim_n, "sum")
+            placements = compute_result_placements(tensor, dim_n, "sum", keepdim_n)
             sharding_shapes = compute_result_sharding_shapes(tensor, dim_n, keepdim_n)
 
             return build_reduction_result(
@@ -649,7 +649,7 @@ class ShardedMean(ShardedReductionBase):
             )
             local_result = local_result * weight
 
-            placements = compute_result_placements(tensor, dim_n, "sum")
+            placements = compute_result_placements(tensor, dim_n, "sum", keepdim_n)
             sharding_shapes = compute_result_sharding_shapes(tensor, dim_n, keepdim_n)
 
             return build_reduction_result(

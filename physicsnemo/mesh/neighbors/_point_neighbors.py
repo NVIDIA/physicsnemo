@@ -124,8 +124,8 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     from physicsnemo.mesh.utilities._topology import extract_unique_edges
     from physicsnemo.utils._index_tuple_ops import sort_index_tuples
 
-    ### Handle empty mesh
-    if mesh.n_cells == 0 or mesh.n_points == 0:
+    ### Handle empty mesh, and vertex cells, which join no two points
+    if mesh.n_cells == 0 or mesh.n_points == 0 or mesh.n_manifold_dims == 0:
         return Adjacency(
             offsets=torch.zeros(
                 mesh.n_points + 1, dtype=torch.int64, device=mesh.points.device

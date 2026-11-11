@@ -146,7 +146,8 @@ def get_boundary_cells(
         Codimension of facets defining boundary membership.
 
         - 1 (default): cells with at least one codim-1 boundary facet
-        - 2: cells with at least one codim-2 boundary facet (more permissive)
+        - 2: cells with at least one codim-2 boundary facet (a subset of the
+          cells that codimension 1 flags)
         - k: cells with at least one codim-k boundary facet
 
     Returns
@@ -254,7 +255,8 @@ def get_boundary_edges(mesh: "Mesh") -> Int[torch.Tensor, "n_boundary_edges 2"]:
     from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
     from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
+    # Boundary faces have n_manifold_dims vertices; their edges have 2
     candidate_edges, _ = extract_candidate_facets(
-        boundary_faces, manifold_codimension=1
+        boundary_faces, manifold_codimension=boundary_faces.shape[1] - 2
     )
     return unique_index_tuples(candidate_edges, index_bound=mesh.n_points)

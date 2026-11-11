@@ -144,6 +144,38 @@ def test_signed_distance_field_index_layout_compatibility(device: str):
     torch.testing.assert_close(faces_flat, faces_faces)
 
 
+# Strided (transposed) vertices and queries give the same values and gradients
+# as their contiguous copies.
+@requires_module("warp")
+def test_signed_distance_field_strided_inputs(device: str):
+    device = torch.device(device)
+    mesh_vertices = _tetrahedron_vertices().to(device=device, dtype=torch.float32)
+    mesh_indices = torch.arange(12, device=device, dtype=torch.int32)
+    query_points = torch.tensor(
+        [[1.0, 1.0, 1.0], [0.05, 0.1, 0.1], [0.1, 0.2, -0.5]],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    leaves = []
+    outputs = []
+    for strided in (False, True):
+        # A leaf stored transposed, so .T is a view with column stride != 1.
+        v = mesh_vertices.T.contiguous().requires_grad_()
+        q = query_points.T.contiguous().requires_grad_()
+        v_in, q_in = (v.T, q.T) if strided else (v.T.contiguous(), q.T.contiguous())
+        assert v_in.is_contiguous() != strided and q_in.is_contiguous() != strided
+        sdf_out, hit_points, hit_faces = signed_distance_field(v_in, mesh_indices, q_in)
+        sdf_out.sum().backward()
+        leaves.append((v.grad, q.grad))
+        outputs.append((sdf_out.detach(), hit_points, hit_faces))
+
+    for expected, actual in zip(outputs[0], outputs[1]):
+        torch.testing.assert_close(actual, expected)
+    for expected, actual in zip(leaves[0], leaves[1]):
+        torch.testing.assert_close(actual, expected)
+
+
 # Validate benchmark input generation contract for SDF.
 @requires_module("warp")
 def test_signed_distance_field_make_inputs_forward(device: str):

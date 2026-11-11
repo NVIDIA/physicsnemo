@@ -27,6 +27,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.tri as mtri  # noqa: E402
+from _style import clean_axis, mesh_label, save  # noqa: E402
 from matplotlib.colors import Normalize  # noqa: E402
 
 from physicsnemo.mesh import Mesh
@@ -179,15 +180,7 @@ def _draw_resolution(
             linewidth=0.44,
             alpha=0.84,
         )
-    axis.set_xlim(PLOT_X_LIMITS)
-    axis.set_ylim(PLOT_Y_LIMITS)
-    axis.set_aspect("equal")
-    axis.set_xticks([])
-    axis.set_yticks([])
-    axis.set_facecolor(BACKGROUND_COLOR)
-    for spine in axis.spines.values():
-        spine.set_color("#cbd3d8")
-        spine.set_linewidth(0.7)
+    clean_axis(axis, (PLOT_X_LIMITS, PLOT_Y_LIMITS))
 
 
 def main() -> None:
@@ -224,19 +217,7 @@ def main() -> None:
     upper = float(source_resolution.amax().detach().cpu())
     normalization = Normalize(vmin=lower, vmax=upper)
 
-    figure = plt.figure(figsize=(14.4, 4.25), dpi=180)
-    grid = figure.add_gridspec(
-        1,
-        4,
-        width_ratios=(1.0, 1.0, 1.0, 0.035),
-        left=0.018,
-        right=0.975,
-        bottom=0.055,
-        top=0.80,
-        wspace=0.055,
-    )
-    axes = [figure.add_subplot(grid[0, index]) for index in range(3)]
-    colorbar_axis = figure.add_subplot(grid[0, 3])
+    figure, axes = plt.subplots(1, 3, figsize=(14.0, 4.4))
 
     _draw_resolution(
         axes[0],
@@ -261,67 +242,32 @@ def main() -> None:
     )
 
     axes[0].set_title(
-        "Attached linear-resolution field\n"
-        f"{lower:.1f}× to {upper:.1f}× relative resolution",
-        color=TEXT_COLOR,
-        fontsize=11.5,
-        pad=8,
+        f"point_data[{RESOLUTION_KEY!r}]\n"
+        f"{mesh_label(source)}, {source.n_points:,} points\n"
+        f"{lower:.1f}x to {upper:.1f}x"
     )
     axes[1].set_title(
-        "Uniform remesh\n"
-        f"{uniform.n_points:,} vertices  |  median focus edge "
-        f"{uniform_focus_edge:.3f}",
-        color=TEXT_COLOR,
-        fontsize=11.5,
-        pad=8,
+        f"remesh({TARGET_VERTICES},\ntransfer_point_data=[{RESOLUTION_KEY!r}])\n"
+        f"{uniform.n_points:,} points, median focus edge {uniform_focus_edge:.3f}"
     )
     axes[2].set_title(
-        "Resolution-controlled remesh\n"
-        f"{adaptive.n_points:,} vertices  |  median focus edge "
-        f"{adaptive_focus_edge:.3f}",
-        color=TEXT_COLOR,
-        fontsize=11.5,
-        pad=8,
+        f"remesh({TARGET_VERTICES}, transfer_point_data=[...],\n"
+        f"resolution_field={RESOLUTION_KEY!r})\n"
+        f"{adaptive.n_points:,} points, median focus edge {adaptive_focus_edge:.3f}"
     )
 
     colorbar = figure.colorbar(
         plt.cm.ScalarMappable(norm=normalization, cmap=RESOLUTION_CMAP),
-        cax=colorbar_axis,
+        ax=axes,
+        orientation="horizontal",
+        fraction=0.07,
+        pad=0.05,
+        shrink=0.4,
     )
-    colorbar.set_label("Relative linear resolution", color=TEXT_COLOR, fontsize=10)
-    colorbar.ax.tick_params(labelsize=8.5, colors=TEXT_COLOR)
-    colorbar.outline.set_linewidth(0.6)
-    colorbar.outline.set_edgecolor("#9daab2")
+    colorbar.set_label("relative linear resolution")
 
-    figure.suptitle(
-        f"One resolution field redirects the same {TARGET_VERTICES}-vertex budget",
-        x=0.49,
-        y=0.965,
-        color=TEXT_COLOR,
-        fontsize=15,
-        fontweight="bold",
-    )
-    figure.text(
-        0.49,
-        0.875,
-        "A larger multiplier requests shorter edges near the curved front",
-        ha="center",
-        va="center",
-        color="#52636d",
-        fontsize=9.3,
-    )
-
-    figure.patch.set_facecolor("white")
-    figure.savefig(
-        OUTPUT,
-        dpi=180,
-        facecolor="white",
-        bbox_inches="tight",
-        pad_inches=0.04,
-    )
-    plt.close(figure)
-
-    print(f"Saved {OUTPUT}")
+    figure.subplots_adjust(left=0.005, right=0.995, bottom=0.2, top=0.86, wspace=0.04)
+    save(figure, OUTPUT, tight=True)
     print(
         "Focus-region median edge length: "
         f"uniform={uniform_focus_edge:.4f}, adaptive={adaptive_focus_edge:.4f}"

@@ -843,6 +843,18 @@ class TestEdgeCases:
         assert adj.n_sources == 0
         assert len(adj.indices) == 0
 
+    def test_vertex_cells_have_no_point_neighbors(self, device):
+        """A cell with a single vertex joins no two points."""
+        mesh = Mesh(
+            points=torch.rand(4, 2, device=device),
+            cells=torch.tensor([[0], [1], [3]], dtype=torch.int64, device=device),
+        )
+
+        adj = mesh.get_point_to_points_adjacency()
+
+        assert adj.to_list() == [[], [], [], []]
+        assert_on_device(adj.offsets, device)
+
     def test_isolated_triangle(self, device):
         """Test single triangle (no cell neighbors)."""
         points = torch.tensor(

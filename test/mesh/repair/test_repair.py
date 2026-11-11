@@ -369,6 +369,45 @@ class TestRepairPipeline:
         assert mesh_clean.point_data["temperature"].shape == (3,)
         assert mesh_clean.cell_data["pressure"].shape == (1,)
 
+    def test_pipeline_removes_cells_collapsed_by_merge(self, device):
+        """Cells that the point merge collapses are removed too."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        sphere = sphere_icosahedral.load(subdivisions=1, device=device)
+        # Split the edge (a, b) of cell 0 at a point 3e-7 from a, below the merge
+        # tolerance, and split both triangles on that edge there.
+        a, b = sphere.cells[0, :2].tolist()
+        on_edge = ((sphere.cells == a) | (sphere.cells == b)).sum(dim=1) == 2
+        split = sphere.cells[on_edge]
+        direction = sphere.points[b] - sphere.points[a]
+        new_point = sphere.points[a] + 3e-7 * direction / direction.norm()
+        n = sphere.n_points
+        mesh = Mesh(
+            points=torch.cat([sphere.points, new_point[None]]),
+            cells=torch.cat(
+                [
+                    sphere.cells[~on_edge],
+                    torch.where(split == b, n, split),
+                    torch.where(split == a, n, split),
+                ]
+            ),
+        )
+        assert mesh.validate()["valid"] and mesh.is_watertight()
+
+        repaired, stats = repair_mesh(mesh)
+
+        # The merge folds the new point into a, giving back the sphere
+        assert repaired.n_points == sphere.n_points
+        assert repaired.n_cells == sphere.n_cells
+        assert stats["degenerates"]["n_duplicate_vertex_cells"] == 2
+        assert repaired.validate()["valid"]
+        assert repaired.is_watertight()
+
+        # A second repair changes nothing
+        _, stats2 = repair_mesh(repaired)
+        assert stats2["degenerates"]["n_cells_final"] == repaired.n_cells
+        assert stats2["merge_points"]["n_duplicates_merged"] == 0
+
 
 class TestHoleFilling:
     """Tests for hole filling."""
@@ -411,6 +450,38 @@ class TestHoleFilling:
 
         # Should find no holes
         assert stats["n_holes_filled"] == 0
+
+    def test_fill_holes_extends_point_and_cell_data(self, device):
+        """New centroid points and faces get NaN in float fields, 0 in others."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device=device
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={
+                "T": torch.tensor([0.0, 1.0, 2.0], device=device),
+                "flow": {"v": torch.ones(3, 2, device=device)},
+            },
+            cell_data={"id": torch.tensor([7], device=device)},
+        )
+
+        # The triangle's boundary is one 3-edge hole: 1 centroid, 3 faces
+        mesh_filled, stats = fill_holes(mesh)
+
+        assert stats["n_points_added"] == 1 and stats["n_faces_added"] == 3
+        nan = float("nan")
+        torch.testing.assert_close(
+            mesh_filled.point_data["T"],
+            torch.tensor([0.0, 1.0, 2.0, nan], device=device),
+            equal_nan=True,
+        )
+        assert mesh_filled.point_data["flow", "v"].shape == (4, 2)
+        assert mesh_filled.point_data["flow", "v"][3].isnan().all()
+        assert torch.equal(
+            mesh_filled.cell_data["id"], torch.tensor([7, 0, 0, 0], device=device)
+        )
 
 
 class TestRepairIntegration:

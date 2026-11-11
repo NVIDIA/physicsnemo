@@ -167,6 +167,18 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     >>> metrics = compute_quality_metrics(mesh)
     >>> assert "quality_score" in metrics.keys()
     """
+    return _compute_quality_metrics(mesh, compute_cell_edge_lengths(mesh))
+
+
+def _compute_quality_metrics(
+    mesh: "Mesh",
+    edge_lengths: Float[torch.Tensor, "n_cells n_edges_per_cell"],
+) -> TensorDict:
+    """Compute the quality metrics from ``compute_cell_edge_lengths(mesh)``.
+
+    Callers that also need the edge lengths, such as
+    ``compute_mesh_statistics``, compute them once and pass them in.
+    """
     if mesh.n_cells == 0:
         return TensorDict(
             {},
@@ -201,9 +213,6 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
             batch_size=torch.Size([n_cells]),
             device=device,
         )
-
-    ### Compute edge lengths for each cell
-    edge_lengths = compute_cell_edge_lengths(mesh)  # (n_cells, n_edges_per_cell)
 
     max_edge = edge_lengths.max(dim=1).values
     min_edge = edge_lengths.min(dim=1).values

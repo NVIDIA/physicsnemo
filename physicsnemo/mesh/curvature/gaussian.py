@@ -35,10 +35,7 @@ from jaxtyping import Float
 
 from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
 from physicsnemo.mesh.curvature._utils import compute_full_angle_n_sphere
-from physicsnemo.mesh.geometry.dual_meshes import (
-    compute_dual_volumes_0,
-    get_or_compute_dual_volumes_0,
-)
+from physicsnemo.mesh.geometry.dual_meshes import get_or_compute_dual_volumes_0
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -104,6 +101,11 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"
 
     where the sum is over vertices and :math:`\chi(M)` is the Euler
     characteristic.
+
+    For a curve in 2D, the sign of :math:`K` follows the edge orientation, so
+    it needs consistently oriented edges (one ending and one starting at each
+    vertex), as :func:`~physicsnemo.mesh.repair.fix_orientation` gives. Where
+    the two edges at a vertex are not, :math:`|K|` is returned.
     """
     n_manifold_dims = mesh.n_manifold_dims
 
@@ -119,12 +121,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"
     angle_defect = full_angle - angle_sums  # (n_points,)
 
     ### Compute dual volumes (Voronoi areas)
-    # The cache does not track gradients: an entry made under torch.no_grad()
-    # has none. So points that require gradients neither read nor fill it.
-    if mesh.points.requires_grad:
-        dual_volumes = compute_dual_volumes_0(mesh)  # (n_points,)
-    else:
-        dual_volumes = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
+    dual_volumes = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
 
     ### Compute Gaussian curvature
     # K = angle_defect / dual_volume
@@ -149,8 +146,9 @@ def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
 
     Averages the intrinsic vertex-based Gaussian curvature (angle defect)
     over each cell's vertices. This gives a cell-centered curvature field
-    that is consistent with the vertex-based curvature and inherits its
-    mathematical properties (intrinsic, satisfies discrete Gauss-Bonnet).
+    that is consistent with the vertex-based curvature and, like it,
+    intrinsic. Its area-weighted sum satisfies discrete Gauss-Bonnet only
+    approximately.
 
     Parameters
     ----------

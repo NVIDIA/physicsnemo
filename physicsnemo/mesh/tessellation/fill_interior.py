@@ -268,6 +268,13 @@ def fill_interior(
         For ``n_spatial_dims != 2`` (3D tetrahedralization is planned;
         the contract above is dimension-generic by design).
 
+    Notes
+    -----
+    This operation is **not differentiable**. The boundary points are
+    detached and meshed in float64 on the CPU, so the output carries no
+    autograd history, even in the leading rows that equal the input
+    vertices.
+
     Examples
     --------
     Fill an annulus given as one edge mesh containing both circles:

@@ -37,9 +37,12 @@ def load(
     n_segments : int
         Number of segments in the polyline.
     amplitude : float
-        Amplitude of the zigzag.
+        Amplitude of the zigzag. Vertices alternate between
+        ``y = -amplitude`` and ``y = +amplitude``.
     wavelength : float
-        Wavelength of the zigzag pattern.
+        Horizontal spacing between consecutive vertices (the length of one
+        segment along x). The zigzag repeats every two segments, so its
+        period is ``2 * wavelength``.
     device : str
         Compute device ('cpu' or 'cuda').
 

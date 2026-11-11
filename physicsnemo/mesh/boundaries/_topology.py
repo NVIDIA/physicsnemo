@@ -52,7 +52,8 @@ def is_watertight(mesh: "Mesh") -> bool:
     Returns
     -------
     bool
-        True if mesh is watertight (no boundary facets), False otherwise
+        True if every codimension-1 facet is shared by exactly 2 cells,
+        False otherwise
 
     Examples
     --------
@@ -478,7 +479,58 @@ def _check_2d_vertex_manifold(mesh: "Mesh") -> bool:
         if not torch.all(valid_counts):
             return False
 
-    return True
+    ### The link of each vertex (the edges opposite it in its triangles) must be
+    # connected: a single path (fan) or cycle. Equivalently, the corners of the
+    # triangles at the vertex, joined across the edges they share, must form
+    # one group. Two closed surfaces touching at a vertex pass the counts
+    # above, but their corners at that vertex form two groups.
+    from physicsnemo.mesh.utilities._duplicate_detection import (
+        vectorized_connected_components,
+    )
+
+    device = mesh.cells.device
+    n_candidates = len(candidate_edges)
+    n_corners = mesh.cells.numel()  # corner 3 * t + i is vertex i of triangle t
+
+    # The two candidates of each interior edge. They are the same candidate for
+    # a boundary edge, whose self-pairs below change nothing.
+    candidate_ids = torch.arange(n_candidates, device=device)
+    first = torch.full((len(unique_edges),), n_candidates, device=device)
+    first.scatter_reduce_(0, inverse_indices, candidate_ids, reduce="amin")
+    last = torch.zeros(len(unique_edges), dtype=torch.long, device=device)
+    last.scatter_reduce_(0, inverse_indices, candidate_ids, reduce="amax")
+
+    def corner(candidates: torch.Tensor, vertices: torch.Tensor) -> torch.Tensor:
+        """Corner at ``vertices`` of the parent triangles of ``candidates``."""
+        cells = parent_cell_indices[candidates]
+        is_vertex = mesh.cells[cells] == vertices.unsqueeze(1)
+        return 3 * cells + is_vertex.byte().argmax(dim=1)
+
+    ### Join the two corners at each endpoint of every interior edge
+    a, b = unique_edges.long().unbind(dim=1)
+    pairs = torch.stack(
+        [
+            torch.cat([corner(first, a), corner(first, b)]),
+            torch.cat([corner(last, a), corner(last, b)]),
+        ],
+        dim=1,
+    )
+    labels = vectorized_connected_components(pairs, n_corners)
+
+    ### Every corner at a vertex must carry the vertex's smallest label
+    corner_vertices = mesh.cells.flatten().long()
+    min_labels = torch.full((mesh.n_points,), n_corners, device=device)
+    min_labels.scatter_reduce_(0, corner_vertices, labels, reduce="amin")
+    connected = labels == min_labels[corner_vertices]
+
+    # As in _check_3d_vertex_manifold, skip the vertices of degenerate cells
+    sorted_cells = sort_index_tuples(mesh.cells)
+    is_degenerate = (sorted_cells[:, 1:] == sorted_cells[:, :-1]).any(dim=1)
+    n_degenerate = torch.zeros(mesh.n_points, dtype=torch.long, device=device)
+    n_degenerate.scatter_add_(
+        0, corner_vertices, is_degenerate.long().repeat_interleave(3)
+    )
+    return bool(torch.all(connected | (n_degenerate[corner_vertices] > 0)))
 
 
 def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:

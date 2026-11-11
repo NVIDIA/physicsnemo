@@ -23,6 +23,7 @@ from conftest import (
     make_domain_mesh,
     make_mesh,
     make_point_cloud,
+    write_unfinished_store,
 )
 
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -73,12 +74,15 @@ def test_domain_mesh_round_trip(tmp_path):
 
 
 def test_boundary_subgroup_loads_as_mesh(tmp_path):
-    """A mesh subgroup inside a DomainMesh store is directly loadable."""
+    """A mesh subgroup inside a DomainMesh store is directly loadable, also
+    through a symlink."""
     dm = make_domain_mesh()
     to_zarr(dm, tmp_path / "dm.zarr")
     wall = from_zarr(tmp_path / "dm.zarr" / "boundaries" / "wall")
     assert isinstance(wall, Mesh)
     assert_meshes_equal(dm.boundaries["wall"], wall)
+    (tmp_path / "wall.zarr").symlink_to(tmp_path / "dm.zarr" / "boundaries" / "wall")
+    assert_meshes_equal(dm.boundaries["wall"], from_zarr(tmp_path / "wall.zarr"))
 
 
 def test_chunking_and_compression_applied(tmp_path):
@@ -98,6 +102,47 @@ def test_dtypes_preserved(tmp_path):
     back = from_zarr(tmp_path / "mesh.zarr")
     assert back.points.dtype == mesh.points.dtype
     assert back.cells.dtype == mesh.cells.dtype
+
+
+def test_0d_uint64_leaf_round_trip(tmp_path):
+    """A 0-d uint64 leaf reads back as a 0-d uint64 tensor."""
+    mesh = make_mesh()
+    mesh.global_data["seed"] = torch.tensor(2**40, dtype=torch.uint64)
+    to_zarr(mesh, tmp_path / "mesh.zarr")
+    seed = from_zarr(tmp_path / "mesh.zarr").global_data["seed"]
+    assert seed.dtype == torch.uint64
+    assert seed.shape == ()
+    assert seed.item() == 2**40
+
+
+def test_unsupported_dtype_raises_before_writing(tmp_path):
+    """A field NumPy cannot hold (bfloat16) raises and writes no partial store."""
+    mesh = make_mesh()
+    mesh.point_data["pred"] = torch.zeros(mesh.n_points, dtype=torch.bfloat16)
+    with pytest.raises(TypeError, match=r"'point_data/pred'.*bfloat16"):
+        to_zarr(mesh, tmp_path / "mesh.zarr")
+    assert not (tmp_path / "mesh.zarr").exists()
+
+
+def test_dtype_check_ignores_default_device(tmp_path):
+    """A non-CPU default device does not make supported dtypes look unsupported."""
+    mesh = make_mesh()
+    with torch.device("meta"):
+        to_zarr(mesh, tmp_path / "mesh.zarr")
+    assert_meshes_equal(mesh, from_zarr(tmp_path / "mesh.zarr"))
+
+
+@pytest.mark.parametrize(
+    "make,groups", [(make_mesh, [""]), (make_domain_mesh, ["", "interior"])]
+)
+def test_unfinished_store_raises(tmp_path, make, groups):
+    """A store whose write failed partway raises on load. So does a mesh group
+    inside it, even one that was written in full."""
+    store = tmp_path / "store.zarr"
+    write_unfinished_store(make(), store)
+    for group in groups:
+        with pytest.raises(ValueError, match="did not finish"):
+            from_zarr(store / group)
 
 
 def test_non_mesh_store_raises(tmp_path):

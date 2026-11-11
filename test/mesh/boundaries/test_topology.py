@@ -237,6 +237,57 @@ class TestManifold2D:
         assert mesh.is_manifold(check_level="edges")
         assert mesh.is_manifold(check_level="full")
 
+    def test_pinch_point_non_manifold_vertex(self, device):
+        """Two closed tetrahedron surfaces touching at one vertex are non-manifold.
+
+        Every edge has two triangles, so the facet and edge checks pass, but the
+        link of vertex 0 is two disjoint cycles: {1, 2, 3} and {4, 5, 6}.
+        """
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],  # vertex 0: pinch point
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [
+                [0, 2, 1],
+                [0, 1, 3],
+                [0, 3, 2],
+                [1, 2, 3],
+                [0, 4, 5],
+                [0, 6, 4],
+                [0, 5, 6],
+                [4, 6, 5],
+            ],
+            device=device,
+            dtype=torch.int64,
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh.is_watertight()
+        assert mesh.is_manifold(check_level="edges") is True
+        assert mesh.is_manifold(check_level="full") is False
+
+    def test_closed_and_open_surfaces_manifold(self, device):
+        """Vertex links of a closed and an open surface are single cycles or paths."""
+        from physicsnemo.mesh.primitives.surfaces import (
+            cylinder_open,
+            sphere_icosahedral,
+        )
+
+        sphere = sphere_icosahedral.load(subdivisions=1, device=device)
+        cylinder = cylinder_open.load(device=device)
+
+        assert sphere.is_manifold(check_level="full") is True
+        assert cylinder.is_manifold(check_level="full") is True
+
 
 class TestManifold3D:
     """Test manifold checking for 3D meshes."""

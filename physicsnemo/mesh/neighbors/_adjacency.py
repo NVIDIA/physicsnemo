@@ -24,6 +24,8 @@ import torch
 from jaxtyping import Int
 from tensordict import TensorClass
 
+from physicsnemo.utils._tracing import is_tracing
+
 # Packed (source, target) keys ``source * n_targets + target`` are used while
 # ``n_sources * n_targets`` stays below this bound, safely inside int64.
 _PACKED_PAIR_KEY_LIMIT = 1 << 62
@@ -44,7 +46,11 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         ``indices[offsets[i]:offsets[i+1]]``.
     indices : torch.Tensor
         Flattened array of all neighbor indices.
-        Shape ``(total_neighbors,)``, dtype int64.
+        Shape ``(total_neighbors,)``, integer dtype. The adjacencies that
+        ``Mesh`` builds store cell indices as int64 and point indices in the
+        dtype of ``mesh.cells``, so the point-to-points and cell-to-points
+        adjacencies of an int32 mesh have int32 indices. A mesh without
+        cells gives int64 indices.
 
     Examples
     --------
@@ -73,7 +79,7 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         # Runs on construction and load, but not when tensordict rebuilds an
         # existing adjacency (clone, to, indexing): the offsets read below
         # synchronize a CUDA device.
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
             if len(self.offsets) < 1:

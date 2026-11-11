@@ -78,6 +78,13 @@ def to_zarr(
     zstd_level : int
         zstd compression level (0 disables compression).
 
+    Raises
+    ------
+    TypeError
+        If ``obj`` is not a Mesh or DomainMesh, or if a field has a dtype
+        that NumPy cannot represent (e.g. ``torch.bfloat16``). Nothing is
+        written in that case; cast the field first (e.g. to ``torch.float32``).
+
     Examples
     --------
     >>> from physicsnemo.mesh.io import to_zarr, from_zarr  # doctest: +SKIP
@@ -87,13 +94,27 @@ def to_zarr(
     if not isinstance(obj, (Mesh, DomainMesh)):
         raise TypeError(f"Expected Mesh or DomainMesh, got {type(obj).__name__}")
 
-    kwargs = {"chunks": (chunk_rows,)}
-    if zstd_level > 0:
-        kwargs["compressors"] = [zarr.codecs.ZstdCodec(level=zstd_level)]
     # Serialize the underlying TensorDict: the tensorclass `to_zarr` proxy
     # tries to re-wrap the returned PersistentTensorDict as a Mesh/DomainMesh,
     # which their __post_init__ validation rejects.
-    obj.to_tensordict().to_zarr(str(store), **kwargs)
+    td = obj.to_tensordict()
+
+    # tensordict writes through NumPy, so a dtype NumPy lacks would fail midway
+    # and leave a partial store behind. Reject it before writing anything.
+    for key, value in td.items(include_nested=True, leaves_only=True):
+        try:
+            torch.empty(0, dtype=value.dtype, device="cpu").numpy()
+        except TypeError:
+            name = key if isinstance(key, str) else "/".join(key)
+            raise TypeError(
+                f"Cannot write field {name!r} with {value.dtype} to zarr: NumPy "
+                f"has no equivalent dtype. Cast it first (e.g. to torch.float32)."
+            ) from None
+
+    kwargs = {"chunks": (chunk_rows,)}
+    if zstd_level > 0:
+        kwargs["compressors"] = [zarr.codecs.ZstdCodec(level=zstd_level)]
+    td.to_zarr(str(store), **kwargs)
 
     root = zarr.open_group(str(store), mode="a")
     root.attrs[_TYPE_ATTR] = type(obj).__name__
@@ -104,13 +125,42 @@ def to_zarr(
 
 
 def _open_group(store) -> "zarr.Group":
-    """Open a zarr group read-only."""
-    return zarr.open_group(str(store), mode="r")
+    """Open a zarr group read-only, if :func:`to_zarr` finished writing it.
+
+    :func:`to_zarr` sets the root type attr last, so a store without it may be
+    partial. A mesh group inside a DomainMesh store (e.g.
+    ``<store>.zarr/boundaries/<name>``) has no type attr of its own; it opens
+    if the attr of an enclosing DomainMesh store is set.
+    """
+    group = zarr.open_group(str(store), mode="r")
+    if _TYPE_ATTR in group.attrs or (
+        "points" in group and _in_finished_domain_mesh_store(store)
+    ):
+        return group
+    raise ValueError(
+        f"{store} was not written by physicsnemo.mesh.io.to_zarr, or the write "
+        f"did not finish: it has no root attr {_TYPE_ATTR!r}, which to_zarr "
+        "sets last."
+    )
+
+
+def _in_finished_domain_mesh_store(store) -> bool:
+    """Whether a parent directory of ``store`` holds a finished DomainMesh store."""
+    for parent in Path(store).resolve().parents:
+        if not (parent / "zarr.json").exists():
+            return False  # Left the zarr hierarchy
+        attrs = zarr.open_group(str(parent), mode="r").attrs
+        if attrs.get(_TYPE_ATTR) == "DomainMesh":
+            return True
+    return False
 
 
 def _read_full(arr, device=None) -> torch.Tensor:
     """Read a whole zarr array as a tensor."""
-    return torch.as_tensor(arr[...], device=device)
+    import numpy as np
+
+    # A 0-d array reads as a NumPy scalar, which torch rejects for uint64.
+    return torch.as_tensor(np.asarray(arr[...]), device=device)
 
 
 def _read_rows(arr, runs: list[tuple[int, int]], device=None) -> torch.Tensor:
@@ -179,17 +229,22 @@ def from_zarr(
     Parameters
     ----------
     store : str or Path
-        Path of the zarr store directory.
+        Path of the zarr store directory, or of a mesh group inside a
+        DomainMesh store (e.g. ``<store>.zarr/boundaries/<name>``).
     device : torch.device, str, or None
         Device for the returned tensors (default CPU).
+
+    Raises
+    ------
+    ValueError
+        If ``store`` was not written by :func:`to_zarr`, or if the write did
+        not finish (for example, because the disk filled up), so that the
+        store may be partial.
     """
     root = _open_group(store)
-    mesh_type = root.attrs.get(_TYPE_ATTR)
-    if mesh_type is None and "points" in root:
-        # A mesh subgroup inside a DomainMesh store (e.g.
-        # <store>.zarr/boundaries/<name>) carries no type attr but is a
-        # complete Mesh group; allow loading it directly.
-        mesh_type = "Mesh"
+    # A group without the type attr is a mesh group inside a DomainMesh store
+    # (see _open_group), which loads directly as a Mesh.
+    mesh_type = root.attrs.get(_TYPE_ATTR, "Mesh")
     if mesh_type == "Mesh":
         return _mesh_from_group(root, device)
     if mesh_type == "DomainMesh":

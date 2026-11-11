@@ -32,8 +32,9 @@ over edges:
 
 where :math:`w_{vw} = |{\star}e|/|e|` are the FEM cotangent weights and
 :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume. This is exact for
-linear vector fields at interior vertices and first-order convergent on
-smooth fields.
+linear vector fields at interior vertices of 1D meshes and of uniform grids.
+On irregular triangle or tetrahedral meshes it is not exact for linear fields,
+and its pointwise error need not shrink as the mesh refines.
 
 Physical interpretation: net flux through the dual cell boundary per unit
 volume, with the PDP-flat providing the edge flux estimate.
@@ -43,8 +44,6 @@ from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float
-
-from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -120,13 +119,14 @@ def compute_divergence_points_dec(
     # v0 (smaller index): edge points outward from v0's dual cell → positive
     # v1 (larger index):  edge points inward to v1's dual cell   → negative
     divergence = torch.zeros(
-        n_points, dtype=vector_field.dtype, device=mesh.points.device
+        n_points, dtype=weighted_flux.dtype, device=mesh.points.device
     )
     divergence.scatter_add_(0, v0_indices, weighted_flux)
     divergence.scatter_add_(0, v1_indices, -weighted_flux)
 
     ### Normalize by dual 0-cell volumes
-    divergence = divergence / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
+    # Isolated vertices (zero dual volume, zero sum) keep their 0
+    divergence = divergence / torch.where(dual_volumes_0 > 0, dual_volumes_0, 1.0)
 
     return divergence
 

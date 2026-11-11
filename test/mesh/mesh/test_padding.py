@@ -150,6 +150,26 @@ class TestPadBasic:
         assert torch.all(padded.cells[1] == 2)
         assert torch.all(padded.cells[2] == 2)
 
+    def test_pad_cells_use_padding_point_when_points_padded(self):
+        """Padding cells sit on a padding point, so real points are unaffected."""
+        # Two triangles sharing the edge (1, 3); point 3 is the last real point
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(points=points, cells=cells)
+        mesh.cell_data["p"] = torch.tensor([1.0, 3.0])
+        _ = mesh.cell_centroids
+
+        padded = mesh.pad(target_n_points=6, target_n_cells=5)
+
+        assert torch.all(padded.cells[2:] == 4)  # the first padding point
+        # Cell-to-point averages at real points: point 3 touches only cell 1
+        c2p = padded.cell_data_to_point_data().point_data["p"]
+        torch.testing.assert_close(c2p[:4], torch.tensor([1.0, 2.0, 2.0, 3.0]))
+        neighbors = padded.get_point_to_points_adjacency().to_list()
+        assert sorted(neighbors[3]) == [1, 2]
+        uncached = Mesh(points=padded.points, cells=padded.cells)
+        torch.testing.assert_close(padded.cell_centroids, uncached.cell_centroids)
+
     def test_cached_padded_cell_centroids_match_geometry(self):
         """Padding must not make cell centroids depend on prior cache access."""
         mesh = Mesh(
@@ -246,6 +266,39 @@ class TestPadWithData:
             padded.point_data["label"][3:], torch.zeros(2, dtype=expected_dtype)
         )
 
+    def test_pad_explicit_measures_with_zero(self):
+        """Padding elements carry zero measure, so the padded mesh still scales."""
+        from physicsnemo.mesh.calculus.measure import (
+            cell_measures,
+            point_measures,
+            set_cell_measures,
+            set_point_measures,
+        )
+
+        ### A 3-4-5 triangle (area 6) with area measures and an ordinary field
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            cell_data={"pressure": torch.tensor([1.0])},
+        )
+        set_cell_measures(mesh, torch.tensor([6.0]))
+        set_point_measures(mesh, torch.full((3,), 2.0), dimension=2)
+
+        padded = mesh.pad(target_n_points=5, target_n_cells=3)
+
+        torch.testing.assert_close(cell_measures(padded), torch.tensor([6.0, 0.0, 0.0]))
+        torch.testing.assert_close(
+            point_measures(padded), torch.tensor([2.0, 2.0, 2.0, 0.0, 0.0])
+        )
+        assert torch.isnan(padded.cell_data["pressure"][1:]).all()
+        scaled = padded.scale(2.0)
+        torch.testing.assert_close(
+            cell_measures(scaled), torch.tensor([24.0, 0.0, 0.0])
+        )
+        torch.testing.assert_close(
+            point_measures(scaled), torch.tensor([8.0, 8.0, 8.0, 0.0, 0.0])
+        )
+
 
 class TestPadErrors:
     """Tests for error handling in pad()."""
@@ -320,6 +373,32 @@ class TestPadToNextPowerBasic:
         # Already powers of 2, should stay same
         assert padded.n_points == 128
         assert padded.n_cells == 64
+
+    @pytest.mark.parametrize(
+        ("n_points", "power", "expected_points", "expected_cells"),
+        [
+            # 5**3 = 125 exactly, although the log ratio is 3.0000000000000004
+            (125, 5.0, 125, 125),
+            # floor(sqrt(3)**10) = 242 fits the cells but not the points
+            (243, math.sqrt(3), 420, 242),
+        ],
+    )
+    def test_pad_to_next_power_uses_smallest_floored_power(
+        self, n_points, power, expected_points, expected_cells
+    ):
+        """The target is the smallest floor(power**k) that is >= the size."""
+        ### A polyline, so that the cell count is one less than the point count
+        mesh = Mesh(
+            points=torch.arange(n_points, dtype=torch.float32).unsqueeze(-1),
+            cells=torch.stack(
+                [torch.arange(n_points - 1), torch.arange(1, n_points)], dim=1
+            ),
+        )
+
+        padded = mesh.pad_to_next_power(power=power)
+
+        assert padded.n_points == expected_points
+        assert padded.n_cells == expected_cells
 
     def test_pad_to_next_power_with_data(self):
         """Test pad_to_next_power with data fields."""

@@ -19,7 +19,7 @@ botocore==1.43.75
     #   s3transfer
 bracex==3.0.1
     # via wcmatch
-certifi==2026.7.22
+certifi==2026.10.23
     # via
     #   -c /tmp/physicsnemo-ci-constraints.txt
     #   requests
@@ -98,7 +98,7 @@ opentelemetry-api==1.45.0
     # via
     #   -c /tmp/physicsnemo-ci-constraints.txt
     #   multi-storage-client
-packaging==26.2
+packaging==26.3
     # via
     #   -c /tmp/physicsnemo-ci-constraints.txt
     #   lazy-loader

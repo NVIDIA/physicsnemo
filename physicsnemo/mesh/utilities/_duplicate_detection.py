@@ -142,7 +142,7 @@ def find_duplicate_pairs(
     ### BVH query: L∞ candidate pairs within tolerance
     candidate_adjacency = bvh.find_candidate_cells(
         query_points=points,
-        max_candidates_per_point=100,
+        max_candidates_per_point=None,
         aabb_tolerance=tolerance,
     )
 

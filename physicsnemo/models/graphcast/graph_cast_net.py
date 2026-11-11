@@ -23,8 +23,14 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.graphcast.utils.graph import Graph
 from physicsnemo.nn import get_activation
+from physicsnemo.nn.module.gnn_layers.distributed_graph import (
+    DistributedGraph,
+    edge_index_to_csc,
+    partition_graph_by_coordinate_bbox,
+)
 from physicsnemo.nn.module.gnn_layers.embedder import (
     GraphCastDecoderEmbedder,
     GraphCastEncoderEmbedder,
@@ -70,20 +76,16 @@ def get_lat_lon_partition_separators(
         lat_bin_width = 180.0 / num_lat_chunks
         lon_bin_width = 360.0 / num_lon_chunks
 
-        lat_ranges = []
-        lon_ranges = []
+        # leave the outer bins open, so that every lat-lon point is in a bin
+        def _bins(num_chunks, width, start):
+            edges = [start + width * i for i in range(num_chunks + 1)]
+            edges[0] = edges[-1] = None
+            return list(zip(edges[:-1], edges[1:]))
 
-        for p_lat in range(num_lat_chunks):
-            for p_lon in range(num_lon_chunks):
-                lat_ranges += [
-                    (lat_bin_width * p_lat - 90.0, lat_bin_width * (p_lat + 1) - 90.0)
-                ]
-                lon_ranges += [
-                    (lon_bin_width * p_lon - 180.0, lon_bin_width * (p_lon + 1) - 180.0)
-                ]
-
-        lat_ranges[-1] = (lat_ranges[-1][0], None)
-        lon_ranges[-1] = (lon_ranges[-1][0], None)
+        lat_bins = _bins(num_lat_chunks, lat_bin_width, -90.0)
+        lon_bins = _bins(num_lon_chunks, lon_bin_width, -180.0)
+        lat_ranges = [lat for lat in lat_bins for _ in lon_bins]
+        lon_ranges = [lon for _ in lat_bins for lon in lon_bins]
 
         return lat_ranges, lon_ranges
 
@@ -111,6 +113,43 @@ def get_lat_lon_partition_separators(
         max_seps.append([lat[1], lon[1]])
 
     return min_seps, max_seps
+
+
+def _partition_graph(
+    edge_index: torch.Tensor,
+    src_lat_lon: torch.Tensor,
+    dst_lat_lon: torch.Tensor,
+    edge_features: torch.Tensor,
+    partition_size: int,
+    partition_group_name: Optional[str],
+    use_lat_lon_partitioning: bool,
+) -> Tuple[DistributedGraph, torch.Tensor]:
+    r"""Splits a graph across the ranks of a process group, and returns it with
+    this rank's edge features. Lat-lon coordinates are in degrees."""
+    offsets, indices, edge_perm = edge_index_to_csc(edge_index, dst_lat_lon.size(0))
+    graph_partition = None
+    if use_lat_lon_partitioning:
+        dist_manager = DistributedManager()
+        graph_partition = partition_graph_by_coordinate_bbox(
+            offsets,
+            indices,
+            src_lat_lon,
+            dst_lat_lon,
+            *get_lat_lon_partition_separators(partition_size),
+            partition_size,
+            dist_manager.group_rank(partition_group_name),
+            dist_manager.device,
+        )
+    # Pass the source node count: m2g may give the last mesh nodes no edges.
+    graph = DistributedGraph(
+        offsets,
+        indices,
+        partition_size,
+        partition_group_name,
+        graph_partition,
+        num_src_nodes=len(src_lat_lon),
+    )
+    return graph, graph.get_edge_features_in_partition(edge_features[edge_perm])
 
 
 @dataclass
@@ -183,7 +222,8 @@ class GraphCastNet(Module):
         Whether to recompute activations during backward to save memory. Defaults to False
     partition_size : int, optional, default=1
         Number of process groups across which graphs are distributed. If ``1``,
-        the model runs in single-GPU mode. Defaults to 1
+        the model runs in single-GPU mode. Distributed mode supports only the
+        ``"MessagePassing"`` processor. Defaults to 1
     partition_group_name : str | None, optional, default=None
         Name of the process group across which graphs are distributed. Defaults to None
     use_lat_lon_partitioning : bool, optional, default=False
@@ -288,10 +328,10 @@ class GraphCastNet(Module):
         self.is_distributed = False
         if partition_size > 1:
             self.is_distributed = True
-            if graph_backend == "pyg":
+            if self.processor_type != "MessagePassing":
                 raise NotImplementedError(
-                    "Distributed mode (partition_size > 1) is not supported with PyG backend. "
-                    "Distributed functionality was only available with the deprecated DGL/cugraphops backend."
+                    "Distributed mode (partition_size > 1) supports only the "
+                    "MessagePassing processor."
                 )
         self.expect_partitioned_input = expect_partitioned_input
         self.global_features_on_rank_0 = global_features_on_rank_0
@@ -341,83 +381,31 @@ class GraphCastNet(Module):
         else:
             raise ValueError(f"Unsupported graph backend: {graph_backend}")
 
-        # This is all deprecated and to-be-removed.
-
-        # if use_cugraphops_encoder or self.is_distributed:
-        #     kwargs = {}
-        #     if use_lat_lon_partitioning:
-        #         min_seps, max_seps = get_lat_lon_partition_separators(partition_size)
-        #         kwargs = {
-        #             "src_coordinates": self.g2m_graph.srcdata["lat_lon"],
-        #             "dst_coordinates": self.g2m_graph.dstdata["lat_lon"],
-        #             "coordinate_separators_min": min_seps,
-        #             "coordinate_separators_max": max_seps,
-        #         }
-        #     self.g2m_graph, edge_perm = CuGraphCSC.from_dgl(
-        #         graph=self.g2m_graph,
-        #         partition_size=partition_size,
-        #         partition_group_name=partition_group_name,
-        #         partition_by_bbox=use_lat_lon_partitioning,
-        #         **kwargs,
-        #     )
-        #     self.g2m_edata = self.g2m_edata[edge_perm]
-
-        #     if self.is_distributed:
-        #         self.g2m_edata = self.g2m_graph.get_edge_features_in_partition(
-        #             self.g2m_edata
-        #         )
-
-        # if use_cugraphops_decoder or self.is_distributed:
-        #     kwargs = {}
-        #     if use_lat_lon_partitioning:
-        #         min_seps, max_seps = get_lat_lon_partition_separators(partition_size)
-        #         kwargs = {
-        #             "src_coordinates": self.m2g_graph.srcdata["lat_lon"],
-        #             "dst_coordinates": self.m2g_graph.dstdata["lat_lon"],
-        #             "coordinate_separators_min": min_seps,
-        #             "coordinate_separators_max": max_seps,
-        #         }
-
-        #     self.m2g_graph, edge_perm = CuGraphCSC.from_dgl(
-        #         graph=self.m2g_graph,
-        #         partition_size=partition_size,
-        #         partition_group_name=partition_group_name,
-        #         partition_by_bbox=use_lat_lon_partitioning,
-        #         **kwargs,
-        #     )
-        #     self.m2g_edata = self.m2g_edata[edge_perm]
-
-        #     if self.is_distributed:
-        #         self.m2g_edata = self.m2g_graph.get_edge_features_in_partition(
-        #             self.m2g_edata
-        #         )
-
-        # if use_cugraphops_processor or self.is_distributed:
-        #     kwargs = {}
-        #     if use_lat_lon_partitioning:
-        #         min_seps, max_seps = get_lat_lon_partition_separators(partition_size)
-        #         kwargs = {
-        #             "src_coordinates": self.mesh_graph.ndata["lat_lon"],
-        #             "dst_coordinates": self.mesh_graph.ndata["lat_lon"],
-        #             "coordinate_separators_min": min_seps,
-        #             "coordinate_separators_max": max_seps,
-        #         }
-
-        #     self.mesh_graph, edge_perm = CuGraphCSC.from_dgl(
-        #         graph=self.mesh_graph,
-        #         partition_size=partition_size,
-        #         partition_group_name=partition_group_name,
-        #         partition_by_bbox=use_lat_lon_partitioning,
-        #         **kwargs,
-        #     )
-        #     self.mesh_edata = self.mesh_edata[edge_perm]
-        #     if self.is_distributed:
-        #         self.mesh_edata = self.mesh_graph.get_edge_features_in_partition(
-        #             self.mesh_edata
-        #         )
-        #         self.mesh_ndata = self.mesh_graph.get_dst_node_features_in_partition(
-        #             self.mesh_ndata
-        #         )
+        if self.is_distributed:
+            # Each rank keeps its destination nodes, their incoming edges, and
+            # those edges' features.
+            args = (partition_size, partition_group_name, use_lat_lon_partitioning)
+            g2m, m2g, mesh = self.g2m_graph, self.m2g_graph, self.mesh_graph
+            self.g2m_graph, self.g2m_edata = _partition_graph(
+                g2m["g2m"].edge_index,
+                g2m["grid"].lat_lon,
+                g2m["mesh"].lat_lon,
+                self.g2m_edata,
+                *args,
+            )
+            self.m2g_graph, self.m2g_edata = _partition_graph(
+                m2g["m2g"].edge_index,
+                m2g["mesh"].lat_lon,
+                m2g["grid"].lat_lon,
+                self.m2g_edata,
+                *args,
+            )
+            self.mesh_graph, self.mesh_edata = _partition_graph(
+                mesh.edge_index, mesh.lat_lon, mesh.lat_lon, self.mesh_edata, *args
+            )
+            self.mesh_ndata = self.mesh_graph.get_dst_node_features_in_partition(
+                self.mesh_ndata
+            )
 
         self.input_dim_grid_nodes = input_dim_grid_nodes
         self.output_dim_grid_nodes = output_dim_grid_nodes
@@ -959,12 +947,6 @@ class GraphCastNet(Module):
                 invar = invar[0].view(self.input_dim_grid_nodes, -1).permute(1, 0)
 
                 # scatter global features
-                if not hasattr(self.g2m_graph, "get_src_node_features_in_partition"):
-                    raise NotImplementedError(
-                        f"Distributed mode is not supported with {self.graph_backend} backend. "
-                        "The get_src_node_features_in_partition method is only available with "
-                        "DistributedGraph objects, which are not created with the PyG backend."
-                    )
                 invar = self.g2m_graph.get_src_node_features_in_partition(
                     invar,
                     scatter_features=global_features_on_rank_0,
@@ -1004,12 +986,6 @@ class GraphCastNet(Module):
         if produce_aggregated_output or not self.is_distributed:
             # default case: output of shape [N, C, H, W]
             if self.is_distributed:
-                if not hasattr(self.m2g_graph, "get_global_dst_node_features"):
-                    raise NotImplementedError(
-                        f"Distributed mode is not supported with {self.graph_backend} backend. "
-                        "The get_global_dst_node_features method is only available with "
-                        "DistributedGraph objects, which are not created with the PyG backend."
-                    )
                 outvar = self.m2g_graph.get_global_dst_node_features(
                     outvar,
                     get_on_all_ranks=produce_aggregated_output_on_all_ranks,
@@ -1046,8 +1022,10 @@ class GraphCastNet(Module):
         self.mesh_edata = self.mesh_edata.to(*args, **kwargs)
 
         device, _, _, _ = torch._C._nn._parse_to(*args, **kwargs)
-        self.g2m_graph = self.g2m_graph.to(device)
-        self.mesh_graph = self.mesh_graph.to(device)
-        self.m2g_graph = self.m2g_graph.to(device)
+        # Distributed graphs already live on their rank's device.
+        if not self.is_distributed:
+            self.g2m_graph = self.g2m_graph.to(device)
+            self.mesh_graph = self.mesh_graph.to(device)
+            self.m2g_graph = self.m2g_graph.to(device)
 
         return self

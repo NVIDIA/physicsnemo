@@ -24,12 +24,12 @@ from datetime import datetime, timedelta
 import dask
 import xarray as xr
 
-from .dataset import StormCastDataset
+from .dataset import CustomDataset
 
 logger = PythonLogger("dataset")
 
 
-class HrrrEra5Dataset(StormCastDataset):
+class HrrrEra5Dataset(CustomDataset):
     """
     Paired dataset object serving time-synchronized pairs of ERA5 and HRRR samples
     Expects data to be stored under directory specified by 'location' with the

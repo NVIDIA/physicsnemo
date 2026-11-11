@@ -35,7 +35,7 @@ import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._gather import gather_rows
-from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.mesh.utilities._normalization import safe_normalize
 from physicsnemo.utils._small_linalg import small_det
 
 

@@ -26,3 +26,4 @@ from .checkpoint import (
 )
 from .logging import LaunchLogger, PythonLogger, RankZeroLoggingWrapper
 from .profiling import Profiler
+from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
