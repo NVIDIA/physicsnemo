@@ -699,3 +699,67 @@ def test_forward_scaling_and_chunking_match_low_level_api(device, train_on_ancho
         torch.testing.assert_close(
             result[0], model.decode_queries(queries * 10, context, "surface")
         )
+
+
+@pytest.mark.parametrize(
+    "override,allowed",
+    [
+        ({"coordinate_scale": 10.0}, False),
+        ({"pooling_radius": 0.5}, False),
+        ({"num_heads": 4}, False),
+        ({"num_interaction_blocks": 0, "num_shared_layers": 3}, False),
+        ({"train_on_anchors": True}, False),
+        ({"parameter_scale": 40.0}, False),
+        (
+            {
+                "pooling_chunk_size": 97,
+                "query_chunk_size": 3,
+                "pooling_message_fp32": True,
+                "radius_search_backend": None,
+            },
+            True,
+        ),
+    ],
+)
+def test_checkpoint_settings(tmp_path, override, allowed):
+    """Loading rejects changed field semantics but permits execution tuning."""
+    path = str(tmp_path / "settings.mdlus")
+    ABUPT(**SMALL).save(path)
+    destination = ABUPT(**(SMALL | override))
+    if allowed:
+        destination.load(path)
+        for name, value in override.items():
+            assert getattr(destination, name) == value
+    else:
+        with pytest.raises(ValueError, match="checkpoint settings"):
+            destination.load(path)
+
+
+def test_anchor_training_compiles_without_validation_graph_breaks(monkeypatch, device):
+    """Compiled anchor training preserves both branches' values and gradients."""
+    model = ABUPT(**SMALL, parameter_channels=3, train_on_anchors=True).to(device)
+    geometry, supernodes, surface, volume = inputs(device)
+    args = (
+        geometry,
+        supernodes,
+        surface,
+        volume,
+        surface.clone(),
+        volume.clone(),
+        torch.ones(2, 3, device=device),
+    )
+    # Radius search has dynamic-shape graph breaks. Freeze only its pooled output
+    # so fullgraph still checks validation and attention in the real model.
+    pooled = model._pool(geometry, supernodes).detach()
+    monkeypatch.setattr(model, "_pool", lambda geometry, supernodes: pooled)
+    expected = model(*args)
+    actual = torch.compile(model, backend="aot_eager", fullgraph=True)(*args)
+    for actual_value, expected_value in zip(actual, expected):
+        torch.testing.assert_close(actual_value, expected_value)
+    weights = (model.surface_head.weight, model.volume_head.weight)
+    expected_grads = torch.autograd.grad(
+        sum(t.square().mean() for t in expected), weights
+    )
+    actual_grads = torch.autograd.grad(sum(t.square().mean() for t in actual), weights)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads):
+        torch.testing.assert_close(actual_grad, expected_grad)
