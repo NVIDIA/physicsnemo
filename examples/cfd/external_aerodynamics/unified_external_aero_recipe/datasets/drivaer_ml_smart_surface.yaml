@@ -48,6 +48,9 @@ pipeline:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
     - _target_: ${dp:CaptureGeometry}
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: query_normals
     - _target_: ${dp:SetGlobalField}
       fields:
         parameters: [1.205, 30.0]

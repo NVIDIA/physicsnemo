@@ -35,6 +35,9 @@ Import this module before Hydra instantiation to register the components.
 
 from __future__ import annotations
 
+import math
+from typing import Literal
+
 import torch
 
 from physicsnemo.datapipes.keys import as_nested_key
@@ -57,8 +60,8 @@ class ComputeSDFFromBoundary(MeshTransform):
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,
     approximate surface normals ``(N, 3)`` are also stored, computed as
     the normalized direction from the closest surface point to each query
-    point.  Points essentially *on* the surface (boundary-layer points at
-    sub-micron wall distances) instead use the hit-face normal, since at
+    point. By default, points essentially *on* the surface (boundary-layer
+    points at sub-micron wall distances) use the hit-face normal, since at
     those distances that direction is float32 rounding noise.  The normal
     points outward unless the query is inside by more than roundoff.
 
@@ -73,6 +76,16 @@ class ComputeSDFFromBoundary(MeshTransform):
     use_winding_number : bool
         Whether to use winding-number sign computation.  Required for
         non-watertight meshes; slightly slower.
+    signed : bool, default=True
+        Return signed distances. If False, return the distance to the closest
+        surface point without a sign. Distances use the current coordinate units.
+    near_surface_normals : {"face", "zero"}, default="face"
+        Use the oriented hit-face normal near the surface, or zero the
+        closest-point direction at distances up to ``direction_threshold``.
+    direction_threshold : float, default=1e-6
+        Nonnegative distance threshold in current coordinate units for the
+        ``"zero"`` policy. The default ``"face"`` policy keeps its existing
+        coordinate-dependent tolerance.
     """
 
     def __init__(
@@ -82,6 +95,9 @@ class ComputeSDFFromBoundary(MeshTransform):
         normals_field: str | None = "sdf_normals",
         *,
         use_winding_number: bool = True,
+        signed: bool = True,
+        near_surface_normals: Literal["face", "zero"] = "face",
+        direction_threshold: float = 1e-6,
     ) -> None:
         super().__init__()
         self.boundary_name = boundary_name
@@ -91,6 +107,13 @@ class ComputeSDFFromBoundary(MeshTransform):
             as_nested_key(normals_field) if normals_field is not None else None
         )
         self.use_winding_number = use_winding_number
+        if near_surface_normals not in ("face", "zero"):
+            raise ValueError("near_surface_normals must be 'face' or 'zero'")
+        if not math.isfinite(direction_threshold) or direction_threshold < 0:
+            raise ValueError("direction_threshold must be finite and nonnegative")
+        self.signed = signed
+        self.near_surface_normals = near_surface_normals
+        self.direction_threshold = direction_threshold
 
     def __call__(self, mesh: Mesh) -> Mesh:
         # Single-mesh path is not meaningful for SDF (we need a separate
@@ -136,42 +159,55 @@ class ComputeSDFFromBoundary(MeshTransform):
 
         # Build updated point_data with SDF (N, 1)
         new_pd = domain.interior.point_data.clone()
-        new_pd[self.sdf_field] = sdf_values.unsqueeze(-1)
+        if self.signed:
+            new_pd[self.sdf_field] = sdf_values.unsqueeze(-1)
+        else:
+            new_pd[self.sdf_field] = (query_points - closest_points).norm(
+                dim=-1, keepdim=True
+            )
 
         # Optionally compute approximate normals from closest-point direction
         if self.normals_field is not None:
             normals = query_points - closest_points
 
-            # Near the wall, (query - closest) is float32 roundoff, so use the
-            # hit-face normal, the exact limit of its direction at the wall.
-            # Roundoff scales with eps * |coordinate|; 128 eps leaves a wide
-            # margin. Mask rather than branch on ``near_surface.any()``: that
-            # host readback would stall the prefetch stream.
-            dist = torch.norm(normals, dim=-1)
-            coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
-            surface_tolerance = 128.0 * torch.finfo(torch.float32).eps * coord_scale
-            near_surface = dist < surface_tolerance
-            face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
-            # A degenerate (zero-area) hit face has no meaningful normal --
-            # ``cell_normals`` returns a zero vector for it. Keep the raw
-            # closest-point direction there instead of substituting zeros.
-            face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
-            # Take the side from the offset along the face normal, not the
-            # SDF: |sdf| also carries tangential closest-point roundoff, which
-            # reaches tens of ulps on thin faces. Within a few ulps the side
-            # is unresolved; default to outward, as volume points lie outside.
-            sign_tolerance = 8.0 * torch.finfo(torch.float32).eps * coord_scale
-            genuinely_inside = (normals * face_normals).sum(-1) < -sign_tolerance
-            oriented = torch.where(
-                genuinely_inside.unsqueeze(-1), -face_normals, face_normals
-            )
-            normals = torch.where(
-                (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
-            )
+            if self.near_surface_normals == "zero":
+                distance = normals.norm(dim=-1, keepdim=True)
+                normals = torch.where(
+                    distance > self.direction_threshold,
+                    normals / distance.clamp_min(1e-30),
+                    0,
+                )
+            else:
+                # Near the wall, (query - closest) is float32 roundoff, so use the
+                # hit-face normal, the exact limit of its direction at the wall.
+                # Roundoff scales with eps * |coordinate|; 128 eps leaves a wide
+                # margin. Mask rather than branch on ``near_surface.any()``: that
+                # host readback would stall the prefetch stream.
+                dist = torch.norm(normals, dim=-1)
+                coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
+                surface_tolerance = 128.0 * torch.finfo(torch.float32).eps * coord_scale
+                near_surface = dist < surface_tolerance
+                face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
+                # A degenerate (zero-area) hit face has no meaningful normal --
+                # ``cell_normals`` returns a zero vector for it. Keep the raw
+                # closest-point direction there instead of substituting zeros.
+                face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
+                # Take the side from the offset along the face normal, not the
+                # SDF: |sdf| also carries tangential closest-point roundoff, which
+                # reaches tens of ulps on thin faces. Within a few ulps the side
+                # is unresolved; default to outward, as volume points lie outside.
+                sign_tolerance = 8.0 * torch.finfo(torch.float32).eps * coord_scale
+                genuinely_inside = (normals * face_normals).sum(-1) < -sign_tolerance
+                oriented = torch.where(
+                    genuinely_inside.unsqueeze(-1), -face_normals, face_normals
+                )
+                normals = torch.where(
+                    (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
+                )
 
-            # Normalize to unit vectors
-            norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
-            normals = normals / norm
+                # Normalize to unit vectors
+                norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
+                normals = normals / norm
             new_pd[self.normals_field] = normals
 
         new_interior = domain.interior.with_data(point_data=new_pd)
@@ -190,6 +226,10 @@ class ComputeSDFFromBoundary(MeshTransform):
         if self.normals_field:
             parts.append(f"normals_field={self.normals_field!r}")
         parts.append(f"winding_number={self.use_winding_number}")
+        parts.append(f"signed={self.signed}")
+        parts.append(f"near_surface_normals={self.near_surface_normals!r}")
+        if self.near_surface_normals == "zero":
+            parts.append(f"direction_threshold={self.direction_threshold}")
         return ", ".join(parts)
 
 

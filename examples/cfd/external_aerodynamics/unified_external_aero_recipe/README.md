@@ -633,8 +633,9 @@ vehicle-cell centroid cloud as geometry, without CAD or STL inputs.
   state, but does not replay the exact random samples of an uninterrupted run.
 
 Surface features are native normals. Volume features are unsigned physical CFD
-boundary distances and closest-surface directions. Keep `coordinate_scale` equal
-in the model and the volume `ComputeUnsignedDistance` transform. Conditioning and
+boundary distances and closest-surface directions. The volume template uses
+`ComputeSDFFromBoundary` before geometry scaling with unsigned distances and zero
+directions within 1e-6 length units of the surface. Conditioning and
 normalization settings are defined in the YAML templates. Physical freestream
 metadata remains unchanged for export and force integration.
 

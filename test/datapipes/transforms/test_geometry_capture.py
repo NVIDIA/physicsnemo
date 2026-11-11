@@ -19,6 +19,7 @@
 import pytest
 import torch
 
+from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.datapipes.transforms.mesh import (
     CaptureGeometry,
     MeshToDomainMesh,
@@ -49,9 +50,18 @@ def cfd_surface():
 
 
 @pytest.mark.parametrize("query_count", [1, 100])
-def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
+@pytest.mark.parametrize("prefix", ["", "captured."])
+def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count, prefix):
     """Query sampling transfers aligned inverse-inclusion areas to the targets."""
-    captured = CaptureGeometry()(cfd_surface)
+    names = {
+        name: prefix + value
+        for name, value in {
+            "geometry_field": "geometry_points",
+            "center_field": "geometry_center",
+            "query_field": "query_coordinates",
+        }.items()
+    }
+    captured = CaptureGeometry(**names)(cfd_surface)
     sampled = SubsampleMesh(n_cells=query_count)(captured)
     domain = MeshToDomainMesh(cell_data_targets=["pressure"], copy_boundary=True)(
         sampled
@@ -63,36 +73,16 @@ def test_surface_effective_areas_and_full_geometry(cfd_surface, query_count):
     torch.testing.assert_close(point_measures(domain.interior), expected)
     torch.testing.assert_close(domain.interior.points, cfd_surface.cell_centroids[rows])
     torch.testing.assert_close(
-        domain.global_data["geometry_points"], cfd_surface.cell_centroids
+        domain.global_data[as_nested_key(names["geometry_field"])],
+        cfd_surface.cell_centroids,
+    )
+    torch.testing.assert_close(
+        boundary.cell_data[as_nested_key(names["query_field"])],
+        cfd_surface.cell_centroids[rows],
+    )
+    centers = cfd_surface.cell_centroids
+    torch.testing.assert_close(
+        domain.global_data[as_nested_key(names["center_field"])],
+        (centers.amin(0) + centers.amax(0)) / 2,
     )
     assert "pressure" not in boundary.cell_data
-
-
-def test_unsigned_boundary_distance_and_physical_coordinates(device):
-    """Distances stay unsigned and directions vanish at the surface."""
-    from physicsnemo.datapipes.transforms.mesh import ComputeUnsignedDistance
-    from physicsnemo.mesh import DomainMesh
-
-    surface = Mesh(
-        points=torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device=device
-        ),
-        cells=torch.tensor([[0, 1, 2]], device=device),
-    )
-    points = torch.tensor(
-        [[0.2, 0.2, 0.5], [0.2, 0.2, -0.5], [0.2, 0.2, 0.0]], device=device
-    )
-    domain = DomainMesh(interior=Mesh(points=points), boundaries={"vehicle": surface})
-    captured = CaptureGeometry().apply_to_domain(domain)
-    result = ComputeUnsignedDistance(
-        coordinate_scale=(12.0, 4.5, 3.25)
-    ).apply_to_domain(captured)
-    fields = result.interior.point_data
-    torch.testing.assert_close(fields["query_coordinates"], points, rtol=0, atol=0)
-    torch.testing.assert_close(
-        fields["sdf"].flatten(), points[:, 2].abs(), rtol=0, atol=1e-6
-    )
-    expected = torch.tensor(
-        [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 0.0, 0.0]], device=device
-    )
-    torch.testing.assert_close(fields["sdf_normals"], expected, rtol=0, atol=1e-6)

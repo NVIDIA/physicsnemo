@@ -28,11 +28,8 @@ from physicsnemo.datapipes.transforms.mesh.augmentations import (
     RandomTranslateMesh,
 )
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.datapipes.transforms.mesh.geometry import (
-    CaptureGeometry,
-    ComputeUnsignedDistance,
-)
 from physicsnemo.datapipes.transforms.mesh.transforms import (
+    CaptureGeometry,
     CenterMesh,
     ComputeCellCentroids,
     ComputeSurfaceNormals,
@@ -51,7 +48,6 @@ from physicsnemo.datapipes.transforms.mesh.transforms import (
 
 __all__ = [
     "CaptureGeometry",
-    "ComputeUnsignedDistance",
     "MeshTransform",
     "ComputeCellCentroids",
     "ComputeSurfaceNormals",

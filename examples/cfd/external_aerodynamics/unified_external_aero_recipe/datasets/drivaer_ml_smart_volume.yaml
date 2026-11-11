@@ -54,9 +54,12 @@ pipeline:
     - _target_: ${dp:SetGlobalField}
       fields:
         parameters: [1.205, 30.0]
-    - _target_: ${dp:ComputeUnsignedDistance}
+    - _target_: ${dp:ComputeSDFFromBoundary}
       boundary_name: vehicle
-      coordinate_scale: [12.0, 4.5, 3.25]
+      use_winding_number: false
+      signed: false
+      near_surface_normals: zero
+      direction_threshold: 1.0e-6
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
       boundary_name: vehicle
