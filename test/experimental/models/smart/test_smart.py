@@ -48,6 +48,7 @@ _DEFAULT_CONFIG = dict(
     qk_temperature_max=None,
     query_feature_channels=0,
     coordinate_scale=(1.0, 1.0, 1.0),
+    center_on_geometry=False,
     eval_chunk_size=8192,
 )
 
@@ -88,6 +89,7 @@ def _assert_model_attributes(model, config):
                 qk_normalization=True,
                 qk_temperature_max=4.0,
                 query_feature_channels=4,
+                center_on_geometry=True,
             ),
             id="custom",
         ),

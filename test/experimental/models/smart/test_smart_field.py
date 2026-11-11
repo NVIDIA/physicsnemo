@@ -50,9 +50,16 @@ def _inputs():
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
-def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
+@pytest.mark.parametrize("center_on_geometry", [False, True])
+def test_coordinate_frame_preserves_inputs_and_checkpoint(
+    field, center_on_geometry, tmp_path
+):
     """Normalize geometry and queries consistently without mutating their inputs."""
-    model = _model(field=field, coordinate_scale=(12.0, 4.5, 3.25))
+    model = _model(
+        field=field,
+        coordinate_scale=(12.0, 4.5, 3.25),
+        center_on_geometry=center_on_geometry,
+    )
     reference = _model(field=field, coordinate_scale=(1.0, 1.0, 1.0))
     reference.load_state_dict(model.state_dict())
     inputs = _inputs()
@@ -79,4 +86,22 @@ def test_coordinate_frame_preserves_inputs_and_checkpoint(field, tmp_path):
     model.save(path)
     restored = Module.from_checkpoint(path).eval()
     assert restored.coordinate_scale == model.coordinate_scale
+    assert restored.center_on_geometry == model.center_on_geometry
     torch.testing.assert_close(restored(**inputs), model(**inputs))
+
+
+@pytest.mark.parametrize("field", ["surface", "volume"])
+def test_geometry_center_matches_explicit_frame(field):
+    """Automatic geometry centering matches an explicit per-case bounding box."""
+    model = _model(
+        field=field, center_on_geometry=True, coordinate_scale=(2.4, 0.9, 0.65)
+    ).eval()
+    geometry = torch.randn(2, 32, 3) + torch.tensor(
+        [[[10.0, 0.0, 0.0]], [[0.0, 20.0, 0.0]]]
+    )
+    queries = torch.randn(2, 7, 3)
+    features = torch.randn(2, 7, 3)
+    center = (geometry.amin(dim=1) + geometry.amax(dim=1)) * 0.5
+    actual = model(geometry, queries, query_features=features)
+    expected = model(geometry, queries, query_features=features, frame_center=center)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)

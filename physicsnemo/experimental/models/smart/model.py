@@ -223,6 +223,9 @@ class SMART(Module):
         Maximum number of queries decoded at once during evaluation.
     coordinate_scale : tuple of three positive floats, optional, default=(1, 1, 1)
         Axis scales applied to both point clouds after subtracting ``frame_center``.
+    center_on_geometry : bool, optional, default=False
+        When ``frame_center`` is omitted, center both clouds on the geometry's
+        bounding-box midpoint before scaling.
 
     Forward
     -------
@@ -233,7 +236,9 @@ class SMART(Module):
     query_features : torch.Tensor or None, optional, default=None
         Aligned features of shape :math:`(B,M,C)` in the caller's physical units.
     frame_center : torch.Tensor or None, optional, default=None
-        Origin of shape :math:`(B,3)` or :math:`(B,1,3)`. ``None`` uses zero.
+        Origin of shape :math:`(B,3)` or :math:`(B,1,3)`. Overrides
+        ``center_on_geometry``. When omitted, use the geometry's bounding-box
+        midpoint if ``center_on_geometry=True``, otherwise zero.
 
     Outputs
     -------
@@ -287,6 +292,7 @@ class SMART(Module):
         query_feature_channels: int = 0,
         eval_chunk_size: int = 8192,
         coordinate_scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        center_on_geometry: bool = False,
     ):
         super().__init__(meta=ModelMetaData(amp=True, auto_grad=True))
         if field not in ("surface", "volume"):
@@ -306,6 +312,7 @@ class SMART(Module):
         self.query_feature_channels = query_feature_channels
         self.eval_chunk_size = eval_chunk_size
         self.coordinate_scale = tuple(coordinate_scale)
+        self.center_on_geometry = center_on_geometry
         self._args["__args__"]["coordinate_scale"] = self.coordinate_scale
         surface_channels = out_dim if field == "surface" else 0
         volume_channels = out_dim if field == "volume" else 0
@@ -624,7 +631,9 @@ class SMART(Module):
         frame_center : torch.Tensor or None, optional, default=None
             Coordinate origin of shape :math:`(B,3)` or :math:`(B,1,3)`.
             A three-element tensor broadcasts one origin across the batch.
-            ``None`` uses zero. Both clouds are divided by ``coordinate_scale``.
+            Overrides ``center_on_geometry``. When omitted, use the geometry's
+            bounding-box midpoint if ``center_on_geometry=True``, otherwise zero.
+            Both clouds are divided by ``coordinate_scale``.
 
         Returns
         -------
@@ -682,6 +691,8 @@ class SMART(Module):
             parameters = parameters.reshape(batch, self.parameter_channels)
         if not torch.compiler.is_compiling():
             self._validate_parameters(parameters, batch, geometry.device)
+        if frame_center is None and self.center_on_geometry:
+            frame_center = (geometry.amin(dim=1) + geometry.amax(dim=1)) * 0.5
         if frame_center is not None:
             center = frame_center.reshape(-1, 1, 3)
             geometry = geometry - center
