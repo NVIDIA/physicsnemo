@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Car body-in-white crash experiment using GeoFLARE (one-shot).
-# Usage: python train.py --config-name=crash_geoflare
+# Usage: python train.py --config-name=biw_yaris_geoflare_oneshot
 
 hydra:
   job:
@@ -23,7 +23,7 @@ hydra:
   run:
     dir: ./outputs/
 
-experiment_name: "Car-Crash-GeoFLARE"
+experiment_name: "BIW-Yaris-GeoFLARE"
 
 defaults:
   - reader: vtp

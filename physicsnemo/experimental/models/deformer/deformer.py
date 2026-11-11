@@ -27,12 +27,15 @@ DeFormer's latent integration is an independent extension, not a claim of
 exact reproduction.
 """
 
+from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
 import torch
 import torch.nn as nn
 from jaxtyping import Float, Int
+from torch.utils.checkpoint import checkpoint
 
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.geotransolver import GeoTransolver
 from physicsnemo.nn import get_activation
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
@@ -58,6 +61,30 @@ class BackboneState(NamedTuple):
 
 
 LocalNeighborhoodMetric = Literal["geodesic", "euclidean"]
+
+
+@dataclass
+class DeFormerMetaData(ModelMetaData):
+    r"""Meta data of :class:`DeFormer`.
+
+    The model consumes a graph with static neighbourhoods and runs a Triton
+    kernel on CUDA, so neither JIT, CUDA graphs nor ONNX export are supported;
+    automatic mixed precision is.
+    """
+
+    name: str = "DeFormer"
+    # Optimization
+    jit: bool = False
+    cuda_graphs: bool = False
+    amp: bool = True
+    # Inference
+    onnx_cpu: bool = False
+    onnx_gpu: bool = False
+    onnx_runtime: bool = False
+    # Physics informed
+    var_dim: int = 1
+    func_torch: bool = False
+    auto_grad: bool = False
 
 
 class MeshGeometryContextEncoder(nn.Module):
@@ -384,9 +411,6 @@ class DeFormer(GeoTransolver):
     input_dim_edges : int, optional
         Width of the per-slot kNN edge features (reference displacement and
         distance give four). Default is 4.
-    guard_config : dict, optional
-        No longer supported; any value raises (use the external GeoTransolver
-        OOD guard API). Default is ``None``.
     num_pre_processor_layers : int, optional
         Local processor blocks on the latent before the FLARE blocks. Default
         is 1.
@@ -414,7 +438,8 @@ class DeFormer(GeoTransolver):
         Default is ``False``.
     recompute_activation : bool, optional
         Recompute the mesh encoder/decoder MLP activations during backward
-        instead of storing them. Default is ``False``.
+        instead of storing them; :class:`MeshGraphMLP` supports this for
+        ``mesh_activation="silu"`` only. Default is ``False``.
     mesh_pre_residual_gate_init : float, optional
         Initial value of the learnable gate on the pre-processor's latent
         update; 0.0 starts as exact GeoFLARE. Default is 1.0.
@@ -516,7 +541,6 @@ class DeFormer(GeoTransolver):
         radii: list[float] | None = None,
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
-        guard_config: dict | None = None,
         attention_type: str = "GALE_FPP",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
@@ -600,10 +624,25 @@ class DeFormer(GeoTransolver):
                 f"got {local_attention_backend!r}"
             )
 
-        if guard_config is not None:
+        if time_input:
             raise ValueError(
-                "Embedded guard_config is no longer supported. Use the external "
-                "GeoTransolver OOD guard API to attach a guard to this model."
+                "DeFormer.forward takes no time argument; condition on time "
+                "through node_features or global_embedding (time_input=False)"
+            )
+        if recompute_activation and mesh_activation.lower() != "silu":
+            raise ValueError(
+                "recompute_activation requires mesh_activation='silu' (the only "
+                f"activation MeshGraphMLP recomputes); got {mesh_activation!r}"
+            )
+        # ``mesh_context`` is DeFormer's own checkpoint component: the mesh
+        # context encoder is not one of GeoTransolver's.
+        components = tuple(activation_checkpointing_components)
+        checkpoint_mesh_context = "mesh_context" in components
+        backbone_components = tuple(c for c in components if c != "mesh_context")
+        if not backbone_components:
+            raise ValueError(
+                "activation_checkpointing_components must name at least one "
+                "GeoTransolver component besides 'mesh_context'"
             )
         super().__init__(
             functional_dim=functional_dim,
@@ -629,9 +668,15 @@ class DeFormer(GeoTransolver):
             state_mixing_mode=state_mixing_mode,
             activation_checkpointing=activation_checkpointing,
             checkpointing_ratio=checkpointing_ratio,
-            activation_checkpointing_components=activation_checkpointing_components,
+            activation_checkpointing_components=backbone_components,
         )
         self.__name__ = "DeFormer"
+        self.meta = DeFormerMetaData()
+        self._checkpoint_mesh_context = checkpoint_mesh_context
+        if checkpoint_mesh_context:
+            self._args["__args__"]["activation_checkpointing_components"] = tuple(
+                sorted((*self._activation_checkpointing_components, "mesh_context"))
+            )
 
         mesh_hidden_dim = n_hidden if mesh_hidden_dim is None else mesh_hidden_dim
         if mesh_hidden_dim <= 0:
@@ -805,10 +850,30 @@ class DeFormer(GeoTransolver):
                     f"{global_embedding.shape[-1]}"
                 )
 
+        neighborhood = self._local_neighborhood(graph, node_features.shape[0])
+        if num_graphs > 1 and not torch.compiler.is_compiling():
+            # Neighbourhoods of a batch must have been offset per graph (see
+            # LocalNeighborhoodData); a cross-graph ID is a batching error.
+            neighbor_graph = batch[neighborhood.index]
+            crossing = neighborhood.mask & (neighbor_graph != batch[:, None])
+            if bool(crossing.any()):
+                raise ValueError(
+                    "graph.knn_index refers to nodes of another graph: collate "
+                    "with LocalNeighborhoodData (or offset knn_index by the node "
+                    "counts) when batching"
+                )
+
         per_graph_inputs = []
         live_geometry_contexts = []
         for graph_idx in range(num_graphs):
-            node_index = torch.nonzero(batch == graph_idx, as_tuple=False).flatten()
+            if num_graphs == 1:
+                # ``nonzero`` is a dynamic-shape op that splits a compiled
+                # forward; one graph needs no selection.
+                node_index = torch.arange(
+                    node_features.shape[0], device=node_features.device
+                )
+            else:
+                node_index = torch.nonzero(batch == graph_idx, as_tuple=False).flatten()
             geometry_i = (
                 None
                 if geometry is None
@@ -825,14 +890,12 @@ class DeFormer(GeoTransolver):
                 else global_embedding[graph_idx : graph_idx + 1]
             )
             local_i = node_features.index_select(0, node_index).unsqueeze(0)
-            context_state = self._run_checkpointed_component(
-                "context",
-                self.context_builder.build_context,
+            context_state = self._build_context(
                 (local_i,),
                 None if positions_i is None else (positions_i,),
                 geometry_i,
                 global_i,
-                self.mesh_context_encoder is None,
+                detach_geometry_context=self.mesh_context_encoder is None,
             )
             if self.mesh_context_encoder is not None:
                 if context_state[2] is None:
@@ -848,16 +911,13 @@ class DeFormer(GeoTransolver):
         if self.mesh_context_encoder is not None:
             if geometry is None:
                 raise ValueError("geometry is required for mesh context fusion")
-            mesh_context = self.mesh_context_encoder(
-                geometry=geometry,
-                batch=batch,
-                geometry_context=torch.cat(live_geometry_contexts, dim=0),
-                global_embedding=(
-                    global_embedding if self.mesh_context_use_global else None
-                ),
+            mesh_context = self._encode_mesh_context(
+                geometry,
+                batch,
+                torch.cat(live_geometry_contexts, dim=0),
+                global_embedding if self.mesh_context_use_global else None,
             )
 
-        neighborhood = self._local_neighborhood(graph, node_features.shape[0])
         backbone_latent = self._run_checkpointed_component(
             "preprocess", self.preprocess[0], node_features
         )
@@ -928,6 +988,44 @@ class DeFormer(GeoTransolver):
             post_latent
         )
 
+    def forward_with_geometry_features(self, *args, **kwargs):
+        r"""Not available: DeFormer's entry point is :meth:`forward`.
+
+        The inherited GeoTransolver path would skip the neighbourhood-attention
+        stages and the mesh-context conditioning, so it is refused instead of
+        silently returning a different model's output.
+        """
+        raise NotImplementedError(
+            "DeFormer does not support forward_with_geometry_features; call "
+            "forward(node_features, graph, geometry=..., return_backbone=...)"
+        )
+
+    def _encode_mesh_context(
+        self,
+        geometry: torch.Tensor,
+        batch: torch.Tensor,
+        geometry_context: torch.Tensor,
+        global_embedding: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Run the mesh context encoder, checkpointed when so configured."""
+        if (
+            self._checkpoint_mesh_context
+            and self._activation_checkpointing_enabled
+            and self.training
+            and torch.is_grad_enabled()
+        ):
+            return checkpoint(
+                self.mesh_context_encoder,
+                geometry,
+                batch,
+                geometry_context,
+                global_embedding,
+                use_reentrant=False,
+            )
+        return self.mesh_context_encoder(
+            geometry, batch, geometry_context, global_embedding
+        )
+
     def _local_neighborhood(
         self, graph: GraphType, num_nodes: int
     ) -> LocalNeighborhood:
@@ -938,7 +1036,9 @@ class DeFormer(GeoTransolver):
         if index is None or mask is None or edge_attr is None:
             raise ValueError(
                 "DeFormer requires graph.knn_index, graph.knn_mask and "
-                "graph.knn_edge_attr (enable datapipe.local_knn_k)"
+                "graph.knn_edge_attr: static neighbourhoods with local_knn_k "
+                "neighbours per node plus the node itself (see "
+                "physicsnemo.experimental.nn.static_knn)"
             )
         metric = getattr(graph, "knn_metric", None)
         metrics = (

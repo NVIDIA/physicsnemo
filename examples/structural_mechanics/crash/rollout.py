@@ -94,10 +94,16 @@ def _oneshot_output(pred_flat: torch.Tensor, N: int, T: int, Fo: int) -> torch.T
 
 
 def _oneshot_add_coords(pred: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
-    """Add initial coords to position slice only. pred [N,T,Fo], coords [N,3]. Fo >= 3."""
-    pred = pred.clone()
-    pred[:, :, :_POS_DIM] += coords.unsqueeze(1)  # [N,1,3] broadcasts to [N,T,3]
-    return pred
+    """Add initial coords to the position slice only. pred [N,T,Fo], coords [N,3]. Fo >= 3.
+
+    The sum is formed out of place in float32: under autocast the network
+    output is a half-precision displacement, and adding the absolute
+    coordinates in that precision would round the positions (about 1 mm at
+    vehicle scale in float16, far more in bfloat16).
+    """
+    pred = pred.float()
+    positions = pred[:, :, :_POS_DIM] + coords.unsqueeze(1).to(pred.dtype)
+    return torch.cat((positions, pred[:, :, _POS_DIM:]), dim=-1)
 
 
 class GeoTransolverOneShot(GeoTransolver):

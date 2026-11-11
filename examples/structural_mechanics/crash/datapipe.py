@@ -755,6 +755,9 @@ class CrashGraphDataset(CrashBaseDataset):
         reference_num_nodes = None
         reference_edge_index = None
         self.local_knn_cache = None
+        # Per-mesh kNN tensors shared by the samples of one mesh (keyed by the
+        # cached neighbourhood object); see _attach_local_neighborhood.
+        self._shared_local_neighborhoods: dict[int, dict] = {}
         if self.local_knn_k is not None:
             from local_neighborhoods import LocalNeighborhoodCache
 
@@ -864,11 +867,20 @@ class CrashGraphDataset(CrashBaseDataset):
                 key: torch.as_tensor(value, dtype=torch.float32)
                 for key, value in self.knn_edge_stats.items()
             }
+            knn_mean = self.knn_edge_stats["knn_edge_mean"].view(1, 1, -1)
+            knn_std = self.knn_edge_stats["knn_edge_std"].view(1, 1, -1) + EPS
+            # Samples of one mesh share their raw features; normalize each
+            # shared tensor once so they keep sharing the normalized one.
+            normalized: dict[int, torch.Tensor] = {}
             for i in range(self.num_samples):
-                self.graphs[i].knn_edge_attr = (
-                    self.graphs[i].knn_edge_attr
-                    - self.knn_edge_stats["knn_edge_mean"].view(1, 1, -1)
-                ) / (self.knn_edge_stats["knn_edge_std"].view(1, 1, -1) + EPS)
+                raw = self.graphs[i].knn_edge_attr
+                if id(raw) not in normalized:
+                    normalized[id(raw)] = (raw - knn_mean) / knn_std
+                self.graphs[i].knn_edge_attr = normalized[id(raw)]
+            for entry in self._shared_local_neighborhoods.values():
+                entry["knn_edge_attr"] = normalized.get(
+                    id(entry["knn_edge_attr"]), entry["knn_edge_attr"]
+                )
 
     def __getitem__(self, idx: int):
         if not (0 <= idx < self._max_idx):
@@ -893,7 +905,11 @@ class CrashGraphDataset(CrashBaseDataset):
         Neighbor selection uses the frozen PHYSICAL initial geometry (isotropic
         distances); features use the same normalized initial geometry as the
         structural edges. Slot zero is the node itself. Distinct initial meshes
-        each cost one bounded Dijkstra/KD-tree pass; shared meshes hit the cache.
+        each cost one bounded Dijkstra/KD-tree pass; shared meshes hit the cache,
+        which returns the same neighbourhood object for them, and then share the
+        attached tensors as well: the ``[N, K]`` slot index and mask and the
+        ``[N, K, 4]`` features (some 25 bytes per slot) are built once per mesh,
+        not once per sample, like ``edge_index`` above.
         """
         from local_neighborhoods import (
             LocalNeighborhoodData,
@@ -907,12 +923,23 @@ class CrashGraphDataset(CrashBaseDataset):
             self.local_knn_k,
             self.local_knn_metric,
         )
-        knn_index, knn_mask = with_self_slot(neighborhood)
+        key = id(neighborhood)
+        entry = self._shared_local_neighborhoods.get(key)
+        if entry is None or not torch.equal(entry["pos0"], pos0):
+            knn_index, knn_mask = with_self_slot(neighborhood)
+            entry = {
+                "neighborhood": neighborhood,  # keeps the key's object alive
+                "pos0": pos0,
+                "knn_index": knn_index,
+                "knn_mask": knn_mask,
+                "knn_edge_attr": knn_edge_features(pos0, knn_index),
+            }
+            self._shared_local_neighborhoods[key] = entry
         if not isinstance(g, LocalNeighborhoodData):
             g = LocalNeighborhoodData(**g.to_dict())
-        g.knn_index = knn_index
-        g.knn_mask = knn_mask
-        g.knn_edge_attr = knn_edge_features(pos0, knn_index)
+        g.knn_index = entry["knn_index"]
+        g.knn_mask = entry["knn_mask"]
+        g.knn_edge_attr = entry["knn_edge_attr"]
         g.knn_metric = self.local_knn_metric
         return g
 

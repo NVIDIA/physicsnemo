@@ -39,7 +39,8 @@ yaris:
   data_root: ???       # directory of <case>.zarr stores
   split_manifest: ???  # dataset creator's splits.csv
   outlier_mask: ???    # outlier_nodes.npz with a boolean `exclude` array (null keeps all)
-  work_dir: ???        # statistics, neighbourhood caches, checkpoints, records
+  work_dir: ???        # ABSOLUTE path: statistics, neighbourhood caches, checkpoints, records
+                       # (Hydra changes into it; a relative path would nest the outputs)
   stride: 5            # 5 ms frames from the 1 ms stores
 
 hydra:
@@ -80,7 +81,9 @@ training:
   loss_space: physical
   loss_scale_mm: 10.0
 
-# inference.py reads VTP sequences only; Yaris predictions come from
-# evaluate_px_yaris.py.
+# inference.py reads VTP sequences only and does not run on the Yaris stores.
+# evaluate_px_yaris.py scores a checkpoint and writes metrics only (the JSON
+# record, the node RMSE array and node_meta.npz); there is no export of a
+# predicted Yaris shape.
 inference:
   raw_data_dir_test: null

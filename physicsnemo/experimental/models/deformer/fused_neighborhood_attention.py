@@ -335,8 +335,10 @@ if triton is not None:
         acc = tl.zeros([BLOCK_N, DH_PAD], tl.float32)
         edge_acc = tl.zeros([BLOCK_N, E_PAD], tl.float32)
         for slot in range(0, K):
-            neighbor = tl.load(INDEX + offs_n * K + slot, mask=node_ok, other=0)
             valid = tl.load(VALID + offs_n * K + slot, mask=node_ok, other=0) != 0
+            # A masked slot may carry any ID: read a valid row instead.
+            neighbor = tl.load(INDEX + offs_n * K + slot, mask=node_ok, other=0)
+            neighbor = tl.where(valid, neighbor, 0)
             key = tl.load(
                 KEY
                 + neighbor[:, None] * stride_kn
@@ -345,7 +347,10 @@ if triton is not None:
                 mask=nd_ok,
                 other=0.0,
             ).to(tl.float32)
-            logit = tl.sum(q * key, axis=1) * scale
+            # ``scale`` is a Python float that Inductor types as fp64 under
+            # torch.compile; pin the product to fp32 so the loop state keeps
+            # one type.
+            logit = (tl.sum(q * key, axis=1) * scale).to(tl.float32)
             logit = logit + tl.load(
                 BIAS + offs_n * stride_bn + slot * stride_bk + head,
                 mask=node_ok,
@@ -490,8 +495,10 @@ if triton is not None:
         lse = tl.load(LSE + offs_n * H + head, mask=node_ok, other=float("inf"))
         dq = tl.zeros([BLOCK_N, DH_PAD], tl.float32)
         for slot in range(0, K):
-            neighbor = tl.load(INDEX + offs_n * K + slot, mask=node_ok, other=0)
             valid = tl.load(VALID + offs_n * K + slot, mask=node_ok, other=0) != 0
+            # A masked slot may carry any ID: read a valid row instead.
+            neighbor = tl.load(INDEX + offs_n * K + slot, mask=node_ok, other=0)
+            neighbor = tl.where(valid, neighbor, 0)
             key = tl.load(
                 KEY
                 + neighbor[:, None] * stride_kn
@@ -513,7 +520,10 @@ if triton is not None:
                 mask=ne_ok,
                 other=0.0,
             ).to(tl.float32)
-            logit = tl.sum(q * key, axis=1) * scale
+            # ``scale`` is a Python float that Inductor types as fp64 under
+            # torch.compile; pin the product to fp32 so the loop state keeps
+            # one type.
+            logit = (tl.sum(q * key, axis=1) * scale).to(tl.float32)
             logit = logit + tl.load(
                 BIAS + offs_n * stride_bn + slot * stride_bk + head,
                 mask=node_ok,
@@ -532,7 +542,7 @@ if triton is not None:
                 + neighbor[:, None] * stride_dkn
                 + head * stride_dkh
                 + offs_d[None, :],
-                (dlogit * scale)[:, None] * q,
+                (dlogit * scale).to(tl.float32)[:, None] * q,
                 mask=contrib_ok,
                 sem="relaxed",
             )
@@ -547,7 +557,7 @@ if triton is not None:
             )
         tl.store(
             DQ + offs_n[:, None] * stride_dqn + head * stride_dqh + offs_d[None, :],
-            (dq * scale).to(DQ.dtype.element_ty),
+            (dq * scale).to(tl.float32).to(DQ.dtype.element_ty),
             mask=nd_ok,
         )
 
@@ -580,40 +590,42 @@ def _triton_forward(query, key, value, bias, edge, index, valid, scale):
     def grid(meta):
         return (triton.cdiv(num_nodes, meta["BLOCK_N"]), heads)
 
-    _neighborhood_attention_fwd_kernel[grid](
-        query,
-        key,
-        value,
-        bias,
-        edge,
-        index,
-        valid,
-        out,
-        edge_out,
-        lse,
-        num_nodes,
-        slots,
-        scale,
-        query.stride(0),
-        query.stride(1),
-        key.stride(0),
-        key.stride(1),
-        value.stride(0),
-        value.stride(1),
-        bias.stride(0),
-        bias.stride(1),
-        edge.stride(0),
-        edge.stride(1),
-        out.stride(0),
-        out.stride(1),
-        edge_out.stride(0),
-        edge_out.stride(1),
-        H=heads,
-        DH=head_dim,
-        DH_PAD=_next_pow2(head_dim),
-        E=edge_dim,
-        E_PAD=_next_pow2(edge_dim),
-    )
+    # Triton launches on the current device; the model may live elsewhere.
+    with torch.cuda.device(query.device):
+        _neighborhood_attention_fwd_kernel[grid](
+            query,
+            key,
+            value,
+            bias,
+            edge,
+            index,
+            valid,
+            out,
+            edge_out,
+            lse,
+            num_nodes,
+            slots,
+            scale,
+            query.stride(0),
+            query.stride(1),
+            key.stride(0),
+            key.stride(1),
+            value.stride(0),
+            value.stride(1),
+            bias.stride(0),
+            bias.stride(1),
+            edge.stride(0),
+            edge.stride(1),
+            out.stride(0),
+            out.stride(1),
+            edge_out.stride(0),
+            edge_out.stride(1),
+            H=heads,
+            DH=head_dim,
+            DH_PAD=_next_pow2(head_dim),
+            E=edge_dim,
+            E_PAD=_next_pow2(edge_dim),
+        )
     return out, edge_out, lse
 
 
@@ -662,57 +674,58 @@ def _triton_backward(
     def grid(meta):
         return (triton.cdiv(num_nodes, meta["BLOCK_N"]), heads)
 
-    _neighborhood_attention_bwd_kernel[grid](
-        query,
-        key,
-        value,
-        bias,
-        edge,
-        index,
-        valid,
-        out,
-        edge_out,
-        lse,
-        d_out,
-        d_edge_out,
-        d_query,
-        d_key,
-        d_value,
-        d_logits,
-        prob,
-        num_nodes,
-        slots,
-        scale,
-        query.stride(0),
-        query.stride(1),
-        key.stride(0),
-        key.stride(1),
-        value.stride(0),
-        value.stride(1),
-        bias.stride(0),
-        bias.stride(1),
-        edge.stride(0),
-        edge.stride(1),
-        out.stride(0),
-        out.stride(1),
-        edge_out.stride(0),
-        edge_out.stride(1),
-        d_out.stride(0),
-        d_out.stride(1),
-        d_edge_out.stride(0),
-        d_edge_out.stride(1),
-        d_query.stride(0),
-        d_query.stride(1),
-        d_key.stride(0),
-        d_key.stride(1),
-        d_value.stride(0),
-        d_value.stride(1),
-        H=heads,
-        DH=head_dim,
-        DH_PAD=_next_pow2(head_dim),
-        E=edge_dim,
-        E_PAD=_next_pow2(edge_dim),
-    )
+    with torch.cuda.device(query.device):
+        _neighborhood_attention_bwd_kernel[grid](
+            query,
+            key,
+            value,
+            bias,
+            edge,
+            index,
+            valid,
+            out,
+            edge_out,
+            lse,
+            d_out,
+            d_edge_out,
+            d_query,
+            d_key,
+            d_value,
+            d_logits,
+            prob,
+            num_nodes,
+            slots,
+            scale,
+            query.stride(0),
+            query.stride(1),
+            key.stride(0),
+            key.stride(1),
+            value.stride(0),
+            value.stride(1),
+            bias.stride(0),
+            bias.stride(1),
+            edge.stride(0),
+            edge.stride(1),
+            out.stride(0),
+            out.stride(1),
+            edge_out.stride(0),
+            edge_out.stride(1),
+            d_out.stride(0),
+            d_out.stride(1),
+            d_edge_out.stride(0),
+            d_edge_out.stride(1),
+            d_query.stride(0),
+            d_query.stride(1),
+            d_key.stride(0),
+            d_key.stride(1),
+            d_value.stride(0),
+            d_value.stride(1),
+            H=heads,
+            DH=head_dim,
+            DH_PAD=_next_pow2(head_dim),
+            E=edge_dim,
+            E_PAD=_next_pow2(edge_dim),
+        )
     # d e_{nk} = sum_h p_{nhk} d ebar_{nh}: a batched [K, H] x [H, E] product,
     # deterministic and far cheaper than cross-head atomics into [N, K, E].
     d_edge = torch.bmm(prob, d_edge_out.float()).to(edge.dtype)
@@ -741,6 +754,9 @@ class _NeighborhoodAttention(torch.autograd.Function):
             )
         else:
             valid = mask
+            # The gather reference dereferences every slot: keep masked IDs in
+            # range so a sentinel there is as harmless as in the kernel.
+            index = torch.where(mask, index, torch.zeros_like(index))
             out, edge_out, lse = _torch_forward(
                 query, key, value, bias, edge, index, mask, scale
             )
@@ -867,6 +883,15 @@ def neighborhood_attention(
     ):
         if tensor.device != query.device:
             raise ValueError(f"{name} must be on the query's device")
+    if not torch.compiler.is_compiling() and index.numel():
+        # The kernels do pointer arithmetic on the IDs of valid slots: a stale
+        # ID would read garbage and the backward atomics would write past the
+        # end of d_key/d_value. Masked slots are never dereferenced.
+        lowest, highest = torch.aminmax(index.masked_fill(~mask, 0))
+        if lowest < 0 or highest >= num_nodes:
+            raise ValueError(
+                f"index holds neighbor IDs outside [0, {num_nodes}) on valid slots"
+            )
     resolved = resolve_backend(backend, query.device)
     out, edge_out, lse = _NeighborhoodAttention.apply(
         query, key, value, bias, edge_latent, index, mask, float(scale), resolved

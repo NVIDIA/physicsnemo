@@ -46,6 +46,16 @@ Definitions (physical millimetres, per held-out case and future frame):
 * Rigid wall (optional): the plane ``axis = position``; ``d_env`` is the
   envelope violation ``relu(h/2 - clearance)`` and ``d_x`` the distance beyond
   the plane itself.
+* Detection ceiling of the surface families: a pair exists only while the
+  node's unsigned distance to the facet lies inside the activation band, so a
+  node that has travelled further through a shell than
+  ``activation_distance_mm + (h_node + h_facet) / 2`` (about 6 mm with the
+  defaults and 1 mm shells) has no pair and both surface depths read zero for
+  it. The summary records this ceiling (``crossing_depth_ceiling_mm``, with
+  the mean thickness of the validated designs). ``crossing_radius_mm`` lifts it
+  to that radius plus the half thicknesses by sweeping candidates beyond the
+  band that the side test certifies as crossed (about thirty times the search
+  cost at full-vehicle scale), which is why it is off by default.
 * A node *penetrates* when its depth exceeds ``tolerance_mm``. Scored against
   the target frame: a node is **spurious** when it penetrates in the prediction
   and not in the target, **missed** when the reverse holds, and its **excess**
@@ -58,13 +68,20 @@ Definitions (physical millimetres, per held-out case and future frame):
   (crossed pairs, penetrating fraction, mean depth over all nodes with the
   tolerance subtracted, maximum depth) come from the same per-node depths.
 
-Validation diagnostic only: any failure disables the metrics and zeroes them,
-it never fails validation. Results are written under ``penetration`` in the
-validation JSON by :class:`px_yaris.trainer.YarisFullTrainer`.
+Validation diagnostic only: a failure on any rank (pair budget, out of
+memory, a non-finite frame) disables the metrics and never fails training
+validation. Every rank logs its own failure; the reasons are gathered in
+:meth:`PenetrationMetrics.reduce` and the summary then carries ``complete:
+false``, ``failure_reasons`` and ``null`` in place of every count and depth,
+so a disabled probe can never read as a perfect score. Results are written
+under ``penetration`` in the validation JSON by
+:class:`px_yaris.trainer.YarisFullTrainer`; ``evaluate_px_yaris.py`` fails
+when the probe ends disabled.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 
 import torch
@@ -75,6 +92,8 @@ from physicsnemo.experimental.nn.shell_contact import (
     shell_penetration_depths,
     wall_penetration_depths,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 SURFACE_FAMILIES = ("surface_envelope", "surface_crossing")
 WALL_FAMILIES = ("wall_envelope", "wall_crossing")
@@ -127,12 +146,20 @@ class PenetrationMetrics:
     """Accumulate target-relative penetration statistics over validated frames.
 
     ``cfg`` keys (all optional): ``tolerance_mm`` 0.5, ``activation_distance_mm``
-    5, ``reference_clearance_mm`` 10, ``implementation``
+    5, ``reference_clearance_mm`` 10, ``crossing_radius_mm`` (default ``None``:
+    no crossing sweep, see below), ``implementation``
     ``warp``, ``max_pairs`` 60e6, ``depth_thresholds_mm`` [1, 2, 5],
     ``histogram_bin_mm`` 0.1, ``histogram_max_mm`` 50, ``region_axis`` 0,
     ``region_bounds_mm`` (default: the ``region_bounds`` argument),
     ``wall_position_mm`` (default: ``graph.rigid_wall`` when the datapipe sets
     one, else no wall statistics), ``wall_axis`` 0, ``wall_sign`` 1.
+
+    The surface crossing depth has a detection ceiling: without
+    ``crossing_radius_mm`` a node deeper through a shell than
+    ``activation_distance_mm`` plus the half thicknesses of the pair has no
+    candidate pair and reads as clean. The summary records the ceiling
+    (``crossing_depth_ceiling_mm``) next to the crossing counts; a crossing
+    radius lifts it to that radius plus the half thicknesses.
     """
 
     def __init__(self, cfg, rollout_steps, device, logger=None, region_bounds=()):
@@ -144,6 +171,7 @@ class PenetrationMetrics:
         # from earlier ones; the depths are read from the pairs' signed gaps.
         self.sidedness = "symmetric"
         self.metric_version = 2
+        crossing_radius = cfg.get("crossing_radius_mm")
         self.search = ShellContactSearch(
             activation_distance=float(cfg.get("activation_distance_mm", 5.0)),
             implementation=str(cfg.get("implementation", "warp")),
@@ -152,6 +180,7 @@ class PenetrationMetrics:
             side_from_reference=True,
             reference_clearance=float(cfg.get("reference_clearance_mm", 10.0)),
             side_symmetric=True,
+            crossing_radius=None if crossing_radius is None else float(crossing_radius),
         )
         self.thresholds = [float(v) for v in cfg.get("depth_thresholds_mm", [1, 2, 5])]
         if any(not math.isfinite(v) or v < 0 for v in self.thresholds):
@@ -164,7 +193,10 @@ class PenetrationMetrics:
             )
         self.bins = int(round(self.hist_max_mm / self.bin_mm))
         self.region_axis = int(cfg.get("region_axis", 0))
-        bounds = cfg.get("region_bounds_mm", region_bounds)
+        # A declared ``region_bounds_mm: null`` defers to the trainer's bounds.
+        bounds = cfg.get("region_bounds_mm")
+        if bounds is None:
+            bounds = region_bounds
         self.region_bounds = sorted(float(v) for v in (bounds or ()))
         self.regions = region_names(self.region_bounds)
         self.wall_position = cfg.get("wall_position_mm")
@@ -193,9 +225,13 @@ class PenetrationMetrics:
         self.hist = torch.zeros(
             (regions, families, self.bins + 1), dtype=torch.float64, device=device
         )
+        # summed nodal thickness and node count over the validated designs, for
+        # the crossing-depth ceiling recorded with the summary
+        self.thickness_stats = torch.zeros(2, dtype=torch.float64, device=device)
         self.wall_seen = False
         self.logger = logger
         self.disabled = False
+        self.failure_reasons = []
 
     # ----- settings -----
     def settings(self):
@@ -204,6 +240,7 @@ class PenetrationMetrics:
             tolerance_mm=self.tolerance,
             activation_distance_mm=self.search.activation_distance,
             reference_clearance_mm=self.search.reference_clearance,
+            crossing_radius_mm=self.search.crossing_radius,
             side_from_reference=True,
             sidedness=self.sidedness,
             metric_version=self.metric_version,
@@ -320,13 +357,23 @@ class PenetrationMetrics:
                 )
 
     def _disable(self, reason):
+        """Disable the probe on this rank, keeping ``reason`` for the summary."""
+        rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_available() and torch.distributed.is_initialized()
+            else 0
+        )
+        message = f"rank {rank}: {reason}"
         self.disabled = True
+        self.failure_reasons.append(message)
         self.counts.zero_()
         self.maxima.zero_()
         self.pairs.zero_()
         self.hist.zero_()
-        if self.logger is not None:
-            self.logger.warning(f"Penetration metrics disabled: {reason}")
+        # Every rank reports its own failure: the trainer's logger is a rank-zero
+        # wrapper that would drop the message of any other rank.
+        logger = self.logger if rank == 0 and self.logger is not None else _LOGGER
+        logger.warning(f"Penetration metrics disabled: {message}")
 
     def accumulate(self, prediction, target, sample, data_stats):
         """Add every step of one case; ``prediction``/``target`` are [N, T, 3]."""
@@ -352,6 +399,9 @@ class PenetrationMetrics:
                 thickness = graph.shell_thickness.to(
                     device=device, dtype=torch.float32
                 ).reshape(-1)
+                self.thickness_stats += torch.stack(
+                    (thickness.double().sum(), thickness.new_tensor(thickness.numel()))
+                ).double()
                 masks = self.region_masks(reference)
                 wall = self._wall_position(graph)
                 for step in range(int(prediction.shape[1])):
@@ -386,14 +436,26 @@ class PenetrationMetrics:
             [1.0 if self.disabled else 0.0, 1.0 if self.wall_seen else 0.0],
             device=self.counts.device,
         )
-        for tensor in (self.counts, self.pairs, self.hist):
+        for tensor in (self.counts, self.pairs, self.hist, self.thickness_stats):
             torch.distributed.all_reduce(tensor)
         torch.distributed.all_reduce(self.maxima, op=torch.distributed.ReduceOp.MAX)
         torch.distributed.all_reduce(flags, op=torch.distributed.ReduceOp.MAX)
-        self.disabled = bool(flags[0].item() > 0)
+        gathered = [None] * world_size
+        torch.distributed.all_gather_object(gathered, list(self.failure_reasons))
+        self.failure_reasons = [reason for reasons in gathered for reason in reasons]
         self.wall_seen = bool(flags[1].item() > 0)
-        if self.disabled:
-            self._disable("disabled on another rank")
+        if bool(flags[0].item() > 0):
+            # Zero the counters everywhere so no rank reports partial numbers;
+            # the gathered reasons already name the failing ranks.
+            self.disabled = True
+            self.counts.zero_()
+            self.maxima.zero_()
+            self.pairs.zero_()
+            self.hist.zero_()
+            if self.logger is not None:
+                self.logger.warning(
+                    "Penetration metrics disabled: " + "; ".join(self.failure_reasons)
+                )
 
     # ----- summaries -----
     def _column(self, name):
@@ -497,10 +559,63 @@ class PenetrationMetrics:
             max_depth_mm=float(maxima.max()) if horizon else 0.0,
         )
 
+    def crossing_depth_ceiling(self):
+        """Deepest surface crossing the search can still see, in mm, plus a note.
+
+        A node is paired with a facet only while its unsigned distance to it is
+        inside the band (or the crossing radius); deeper crossings have no pair
+        and read zero. The half thicknesses of the pair add to the ceiling, so
+        the mean thickness of the validated designs stands in for them.
+        """
+        count = float(self.thickness_stats[1])
+        mean_thickness = (
+            float(self.thickness_stats[0]) / count if count > 0 else float("nan")
+        )
+        radius = self.search.crossing_radius
+        reach = self.search.activation_distance if radius is None else radius
+        return dict(
+            crossing_depth_ceiling_mm=(
+                reach + mean_thickness if math.isfinite(mean_thickness) else None
+            ),
+            crossing_depth_ceiling_note=(
+                ("activation_distance_mm" if radius is None else "crossing_radius_mm")
+                + " plus the mean shell thickness of the validated designs "
+                + f"({mean_thickness:.3f} mm); a node deeper through a shell than "
+                "this has no candidate pair and its surface depths read zero"
+                + (
+                    "; set crossing_radius_mm to lift the ceiling"
+                    if radius is None
+                    else ""
+                )
+            ),
+        )
+
+    @staticmethod
+    def _nullify(value):
+        """Replace every number of a JSON-ready block by ``None`` (booleans kept)."""
+        if isinstance(value, dict):
+            return {k: PenetrationMetrics._nullify(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [PenetrationMetrics._nullify(v) for v in value]
+        if isinstance(value, bool) or value is None or isinstance(value, str):
+            return value
+        if isinstance(value, (int, float)):
+            return None
+        return value
+
     def summary(self, nodes_w_time):
-        """JSON-ready statistics: the absolute blocks plus the target-relative families."""
+        """JSON-ready statistics: the absolute blocks plus the target-relative families.
+
+        When the probe ended disabled on any rank, every count and depth is
+        ``null`` and ``failure_reasons`` lists the ranks' reasons.
+        """
         horizon = int(nodes_w_time.numel())
-        out = dict(self.settings(), complete=not self.disabled)
+        out = dict(
+            self.settings(),
+            complete=not self.disabled,
+            failure_reasons=list(self.failure_reasons),
+            **self.crossing_depth_ceiling(),
+        )
         out["prediction"] = self._absolute(horizon, 0)
         out["target"] = self._absolute(horizon, 1)
         out["pairs_per_time"] = {
@@ -520,10 +635,15 @@ class PenetrationMetrics:
             if self.wall_seen
             else None
         )
+        if self.disabled:
+            for key in ("prediction", "target", "pairs_per_time", "surface", "wall"):
+                out[key] = self._nullify(out[key])
         return out
 
     def log_line(self, summary):
         """Format the summary as one log line."""
+        if not summary["complete"]:
+            return "DISABLED (" + "; ".join(summary.get("failure_reasons", [])) + ")"
         parts = []
         for name in ("prediction", "target"):
             s = summary[name]
@@ -550,4 +670,4 @@ class PenetrationMetrics:
                     f"missed {100 * s['missed_fraction']:.1f}% of target, "
                     f"excess mean {s['excess_mean_mm']:.5f} mm max {s['excess_max_mm']:.2f} mm"
                 )
-        return " | ".join(parts) + ("" if summary["complete"] else " (INCOMPLETE)")
+        return " | ".join(parts)

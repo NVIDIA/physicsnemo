@@ -15,9 +15,9 @@ full-resolution Toyota Yaris frontal-impact dataset (99 thickness-variation
 designs, 1.48M nodes per design, 5 ms frames) the network reaches a pooled
 validation RMSE of 7.6 mm against 10.1 mm for a GeoTransolver baseline of the
 same width and depth, and the corrector lowers it to 7.5 mm while cutting the
-spurious shell crossings about sevenfold. The paper is "DeFormer: Deformation
+spurious shell crossings about sevenfold. The paper, "DeFormer: Deformation
 Transformers with Contact-Aware Local Corrections for Full-Vehicle Crash
-Simulation".
+Simulation", is in preparation; a link will follow.
 
 The network (`deformer.time_conditional.DeFormerTimeConditional`,
 `conf/model/deformer_time_conditional.yaml`):
@@ -103,7 +103,10 @@ needed:
 
 Every PX Yaris recipe takes the same four paths: `yaris.data_root` (the stores),
 `yaris.split_manifest`, `yaris.outlier_mask` and `yaris.work_dir` (statistics,
-neighbourhood caches, checkpoints and validation records of the run). Prepare
+neighbourhood caches, checkpoints and validation records of the run). Give
+`yaris.work_dir` as an absolute path: Hydra changes into it, and a relative
+path would be resolved again for the statistics, checkpoint and TensorBoard
+directories and nest the outputs under themselves (the trainer rejects it). Prepare
 the frozen normalization statistics and the kNN neighbourhood cache once, on a
 CPU node (minutes for 1.48M nodes):
 
@@ -143,8 +146,19 @@ optimizer and RNG states; after a change of the GPU count pass
 `training.restore_rng=false`. The reference runs are the only measured
 configuration (16 GB300 GPUs with activation checkpointing on); the per-GPU
 memory of the 1.48M-node forward on smaller cards has not been measured, and
-the exact validation additionally holds two float64 `[N, T, 3]` error tensors
-(about 1.1 GB each) on every device.
+the exact validation additionally holds about three float64 `[N, T, 3]`
+tensors of metric overhead (about 1.1 GB each; about 4.4 with the node-error
+maps and regions on) on every device.
+
+At full-vehicle scale the three neighbourhood-attention processors dominate the
+activation memory: with the recipe widths under bf16 each one-layer processor
+would hold about 20 GB of activations after the forward pass without
+checkpointing, about 60 GB for the three. The recipe runs every local
+processor as one checkpoint segment (`num_pre_processor_checkpoint_segments`,
+`num_post_processor_checkpoint_segments`), and the edge encoders are
+recomputed inside the segments, so the held activation memory stays at a few
+gigabytes and the peak near 50 GB; without the segments the time-conditional
+recipe does not fit an 80 GB card.
 
 ## Train the corrector
 
@@ -177,20 +191,36 @@ torchrun --nproc_per_node=<NUM_GPUS> evaluate_px_yaris.py \
   yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/corrector \
   datapipe.stats_dir=/runs/network/stats \
   model.teacher_weights=/runs/network/checkpoints/DeFormerTimeConditional.0.60.mdlus \
-  training.ckpt_path=/runs/corrector/checkpoints +training.load_epoch=30 \
-  +training.validation_output_dir=/runs/eval/corrector \
+  training.ckpt_path=/runs/corrector/checkpoints training.load_epoch=30 \
+  training.validation_output_dir=/runs/eval/corrector \
   hydra.run.dir=/runs/eval/corrector \
-  +training.validation_node_errors=true
+  training.validation_node_errors=true
 ```
 
 For the network or the baseline use their recipe with `datapipe.contact_surface=true`
 (the penetration metrics need the shell facets; the models ignore them) and
-`++training.validation_penetration.wall_position_mm=100` for the wall family.
-The record is `<validation_output_dir>/epoch_<EEEE>.json` (zero-padded).
+`training.validation_penetration.wall_position_mm=100` for the wall family.
+The record is `<validation_output_dir>/epoch_<EEEE>.json` (zero-padded). The
+penetration metrics are the script's purpose: a failure of the probe on any
+rank (pair budget, out of memory, a non-finite frame) leaves `null` values and
+the ranks' `failure_reasons` in the record's `penetration` block, and the
+script then exits with an error.
+
+The surface crossing depth has a detection ceiling. A node is paired with a
+facet only while its unsigned distance to it lies inside the 5 mm band, so a
+node that has travelled further through a shell than the band plus the half
+thicknesses of the pair (about 6 mm with 1 mm shells) has no pair and reads as
+clean; a part pushed deep through another is under-counted. The record states
+the ceiling next to the crossing numbers (`crossing_depth_ceiling_mm`, computed
+with the mean thickness of the validated designs). The opt-in key
+`training.validation_penetration.crossing_radius_mm=<mm>` turns on the crossing
+sweep of the search, which keeps candidates beyond the band up to that radius
+when the side test certifies a crossing and lifts the ceiling accordingly, at
+about thirty times the search cost at full-vehicle scale.
 
 A model-only checkpoint, the `.mdlus` file without the `checkpoint.0.<E>.pt`
 training state (the form in which trained weights are distributed), is scored
-with `+training.warm_start_model=<file>.mdlus`; `training.ckpt_path` may then
+with `training.warm_start_model=<file>.mdlus`; `training.ckpt_path` may then
 point at an empty directory. The corrector's `.mdlus` can also be loaded
 directly with
 `physicsnemo.Module.from_checkpoint(path, override_args={"teacher_weights": "<network .mdlus>"})`;

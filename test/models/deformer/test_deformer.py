@@ -17,30 +17,42 @@
 import pytest
 import torch
 
-pyg = pytest.importorskip("torch_geometric")
-
-from physicsnemo.experimental.models.deformer import DeFormer  # noqa: E402
-from physicsnemo.experimental.nn.static_knn import geodesic_knn  # noqa: E402
-from physicsnemo.models.geotransolver import GeoTransolver  # noqa: E402
-from physicsnemo.models.geotransolver.flare_plus_plus import (  # noqa: E402
+from physicsnemo.experimental.models.deformer import (
+    DeFormer,
+    DeFormerMetaData,
+    LocalNeighborhoodData,
+)
+from physicsnemo.experimental.models.deformer.deformer import BackboneState
+from physicsnemo.experimental.nn.static_knn import geodesic_knn
+from physicsnemo.models.geotransolver import GeoTransolver
+from physicsnemo.models.geotransolver.flare_plus_plus import (
     _FLAREPlusPlusAttention,
 )
+
+try:
+    import torch_geometric as pyg
+except ImportError:  # DeFormer itself only reads attributes off the graph
+    pyg = None
+requires_pyg = pytest.mark.skipif(pyg is None, reason="requires torch_geometric")
 
 K = 4
 
 
-class _KnnData(pyg.data.Data):
-    """PyG data whose per-node neighbourhood tensors batch like node tensors."""
+class _PlainGraph:
+    """Attribute bag standing in for a PyG ``Data`` when PyG is not installed."""
 
-    def __inc__(self, key, value, *args, **kwargs):
-        if key == "knn_index":
-            return self.num_nodes
-        return super().__inc__(key, value, *args, **kwargs)
+    def __init__(self, **tensors):
+        self.__dict__.update(tensors)
 
-    def __cat_dim__(self, key, value, *args, **kwargs):
-        if key in ("knn_index", "knn_mask", "knn_edge_attr"):
-            return 0
-        return super().__cat_dim__(key, value, *args, **kwargs)
+    def to(self, device):
+        moved = {
+            key: value.to(device) if torch.is_tensor(value) else value
+            for key, value in self.__dict__.items()
+        }
+        return _PlainGraph(**moved)
+
+    def cuda(self):
+        return self.to("cuda")
 
 
 def _graph(num_nodes: int = 9, node_dim: int = 6):
@@ -54,7 +66,8 @@ def _graph(num_nodes: int = 9, node_dim: int = 6):
     mask = torch.cat((torch.ones_like(own, dtype=torch.bool), knn.mask), dim=1)
     displacement = pos[index] - pos[:, None]
     edge_attr = torch.cat((displacement, displacement.norm(dim=-1, keepdim=True)), -1)
-    graph = _KnnData(
+    data_class = _PlainGraph if pyg is None else LocalNeighborhoodData
+    graph = data_class(
         x=torch.randn(num_nodes, node_dim), edge_index=edge_index, num_nodes=num_nodes
     )
     graph.knn_index, graph.knn_mask, graph.knn_edge_attr = index, mask, edge_attr
@@ -104,6 +117,7 @@ def test_forward_backward():
     assert any(parameter.grad is not None for parameter in model.parameters())
 
 
+@requires_pyg
 def test_variable_graph_batch_matches_independent_forwards():
     torch.manual_seed(11)
     graphs = [_graph(5), _graph(8)]
@@ -322,6 +336,7 @@ def test_context_fusion_is_zero_initialized_identity(fusion_stage, use_global):
     ("fusion_stage", "use_global"),
     [("post", False), ("pre_post", False), ("pre_post", True)],
 )
+@requires_pyg
 def test_context_fusion_variable_batch_matches_independent(fusion_stage, use_global):
     torch.manual_seed(37)
     graphs = [_graph(5), _graph(8)]
@@ -363,6 +378,111 @@ def test_context_fusion_parameter_ordering():
 def test_rejects_invalid_context_fusion(kwargs, message):
     with pytest.raises(ValueError, match=message):
         _model(n_layers=1, **kwargs)
+
+
+def test_forward_with_geometry_features_is_refused():
+    """The inherited GeoTransolver entry point would skip the local stages."""
+    model = _model()
+    with pytest.raises(NotImplementedError, match="forward_with_geometry_features"):
+        model.forward_with_geometry_features(
+            torch.randn(1, 6, 6), geometry=torch.randn(1, 6, 3)
+        )
+
+
+def test_constructor_rejects_unusable_backbone_options():
+    with pytest.raises(ValueError, match="time_input"):
+        _model(time_input=True)
+    with pytest.raises(ValueError, match="mesh_activation='silu'"):
+        _model(recompute_activation=True)
+    _model(recompute_activation=True, mesh_activation="silu")
+    with pytest.raises(TypeError):
+        _model(guard_config=None)
+    with pytest.raises(ValueError, match="mesh_context"):
+        _model(activation_checkpointing_components=("mesh_context",))
+
+
+def test_metadata_describes_deformer():
+    model = _model()
+    assert isinstance(model.meta, DeFormerMetaData)
+    assert model.meta.name == "DeFormer"
+    assert model.meta.amp and not model.meta.onnx_cpu and not model.meta.jit
+
+
+def test_return_backbone_exposes_the_full_width_state():
+    torch.manual_seed(19)
+    graph = _graph(7)
+    model = _model(mesh_context_fusion="post", include_local_features=False)
+    state = model(
+        node_features=graph.x,
+        graph=graph,
+        geometry=graph.x[:, :3],
+        global_embedding=torch.randn(1, 1, 2),
+        return_backbone=True,
+    )
+    assert isinstance(state, BackboneState)
+    assert state.point_features.shape == (7, 32)
+    assert state.neighborhood.index.shape == (7, K + 1)
+    assert state.mesh_context.shape == (7, 32)
+    state.point_features.square().mean().backward()
+    assert model.pre_processor.blocks[0].query.weight.grad is not None
+
+
+def test_batched_neighborhoods_must_be_offset_per_graph():
+    """Collating two graphs without offsetting knn_index is a batching error."""
+    torch.manual_seed(13)
+    first, second = _graph(5), _graph(6)
+
+    def collate(offset: bool):
+        shift = first.num_nodes if offset else 0
+        return _PlainGraph(
+            x=torch.cat((first.x, second.x)),
+            num_nodes=11,
+            knn_index=torch.cat((first.knn_index, second.knn_index + shift)),
+            knn_mask=torch.cat((first.knn_mask, second.knn_mask)),
+            knn_edge_attr=torch.cat((first.knn_edge_attr, second.knn_edge_attr)),
+            knn_metric="geodesic",
+            batch=torch.cat(
+                (torch.zeros(5, dtype=torch.long), torch.ones(6, dtype=torch.long))
+            ),
+        )
+
+    model = _model().eval()
+    global_embedding = torch.randn(2, 1, 2)
+    with torch.no_grad():
+        assert _forward(model, collate(True), global_embedding).shape == (11, 5)
+        with pytest.raises(ValueError, match="another graph"):
+            _forward(model, collate(False), global_embedding)
+
+
+def test_mesh_context_checkpointing_matches_plain_execution(tmp_path):
+    """``mesh_context`` is DeFormer's own checkpoint component."""
+    torch.manual_seed(17)
+    common = dict(mesh_context_fusion="pre_post", mesh_context_use_global=True)
+    plain = _model(**common).train()
+    checkpointed = _model(
+        **common,
+        activation_checkpointing=True,
+        activation_checkpointing_components=("mesh_context", "blocks"),
+    ).train()
+    checkpointed.load_state_dict(plain.state_dict(), strict=True)
+    recorded = checkpointed._args["__args__"]["activation_checkpointing_components"]
+    assert recorded == ("blocks", "mesh_context")
+    graph = _graph(7)
+    global_embedding = torch.randn(1, 1, 2)
+    expected = _forward(plain, graph, global_embedding)
+    actual = _forward(checkpointed, graph, global_embedding)
+    expected.square().mean().backward()
+    actual.square().mean().backward()
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    for (name, parameter), (_, other) in zip(
+        plain.named_parameters(), checkpointed.named_parameters(), strict=True
+    ):
+        torch.testing.assert_close(parameter.grad, other.grad, msg=name)
+    path = tmp_path / "DeFormer.mdlus"
+    checkpointed.save(path)
+    restored = DeFormer.from_checkpoint(path)
+    assert restored._checkpoint_mesh_context
+    assert "blocks" in restored._activation_checkpointing_components
 
 
 def test_checkpoint_roundtrip(tmp_path):

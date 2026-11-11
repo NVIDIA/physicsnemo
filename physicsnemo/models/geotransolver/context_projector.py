@@ -1077,13 +1077,4 @@ class GlobalContextBuilder(nn.Module):
         if context is not None and hasattr(context, "redistribute"):
             context = context.redistribute(placements=[Replicate()])
 
-        # Hybrid mesh processors also consume the separate geometry tokens
-        # nonlinearly. Resolve their partial sum before returning live tokens.
-        if not detach_geometry_context and hasattr(
-            returned_geometry_context, "redistribute"
-        ):
-            returned_geometry_context = returned_geometry_context.redistribute(
-                placements=[Replicate()]
-            )
-
         return context, local_features, returned_geometry_context

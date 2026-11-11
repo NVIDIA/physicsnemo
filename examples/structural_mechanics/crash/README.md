@@ -69,15 +69,17 @@ extra) and build their graphs with `torch_geometric` (the `gnns` extra):
 pip install "nvidia-physicsnemo[gnns,datapipes-extras]"
 ```
 
-Reference-geodesic preprocessing also requires SciPy, declared in the existing
-`nn-extras` optional dependency group. Install that extra, or install SciPy
-directly in an existing graph-model environment:
+The Euclidean kNN neighbourhoods and the one-ring contact exclusions, which the
+Yaris recipes use, also require SciPy (a k-d tree query and a sparse adjacency),
+declared in the existing `nn-extras` optional dependency group; the geodesic
+neighbourhoods are a pure-Python Dijkstra and need no extra. Install that
+extra, or install SciPy directly in an existing graph-model environment:
 
 ```bash
 pip install scipy
 ```
 
-SciPy is loaded only when reference-geodesic preprocessing is called; unrelated
+SciPy is loaded only when those neighbourhoods or exclusions are built; unrelated
 models and contact geometry remain importable without it.
 
 ## Data Preprocessing

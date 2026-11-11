@@ -193,7 +193,9 @@ def main():
     if not timesteps:
         raise SystemExit("No valid timesteps found.")
 
-    timesteps_plot = [ts + 1 for ts in timesteps]
+    # The file names already carry the frame number (frame_001 is the first
+    # predicted frame), so the axis and the CSV use it as is.
+    timesteps_plot = list(timesteps)
 
     means: List[float] = []
     stds: List[float] = []

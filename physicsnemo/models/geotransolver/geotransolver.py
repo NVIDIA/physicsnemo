@@ -700,19 +700,27 @@ class GeoTransolver(Module):
         local_positions: tuple[torch.Tensor, ...] | None,
         geometry: torch.Tensor | None,
         global_embedding: torch.Tensor | None,
+        *,
+        detach_geometry_context: bool = True,
     ) -> tuple[
         torch.Tensor | None,
         list[torch.Tensor] | None,
         torch.Tensor | None,
     ]:
-        r"""Build context directly or under activation checkpointing."""
+        r"""Build context directly or under activation checkpointing.
+
+        Extension point: subclasses that condition further stages on the live
+        geometry tokens (:class:`~physicsnemo.experimental.models.deformer.DeFormer`)
+        call this with ``detach_geometry_context=False`` and then
+        :meth:`_process_preprocessed_embeddings`; keep both seams stable.
+        """
+        inputs = (local_embedding, local_positions, geometry, global_embedding)
+        if not detach_geometry_context:
+            # Only the live-token request adds an input; GeoTransolver's own
+            # checkpointed call keeps its arity.
+            inputs += (False,)
         return self._run_checkpointed_component(
-            "context",
-            self.context_builder.build_context,
-            local_embedding,
-            local_positions,
-            geometry,
-            global_embedding,
+            "context", self.context_builder.build_context, *inputs
         )
 
     def _process_preprocessed_embeddings(
@@ -728,6 +736,9 @@ class GeoTransolver(Module):
         Each input is ``[B, N, n_hidden]``. This seam lets mesh processors
         refine the projected state without a bottleneck back to raw features.
         Both regular and hybrid forwards share checkpointing and output heads.
+        Extension point relied on by
+        :class:`~physicsnemo.experimental.models.deformer.DeFormer` together with
+        :meth:`_build_context`.
         """
         if self.include_local_features and local_features is not None:
             embeddings = [

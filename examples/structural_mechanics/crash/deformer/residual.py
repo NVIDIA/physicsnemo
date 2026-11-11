@@ -32,6 +32,8 @@ prediction stays as the student was trained on).
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 
 import torch
@@ -55,8 +57,10 @@ class ResidualTimeConditional(physicsnemo.Module):
         The teacher's architecture (an instantiated, randomly initialised
         ``DeFormerTimeConditional`` of the teacher's recipe); its weights
         come from ``teacher_weights``.
-    teacher_weights : str
+    teacher_weights : str or os.PathLike, optional
         ``.mdlus`` (or state-dict ``.pt``) file of the teacher, loaded strictly.
+        Required to train; ``None`` when a saved corrector is reloaded, whose
+        state dict carries the teacher's weights.
     num_time_steps : int
         Frames per trajectory in the datapipe (``num_time_steps - 1`` future
         frames, labelled ``k / (num_time_steps - 1)`` as in the teacher).
@@ -77,11 +81,14 @@ class ResidualTimeConditional(physicsnemo.Module):
         its ``functional_dim`` counts coords (3), the static features, the time
         code (``time_dim``) and the teacher displacement (3).
 
-    A saved corrector (``.mdlus``) records ``teacher_weights`` as given at
-    training time. Reload it elsewhere with
-    ``physicsnemo.Module.from_checkpoint(path, override_args={"teacher_weights": <network .mdlus>})``;
-    the teacher's weights are part of the corrector's state dict, the file is
-    only needed to build the teacher.
+    A saved corrector (``.mdlus``) is self-contained: the teacher's weights are
+    part of its state dict and it records ``teacher_weights=None``, so
+    ``physicsnemo.Module.from_checkpoint(path)`` rebuilds the teacher's
+    architecture and loads everything from the state dict. A teacher file may
+    still be given at reload with
+    ``override_args={"teacher_weights": <network .mdlus>}``; it is read and then
+    overwritten by the state dict. Correctors saved by earlier revisions record
+    the training-time path and take the same override.
     """
 
     # The teacher path is the one argument a saved corrector lets the loader override.
@@ -92,7 +99,7 @@ class ResidualTimeConditional(physicsnemo.Module):
         self,
         *,
         teacher: nn.Module,
-        teacher_weights,
+        teacher_weights: str | os.PathLike | None = None,
         num_time_steps: int,
         time_embedding: str = "fourier",
         time_fourier_bands: int = 8,
@@ -113,19 +120,33 @@ class ResidualTimeConditional(physicsnemo.Module):
         self.wall_clamp = RigidWallClamp(
             enabled=final_clamp_to_wall, axis=wall_axis, sign=wall_sign
         )
-        if not teacher_weights:
-            raise ValueError("teacher_weights must name the teacher's checkpoint")
-        if not Path(str(teacher_weights)).is_file():
-            raise FileNotFoundError(
-                f"teacher checkpoint {teacher_weights} does not exist; point "
-                "model.teacher_weights at the network's .mdlus file, or pass "
-                'override_args={"teacher_weights": ...} to Module.from_checkpoint'
+        if teacher_weights is not None:
+            teacher_weights = str(teacher_weights)
+            if not teacher_weights:
+                raise ValueError(
+                    "teacher_weights must name the teacher's checkpoint (None only "
+                    "when a saved corrector supplies the teacher's weights)"
+                )
+            if not Path(teacher_weights).is_file():
+                raise FileNotFoundError(
+                    f"teacher checkpoint {teacher_weights} does not exist; point "
+                    "model.teacher_weights at the network's .mdlus file, or pass "
+                    'override_args={"teacher_weights": ...} to Module.from_checkpoint'
+                )
+            load_warm_start(teacher, teacher_weights)
+            # The saved corrector carries the teacher in its state dict: record no
+            # file, so the checkpoint is self-contained and no path of the
+            # training machine travels with it.
+            self._args["__args__"]["teacher_weights"] = None
+        else:
+            logging.getLogger(__name__).info(
+                "teacher_weights=None: the teacher's weights are expected from the "
+                "corrector's state dict"
             )
-        load_warm_start(teacher, teacher_weights)
         teacher.requires_grad_(False)
         teacher.eval()
         self.teacher = teacher
-        self.teacher_weights = str(teacher_weights)
+        self.teacher_weights = teacher_weights
         # Read by recipes and readouts that know the time-conditional interface.
         self.rollout_steps = int(num_time_steps) - 1
         self.dt = None if dt is None else float(dt)

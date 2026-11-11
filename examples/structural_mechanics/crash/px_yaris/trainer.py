@@ -196,6 +196,14 @@ class YarisFullTrainer(Trainer):
     """Unchanged training loop; exact, horizon-aware held-out validation."""
 
     def __init__(self, cfg, logger0):
+        work_dir = cfg.get("yaris", {}).get("work_dir") if "yaris" in cfg else None
+        if work_dir is not None and not Path(str(work_dir)).is_absolute():
+            # Hydra changes into the run directory (${yaris.work_dir}); a relative
+            # value is then resolved again for stats_dir, ckpt_path and the
+            # TensorBoard directory and the outputs nest under themselves.
+            raise ValueError(
+                f"yaris.work_dir must be an absolute path, got {work_dir!r}"
+            )
         if not math.isclose(
             float(cfg.model.dt),
             float(cfg.reader.raw_dt) * int(cfg.reader.stride),
@@ -223,11 +231,15 @@ class YarisFullTrainer(Trainer):
             cfg.training.get("validation_node_errors", False)
         )
         # Reference-x bounds splitting the mesh into regions (rear, ..., front)
-        # for the translational-error breakdown written with the node errors.
+        # for the translational-error breakdown written with the node errors;
+        # a declared ``null`` means the Yaris default.
+        bounds = cfg.training.get("validation_region_bounds")
         self.validation_region_bounds = [
-            float(v)
-            for v in cfg.training.get("validation_region_bounds", [-2000.0, -1000.0])
+            float(v) for v in ([-2000.0, -1000.0] if bounds is None else bounds)
         ]
+        # The penetration summary of the last validation pass (``None`` without
+        # the probe); evaluate_px_yaris.py fails when it is incomplete.
+        self.last_penetration_summary = None
         if requested <= 0:
             return
         reader = instantiate(cfg.reader)
@@ -439,6 +451,7 @@ class YarisFullTrainer(Trainer):
             penetration = (
                 None if probe is None else probe.summary(stats["nodes_w_time"])
             )
+            self.last_penetration_summary = penetration
             if penetration is not None:
                 self.logger0.info(
                     f"Validation epoch {epoch + 1}: penetration "

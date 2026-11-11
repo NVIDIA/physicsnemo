@@ -78,8 +78,10 @@ def contact_edge_features(
     torch.Tensor
         ``[E, 8]`` features, or ``[E, 12]`` with ``relative_velocity``.
     """
-    if feature_scale <= 0.0:
-        raise ValueError("feature_scale must be positive")
+    if not (math.isfinite(feature_scale) and feature_scale > 0.0):
+        raise ValueError(
+            f"feature_scale must be positive and finite; got {feature_scale}"
+        )
     if relative_displacement.ndim != 2 or relative_displacement.shape[-1] != 3:
         raise ValueError("relative_displacement must have shape [E, 3]")
     if signed_gap.ndim == 1:
@@ -117,8 +119,10 @@ def contact_edge_features(
     if relative_velocity is not None:
         if relative_velocity.shape != relative_displacement.shape:
             raise ValueError("relative_velocity must have shape [E, 3]")
-        if velocity_scale <= 0.0:
-            raise ValueError("velocity_scale must be positive")
+        if not (math.isfinite(velocity_scale) and velocity_scale > 0.0):
+            raise ValueError(
+                f"velocity_scale must be positive and finite; got {velocity_scale}"
+            )
         # Negative normal relative speed denotes approach for n=(x_j-x_i)/d.
         normal_speed = (relative_velocity * contact_normal).sum(-1, keepdim=True)
         features = torch.cat(
@@ -147,8 +151,8 @@ def smooth_contact_cutoff(distance: torch.Tensor, radius: float) -> torch.Tensor
     torch.Tensor
         ``(1 - (d / radius)^2)^2`` clamped to the band, same shape as ``distance``.
     """
-    if radius <= 0.0:
-        raise ValueError("radius must be positive")
+    if not (math.isfinite(radius) and radius > 0.0):
+        raise ValueError(f"radius must be positive and finite; got {radius}")
     fraction = (distance.clamp_min(0.0) / radius).clamp_max(1.0)
     return (1.0 - fraction.square()).square()
 

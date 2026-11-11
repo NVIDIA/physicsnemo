@@ -25,7 +25,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 
 | Key | Value | Meaning |
 | --- | --- | --- |
-| `yaris.data_root`, `yaris.split_manifest`, `yaris.outlier_mask`, `yaris.work_dir` | required | stores, `splits.csv`, `outlier_nodes.npz` (or `null`), run directory |
+| `yaris.data_root`, `yaris.split_manifest`, `yaris.outlier_mask`, `yaris.work_dir` | required | stores, `splits.csv`, `outlier_nodes.npz` (or `null`), run directory (an absolute path: Hydra changes into it) |
 | `yaris.stride` | 5 | every fifth 1 ms frame (5 ms); `model.dt` and `reader.raw_dt * stride` must agree |
 | `training.trainer_class` | `px_yaris.trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
 | `training.num_training_samples` / `num_validation_samples` | 69 / 20 | the manifest's split sizes |
@@ -78,7 +78,7 @@ model file with `local_neighborhood=geodesic`, no activation checkpointing and
 | `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | true, true, 100 | shell facets and exclusions, mesh edges, the Yaris barrier plane |
 | `training.epochs`, `lr_warmup_epochs`, `validation_freq`, `save_checkpoint_freq` | 30, 1, 2, 1 | the corrector's budget |
 | `training.auxiliary_loss_weight` | 0 | no provisional head |
-| `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm | target-relative penetration metrics in the validation record |
+| `training.validation_penetration` | enabled, tolerance 0.5 mm, band 5 mm, clearance 10 mm, no crossing sweep | target-relative penetration metrics in the validation record; the crossing depth the search can still see is bounded (band plus half thicknesses, recorded as `crossing_depth_ceiling_mm`), `crossing_radius_mm` lifts the bound at a large cost |
 
 `px_yaris_geotransolver` sets the point model's time code, width and memory policy
 to the network's and the datapipe's neighbourhood keys explicitly (the point
@@ -88,15 +88,20 @@ model has none); it ignores the neighbourhoods.
 
 | Override | Effect |
 | --- | --- |
-| `+training.validation_output_dir=<dir>` | where the record goes (required; the run's own records are never written) |
-| `training.ckpt_path=<run>/checkpoints`, `+training.load_epoch=<E>` | the checkpoint to score |
+| `training.validation_output_dir=<dir>` | where the record goes (required; the run's own records are never written) |
+| `training.ckpt_path=<run>/checkpoints`, `training.load_epoch=<E>` | the checkpoint to score |
 | `datapipe.contact_surface=true` | shell facets for the penetration metrics of a contact-free model |
-| `++training.validation_penetration.wall_position_mm=100` | wall family for models whose recipe has no `rigid_wall_position` |
-| `+training.validation_node_errors=true` | per-node RMSE map and per-region translational share |
+| `training.validation_penetration.wall_position_mm=100` | wall family for models whose recipe has no `rigid_wall_position` |
+| `training.validation_penetration.crossing_radius_mm=<mm>` | crossing sweep of the penetration search: crossings deeper than the band plus the half thicknesses become visible up to this radius (about thirty times the search cost) |
+| `training.validation_node_errors=true` | per-node RMSE map and per-region translational share |
 | `training.validation_region_bounds=[-2000,-1000]` | reference-x bounds of the regions |
-| `+training.warm_start_model=<file>.mdlus` | score a model-only checkpoint (no `checkpoint.0.<E>.pt` next to it); `training.ckpt_path` may then be an empty directory |
+| `training.warm_start_model=<file>.mdlus` | score a model-only checkpoint (no `checkpoint.0.<E>.pt` next to it); `training.ckpt_path` may then be an empty directory |
 
-The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
+Every key above is declared in `training/default.yaml`, so plain overrides
+compose on every recipe. The record is `<dir>/epoch_<EEEE>.json` (zero-padded,
+e.g. `epoch_0030.json`); its `penetration` block carries `complete: false`,
+the ranks' `failure_reasons` and `null` values when the probe failed anywhere,
+and `evaluate_px_yaris.py` then exits with an error.
 
 ### Training-loop keys (`training/default.yaml`)
 
@@ -104,6 +109,18 @@ The record is `<dir>/epoch_<EEEE>.json` (zero-padded, e.g. `epoch_0030.json`).
 | --- | --- | --- |
 | `training.restore_rng` | true | restore the checkpoint's RNG states on resume; false after a change of the GPU count |
 | `training.data_startup_timeout_seconds` | 3600 | how long the ranks wait while rank 0 prepares statistics and caches at startup |
+| `training.loss`, `loss_space`, `loss_scale_mm` | `mse`, `normalized`, 10 | the loss (`relative_l2` is the alternative) and its space (`physical`: millimetres over `loss_scale_mm`) |
+| `training.auxiliary_loss_weight` | 0 | weight of the loss on a model's auxiliary prediction (the DeFormer's provisional head) |
+| `training.reproducible_sampling`, `sampler_seed` | false, 0 | epoch-seeded sample order independent of the rank count |
+| `training.deterministic` | false | deterministic cuDNN/cuBLAS kernels |
+| `training.manual_gradient_allreduce` | false | average the gradients after backward instead of DDP's bucketed reduction |
+| `training.muon_min_dim` | 0 | Muon: 2-D parameters with a dimension below this stay on AdamW |
+| `training.trainer_class` | null | dotted path of a `train.Trainer` subclass (null: `train.Trainer`) |
+| `training.load_epoch`, `warm_start_model` | null, null | the checkpoint epoch to load (null: the latest); `.mdlus` weights to start from when `ckpt_path` holds no training checkpoint |
+| `training.validation_output_dir`, `validation_node_errors`, `validation_region_bounds`, `validation_penetration` | null, false, null, off | the validation suite's keys (see [Evaluation keys](#evaluation-keys-evaluate_px_yarispy)); the recipes that use them set their values |
+| `reader.include_contact_topology` (`reader/vtp.yaml`) | false | also cache the shell cells of the VTP files, for `datapipe.contact_surface` |
+| `datapipe.contact_surface`, `contact_surface_exclusion`, `rigid_wall_position` (`datapipe/graph.yaml`) | false, `incidence`, null | contact topology and rigid wall on the structural graph |
+| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` (`datapipe/graph.yaml`) | null, `geodesic`, null | static kNN neighbourhoods for neighbourhood attention; null keeps the MeshGraphNet graph unchanged |
 | `training.num_training_samples`, `num_validation_samples` | `???`, 0 (69 and 20 in `px_yaris_deformer`) | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
 
 Re-running a training command resumes from `<work_dir>/checkpoints`.
@@ -126,11 +143,13 @@ neighbourhoods and caches them under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw.py` scores a body-in-white time-conditional checkpoint with
 the PX Yaris validation suite; the penetration metrics need the shell facets
-(`++reader.include_contact_topology=true ++datapipe.contact_surface=true
-++datapipe.contact_surface_exclusion=one_ring ++datapipe.rigid_wall_position=-29.8`,
+(`reader.include_contact_topology=true datapipe.contact_surface=true
+datapipe.contact_surface_exclusion=one_ring datapipe.rigid_wall_position=-29.8`,
 see the script's docstring). Its per-region readouts follow the recipe's
 `training.validation_region_bounds`, `[-3000, -1500]` for the body-in-white
-mesh (the PX Yaris recipes use `[-2000, -1000]`).
+mesh (the PX Yaris recipes use `[-2000, -1000]`); the recipe turns on
+`training.validation_node_errors` and `training.validation_penetration.enabled`
+for the script (its own training validation is the pooled MSE).
 
 ## Shared components
 

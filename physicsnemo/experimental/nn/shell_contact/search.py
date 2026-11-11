@@ -73,7 +73,12 @@ class ShellContactSearch:
         Safety budget for the number of ACTIVE pairs. Exceeding it raises; no
         pair is ever truncated.
     candidate_chunk_size : int
-        Page size of the streamed broad-phase candidates.
+        Page size, in pairs, of the streamed broad-phase candidates, of the
+        deferred Torch recomputes of the fused narrow phase and of the live
+        geometry of the active pairs. A page bounds the transient memory
+        (a few KB per quad pair in the live projection) while every page
+        costs launches and host synchronisations, so large pages are
+        faster; the default is ``1 << 20``.
     material_fan : bool
         Transport the reference centre fan of four-node facets with the
         vertices (the material surface contract) instead of validating the
@@ -112,7 +117,7 @@ class ShellContactSearch:
     implementation: str = "warp"
     narrow_phase: str = "auto"
     max_pairs: int = 2_000_000
-    candidate_chunk_size: int = 65_536
+    candidate_chunk_size: int = 1 << 20
     material_fan: bool = False
     prediction_horizon: float = 0.0
     side_from_reference: bool = False
@@ -228,6 +233,7 @@ class ShellContactPairs:
         Discovery counters: ``candidates``, ``active_pairs``, ``pages``,
         ``largest_page``, ``narrow_phase_fallback_pairs``,
         ``narrow_phase_reference_pages``, ``largest_reference_page``,
+        ``clearance_fallback_pairs``, ``clearance_reference_pages``,
         ``reference_excluded_pairs``, ``sweep_pairs``,
         ``clearance_crossings_kept`` and ``crossed_pairs``.
     """
@@ -388,6 +394,28 @@ def _fused_candidate_gaps(positions, velocities, thickness, faces, pairs, search
     )
 
 
+def _fused_reference_gaps(reference_positions, thickness, faces, pairs, search):
+    """Fused Warp reference gaps of kept pairs and their ambiguity mask.
+
+    The reference carries no forecast, and the membership boundary the kernel
+    guards is the reference clearance (not the live activation band): the
+    pairs it leaves ambiguous are exactly those near the clearance decision.
+    """
+    from ._narrow_phase_warp import (
+        fused_activation_gaps,
+    )
+
+    return fused_activation_gaps(
+        reference_positions,
+        None,
+        thickness,
+        faces,
+        pairs,
+        0.0,
+        search.reference_clearance,
+    )
+
+
 def candidate_activation_gaps(
     positions: torch.Tensor,
     velocities: torch.Tensor | None,
@@ -461,6 +489,71 @@ def _certify_crossed(positions, reference_positions, thickness, faces, pairs, se
         reference_positions[query],
         reference_projection,
         symmetric=search.side_symmetric,
+    )
+
+
+def _pages(rows: int, size: int):
+    """Yield ``(start, stop)`` of consecutive pages; one empty page for no rows."""
+    if rows == 0:
+        yield 0, 0
+    for start in range(0, rows, size):
+        yield start, min(start + size, rows)
+
+
+def _live_pair_geometry(
+    positions,
+    velocities,
+    thickness,
+    reference_positions,
+    query,
+    source_nodes,
+    search: ShellContactSearch,
+):
+    """Live, differentiable geometry of one page of active pairs.
+
+    Returns barycentric weights, closest points, distances, half thicknesses,
+    signed gaps, activation gaps and crossing flags; every quantity is per
+    pair, so a page holds exactly what the unpaged computation would.
+    """
+    projection = project_onto_facets(
+        positions, query, source_nodes, material_fan=search.material_fan
+    )
+    source_thickness = (thickness[source_nodes] * projection.barycentric).sum(-1)
+    half_thickness = (thickness[query] + source_thickness) * 0.5
+    gap = projection.distance - half_thickness
+    activation_gap = _activation_gap(
+        positions, velocities, thickness, query, source_nodes, projection, search
+    )
+    crossed = torch.zeros(len(query), dtype=torch.bool, device=positions.device)
+    if search.side_from_reference:
+        # A node that changed side of the facet plane since the reference
+        # configuration has crossed the shell: its distance counts as
+        # negative and the pair is fully active.
+        _, reference_projection = reference_facet_projection(
+            reference_positions,
+            thickness,
+            query,
+            source_nodes,
+            material_fan=search.material_fan,
+        )
+        crossed = crossing_flags(
+            positions[query],
+            projection,
+            reference_positions[query],
+            reference_projection,
+            symmetric=search.side_symmetric,
+        )
+        side = torch.where(crossed, -1.0, 1.0).to(positions.dtype)
+        gap = side * projection.distance - half_thickness
+        activation_gap = torch.where(crossed, gap, activation_gap)
+    return (
+        projection.barycentric,
+        projection.closest,
+        projection.distance,
+        half_thickness,
+        gap,
+        activation_gap,
+        crossed,
     )
 
 
@@ -633,39 +726,24 @@ def shell_contact_pairs(
         candidates = active = pages = largest_page = fallback_pairs = 0
         reference_pages = largest_reference_page = 0
         reference_excluded = sweep_pairs = clearance_crossings_kept = 0
+        clearance_fallback_pairs = clearance_pages = 0
         pending = []
         pending_count = 0
+        # Kept pairs whose reference-clearance gap the fused kernel left
+        # ambiguous, with their sweep flags: decided by the Torch reference in
+        # bounded pages, like the live ambiguous pairs, never dropped.
+        clearance_pending = []
+        clearance_pending_sweep = []
+        clearance_pending_count = 0
         use_fused = uses_fused_narrow_phase(search, positions)
+        # The reference carries no forecast, so a positive horizon of the live
+        # search must not be applied to it.
+        static_search = replace(search, prediction_horizon=0.0)
 
-        def select_active(pair_ids, gaps):
+        def finish(kept, from_sweep, passes):
+            """Certify, accept and record pairs whose membership is decided."""
             nonlocal active, reference_excluded, sweep_pairs
             nonlocal clearance_crossings_kept
-            near = gaps < search.activation_distance
-            from_sweep = None
-            if search.crossing_radius is not None:
-                # Crossing sweep: candidates beyond the band but within the
-                # radius are kept only when certified crossed below.
-                from_sweep = ~near & (gaps < search.crossing_radius)
-                keep = near | from_sweep
-                kept = pair_ids[:, keep]
-                from_sweep = from_sweep[keep]
-            else:
-                kept = pair_ids[:, near]
-            passes = None
-            if search.reference_clearance is not None and kept.shape[1]:
-                # Same discrete narrow phase on the reference configuration
-                # (fused kernel where available, Torch reference otherwise).
-                # The reference carries no forecast, so a positive horizon of
-                # the live search must not be applied to it.
-                reference_gap, _ = candidate_activation_gaps(
-                    reference_positions,
-                    None,
-                    thickness,
-                    faces,
-                    kept,
-                    replace(search, prediction_horizon=0.0),
-                )
-                passes = reference_gap >= search.reference_clearance
             needs_certificate = None
             if from_sweep is not None:
                 needs_certificate = from_sweep
@@ -714,6 +792,97 @@ def shell_contact_pairs(
             if kept.shape[1]:
                 selected.append(kept)
 
+        def finish_with_reference(kept, from_sweep, reference_gap):
+            finish(kept, from_sweep, reference_gap >= search.reference_clearance)
+
+        def flush_clearance(full_pages_only):
+            """Decide deferred clearance pairs by the Torch reference, a page at a time."""
+            nonlocal clearance_pending, clearance_pending_sweep
+            nonlocal clearance_pending_count, clearance_pages
+            if not clearance_pending_count:
+                return
+            size = search.candidate_chunk_size
+            combined = torch.cat(clearance_pending, 1)
+            combined_sweep = (
+                torch.cat(clearance_pending_sweep) if clearance_pending_sweep else None
+            )
+            end = clearance_pending_count
+            if full_pages_only:
+                end = (clearance_pending_count // size) * size
+            for start in range(0, end, size):
+                page = combined[:, start : start + size]
+                page_sweep = (
+                    None
+                    if combined_sweep is None
+                    else combined_sweep[start : start + size]
+                )
+                clearance_pages += 1
+                finish_with_reference(
+                    page,
+                    page_sweep,
+                    _reference_candidate_gaps(
+                        reference_positions, None, thickness, faces, page, static_search
+                    ),
+                )
+            remainder = combined[:, end:]
+            clearance_pending_count = remainder.shape[1]
+            clearance_pending = [remainder] if clearance_pending_count else []
+            clearance_pending_sweep = (
+                [combined_sweep[end:]]
+                if combined_sweep is not None and clearance_pending_count
+                else []
+            )
+            del combined, combined_sweep, remainder
+
+        def select_live(pair_ids, gaps):
+            """Live-band membership; the reference clearance decides afterwards."""
+            nonlocal clearance_fallback_pairs, clearance_pending_count
+            near = gaps < search.activation_distance
+            from_sweep = None
+            if search.crossing_radius is not None:
+                # Crossing sweep: candidates beyond the band but within the
+                # radius are kept only when certified crossed below.
+                from_sweep = ~near & (gaps < search.crossing_radius)
+                keep = near | from_sweep
+                kept = pair_ids[:, keep]
+                from_sweep = from_sweep[keep]
+            else:
+                kept = pair_ids[:, near]
+            if search.reference_clearance is None or not kept.shape[1]:
+                finish(kept, from_sweep, None)
+                return
+            if not use_fused:
+                finish_with_reference(
+                    kept,
+                    from_sweep,
+                    _reference_candidate_gaps(
+                        reference_positions, None, thickness, faces, kept, static_search
+                    ),
+                )
+                return
+            # Same discrete narrow phase on the reference configuration, with
+            # the clearance as the boundary the kernel guards. Ambiguous pairs
+            # are not recomputed here, page by page, but collected into
+            # bounded pages for the Torch reference.
+            reference_gap, ambiguous = _fused_reference_gaps(
+                reference_positions, thickness, faces, kept, search
+            )
+            if bool(ambiguous.any()):
+                decided = ~ambiguous
+                deferred = kept[:, ambiguous]
+                clearance_fallback_pairs += deferred.shape[1]
+                clearance_pending_count += deferred.shape[1]
+                clearance_pending.append(deferred)
+                if from_sweep is not None:
+                    clearance_pending_sweep.append(from_sweep[ambiguous])
+                    from_sweep = from_sweep[decided]
+                kept = kept[:, decided]
+                reference_gap = reference_gap[decided]
+                del deferred, decided
+            finish_with_reference(kept, from_sweep, reference_gap)
+            if clearance_pending_count >= search.candidate_chunk_size:
+                flush_clearance(full_pages_only=True)
+
         def select_reference(pair_ids):
             nonlocal reference_pages, largest_reference_page
             reference_pages += 1
@@ -721,7 +890,7 @@ def shell_contact_pairs(
             gaps = _reference_candidate_gaps(
                 positions, velocities, thickness, faces, pair_ids, search
             )
-            select_active(pair_ids, gaps)
+            select_live(pair_ids, gaps)
 
         for pairs in chunks:
             pages += 1
@@ -742,7 +911,7 @@ def shell_contact_pairs(
                     pending.append(reference_pairs)
                     pending_count += count
                 candidate_gap.masked_fill_(ambiguous, float("inf"))
-                select_active(pairs, candidate_gap)
+                select_live(pairs, candidate_gap)
                 if pending_count >= search.candidate_chunk_size:
                     combined = torch.cat(pending, 1)
                     full = pending_count // search.candidate_chunk_size
@@ -758,11 +927,13 @@ def shell_contact_pairs(
                 candidate_gap = _reference_candidate_gaps(
                     positions, velocities, thickness, faces, pairs, search
                 )
-                select_active(pairs, candidate_gap)
+                select_live(pairs, candidate_gap)
             del candidate_gap, pairs
         if pending_count:
             select_reference(torch.cat(pending, 1))
         del pending
+        # The live flush above may have deferred more clearance decisions.
+        flush_clearance(full_pages_only=False)
         pairs = torch.cat(selected, 1) if selected else faces.new_empty((2, 0))
         selected.clear()
         del chunks
@@ -778,50 +949,42 @@ def shell_contact_pairs(
             "narrow_phase_fallback_pairs": fallback_pairs,
             "narrow_phase_reference_pages": reference_pages,
             "largest_reference_page": largest_reference_page,
+            "clearance_fallback_pairs": clearance_fallback_pairs,
+            "clearance_reference_pages": clearance_pages,
             "reference_excluded_pairs": reference_excluded,
             "sweep_pairs": sweep_pairs,
             "clearance_crossings_kept": clearance_crossings_kept,
             "crossed_pairs": 0,
         }
-    projection = project_onto_facets(
-        positions, query, source_nodes, material_fan=search.material_fan
-    )
-    source_thickness = (thickness[source_nodes] * projection.barycentric).sum(-1)
-    half_thickness = (thickness[query] + source_thickness) * 0.5
-    gap = projection.distance - half_thickness
-    activation_gap = _activation_gap(
-        positions, velocities, thickness, query, source_nodes, projection, search
-    )
-    crossed = torch.zeros(len(query), dtype=torch.bool, device=positions.device)
-    if search.side_from_reference:
-        # A node that changed side of the facet plane since the reference
-        # configuration has crossed the shell: its distance counts as
-        # negative and the pair is fully active.
-        _, reference_projection = reference_facet_projection(
-            reference_positions,
+    # Live geometry of the selected pairs, recomputed in pages of
+    # candidate_chunk_size rows: the projection's transient memory is a few
+    # KB per quad pair, so one unpaged pass over millions of active pairs
+    # would dominate the peak. Every quantity is per pair, so paging changes
+    # no value, and autograd flows through the concatenation.
+    pieces = [
+        _live_pair_geometry(
+            positions,
+            velocities,
             thickness,
-            query,
-            source_nodes,
-            material_fan=search.material_fan,
+            reference_positions,
+            query[start:stop],
+            source_nodes[start:stop],
+            search,
         )
-        crossed = crossing_flags(
-            positions[query],
-            projection,
-            reference_positions[query],
-            reference_projection,
-            symmetric=search.side_symmetric,
-        )
-        side = torch.where(crossed, -1.0, 1.0).to(positions.dtype)
-        gap = side * projection.distance - half_thickness
-        activation_gap = torch.where(crossed, gap, activation_gap)
+        for start, stop in _pages(query.shape[0], search.candidate_chunk_size)
+    ]
+    barycentric, closest, distance, half_thickness, gap, activation_gap, crossed = (
+        parts[0] if len(parts) == 1 else torch.cat(parts) for parts in zip(*pieces)
+    )
+    if search.side_from_reference:
         stats["crossed_pairs"] = int(crossed.sum())
     return ShellContactPairs(
         query=query,
         face=face_id,
         source_nodes=source_nodes,
-        barycentric=projection.barycentric,
-        closest=projection.closest,
-        distance=projection.distance,
+        barycentric=barycentric,
+        closest=closest,
+        distance=distance,
         half_thickness=half_thickness,
         gap=gap,
         activation_gap=activation_gap,

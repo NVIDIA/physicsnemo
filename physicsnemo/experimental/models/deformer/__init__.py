@@ -22,8 +22,14 @@ context. The corrector is a MeshGraphNet-style message-passing model over the
 structural edges and the contact edges discovered on a predicted shape.
 """
 
+from .batching import LocalNeighborhoodData
 from .corrector import DeFormerCorrector, mesh_edge_features
-from .deformer import DeFormer, MeshContextFiLM, MeshGeometryContextEncoder
+from .deformer import (
+    DeFormer,
+    DeFormerMetaData,
+    MeshContextFiLM,
+    MeshGeometryContextEncoder,
+)
 from .local_attention import (
     LocalNeighborhood,
     NeighborhoodAttentionBlock,
@@ -35,7 +41,9 @@ __all__ = [
     "MeshContextFiLM",
     "DeFormer",
     "DeFormerCorrector",
+    "DeFormerMetaData",
     "LocalNeighborhood",
+    "LocalNeighborhoodData",
     "NeighborhoodAttentionBlock",
     "NeighborhoodAttentionProcessor",
     "mesh_edge_features",

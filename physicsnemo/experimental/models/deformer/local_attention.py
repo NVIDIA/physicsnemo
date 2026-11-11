@@ -28,8 +28,12 @@ influence. In the reference path keys and values are materialized per neighbor,
 so peak memory per block scales as :math:`O(N K D)`; use checkpoint segments for
 long rollouts. ``fused=True`` selects
 :func:`~physicsnemo.experimental.models.deformer.fused_neighborhood_attention.neighborhood_attention`,
-which computes the same map while reading neighbor keys and values on the fly
-and keeps the extra activation memory at :math:`O(N (H + D))`.
+which computes the same map while reading neighbor keys and values on the fly;
+the kernel's own extra activation memory is :math:`O(N (H + D))`, while the
+block around it still holds the :math:`[N, K, E]` edge latent and the float32
+:math:`[N, K, H]` logit bias. With checkpoint segments the processor's edge
+encoder runs inside each segment, so those per-slot tensors are recomputed in
+backward instead of being held for the whole processor.
 """
 
 from __future__ import annotations
@@ -448,6 +452,15 @@ class NeighborhoodAttentionProcessor(nn.Module):
             x = block(x, index, mask, edge_latent)
         return x
 
+    def _run_encoded_segment(
+        self, start: int, stop: int, x, index, mask, edge_features
+    ):
+        # Encoding the edges inside the checkpointed segment means the
+        # encoder's activations and the [N, K, E] latent are recomputed in
+        # backward instead of being held until then.
+        edge_latent = self.edge_encoder(edge_features.to(x.dtype))
+        return self._run_segment(start, stop, x, index, mask, edge_latent)
+
     def forward(
         self,
         x: Float[torch.Tensor, "num_nodes hidden_dim"],
@@ -461,28 +474,29 @@ class NeighborhoodAttentionProcessor(nn.Module):
                 )
             neighborhood.validate(x.shape[0], self.edge_input_dim)
         index, mask = neighborhood.index, neighborhood.mask
-        edge_latent = self.edge_encoder(neighborhood.edge_features.to(x.dtype))
         use_checkpoint = (
             self.checkpoint_segments > 0 and self.training and torch.is_grad_enabled()
         )
+        if not use_checkpoint:
+            edge_latent = self.edge_encoder(neighborhood.edge_features.to(x.dtype))
+            for start, stop in self.segments:
+                x = self._run_segment(start, stop, x, index, mask, edge_latent)
+            return x
         context = (
             torch.autograd.graph.save_on_cpu(pin_memory=True)
-            if use_checkpoint and self.checkpoint_offloading
+            if self.checkpoint_offloading
             else nullcontext()
         )
         with context:
             for start, stop in self.segments:
-                if use_checkpoint:
-                    x = checkpoint(
-                        self._run_segment,
-                        start,
-                        stop,
-                        x,
-                        index,
-                        mask,
-                        edge_latent,
-                        use_reentrant=False,
-                    )
-                else:
-                    x = self._run_segment(start, stop, x, index, mask, edge_latent)
+                x = checkpoint(
+                    self._run_encoded_segment,
+                    start,
+                    stop,
+                    x,
+                    index,
+                    mask,
+                    neighborhood.edge_features,
+                    use_reentrant=False,
+                )
         return x

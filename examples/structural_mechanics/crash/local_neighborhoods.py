@@ -34,8 +34,10 @@ import time
 from pathlib import Path
 
 import torch
-from torch_geometric.data import Data
 
+from physicsnemo.experimental.models.deformer import (  # noqa: F401 (re-export)
+    LocalNeighborhoodData,
+)
 from physicsnemo.experimental.nn import static_knn as _static_knn_module
 from physicsnemo.experimental.nn.static_knn import (
     StaticNeighborhood,
@@ -45,20 +47,8 @@ from physicsnemo.experimental.nn.static_knn import (
 KNN_METRICS = ("geodesic", "euclidean")
 
 
-class LocalNeighborhoodData(Data):
-    """PyG batching with node offsets for ``knn_index`` (padding repeats the node)."""
-
-    def __inc__(self, key, value, *args, **kwargs):
-        if key == "knn_index":
-            return self.num_nodes
-        return super().__inc__(key, value, *args, **kwargs)
-
-    def __cat_dim__(self, key, value, *args, **kwargs):
-        # PyG treats any key containing "index" as [2, E] and would concatenate
-        # along the last axis; neighborhoods are per node, [N, K].
-        if key == "knn_index":
-            return 0
-        return super().__cat_dim__(key, value, *args, **kwargs)
+# ``LocalNeighborhoodData`` (PyG batching with per-graph offsets of ``knn_index``)
+# ships with the library model and is re-exported above for the datapipes.
 
 
 def with_self_slot(neighborhood: StaticNeighborhood):

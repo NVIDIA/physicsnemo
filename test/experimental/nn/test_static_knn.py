@@ -13,20 +13,34 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Static reference kNN: exactness against dense Dijkstra, topology, padding."""
+"""Static reference kNN: exactness against dense Dijkstra, topology, padding.
+
+The geodesic path is pure Python and runs everywhere; the Euclidean path and
+the dense Dijkstra reference need SciPy, so only those tests skip without it.
+"""
 
 import numpy as np
 import pytest
 import torch
 
-scipy = pytest.importorskip("scipy")
-from scipy.sparse import coo_matrix  # noqa: E402
-from scipy.sparse.csgraph import dijkstra  # noqa: E402
-
-from physicsnemo.experimental.nn.static_knn import (  # noqa: E402
+from physicsnemo.experimental.nn.static_knn import (
     euclidean_knn,
     geodesic_knn,
     static_knn,
+)
+
+
+def _has_scipy() -> bool:
+    try:
+        import scipy  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+requires_scipy = pytest.mark.skipif(
+    not _has_scipy(),
+    reason="SciPy is needed for Euclidean neighbourhoods and the Dijkstra reference",
 )
 
 
@@ -48,6 +62,9 @@ def grid(nx, ny, spacing=(1.0, 1.0), z=0.0, offset=0):
 
 
 def dense_geodesic_reference(pos, edge_index, k):
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import dijkstra
+
     n = len(pos)
     src, dst = edge_index.numpy()
     lengths = np.linalg.norm(pos.numpy()[src] - pos.numpy()[dst], axis=1)
@@ -64,6 +81,7 @@ def dense_geodesic_reference(pos, edge_index, k):
     return index, dist
 
 
+@requires_scipy
 def test_geodesic_matches_dense_dijkstra_with_weighted_edges():
     pos, edge_index = grid(6, 5, spacing=(1.0, 0.7))
     k = 7
@@ -86,6 +104,7 @@ def test_geodesic_ties_prefer_smaller_node_id():
     )
 
 
+@requires_scipy
 def test_geodesic_stays_on_the_sheet_but_euclidean_crosses_the_gap():
     lower_pos, lower_edges = grid(4, 4, spacing=(10.0, 10.0), z=0.0)
     upper_pos, upper_edges = grid(4, 4, spacing=(10.0, 10.0), z=1.0, offset=16)
@@ -108,14 +127,22 @@ def test_geodesic_stays_on_the_sheet_but_euclidean_crosses_the_gap():
     )
 
 
-def test_small_components_and_small_point_sets_are_padded():
-    pos = torch.tensor([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [50, 0, 0], [51, 0, 0]])
+PADDED_POSITIONS = torch.tensor(
+    [[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [50, 0, 0], [51, 0, 0]]
+)
+
+
+def test_small_components_are_padded():
     edge_index = torch.tensor([[0, 1, 1, 2, 3, 4], [1, 0, 2, 1, 4, 3]])
-    result = geodesic_knn(pos, edge_index, 4)
+    result = geodesic_knn(PADDED_POSITIONS, edge_index, 4)
     assert result.mask.sum(1).tolist() == [2, 2, 2, 1, 1]
     assert result.index[3].tolist() == [4, 3, 3, 3]  # padding repeats the query
     torch.testing.assert_close(result.distance[3], torch.tensor([1.0, 0, 0, 0]))
-    few = euclidean_knn(pos[:3], 5)
+
+
+@requires_scipy
+def test_small_point_sets_are_padded():
+    few = euclidean_knn(PADDED_POSITIONS[:3], 5)
     assert few.mask.sum(1).tolist() == [2, 2, 2]
     assert few.index[0].tolist() == [1, 2, 0, 0, 0]
 

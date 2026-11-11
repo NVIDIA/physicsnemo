@@ -101,7 +101,7 @@ def wall_penetration_depths(
     positions : torch.Tensor
         ``[N, 3]`` node positions in the wall's units.
     thickness : torch.Tensor
-        ``[N]`` nodal shell thickness.
+        ``[N]`` nodal shell thickness, or a scalar shared by every node.
     wall_position : float
         Plane coordinate along ``axis``.
     axis : int, optional
@@ -115,6 +115,16 @@ def wall_penetration_depths(
         ``[N]`` envelope depths and ``[N]`` crossing depths.
     """
     _check_wall(axis, sign)
+    if positions.ndim != 2 or positions.shape[-1] != 3:
+        raise ValueError("positions must have shape [N, 3]")
+    thickness = torch.as_tensor(
+        thickness, dtype=positions.dtype, device=positions.device
+    )
+    if thickness.ndim != 0 and thickness.shape != positions.shape[:1]:
+        raise ValueError(
+            "thickness must have shape [N] or be a scalar; got "
+            f"{tuple(thickness.shape)} for {positions.shape[0]} nodes"
+        )
     clearance = float(sign) * (float(wall_position) - positions[:, axis])
     envelope = (0.5 * thickness - clearance).clamp_min(0.0)
     crossing = (-clearance).clamp_min(0.0)

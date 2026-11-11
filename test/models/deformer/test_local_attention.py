@@ -20,14 +20,19 @@ import contextlib
 import pytest
 import torch
 
-pyg = pytest.importorskip("torch_geometric")
-
-from physicsnemo.experimental.models.deformer import (  # noqa: E402
+from physicsnemo.experimental.models.deformer import (
     DeFormer,
     LocalNeighborhood,
+    LocalNeighborhoodData,
     NeighborhoodAttentionProcessor,
 )
-from physicsnemo.experimental.nn.static_knn import geodesic_knn  # noqa: E402
+from physicsnemo.experimental.nn.static_knn import geodesic_knn
+
+try:
+    import torch_geometric as pyg
+except ImportError:  # the kernel and processor tests need no PyG
+    pyg = None
+requires_pyg = pytest.mark.skipif(pyg is None, reason="requires torch_geometric")
 
 
 def _neighborhood(num_nodes, k, seed=0, break_at=None):
@@ -49,7 +54,7 @@ def _neighborhood(num_nodes, k, seed=0, break_at=None):
 
 def _graph(num_nodes=9, k=4, metric="geodesic", node_dim=6):
     pos, edge_index, index, mask, edge_attr = _neighborhood(num_nodes, k)
-    graph = pyg.data.Data(
+    graph = LocalNeighborhoodData(
         x=torch.randn(num_nodes, node_dim),
         edge_index=edge_index,
         edge_attr=torch.randn(edge_index.shape[1], 4),
@@ -145,13 +150,17 @@ def test_processor_checkpoint_segments_match_plain_execution():
     for (name, a), (_, b) in zip(
         plain.named_parameters(), checkpointed.named_parameters(), strict=True
     ):
-        torch.testing.assert_close(b.grad, a.grad, atol=0, rtol=0, msg=name)
+        # The edge encoder runs inside every segment, so its gradient is the
+        # sum of per-segment contributions: equal up to summation order.
+        exact = {} if name.startswith("edge_encoder.") else dict(atol=0, rtol=0)
+        torch.testing.assert_close(b.grad, a.grad, msg=name, **exact)
     with pytest.raises(ValueError, match="checkpoint_segments"):
         NeighborhoodAttentionProcessor(2, 16, 4, checkpoint_segments=3)
     with pytest.raises(ValueError, match="at least one valid"):
         plain(x, LocalNeighborhood(index, torch.zeros_like(mask), edge_attr))
 
 
+@requires_pyg
 def test_knn_mode_is_geoflare_at_zero_gates_and_trains_otherwise():
     torch.manual_seed(3)
     graph = _graph()
@@ -174,6 +183,7 @@ def test_knn_mode_is_geoflare_at_zero_gates_and_trains_otherwise():
         assert any(g.abs().sum() > 0 for g in grads), name
 
 
+@requires_pyg
 def test_knn_mode_checkpoint_segments_and_state_dict_round_trip():
     torch.manual_seed(4)
     graph = _graph(num_nodes=10)
@@ -193,7 +203,8 @@ def test_knn_mode_checkpoint_segments_and_state_dict_round_trip():
     for (name, a), (_, b) in zip(
         plain.named_parameters(), checkpointed.named_parameters(), strict=True
     ):
-        torch.testing.assert_close(b.grad, a.grad, atol=0, rtol=0, msg=name)
+        exact = {} if ".edge_encoder." in name else dict(atol=0, rtol=0)
+        torch.testing.assert_close(b.grad, a.grad, msg=name, **exact)
     reloaded = _model().eval()
     reloaded.load_state_dict(plain.state_dict(), strict=True)
     plain.eval()
@@ -203,6 +214,7 @@ def test_knn_mode_checkpoint_segments_and_state_dict_round_trip():
     )
 
 
+@requires_pyg
 def test_rejects_mismatched_neighborhoods_and_invalid_settings():
     torch.manual_seed(5)
     graph = _graph()
@@ -253,6 +265,11 @@ from physicsnemo.experimental.models.deformer.local_attention import (  # noqa: 
 # most 1.5x the reference's own bf16 error (+1e-3) and below 5 percent.
 BF16_TOLERANCE = dict(atol=5e-2, rtol=5e-2)
 BF16_RELATIVE_SLACK, BF16_RELATIVE_FLOOR, BF16_RELATIVE_MAX = 1.5, 1e-3, 5e-2
+# With the log-sum-exp detached the softmax is shift invariant per row, so the
+# key bias and the edge-bias bias receive no gradient, and the value bias
+# cancels in the neighbour difference: these three are zero analytically and
+# only collect rounding noise.
+ZERO_GRADIENT_PARAMETERS = frozenset({"key.bias", "value.bias", "edge_bias.bias"})
 
 cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 triton_only = pytest.mark.skipif(
@@ -470,7 +487,8 @@ def test_fused_processor_checkpoint_segments_match_plain_execution():
     for (name, a), (_, b) in zip(
         plain.named_parameters(), checkpointed.named_parameters(), strict=True
     ):
-        torch.testing.assert_close(b.grad, a.grad, atol=0, rtol=0, msg=name)
+        exact = {} if name.startswith("edge_encoder.") else dict(atol=0, rtol=0)
+        torch.testing.assert_close(b.grad, a.grad, msg=name, **exact)
 
 
 @triton_only
@@ -532,9 +550,9 @@ def test_fused_triton_bf16_autocast_matches_reference_within_tolerance():
         BF16_RELATIVE_SLACK * _relative_error(expected, truth) + BF16_RELATIVE_FLOOR
     )
     for name in expected_grads:
-        if name == "edge_bias.bias":
-            # Softmax is shift invariant per head, so this gradient is analytically
-            # zero and only an absolute comparison of the bf16 noise is meaningful.
+        if name in ZERO_GRADIENT_PARAMETERS:
+            # Analytically zero gradients (see ZERO_GRADIENT_PARAMETERS): only
+            # an absolute comparison of the bf16 noise is meaningful.
             fused_error = (actual_grads[name] - truth_grads[name]).norm().item()
             reference_error = (expected_grads[name] - truth_grads[name]).norm().item()
             assert (
@@ -552,6 +570,78 @@ def test_fused_triton_bf16_autocast_matches_reference_within_tolerance():
             reference_error,
         )
         assert fused_error < BF16_RELATIVE_MAX, (name, fused_error)
+
+
+def test_functional_rejects_neighbor_ids_outside_the_node_range():
+    """Valid slots must point into the node range; masked slots may hold anything."""
+    n, k, heads, dh, edge_dim = 12, 4, 2, 8, 3
+    g = torch.Generator().manual_seed(0)
+    q, key, value = (torch.randn(n, heads, dh, generator=g) for _ in range(3))
+    bias = torch.randn(n, k, heads, generator=g)
+    edge = torch.randn(n, k, edge_dim, generator=g)
+    index = torch.randint(0, n, (n, k), generator=g)
+    mask = torch.ones(n, k, dtype=torch.bool)
+    kwargs = dict(scale=dh**-0.5, backend="torch")
+    stale = index.clone()
+    stale[0, 1] = n
+    with pytest.raises(ValueError, match="outside"):
+        neighborhood_attention(q, key, value, bias, edge, stale, mask, **kwargs)
+    stale[0, 1] = -1
+    with pytest.raises(ValueError, match="outside"):
+        neighborhood_attention(q, key, value, bias, edge, stale, mask, **kwargs)
+    masked = mask.clone()
+    masked[0, 1] = False
+    expected = neighborhood_attention(
+        q, key, value, bias, edge, index, masked, **kwargs
+    )
+    actual = neighborhood_attention(q, key, value, bias, edge, stale, masked, **kwargs)
+    for a, e in zip(actual, expected, strict=True):
+        torch.testing.assert_close(a, e, atol=0, rtol=0)
+
+
+@triton_only
+def test_fused_triton_block_compiles_and_matches_eager():
+    """torch.compile of the Triton block reproduces eager forward and backward."""
+    device, hidden, heads, edge_dim = "cuda", 64, 4, 16
+    x, index, mask, edge_latent, weight = _block_inputs(
+        256, 8, hidden, edge_dim, device
+    )
+    block = NeighborhoodAttentionBlock(
+        hidden, heads, edge_dim, fused=True, fused_backend="triton"
+    ).to(device)
+    with _strict_fp32():
+        expected, expected_grads = _run_block(
+            block, x, index, mask, edge_latent, weight
+        )
+        compiled = torch.compile(block)
+        actual, compiled_grads = _run_block(
+            compiled, x, index, mask, edge_latent, weight
+        )
+    actual_grads = {
+        name.removeprefix("_orig_mod."): grad for name, grad in compiled_grads.items()
+    }
+    torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+    _assert_close_dict(actual_grads, expected_grads, atol=1e-5, rtol=1e-5)
+
+
+@triton_only
+def test_fused_triton_runs_on_a_non_current_device():
+    """The kernels launch on the tensors' device, not the current one."""
+    if torch.cuda.device_count() < 2:
+        pytest.skip("needs two CUDA devices")
+    device, hidden, heads, edge_dim = torch.device("cuda", 1), 64, 4, 8
+    x, index, mask, edge_latent, weight = _block_inputs(
+        300, 8, hidden, edge_dim, device
+    )
+    reference, fused = _block_pair(hidden, heads, edge_dim, device, "triton")
+    with torch.cuda.device(0), _strict_fp32():
+        expected, expected_grads = _run_block(
+            reference, x, index, mask, edge_latent, weight
+        )
+        actual, actual_grads = _run_block(fused, x, index, mask, edge_latent, weight)
+    assert actual.device == device
+    torch.testing.assert_close(actual, expected, atol=2e-4, rtol=2e-4)
+    _assert_close_dict(actual_grads, expected_grads, atol=2e-4, rtol=2e-4)
 
 
 @cuda_only
@@ -581,6 +671,7 @@ def test_fused_path_uses_a_fraction_of_the_reference_memory():
     assert fused_peak < 0.5 * reference_peak
 
 
+@requires_pyg
 def test_knn_mode_fused_flag_matches_reference_model():
     """The fused blocks (the default) reproduce the gather-based reference model."""
     device = "cuda" if torch.cuda.is_available() else "cpu"

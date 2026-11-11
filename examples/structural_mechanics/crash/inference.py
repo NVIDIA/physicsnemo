@@ -34,6 +34,7 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils import load_checkpoint
 
 from datapipe import simsample_collate
+from utils import load_warm_start
 
 
 def denormalize_positions(
@@ -209,20 +210,33 @@ class InferenceWorker:
         self.model.eval()
 
         ckpt_path = cfg.training.ckpt_path
-        loaded_epoch = load_checkpoint(
-            ckpt_path,
-            models=self.model,
-            device=self.device,
-            epoch=cfg.training.get("load_epoch"),
-        )
-        if loaded_epoch <= 0:
-            raise FileNotFoundError(
-                f"No training checkpoint (checkpoint.0.<E>.pt) with its model file "
-                f"found in {ckpt_path}"
+        warm_start = cfg.training.get("warm_start_model")
+        if warm_start:
+            # A weights-only file (.mdlus or state dict), as for the evaluators;
+            # no training checkpoint is needed then.
+            report = load_warm_start(self.model, warm_start)
+            self.logger.info(
+                f"[Rank {dist.rank}] Weights from {warm_start}: "
+                f"{len(report['loaded'])} tensors loaded"
             )
-        self.logger.info(
-            f"[Rank {dist.rank}] Loaded checkpoint {ckpt_path} at epoch {loaded_epoch}"
-        )
+        else:
+            loaded_epoch = load_checkpoint(
+                ckpt_path,
+                models=self.model,
+                device=self.device,
+                epoch=cfg.training.get("load_epoch"),
+            )
+            if loaded_epoch <= 0:
+                raise FileNotFoundError(
+                    f"No training checkpoint (checkpoint.0.<E>.pt with its model "
+                    f"file) found in {ckpt_path}; pass "
+                    "training.warm_start_model=<file>.mdlus to run a weights-only "
+                    "checkpoint"
+                )
+            self.logger.info(
+                f"[Rank {dist.rank}] Loaded checkpoint {ckpt_path} at epoch "
+                f"{loaded_epoch}"
+            )
 
         # For VTP exporting
         self.vtp_prefix = cfg.inference.get("vtp_prefix", "frame")
@@ -383,7 +397,17 @@ def main(cfg: DictConfig):
     logging.getLogger().setLevel(logging.INFO)
 
     # Discover all .vtp files in the parent directory (flat layout)
-    parent_dir = to_absolute_path(cfg.inference.raw_data_dir_test)
+    raw_data_dir_test = (
+        cfg.inference.get("raw_data_dir_test") if "inference" in cfg else None
+    )
+    if not raw_data_dir_test:
+        raise ValueError(
+            "inference.raw_data_dir_test is not set. inference.py serves the VTP "
+            "recipes (the graph and point-cloud datapipes over .vtp runs); the "
+            "Yaris recipes are scored by evaluate_px_yaris.py, which writes "
+            "metrics only and exports no predicted shapes."
+        )
+    parent_dir = to_absolute_path(raw_data_dir_test)
     if not os.path.isdir(parent_dir):
         logger0.error(f"Parent directory not found: {parent_dir}")
         return

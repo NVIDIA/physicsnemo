@@ -30,12 +30,12 @@ environment, sharded over GPUs like training::
     torchrun --standalone --nproc_per_node=4 evaluate_biw.py \\
         --config-name biw_yaris_deformer \\
         training.raw_data_dir=<train> training.raw_data_dir_validation=<validation> \\
-        reader.cache_dir=<vtp cache with cells> ++reader.include_contact_topology=true \\
-        ++datapipe.local_knn_cache_dir=<knn cache> datapipe.stats_dir=<run>/stats \\
-        ++datapipe.contact_surface=true ++datapipe.contact_surface_exclusion=one_ring \\
-        ++datapipe.rigid_wall_position=-29.8 \\
-        training.ckpt_path=<run>/checkpoints +training.load_epoch=100 \\
-        +training.validation_output_dir=<out> hydra.run.dir=<out>
+        reader.cache_dir=<vtp cache with cells> reader.include_contact_topology=true \\
+        datapipe.local_knn_cache_dir=<knn cache> datapipe.stats_dir=<run>/stats \\
+        datapipe.contact_surface=true datapipe.contact_surface_exclusion=one_ring \\
+        datapipe.rigid_wall_position=-29.8 \\
+        training.ckpt_path=<run>/checkpoints training.load_epoch=100 \\
+        training.validation_output_dir=<out> hydra.run.dir=<out>
 
 Only the validation split is built; the normalization statistics are loaded
 from ``datapipe.stats_dir`` (the run's ``stats`` directory, written when the
@@ -450,7 +450,7 @@ def main(cfg: DictConfig) -> None:
     output_dir = cfg.training.get("validation_output_dir")
     if not output_dir:
         raise ValueError(
-            "pass +training.validation_output_dir=<dir>; nothing is written "
+            "pass training.validation_output_dir=<dir>; nothing is written "
             "next to the run"
         )
     output_dir = Path(output_dir)
@@ -490,7 +490,7 @@ def main(cfg: DictConfig) -> None:
         if epoch <= 0:
             raise RuntimeError(
                 f"No training checkpoint (checkpoint.0.<E>.pt) under "
-                f"{cfg.training.ckpt_path}; pass +training.warm_start_model=<file>.mdlus "
+                f"{cfg.training.ckpt_path}; pass training.warm_start_model=<file>.mdlus "
                 "for a weights-only file"
             )
     model.eval()

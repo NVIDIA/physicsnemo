@@ -68,14 +68,34 @@ def file_sha256(path):
 
 
 def atomic_json(path, value):
-    """Write ``value`` as JSON to ``path`` via a temporary file and atomic replace."""
+    """Write ``value`` as JSON to ``path`` via a temporary file and atomic replace.
+
+    The result gets the permissions a plain ``open(path, "w")`` would give it
+    (the umask applied to 0o666, or the mode of the file it replaces), not the
+    0o600 of the temporary file, so a shared statistics directory stays
+    readable; a failed dump leaves no temporary file behind.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
-        json.dump(value, stream, indent=2, allow_nan=False)
-        stream.write("\n")
-        temporary = Path(stream.name)
-    temporary.replace(path)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(value, stream, indent=2, allow_nan=False)
+            stream.write("\n")
+        if path.exists():
+            mode = path.stat().st_mode & 0o777
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(temporary, mode)
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 # The Yaris store layout; every array is checked where the recipe reads it.
@@ -613,20 +633,25 @@ class YarisFullGraphDataset(Dataset):
         self.num_samples = len(self.paths)
         self.reader.open(self.paths[0])  # establishes the shared reference geometry
         self.num_nodes = int(len(self.reader.keep_ids))
+        # Every case's selected frame count is checked at construction, in both
+        # sample types, so a case longer than the frame bound fails at startup
+        # and not when it is first read (the first validation epoch).
+        counts = []
+        for path in self.paths:
+            frames = reader.frames(reader.open(path))
+            if len(frames) > self.num_steps or len(frames) < 2:
+                raise ValueError(
+                    f"{path.stem} ({split} split): {len(frames)} selected frames "
+                    f"outside [2, {self.num_steps}]; training.num_time_steps bounds "
+                    "every case"
+                )
+            counts.append(len(frames) - 1)
         # one_time_step enumerates every (case, future frame) pair; the time label
         # k / (num_steps - 1) is normalized by the configured frame bound so the
         # same label means the same physical time in every case.
         self.case_future_frames = None
         self.case_offsets = None
         if sample_type == "one_time_step":
-            counts = []
-            for path in self.paths:
-                frames = reader.frames(reader.open(path))
-                if len(frames) > self.num_steps or len(frames) < 2:
-                    raise ValueError(
-                        f"{path.stem}: {len(frames)} selected frames outside [2, {self.num_steps}]"
-                    )
-                counts.append(len(frames) - 1)
             self.case_future_frames = counts
             offsets, total = [], 0
             for count in counts:

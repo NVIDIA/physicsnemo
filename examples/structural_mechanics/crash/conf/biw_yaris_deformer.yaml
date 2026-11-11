@@ -60,6 +60,11 @@ training:
   end_lr: 1.0e-6
   validation_freq: 5
   validation_region_bounds: [-3000.0, -1500.0]  # rear / middle / front of the body-in-white mesh
+  # read by evaluate_biw.py (training validation is the pooled MSE): node-error
+  # maps and the penetration metrics are on when a checkpoint is scored
+  validation_node_errors: true
+  validation_penetration:
+    enabled: true
   save_checkpoint_freq: 5
   early_stopping_patience: 0
   auxiliary_loss_weight: 0.1

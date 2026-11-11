@@ -27,15 +27,18 @@ maps::
         --config-name px_yaris_deformer \\
         yaris.data_root=... yaris.split_manifest=... yaris.outlier_mask=... \\
         yaris.work_dir=... training.ckpt_path=<run>/checkpoints \\
-        +training.validation_output_dir=<out> hydra.run.dir=<out> \\
-        datapipe.contact_surface=true [+training.load_epoch=30] \\
-        [+training.validation_node_errors=true]
+        training.validation_output_dir=<out> hydra.run.dir=<out> \\
+        datapipe.contact_surface=true [training.load_epoch=30] \\
+        [training.validation_node_errors=true]
 
 The run's own validation records are untouched: the JSON goes to
 ``<out>/epoch_<E>.json`` where ``E`` is the loaded checkpoint's epoch.
 ``datapipe.contact_surface=true`` gives contact-free models the shell facets the
 penetration metrics need; such models ignore them. For the corrector recipe pass
-``model.teacher_weights=<teacher .mdlus>`` as in training.
+``model.teacher_weights=<teacher .mdlus>`` as in training. The penetration
+metrics are this script's purpose, so it exits with an error (after writing the
+record, whose penetration block then holds ``null`` values and the reasons)
+when the probe was disabled on any rank.
 """
 
 from pathlib import Path
@@ -57,7 +60,7 @@ def main(cfg: DictConfig) -> None:
     output_dir = cfg.training.get("validation_output_dir")
     if not output_dir:
         raise ValueError(
-            "pass +training.validation_output_dir=<dir>; the run's own validation "
+            "pass training.validation_output_dir=<dir>; the run's own validation "
             "directory is never written by this script"
         )
     with open_dict(cfg):
@@ -72,7 +75,7 @@ def main(cfg: DictConfig) -> None:
     if trainer.epoch_init <= 0 and not cfg.training.get("warm_start_model"):
         raise RuntimeError(
             f"No training checkpoint (checkpoint.0.<E>.pt) under "
-            f"{cfg.training.ckpt_path}; pass +training.warm_start_model=<file>.mdlus "
+            f"{cfg.training.ckpt_path}; pass training.warm_start_model=<file>.mdlus "
             "for a weights-only file"
         )
     logger0.info(
@@ -85,6 +88,16 @@ def main(cfg: DictConfig) -> None:
     logger0.info(
         f"Validation epoch {trainer.epoch_init}: MSE: {stats['MSE'].item():.6f}"
     )
+    penetration = trainer.last_penetration_summary
+    if penetration is None or not penetration["complete"]:
+        # The record is written (with null penetration values and the reasons);
+        # the numbers this script exists for are missing, so fail loudly.
+        reasons = "; ".join(penetration["failure_reasons"]) if penetration else "none"
+        raise RuntimeError(
+            "Penetration metrics were disabled during the evaluation "
+            f"(reasons: {reasons}); the record under {output_dir} carries null "
+            "penetration values"
+        )
 
 
 if __name__ == "__main__":

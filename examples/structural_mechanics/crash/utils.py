@@ -128,31 +128,50 @@ def build_muon_optimizer(model: torch.nn.Module, cfg) -> torch.optim.Optimizer:
         return torch.optim.AdamW(other_params, lr=lr, weight_decay=weight_decay)
 
 
+def _is_mdlus_archive(path: str) -> bool:
+    """A physicsnemo ``.mdlus`` archive: a zip, or the tar of older releases, with ``model.pt``."""
+    import tarfile
+    import zipfile
+
+    # Tar first: a tar archive holding a zip member passes the zip sniff as
+    # well. A torch.save file is a zip too, without model.pt.
+    if tarfile.is_tarfile(path):
+        with tarfile.open(path) as archive:
+            return "model.pt" in archive.getnames()
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            return "model.pt" in archive.namelist()
+    return False
+
+
 def load_warm_start(model: torch.nn.Module, path) -> dict[str, list[str]]:
     """Initialise ``model`` from another run's ``.mdlus`` (or state-dict ``.pt``) file.
 
-    Every tensor of the checkpoint must exist in the model and every tensor of
-    the model must be in the checkpoint. Returns the loaded key list. Used to
-    initialise a run from a finished one (``training.warm_start_model``) and to
-    load the frozen teacher of the corrector.
+    A ``.mdlus`` archive (zip, or the tar format of releases before 2.2.0) is
+    loaded with :func:`physicsnemo.utils.load_model_weights`; a ``torch.save``
+    file may hold a state dict or a checkpoint dict with ``model_state_dict``.
+    Every tensor of the file must exist in the model and every tensor of the
+    model must be in the file. Returns the loaded key list. Used to initialise
+    a run from a finished one (``training.warm_start_model``), by the evaluators
+    and by the corrector to load its frozen teacher.
     """
-    import io
-    import zipfile
+    from physicsnemo.utils import load_model_weights
 
     path = str(path)
-    state = None
-    if zipfile.is_zipfile(path):
-        with zipfile.ZipFile(path) as archive:
-            if "model.pt" in archive.namelist():  # a physicsnemo .mdlus archive
-                state = torch.load(
-                    io.BytesIO(archive.read("model.pt")),
-                    map_location="cpu",
-                    weights_only=True,
-                )
-    if state is None:  # a torch.save file (a state dict or a checkpoint dict)
-        state = torch.load(path, map_location="cpu", weights_only=True)
-        if isinstance(state, dict) and "model_state_dict" in state:
-            state = state["model_state_dict"]
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"warm start file {path} does not exist")
+    if _is_mdlus_archive(path):
+        try:
+            load_model_weights(model, path)
+        except RuntimeError as error:  # the strict load names the mismatched keys
+            raise ValueError(
+                f"warm start {path} does not match the model: {error}"
+            ) from error
+        return {"loaded": sorted(model.state_dict().keys())}
+    # a torch.save file: a state dict or a checkpoint dict
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    if isinstance(state, dict) and "model_state_dict" in state:
+        state = state["model_state_dict"]
     result = model.load_state_dict(state, strict=False)
     if result.unexpected_keys:
         raise ValueError(
@@ -275,8 +294,22 @@ def gather_rng_states(generators=None):
     return states
 
 
-def restore_rank_rng(states, rank, world_size, generators=None):
-    """Restore this rank only after checking the saved distributed world size."""
+def restore_rank_rng(states, rank, world_size, generators=None, *, required=True):
+    """Restore this rank's RNG state after checking the saved distributed world size.
+
+    Returns ``True`` when the state was restored. At another world size the
+    saved streams cannot be replayed: with ``required`` (a reproducible or
+    deterministic restart) that raises, otherwise nothing is restored and
+    ``False`` is returned so the caller can warn and go on.
+    """
     if len(states) != world_size or not 0 <= rank < world_size:
-        raise ValueError("RNG checkpoint world size does not match this restart")
+        if required:
+            raise ValueError(
+                f"RNG checkpoint holds {len(states)} rank states but this restart "
+                f"has {world_size} ranks; training.reproducible_sampling and "
+                "training.deterministic need the world size of the checkpoint "
+                "(training.restore_rng=false loads the weights without the streams)"
+            )
+        return False
     restore_rng_state(states[rank], generators)
+    return True

@@ -148,11 +148,12 @@ class DeFormerTimeConditional(DeFormer):
             nn.Linear(self.mesh_hidden_dim, self.output_dim),
         )
         self._zero_head(self.coarse_decoder[-1])
-        # Stage B: an independent, re-initialised copy of stage A and its FiLM.
-        self.refinement_processor = copy.deepcopy(self.post_processor)
-        for module in self.refinement_processor.modules():
-            if hasattr(module, "reset_parameters"):
-                module.reset_parameters()
+        # Stage B: a fresh processor of stage A's shape from the base model's
+        # factory (the same initialisation as the stages it builds) and a copy
+        # of stage A's FiLM.
+        self.refinement_processor = self.make_local_processor(
+            self.post_processor.num_layers, self.post_processor.checkpoint_segments
+        )
         self.refinement_context_film = copy.deepcopy(self.post_context_film)
         # The base model's post stage re-encodes the output space; this model
         # keeps the latent instead, so that encoder is unused.

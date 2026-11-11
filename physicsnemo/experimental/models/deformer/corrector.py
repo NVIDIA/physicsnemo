@@ -304,6 +304,12 @@ class DeFormerCorrector(physicsnemo.Module):
     ) -> tuple[torch.Tensor | None, torch.Tensor]:
         r"""Expanded contact edges on the predicted shape (normalized positions).
 
+        Edges are emitted once per (pair, facet vertex) and are never merged, so a
+        node inside the band of several adjacent facets receives parallel edges
+        from their shared vertices and, with sum aggregation, its contact signal
+        grows with the number of facets in range; this is intended, the
+        multiplicity encodes how much of the opposing surface the node faces.
+
         Parameters
         ----------
         predicted : torch.Tensor

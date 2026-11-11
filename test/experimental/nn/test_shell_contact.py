@@ -355,6 +355,15 @@ def test_wall_depths_and_clamp():
         clamp_to_wall(positions, 1.0, axis=3)
     with pytest.raises(ValueError, match="sign"):
         wall_penetration_depths(positions, thickness, 1.0, sign=0.5)
+    # A scalar thickness is shared by every node; anything else must be [N].
+    shared, _ = wall_penetration_depths(positions, torch.tensor(2.0), 100.0)
+    torch.testing.assert_close(shared, torch.tensor([0.0, 1.5, 0.8]))
+    with pytest.raises(ValueError, match=r"positions must have shape"):
+        wall_penetration_depths(positions[:, :2], thickness, 100.0)
+    with pytest.raises(ValueError, match=r"thickness must have shape"):
+        wall_penetration_depths(positions, thickness[:, None], 100.0)
+    with pytest.raises(ValueError, match=r"thickness must have shape"):
+        wall_penetration_depths(positions, torch.ones(4), 100.0)
 
 
 def test_taper_and_feature_helpers():
@@ -369,8 +378,20 @@ def test_taper_and_feature_helpers():
     )
     assert features.shape == (1, CONTACT_FEATURE_DIM)
     torch.testing.assert_close(features[0, 3], torch.tensor(0.2))
-    with pytest.raises(ValueError, match="feature_scale"):
-        contact_edge_features(relative, torch.tensor([1.0]), 0.0)
+    # The scale checks reject NaN and infinity as well as nonpositive values.
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="feature_scale"):
+            contact_edge_features(relative, torch.tensor([1.0]), bad)
+        with pytest.raises(ValueError, match="velocity_scale"):
+            contact_edge_features(
+                relative,
+                torch.tensor([1.0]),
+                10.0,
+                relative_velocity=relative,
+                velocity_scale=bad,
+            )
+        with pytest.raises(ValueError, match="radius"):
+            smooth_contact_cutoff(gaps, bad)
 
 
 def test_narrow_phase_selection():
@@ -488,3 +509,258 @@ def test_warp_broad_phase_matches_the_torch_reference_on_cpu():
         assert actual.face.tolist() == expected.face.tolist()
         assert actual.crossed.tolist() == expected.crossed.tolist()
         torch.testing.assert_close(actual.gap, expected.gap)
+
+
+def _wavy_sheets(n=30, sheets=3, amplitude=8.0, device="cpu"):
+    """Three 5-unit quad sheets 14 apart; the middle one bulges up, the others down.
+
+    In the reference the middle sheet carries a dimple towards the last one,
+    so pairs there are assembled closer than the clearance (structure, dropped);
+    in the live configuration the waves bring the sheets into the band and the
+    corner with the largest wave through one another (crossings).
+    """
+    i, j = torch.meshgrid(torch.arange(n), torch.arange(n), indexing="ij")
+    xy = torch.stack((i, j), -1).reshape(-1, 2).double() * 5.0
+    reference = torch.cat(
+        [
+            torch.cat((xy, torch.full((n * n, 1), 14.0 * s, dtype=xy.dtype)), 1)
+            for s in range(sheets)
+        ]
+    )
+    dimple = 5.0 * torch.exp(-((xy[:, 0] - 60.0) ** 2 + (xy[:, 1] - 60.0) ** 2) / 600.0)
+    reference[n * n : 2 * n * n, 2] += dimple
+    sign = torch.where((reference[:, 2] / 14.0).round() == 1, 1.0, -1.0)
+    wave = (
+        amplitude
+        * torch.sin(reference[:, 0] / 100.0)
+        * torch.cos(reference[:, 1] / 100.0)
+    )
+    current = reference.clone()
+    current[:, 2] += sign * wave
+    quad = (i[:-1, :-1] * n + j[:-1, :-1]).reshape(-1)
+    faces = torch.cat(
+        [
+            torch.stack((quad, quad + n, quad + n + 1, quad + 1), 1) + s * n * n
+            for s in range(sheets)
+        ]
+    )
+    thickness = torch.full((len(reference),), 1.5, dtype=torch.float32)
+    return (
+        reference.float().to(device),
+        current.float().to(device),
+        faces.to(device),
+        thickness.to(device),
+    )
+
+
+def _brute_force_pairs(reference, current, faces, thickness, nodes, band, clearance):
+    """Float64 membership of every (node, face) pair of ``nodes`` without a broad phase.
+
+    Returns the certain active pairs and the pairs within ``tol`` of either
+    membership boundary, whose float32 decision may legitimately differ.
+    """
+    from physicsnemo.experimental.nn.shell_contact import project_onto_facets
+
+    tol = 1.0e-3
+    reference, current = reference.double(), current.double()
+    thickness = thickness.double()
+    query = nodes.repeat_interleave(len(faces))
+    face = torch.arange(len(faces), device=faces.device).repeat(len(nodes))
+    incident = (faces[face] == query[:, None]).any(1)
+    query, face = query[~incident], face[~incident]
+    source = faces[face]
+
+    def gap(positions):
+        projection = project_onto_facets(positions, query, source, material_fan=True)
+        half = (
+            thickness[query] + (thickness[source] * projection.barycentric).sum(-1)
+        ) * 0.5
+        return projection.distance - half
+
+    live, static = gap(current), gap(reference)
+    active = (live < band) & (static >= clearance)
+    boundary = ((live - band).abs() < tol) | ((static - clearance).abs() < tol)
+    codes = query * len(faces) + face
+    return set(codes[active & ~boundary].tolist()), set(codes[boundary].tolist())
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA is not available"
+            ),
+        ),
+    ],
+)
+def test_paged_warp_search_matches_the_torch_reference_and_brute_force(device):
+    """Small pages exercise the broad-phase paging, the deferred reference recomputes
+    of the fused narrow phase (CUDA) and the paged live geometry."""
+    reference, current, faces, thickness = _wavy_sheets(device=device)
+    options = dict(
+        activation_distance=5.0,
+        material_fan=True,
+        side_from_reference=True,
+        reference_clearance=10.0,
+        candidate_chunk_size=512,
+        max_pairs=200_000,
+    )
+    warp_search = ShellContactSearch(implementation="warp", **options)
+    expected = shell_contact_pairs(
+        current,
+        faces,
+        thickness,
+        reference_positions=reference,
+        search=ShellContactSearch(**TORCH, **options),
+    )
+    actual = shell_contact_pairs(
+        current, faces, thickness, reference_positions=reference, search=warp_search
+    )
+    assert uses_fused_narrow_phase(warp_search, current) == (device == "cuda")
+    assert actual.stats["pages"] > 1 and actual.num_pairs > 2 * 512
+    assert actual.stats["reference_excluded_pairs"] > 0
+    assert actual.stats["crossed_pairs"] > 0
+    assert torch.equal(actual.query, expected.query)
+    assert torch.equal(actual.face, expected.face)
+    assert torch.equal(actual.crossed, expected.crossed)
+    torch.testing.assert_close(actual.gap, expected.gap)
+    torch.testing.assert_close(actual.closest, expected.closest)
+    # Float64 brute force over every facet for a subset of nodes (active ones
+    # and arbitrary ones): the certain pairs agree, boundary pairs may differ.
+    generator = torch.Generator().manual_seed(0)
+    nodes = torch.cat(
+        (
+            actual.query.unique()[::37][:24].cpu(),
+            torch.randperm(len(current), generator=generator)[:24],
+        )
+    ).unique()
+    certain, boundary = _brute_force_pairs(
+        reference, current, faces, thickness, nodes.to(device), 5.0, 10.0
+    )
+    codes = actual.query * len(faces) + actual.face
+    found = set(codes[torch.isin(actual.query, nodes.to(device))].tolist())
+    assert certain <= found
+    assert found <= certain | boundary
+
+
+def test_live_geometry_paging_changes_no_value():
+    """The live stage is per pair: tiny pages give the same tensors and gradients."""
+    reference, current, faces, thickness = _wavy_sheets(n=16, amplitude=12.0)
+    options = dict(
+        activation_distance=5.0,
+        material_fan=True,
+        side_from_reference=True,
+        reference_clearance=10.0,
+        **TORCH,
+    )
+    results = []
+    for chunk in (97, 1 << 20):
+        live = current.clone().requires_grad_()
+        pairs = shell_contact_pairs(
+            live,
+            faces,
+            thickness,
+            reference_positions=reference,
+            search=ShellContactSearch(candidate_chunk_size=chunk, **options),
+        )
+        (pairs.gap.square().sum() + pairs.closest.sum()).backward()
+        results.append((pairs, live.grad))
+    (paged, paged_grad), (whole, whole_grad) = results
+    assert paged.num_pairs > 97 and paged.stats["pages"] > whole.stats["pages"]
+    for name in (
+        "query",
+        "face",
+        "source_nodes",
+        "barycentric",
+        "closest",
+        "distance",
+        "half_thickness",
+        "gap",
+        "activation_gap",
+        "crossed",
+    ):
+        assert torch.equal(getattr(paged, name), getattr(whole, name)), name
+    assert paged.stats["crossed_pairs"] == whole.stats["crossed_pairs"] > 0
+    torch.testing.assert_close(paged_grad, whole_grad, atol=1e-5, rtol=1e-5)
+
+
+def test_deferred_fused_decisions_match_the_torch_reference(monkeypatch):
+    """The fused narrow phase's bookkeeping, driven on CPU by a stand-in kernel.
+
+    The stand-in returns the Torch gaps with a third of the pairs marked
+    ambiguous and their gaps spoiled: the live and the reference-clearance
+    deferrals must recompute exactly those pairs in bounded pages, carry the
+    sweep flags along, and reproduce the Torch reference pair for pair.
+    """
+    from physicsnemo.experimental.nn.shell_contact import search as search_module
+
+    generator = torch.Generator().manual_seed(1)
+
+    def spoiled(gaps):
+        ambiguous = torch.rand(gaps.shape, generator=generator) < 0.3
+        return gaps.masked_fill(ambiguous, -1.0e6), ambiguous
+
+    def fake_candidate_gaps(positions, velocities, thickness, faces, pairs, search):
+        return spoiled(
+            search_module._reference_candidate_gaps(
+                positions, velocities, thickness, faces, pairs, search
+            )
+        )
+
+    def fake_reference_gaps(reference_positions, thickness, faces, pairs, search):
+        static = search_module.replace(search, prediction_horizon=0.0)
+        return spoiled(
+            search_module._reference_candidate_gaps(
+                reference_positions, None, thickness, faces, pairs, static
+            )
+        )
+
+    reference, current, faces, thickness = _wavy_sheets(n=16, amplitude=12.0)
+    options = dict(
+        activation_distance=5.0,
+        material_fan=True,
+        side_from_reference=True,
+        reference_clearance=10.0,
+        crossing_radius=9.0,
+        clearance_approach_only=True,
+        candidate_chunk_size=128,
+        **TORCH,
+    )
+    expected = shell_contact_pairs(
+        current,
+        faces,
+        thickness,
+        reference_positions=reference,
+        search=ShellContactSearch(**options),
+    )
+    monkeypatch.setattr(search_module, "uses_fused_narrow_phase", lambda *_: True)
+    monkeypatch.setattr(search_module, "_fused_candidate_gaps", fake_candidate_gaps)
+    monkeypatch.setattr(search_module, "_fused_reference_gaps", fake_reference_gaps)
+    actual = shell_contact_pairs(
+        current,
+        faces,
+        thickness,
+        reference_positions=reference,
+        search=ShellContactSearch(**options),
+    )
+    stats = actual.stats
+    assert stats["narrow_phase_fallback_pairs"] > 0
+    assert stats["narrow_phase_reference_pages"] > 1
+    assert stats["clearance_fallback_pairs"] > 0
+    assert stats["clearance_reference_pages"] > 1
+    assert stats["largest_reference_page"] <= 128
+    assert torch.equal(actual.query, expected.query)
+    assert torch.equal(actual.face, expected.face)
+    assert torch.equal(actual.crossed, expected.crossed)
+    torch.testing.assert_close(actual.gap, expected.gap)
+    for key in (
+        "active_pairs",
+        "reference_excluded_pairs",
+        "sweep_pairs",
+        "clearance_crossings_kept",
+        "crossed_pairs",
+    ):
+        assert stats[key] == expected.stats[key], key

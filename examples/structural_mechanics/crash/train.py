@@ -58,7 +58,7 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 _tabulate = OptionalImport("tabulate")
 _torchinfo = OptionalImport("torchinfo")
 
-from datapipe import SimSample, simsample_collate
+from datapipe import GLOBAL_STATS_FILE, SimSample, simsample_collate
 from losses import PositionLoss
 from omegaconf import open_dict
 from utils import (
@@ -103,30 +103,73 @@ class ValidationEarlyStopping:
 
 
 def average_model_gradients(model: torch.nn.Module, world_size: int) -> None:
-    """Synchronously average dense gradients after backward releases activations."""
+    """Synchronously average dense gradients after backward releases activations.
+
+    Every trainable parameter takes part, a missing gradient as zeros, so all
+    ranks pack the same flat buffer even when a data-dependent branch left a
+    module unused on one of them (a mismatch would abort under Gloo and hang
+    under NCCL). Such a parameter ends up with the average of the other ranks'
+    gradients.
+    """
 
     if world_size <= 1:
         return
-    gradients = [
-        parameter.grad
-        for parameter in model.parameters()
-        if parameter.requires_grad and parameter.grad is not None
-    ]
-    if not gradients:
-        raise RuntimeError("No gradients are available for distributed averaging")
+    parameters = [p for p in model.parameters() if p.requires_grad]
+    if not parameters:
+        raise RuntimeError("No trainable parameters for distributed gradient averaging")
 
-    groups: dict[tuple[torch.device, torch.dtype], list[torch.Tensor]] = {}
-    for gradient in gradients:
-        groups.setdefault((gradient.device, gradient.dtype), []).append(gradient)
-    for grouped_gradients in groups.values():
-        flat = torch.cat([gradient.reshape(-1) for gradient in grouped_gradients])
+    groups: dict[tuple[torch.device, torch.dtype], list[torch.nn.Parameter]] = {}
+    for parameter in parameters:
+        groups.setdefault((parameter.device, parameter.dtype), []).append(parameter)
+    for grouped in groups.values():
+        flat = torch.cat(
+            [
+                (
+                    p.grad.reshape(-1)
+                    if p.grad is not None
+                    else torch.zeros(p.numel(), device=p.device, dtype=p.dtype)
+                )
+                for p in grouped
+            ]
+        )
         torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
         flat.div_(world_size)
         offset = 0
-        for gradient in grouped_gradients:
-            count = gradient.numel()
-            gradient.copy_(flat[offset : offset + count].view_as(gradient))
+        for p in grouped:
+            count = p.numel()
+            chunk = flat[offset : offset + count].view_as(p)
+            if p.grad is None:
+                p.grad = chunk.clone()
+            else:
+                p.grad.copy_(chunk)
             offset += count
+
+
+def check_global_stats_for_resume(cfg) -> None:
+    """Refuse to resume a run whose stats directory predates global-feature standardization.
+
+    The datapipe standardizes the global features with train-split statistics
+    stored in ``stats/global_stats.json``. A run directory written before that
+    holds checkpoints but no such file; recomputing it silently would resume
+    the run on rescaled inputs.
+    """
+    if not cfg.datapipe.get("global_features_filepath"):
+        return
+    ckpt_path = str(cfg.training.ckpt_path)
+    has_checkpoint = os.path.isdir(ckpt_path) and any(
+        name.endswith((".pt", ".mdlus")) for name in os.listdir(ckpt_path)
+    )
+    stats_path = os.path.join(
+        str(cfg.datapipe.get("stats_dir", "stats")), GLOBAL_STATS_FILE
+    )
+    if has_checkpoint and not os.path.exists(stats_path):
+        raise FileNotFoundError(
+            f"{ckpt_path} holds a checkpoint but {stats_path} does not exist: this run "
+            "directory predates the standardization of the global features with "
+            "train-split statistics, and resuming would recompute them and continue "
+            "on rescaled inputs. Start the run afresh, or point training.ckpt_path "
+            "and datapipe.stats_dir at a new run directory."
+        )
 
 
 def resolve_trainer_class(path: str | None):
@@ -305,6 +348,9 @@ class Trainer:
                     f"model.teacher_weights={teacher_weights} does not exist; it must "
                     "be the trained network's .mdlus file"
                 )
+        # A run directory from before global-feature standardization fails here
+        # instead of resuming on silently rescaled inputs.
+        check_global_stats_for_resume(cfg)
         # Includes validation warmup: no rank may reach model NCCL broadcasts
         # while another is still building static masks on the CPU.
         dataset, val_dataset = initialize_datasets(
@@ -540,9 +586,27 @@ class Trainer:
                 # only; replay equivalence is not needed there.
                 logger0.info("RNG state not restored (training.restore_rng=false)")
             else:
-                restore_rank_rng(
-                    states, self.dist.rank, self.dist.world_size, self.loader_generators
+                # Replay equivalence is only promised with reproducible sampling
+                # or deterministic execution; a plain restart at another world
+                # size goes on with fresh streams.
+                replay_required = bool(
+                    cfg.training.get("reproducible_sampling", False)
+                    or cfg.training.get("deterministic", False)
                 )
+                restored = restore_rank_rng(
+                    states,
+                    self.dist.rank,
+                    self.dist.world_size,
+                    self.loader_generators,
+                    required=replay_required,
+                )
+                if not restored:
+                    logger0.warning(
+                        f"Checkpoint holds RNG states for {len(states)} ranks, this "
+                        f"restart has {self.dist.world_size}; the per-rank RNG states "
+                        "were not restored and the restart is not replay-equivalent "
+                        "(training.restore_rng=false silences this)"
+                    )
 
     def _configure_position_loss(self, cfg):
         """``training.loss`` / ``loss_space`` / ``loss_scale_mm``."""
