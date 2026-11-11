@@ -80,9 +80,9 @@ def _facet_pairs(
     cells: Int[torch.Tensor, "n_cells n_vertices"], n_points: int
 ) -> tuple[
     Int[torch.Tensor, "n_candidates n_facet_vertices"],
-    Int[torch.Tensor, " n_pairs"],
-    Int[torch.Tensor, " n_pairs"],
-    Bool[torch.Tensor, " n_pairs"],
+    Int[torch.Tensor, " n_links"],
+    Int[torch.Tensor, " n_links"],
+    Bool[torch.Tensor, " n_links"],
     Bool[torch.Tensor, " n_cells"],
 ]:
     """The two cells of each facet that exactly two cells share.
@@ -140,9 +140,9 @@ def _facet_pairs(
 
 
 def _flip_labels(
-    a: Int[torch.Tensor, " n_pairs"],
-    b: Int[torch.Tensor, " n_pairs"],
-    opposite: Bool[torch.Tensor, " n_pairs"],
+    a: Int[torch.Tensor, " n_links"],
+    b: Int[torch.Tensor, " n_links"],
+    opposite: Bool[torch.Tensor, " n_links"],
     n_elements: int,
 ) -> tuple[Int[torch.Tensor, " n_elements"], Int[torch.Tensor, " n_elements"]]:
     """Union-find over the kept (``e``) and flipped (``e + n_elements``) copies.
@@ -186,10 +186,11 @@ def _flips_around_points(
     Returns
     -------
     torch.Tensor
-        The flips, shape ``(n_cells, n_vertices)``.
+        The flips, shape ``(n_cells, n_vertices)``, or ``(0, n_vertices)``
+        where no cell flips.
     """
     n_cells, n_vertices = cells.shape
-    no_flips = torch.zeros_like(cells, dtype=torch.bool)
+    no_flips = cells.new_zeros((0, n_vertices), dtype=torch.bool)
     if n_vertices < 2:  # points have no facets
         return no_flips
     facets, first, second, opposite, _ = _facet_pairs(cells, n_points)
