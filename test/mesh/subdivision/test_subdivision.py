@@ -521,6 +521,32 @@ class TestLoopSubdivision:
                 subdivided.points.float(), expected, rtol=0, atol=2e-2
             )
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_loop_reduced_precision_far_from_origin(self, dtype, device):
+        """Regression: Loop sums positions in at least float32. In float16, the
+        six neighbors of a second-level vertex near x = 12000 summed past the
+        float16 maximum of 65504, as did the boundary and edge rules near 33000."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        closed = sphere_icosahedral.load(subdivisions=0, device=device).scale(128.0)
+        open_mesh = create_triangle_mesh(device).scale(1000.0)
+        eps = torch.finfo(dtype).eps
+        for mesh, offset, levels in (
+            (closed, [12000.0, 0.0, 0.0], 2),
+            (open_mesh, [33000.0, 0.0], 1),
+        ):
+            mesh = mesh.translate(offset).to(dtype)
+            expected = mesh.to(torch.float64).subdivide(levels, filter="loop")
+            subdivided = mesh.subdivide(levels, filter="loop")
+            assert subdivided.points.dtype == dtype
+            # Each level rounds the positions to the dtype
+            torch.testing.assert_close(
+                subdivided.points.double(),
+                expected.points,
+                rtol=2 * eps,
+                atol=2 * eps * 128,
+            )
+
 
 ### Test Edge Cases and Validation
 
