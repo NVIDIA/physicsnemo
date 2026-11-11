@@ -322,9 +322,16 @@ class TestFlipsAroundPoints:
             around = torch.where(flips[cell, vertex, None], swapped[cell], cells[cell])
             assert _orientation_conflicts(around) == 0
 
-    def test_consistently_wound_cells_need_no_flips(self, device):
+    @pytest.mark.parametrize("name", ["sphere", "three_sheets"])
+    def test_consistently_wound_cells_need_no_flips(self, device, name):
+        """Also where three sheets share an edge, two of which orient it alike."""
         from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         from physicsnemo.mesh.repair.orientation import _flips_around_points
 
-        sphere = sphere_icosahedral.load(subdivisions=1, device=device)
-        assert _flips_around_points(sphere.cells, sphere.n_points).numel() == 0
+        if name == "sphere":
+            sphere = sphere_icosahedral.load(subdivisions=1, device=device)
+            cells, n_points = sphere.cells, sphere.n_points
+        else:
+            cells, n_points = torch.tensor([[0, 1, 2], [0, 1, 3], [1, 0, 4]]), 5
+        flips = _flips_around_points(cells.to(device), n_points)
+        assert flips.shape == (0, 3)

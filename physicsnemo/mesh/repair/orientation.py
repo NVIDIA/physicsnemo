@@ -193,8 +193,18 @@ def _flips_around_points(
     no_flips = cells.new_zeros((0, n_vertices), dtype=torch.bool)
     if n_vertices < 2:  # points have no facets
         return no_flips
+
+    ### Consistently wound: no two cells orient a facet alike, as one sort shows
+    # The highest vertex v of each facet becomes 2 * v + the orientation induced
+    induced, _ = _induced_facet_orientations(cells)
+    oriented = extract_candidate_facets(cells)[0].long()
+    oriented[:, -1] = 2 * oriented[:, -1] + induced.flatten()
+    if len(unique_index_tuples(oriented, index_bound=2 * n_points)) == len(oriented):
+        return no_flips
+    del induced, oriented
+
     facets, first, second, opposite, _ = _facet_pairs(cells, n_points)
-    if not opposite.any():  # consistently wound
+    if not opposite.any():  # alike only on facets of 3+ cells or degenerate cells
         return no_flips
 
     ### Pair the corners of the two cells at each point of their facet, as
