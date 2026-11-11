@@ -51,17 +51,16 @@ from typing import NamedTuple
 import hydra
 import pytest
 import torch
-from hydra import compose, initialize_config_dir
-from omegaconf import DictConfig, OmegaConf
-from tensordict import TensorDict
-
-from physicsnemo.mesh import DomainMesh, Mesh
-
 from collate import build_collate_fn
 from datasets import _apply_dataset_reader_overrides
+from hydra import compose, initialize_config_dir
 from loss import LossCalculator
+from omegaconf import DictConfig, OmegaConf
 from output_normalize import normalize_output_to_tensordict
+from tensordict import TensorDict
 from utils import field_dim
+
+from physicsnemo.mesh import DomainMesh, Mesh
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -166,6 +165,13 @@ def _volume_domain_mesh(target_config: dict[str, str], n_pts: int = 200) -> Doma
 ### run on CPU. Per-class because each model exposes a different set of
 ### shrinkable knobs.
 _MODEL_SHRINK_OVERRIDES: dict[str, dict] = {
+    "SMART": {
+        "hidden_dim": 16,
+        "num_heads": 2,
+        "num_layers": 2,
+        "num_latents": 8,
+        "geometry_subsample": 16,
+    },
     "GeoTransolver": {
         "n_layers": 2,
         "n_hidden": 32,
@@ -219,6 +225,12 @@ class _RecipeSpec(NamedTuple):
 
 
 _TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
+    _RecipeSpec(
+        "smart_surface", "smart_surface", "drivaer_ml_smart_surface", "surface", []
+    ),
+    _RecipeSpec(
+        "smart_volume", "smart_volume", "drivaer_ml_smart_volume", "volume", []
+    ),
     _RecipeSpec(
         "geotransolver_surface",
         "geotransolver_surface",
@@ -321,10 +333,12 @@ def test_tensor_input_config_synthetic_e2e(
     ### The chosen model template must declare a tensor-input contract
     ### for the test driver below to work (it builds tensor batches via
     ### the collate's `input_type='tensors'` branch).
-    assert OmegaConf.select(train_cfg, "input_type") == "tensors", (
+    input_type = OmegaConf.select(train_cfg, "input_type")
+    output_type = OmegaConf.select(train_cfg, "output_type")
+    assert input_type == "tensors", (
         f"{recipe_id}: {model=} has {input_type=}, not 'tensors'"
     )
-    assert OmegaConf.select(train_cfg, "output_type") == "tensors", (
+    assert output_type == "tensors", (
         f"{recipe_id}: {model=} has {output_type=}, not 'tensors'"
     )
 
@@ -337,6 +351,19 @@ def test_tensor_input_config_synthetic_e2e(
         ds = _volume_domain_mesh(target_config)
     else:  # pragma: no cover -- table-only typo guard
         raise ValueError(f"Unknown domain {domain!r}")
+
+    if model in ("smart_surface", "smart_volume"):
+        # Supply the post-pipeline fields used by the SMART dataset templates.
+        vehicle = ds.boundaries["vehicle"]
+        geometry = vehicle.cell_centroids
+        ds.global_data["geometry_points"] = geometry
+        ds.global_data["geometry_center"] = (geometry.amin(0) + geometry.amax(0)) / 2
+        ds.global_data["parameters"] = torch.tensor([1.205, 30.0])
+        if domain == "surface":
+            vehicle.cell_data["query_coordinates"] = geometry.clone()
+            vehicle.cell_data["query_normals"] = vehicle.cell_data["normals"].clone()
+        else:
+            ds.interior.point_data["query_coordinates"] = ds.interior.points.clone()
 
     ### Build the recipe collate the same way `build_dataloaders` would.
     forward_kwargs_spec = OmegaConf.to_container(train_cfg.forward_kwargs, resolve=True)
@@ -360,7 +387,7 @@ def test_tensor_input_config_synthetic_e2e(
         output = model_inst(**batch["forward_kwargs"])
     pred_td = _output_to_tensordict(output, target_config)
 
-    for name, ftype in target_config.items():
+    for name in target_config:
         assert name in pred_td.keys(), f"{name} missing from pred"
         pred_t = pred_td[name]
         target_t = batch["targets"][name]
@@ -466,7 +493,7 @@ def test_mesh_input_config_synthetic_e2e(
         output = model_inst(**batch["forward_kwargs"])
     pred_td = _output_to_tensordict(output, target_config)
 
-    for name, ftype in target_config.items():
+    for name in target_config:
         assert name in pred_td.keys(), f"{name} missing from pred"
         pred_t = pred_td[name]
         target_t = batch["targets"][name]

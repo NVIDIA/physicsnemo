@@ -14,22 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SMART integration regressions: full geometry, independent RNG and recipe I/O."""
+"""SMART dataset regressions for geometry, query alignment, and recipe I/O."""
 
 from pathlib import Path
 
-import hydra
 import pytest
 import torch
-from collate import build_collate_fn
-from datasets import build_dataset, load_dataset_config
+from datasets import build_dataset, find_normalizer, load_dataset_config
 from hydra import compose, initialize_config_dir
-from loss import LossCalculator
+from metrics import MetricCalculator
 from omegaconf import OmegaConf
-from output_normalize import normalize_output_to_tensordict
-from utils import field_dim
 
-from physicsnemo import Module
 from physicsnemo.mesh import DomainMesh, Mesh
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,23 +99,6 @@ def dataset_cfg(path, field, n=4):
     )
 
 
-def model_cfg(field):
-    """Compose the public model template at tiny test dimensions."""
-    with initialize_config_dir(config_dir=str(ROOT / "conf"), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[f"model=smart_{field}", f"dataset=drivaer_ml_smart_{field}"],
-        )
-    cfg.model.hidden_dim = 16
-    cfg.model.num_heads = 2
-    cfg.model.num_layers = 2
-    cfg.model.num_latents = 3
-    cfg.model.geometry_subsample = 4
-    cfg.model.eval_chunk_size = 2
-    OmegaConf.update(cfg, "out_dim", 4 if field == "surface" else 5, force_add=True)
-    return cfg
-
-
 @pytest.mark.parametrize("field", ["surface", "volume"])
 def test_pipeline_geometry_alignment(native_cases, field):
     """Keep full geometry and aligned targets through query sampling."""
@@ -136,8 +114,6 @@ def test_pipeline_geometry_alignment(native_cases, field):
         torch.testing.assert_close(
             sample.interior.points, sample.boundaries["vehicle"].cell_centroids
         )
-        from datasets import find_normalizer
-
         unscaled = find_normalizer([ds]).inverse_td(sample.interior.point_data)
         pressure, shear = unscaled["pressure"], unscaled["wss"]
         torch.testing.assert_close(
@@ -160,61 +136,25 @@ def test_pipeline_geometry_alignment(native_cases, field):
 
 
 @pytest.mark.parametrize("field", ["surface", "volume"])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_actual_pipeline_forward_backward_checkpoint_and_chunking(
-    native_cases, field, tmp_path, device
-):
-    """Exercise both heads through the native pipeline and checkpoint contract."""
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA required")
-    ds = build_dataset(dataset_cfg(native_cases, field), device="cpu", num_workers=1)
-    ds.set_generator(torch.Generator().manual_seed(42))
-    sample = ds[0]
-    cfg = model_cfg(field)
-    targets = OmegaConf.to_container(dataset_cfg(native_cases, field).targets)
-    collate = build_collate_fn(
-        "tensors", OmegaConf.to_container(cfg.forward_kwargs), targets
+def test_pipeline_physical_metrics(native_cases, field):
+    """Report physical field errors without mutating standardized training targets."""
+    cfg = dataset_cfg(native_cases, field)
+    ds = build_dataset(cfg, device="cpu", num_workers=1)
+    sample, _ = ds[0]
+    targets = sample.interior.point_data.select(*cfg.targets).clone()
+    original = targets.clone()
+    predictions = targets.apply(lambda value: value + 0.1)
+    normalizer = find_normalizer([ds])
+    measured = MetricCalculator(cfg.targets, metrics=["l2"], normalizer=normalizer)(
+        predictions, targets
     )
-    from utils import recursive_to_device
-
-    batch = recursive_to_device(collate([sample]), device)
-    inputs = batch["forward_kwargs"]
-    model = hydra.utils.instantiate(cfg.model).to(device)
-    output = model(**inputs)
-    assert output.shape == (1, 4, sum(field_dim(t) for t in targets.values()))
-    loss = LossCalculator(target_config=targets, loss_type="mse")
-    result = loss(
-        normalize_output_to_tensordict(output, targets, "tensors"), batch["targets"]
-    )
-    from datasets import find_normalizer
-    from metrics import MetricCalculator
-
-    normalizer = find_normalizer([ds]).to(device)
-    prediction = normalize_output_to_tensordict(output, targets, "tensors")
-    before = batch["targets"].clone()
-    measured = MetricCalculator(targets, metrics=["l2"], normalizer=normalizer)(
-        prediction, batch["targets"]
-    )
-    expected = MetricCalculator(targets, metrics=["l2"])(
-        normalizer.inverse_td(prediction), normalizer.inverse_td(batch["targets"])
+    expected = MetricCalculator(cfg.targets, metrics=["l2"])(
+        normalizer.inverse_td(predictions), normalizer.inverse_td(targets)
     )
     for name in expected.keys():
         torch.testing.assert_close(measured[name], expected[name])
-    for name in before.keys():
-        torch.testing.assert_close(batch["targets"][name], before[name], rtol=0, atol=0)
-    total = result[0]
-    total.backward()
-    assert any(
-        p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters()
-    )
-    model.eval()
-    chunked = model(**inputs)
-    model.eval_chunk_size = 100
-    torch.testing.assert_close(model(**inputs), chunked, rtol=2e-5, atol=2e-6)
-    path = tmp_path / f"{field}.mdlus"
-    model.save(path)
-    restored = Module.from_checkpoint(path).to(device).eval()
-    torch.testing.assert_close(restored(**inputs), chunked, rtol=2e-5, atol=2e-6)
+    for name in targets.keys():
+        torch.testing.assert_close(targets[name], original[name], rtol=0, atol=0)
     ds.close()
 
 
@@ -266,7 +206,11 @@ def test_loader_validation_is_independent_of_training(native_cases, field, monke
             original(path), {"dataset_paths": {"drivaer_ml": str(native_cases)}}
         ),
     )
-    cfg = model_cfg(field)
+    with initialize_config_dir(config_dir=str(ROOT / "conf"), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[f"model=smart_{field}", f"dataset=drivaer_ml_smart_{field}"],
+        )
     cfg.sampling_resolution = 4
     cfg.dataloader.num_workers = 1
     cfg.dataloader.prefetch_factor = 0
@@ -343,8 +287,6 @@ def test_full_surface_force_and_export_contract(native_cases, tmp_path):
     torch.testing.assert_close(
         domain.interior.points, domain.boundaries["vehicle"].cell_centroids
     )
-    from datasets import find_normalizer
-
     fields = {"pressure": "scalar", "wss": "vector"}
     normalizer = find_normalizer([ds])
     pred = domain.interior.point_data.select("pressure", "wss").clone()
