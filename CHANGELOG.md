@@ -450,6 +450,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
+  its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
+  `cleanup()` no longer raises after a failed initialization.
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.
@@ -1318,12 +1321,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `DistributedManager` initialization on CPU-only hosts: `setup()` no
-  longer passes a CPU `torch.device` as `device_id` to
-  `torch.distributed.init_process_group` (which raises on recent PyTorch
-  versions) and no longer divides by zero when deriving `local_rank`
-  without visible accelerators; `cleanup()` no longer asserts when the
-  process group was never created (e.g. after a failed initialization).
 - `MeshReader` / `DomainMeshReader` sample discovery no longer uses
   `pathlib.Path.glob`, which can silently drop entries under filesystem
   metadata-server load (Lustre), causing training to proceed on a subset
