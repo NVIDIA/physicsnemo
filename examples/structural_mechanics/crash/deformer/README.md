@@ -39,7 +39,8 @@ The network (`deformer.time_conditional.DeFormerTimeConditional`,
   9,672,505 parameters.
 
 The corrector (`deformer.residual.ResidualTimeConditional` around
-`deformer.corrector.DeFormerCorrector`, `conf/model/deformer_corrector.yaml`):
+`physicsnemo.experimental.models.deformer.DeFormerCorrector`,
+`conf/model/deformer_corrector.yaml`):
 
 * the frozen network is recomputed on the fly (no prediction files); the
   corrector reads its predicted shape through message passing on the shell

@@ -14,12 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""DeFormer's network and its neighbourhood-attention processor.
+r"""DeFormer: the network, its contact-aware corrector and their building blocks.
 
-A GeoTransolver/FLARE backbone with static kNN neighbourhood-attention stages
-before and after it, FiLM-conditioned on a mesh context.
+The network is a GeoTransolver/FLARE backbone with static kNN
+neighbourhood-attention stages before and after it, FiLM-conditioned on a mesh
+context. The corrector is a MeshGraphNet-style message-passing model over the
+structural edges and the contact edges discovered on a predicted shape.
 """
 
+from .corrector import DeFormerCorrector, mesh_edge_features
 from .deformer import DeFormer, MeshContextFiLM, MeshGeometryContextEncoder
 from .local_attention import (
     LocalNeighborhood,
@@ -31,7 +34,9 @@ __all__ = [
     "MeshGeometryContextEncoder",
     "MeshContextFiLM",
     "DeFormer",
+    "DeFormerCorrector",
     "LocalNeighborhood",
     "NeighborhoodAttentionBlock",
     "NeighborhoodAttentionProcessor",
+    "mesh_edge_features",
 ]

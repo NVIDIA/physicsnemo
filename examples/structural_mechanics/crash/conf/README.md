@@ -14,7 +14,7 @@ VTP data and `bumper_*` the bumper beam.
 | Recipe | Model | What it trains |
 | --- | --- | --- |
 | `px_yaris_deformer` | `model/deformer_time_conditional.yaml` (`deformer.time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
-| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`deformer.residual.ResidualTimeConditional` around `deformer.corrector.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
+| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`deformer.residual.ResidualTimeConditional` around `physicsnemo.experimental.models.deformer.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
 | `px_yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
 
 `px_yaris_deformer` is self-contained (reader `px_yaris_full`, datapipe `px_yaris_full`,

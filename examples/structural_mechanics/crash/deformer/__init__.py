@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DeFormer: the time-conditional network, its contact-aware corrector and their
-evaluation metrics, built on :mod:`physicsnemo.experimental.models.deformer`.
+"""DeFormer in the crash recipe: the time-conditional network wrapper, the
+teacher-plus-corrector wrapper and the evaluation metrics, built on
+:mod:`physicsnemo.experimental.models.deformer` (the network and the corrector).
 
 The generic crash pipeline (``train.py``, ``datapipe.py``, ``rollout.py``) does not
 import this package; the DeFormer recipes reach it through their Hydra targets.

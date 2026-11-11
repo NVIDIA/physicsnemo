@@ -713,9 +713,10 @@ class YarisFullGraphDataset(Dataset):
             LocalNeighborhoodCache,
             LocalNeighborhoodData,
             knn_edge_features,
-            mesh_edge_features,
             with_self_slot,
         )
+
+        from physicsnemo.experimental.models.deformer import mesh_edge_features
 
         reference = torch.from_numpy(self.reader.reference.copy())
         if self.local_knn_metric == "geodesic":

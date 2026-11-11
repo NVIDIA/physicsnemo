@@ -15,7 +15,8 @@
 # limitations under the License.
 
 # DeFormer corrector: deformer.residual.ResidualTimeConditional (frozen teacher
-# recomputed on the fly) around deformer.corrector.DeFormerCorrector (message
+# recomputed on the fly) around physicsnemo.experimental.models.deformer.DeFormerCorrector
+# (message
 # passing on the shell mesh edges and on contact edges discovered on the
 # teacher's predicted shape). The recipe adds model.teacher (the teacher's
 # architecture) and model.teacher_weights (its checkpoint). dt, local_knn_k

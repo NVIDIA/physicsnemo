@@ -85,23 +85,6 @@ def knn_edge_features(pos: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
     return torch.cat((displacement, distance), dim=-1)
 
 
-def mesh_edge_features(pos: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-    """Source-minus-destination displacement and distance per directed edge, ``[E, 4]``.
-
-    The structural edge convention of :func:`knn_edge_features`: the destination
-    node receives the message. ``pos`` is normalized geometry (the reference, or
-    a predicted configuration measured with the reference's statistics).
-    """
-    pos = torch.as_tensor(pos)
-    if pos.ndim != 2 or pos.shape[1] != 3:
-        raise ValueError("pos must be [N, 3]")
-    if edge_index.ndim != 2 or edge_index.shape[0] != 2:
-        raise ValueError("edge_index must be [2, E]")
-    displacement = pos[edge_index[0]] - pos[edge_index[1]]
-    distance = torch.linalg.norm(displacement, dim=-1, keepdim=True)
-    return torch.cat((displacement, distance), dim=-1)
-
-
 def _digest(tensor: torch.Tensor) -> str:
     return hashlib.sha256(tensor.contiguous().numpy().tobytes()).hexdigest()
 
