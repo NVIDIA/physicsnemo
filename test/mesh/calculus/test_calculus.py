@@ -307,6 +307,18 @@ class TestGradient:
         # Laplacian should be positive (correct sign)
         assert mean_lap > 0, "Laplacian should be positive for convex function"
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    @pytest.mark.parametrize("gradient_type", ["intrinsic", "extrinsic"])
+    def test_integer_field_raises(self, dtype, gradient_type):
+        """LSQ gradients of integer fields raise, rather than truncate."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        mesh = sphere_icosahedral.load(subdivisions=1).to(dtype=dtype)
+        labels = (10 * mesh.points[:, 0]).round().long()
+
+        with pytest.raises(TypeError, match="floating-point"):
+            mesh.gradient(labels, gradient_type=gradient_type)
+
 
 class TestDivergence:
     """Test divergence computation with analytical fields."""
@@ -375,6 +387,22 @@ class TestDivergence:
         # ∂(yz)/∂x + ∂(xz)/∂y + ∂(xy)/∂z = 0 + 0 + 0 = 0
         # Quadratic components have O(h) LSQ error; lumpy_ball is moderate resolution.
         assert divergence.abs().mean() < 0.15
+
+    def test_dec_divergence_millimetre_tet_float32(self):
+        """div(x) = 3 is scale-free, so a float32 tet mesh a few mm across in
+        metres gives 3 at its interior points, as at unit scale."""
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        cube = cube_volume.load(subdivisions=4)
+        mesh = Mesh(points=2e-3 * cube.points, cells=cube.cells)
+        p = mesh.points
+        inner = ((p > p.min(0).values + 1e-9) & (p < p.max(0).values - 1e-9)).all(1)
+
+        divergence = mesh.divergence(mesh.points, method="dec")
+
+        torch.testing.assert_close(
+            divergence[inner], torch.full((int(inner.sum()),), 3.0), rtol=1e-4, atol=0
+        )
 
 
 class TestCurl:
@@ -565,6 +593,25 @@ class TestLaplacian:
         mean_error = (lap - expected).abs().mean()
         assert mean_error < 0.05, f"Mean error: {mean_error:.4f}"
 
+    def test_dec_laplacian_gradient_after_no_grad_call(self):
+        """A DEC Laplacian call under no_grad leaves a later gradient unchanged."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        sphere = sphere_icosahedral.load(subdivisions=1)
+        phi = sphere.points[:, 0].double() ** 2
+
+        def points_gradient(call_under_no_grad_first: bool) -> torch.Tensor:
+            points = sphere.points.double().clone().requires_grad_()
+            mesh = Mesh(points=points, cells=sphere.cells)
+            if call_under_no_grad_first:
+                with torch.no_grad():
+                    compute_laplacian_points_dec(mesh, phi)
+            compute_laplacian_points_dec(mesh, phi).sum().backward()
+            return points.grad
+
+        torch.testing.assert_close(points_gradient(True), points_gradient(False))
+
 
 class TestManifolds:
     """Test calculus on manifolds (surfaces in higher dimensions)."""
@@ -598,6 +645,40 @@ class TestManifolds:
         # Extrinsic gradient should be finite and have correct shape
         assert torch.all(torch.isfinite(grad_extrinsic))
         assert grad_extrinsic.shape == grad_intrinsic.shape
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    def test_intrinsic_gradient_of_surface_in_4d(self, dtype):
+        """A flat quad of two triangles in R^4: the intrinsic gradient of a
+        linear field is its projection onto the plane at all four vertices,
+        two of which have only two neighbors."""
+        u = torch.tensor([0.0, 0.6, 0.0, 0.8], dtype=dtype)
+        v = torch.tensor([0.0, 0.0, 1.0, 0.0], dtype=dtype)
+        uv = torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=dtype)
+        points = uv[:, :1] * u + uv[:, 1:] * v + torch.tensor([1.0, 2, 3, 4])
+        mesh = Mesh(points=points.to(dtype), cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+        g = torch.tensor([1.0, 2.0, -3.0, 0.5], dtype=dtype)
+
+        gradient = mesh.gradient(mesh.points @ g)
+
+        expected = ((g @ u) * u + (g @ v) * v).expand(4, 4)
+        torch.testing.assert_close(gradient, expected)
+
+    def test_dec_intrinsic_gradient_at_curve_endpoints(self):
+        """At the endpoints of a polyline in 3D, the intrinsic DEC gradient of a
+        linear field is its projection onto the end edge."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 2.0, 2.0], [2.0, 2.0, 4.0], [3.0, 4.0, 3.0]],
+            dtype=torch.float64,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1], [1, 2], [2, 3]]))
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=torch.float64)
+
+        gradient = mesh.gradient(points @ g, method="dec")
+
+        for end, neighbor in ((0, 1), (3, 2)):
+            edge = points[neighbor] - points[end]
+            expected = (g @ edge) * edge / (edge @ edge)
+            torch.testing.assert_close(gradient[end], expected)
 
 
 class TestCalculusIdentities:
@@ -1506,6 +1587,39 @@ class TestDECOperators:
         # Just verify it runs and returns correct shape
         assert grad.shape == (mesh.n_points, mesh.n_spatial_dims)
         assert torch.isfinite(grad).all()
+
+    def test_dec_gradient_2d_ignores_padding(self):
+        """The zero-area cells of Mesh.pad do not change the DEC gradient of
+        a planar mesh at its real points."""
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+        padded = mesh.pad(target_n_cells=4)  # on a real point, with no new points
+        phi = points @ torch.tensor([1.0, 2.0])
+
+        grad = compute_gradient_points_dec(padded, phi)
+
+        torch.testing.assert_close(grad, compute_gradient_points_dec(mesh, phi))
+
+    def test_dec_gradient_2d_with_collinear_triangle(self):
+        """A zero-area triangle of distinct collinear vertices contributes
+        nothing to the DEC gradient, as for the same mesh embedded in 3D."""
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 2.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2], [0, 3, 4]])
+        phi = points @ torch.tensor([1.0, 2.0], dtype=torch.float64)
+        embedded = Mesh(points=torch.nn.functional.pad(points, (0, 1)), cells=cells)
+
+        grad = compute_gradient_points_dec(Mesh(points=points, cells=cells), phi)
+
+        torch.testing.assert_close(
+            grad, compute_gradient_points_dec(embedded, phi)[:, :2]
+        )
 
     @pytest.mark.parametrize("n_cells", [1, 3])
     def test_flat_operator_matches_per_component(self, n_cells):

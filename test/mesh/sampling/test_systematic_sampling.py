@@ -673,11 +673,12 @@ def test_cells_on_one_centroid_are_laid_in_index_order(device):
 
 @pytest.mark.parametrize("effective", [True, False])
 def test_a_padded_mesh_keeps_the_same_cells(effective, device):
-    """Mesh.pad's cells sit on the last point, here far outside the other cells, at
-    zero measure: they move neither the canonical frame nor the Morton grid, so the
-    padded mesh keeps the same cells as the mesh itself, while n_samples is at most
-    the count of positive measures. The weights are bitwise the same: the doubling
-    scan of the tails gives the same bits after leading zeros."""
+    """Mesh.pad's cells sit on a copy of the last point, here far outside the other
+    cells, at zero measure: they move neither the canonical frame nor the Morton
+    grid, so the padded mesh keeps the same cells as the mesh itself, while
+    n_samples is at most the count of positive measures. The weights are bitwise
+    the same: the doubling scan of the tails gives the same bits after leading
+    zeros."""
     soup = _soup(3000, effective=effective)
     far = torch.tensor([[40.0, -30.0, 20.0]], dtype=D)  # used by no cell
     mesh = Mesh(

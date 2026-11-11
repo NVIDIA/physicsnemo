@@ -484,8 +484,9 @@ def _lstsq_solver(
 
 def _uses_normal_equations(dtype: torch.dtype, d: int) -> bool:
     """Whether :func:`batched_lstsq` solves systems of ``d`` unknowns of
-    ``dtype`` by the normal equations, which :func:`_segment_lstsq_solver` can."""
-    return dtype in (torch.float32, *_HALF_DTYPES) and d <= 3
+    ``dtype`` by the normal equations, which :func:`_segment_lstsq_solver` can
+    (for at least one unknown)."""
+    return dtype in (torch.float32, *_HALF_DTYPES) and 1 <= d <= 3
 
 
 def _segment_lstsq_solver(

@@ -42,8 +42,8 @@ def repair_mesh(
     Operations are applied in a specific order to maximize effectiveness.
 
     Order of operations:
-    1. Remove degenerate cells (zero area)
-    2. Merge duplicate points
+    1. Merge duplicate points
+    2. Remove degenerate cells (zero area), including those the merge collapses
     3. Remove isolated points
     4. Fix orientation (if enabled)
     5. Fill holes (if enabled)
@@ -90,16 +90,7 @@ def repair_mesh(
     current_mesh = mesh
     all_stats = {}
 
-    ### Operation 1: Remove degenerate cells
-    if remove_degenerates:
-        from physicsnemo.mesh.repair.degenerate_removal import (
-            remove_degenerate_cells as remove_deg,
-        )
-
-        current_mesh, stats = remove_deg(current_mesh, area_tolerance=area_tolerance)
-        all_stats["degenerates"] = stats
-
-    ### Operation 2: Merge duplicate points (via clean_mesh)
+    ### Operation 1: Merge duplicate points (via clean_mesh)
     if merge_points:
         from physicsnemo.mesh.repair._cleaning import clean_mesh
 
@@ -118,6 +109,15 @@ def repair_mesh(
             "n_duplicates_merged": n_before - n_after,
         }
         all_stats["clean"] = clean_stats
+
+    ### Operation 2: Remove degenerate cells
+    if remove_degenerates:
+        from physicsnemo.mesh.repair.degenerate_removal import (
+            remove_degenerate_cells as remove_deg,
+        )
+
+        current_mesh, stats = remove_deg(current_mesh, area_tolerance=area_tolerance)
+        all_stats["degenerates"] = stats
 
     ### Operation 3: Remove isolated points
     if remove_isolated:

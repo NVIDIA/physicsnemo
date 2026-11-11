@@ -58,8 +58,12 @@ def load(
 
     ### Create conical side
     # Rings from the base up to (not including) the apex, which is one vertex
-    theta = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
-    z_levels = torch.linspace(0, height, n_height, device=device)[:-1]
+    theta = torch.linspace(
+        0, 2 * torch.pi, n_circ + 1, device=device, dtype=torch.float32
+    )[:-1]
+    z_levels = torch.linspace(0, height, n_height, device=device, dtype=torch.float32)[
+        :-1
+    ]
 
     # Vectorized side point generation (radius decreases with height)
     i_vals = torch.arange(n_height - 1, device=device, dtype=torch.float32)
