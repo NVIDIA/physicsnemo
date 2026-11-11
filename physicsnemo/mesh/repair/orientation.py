@@ -76,15 +76,105 @@ def _induced_facet_orientations(
     return induced, is_degenerate
 
 
-def _inconsistently_wound_points(
+def _facet_pairs(
     cells: Int[torch.Tensor, "n_cells n_vertices"], n_points: int
-) -> Bool[torch.Tensor, " n_points"]:
-    """Points on a facet on which two cells induce the same orientation.
+) -> tuple[
+    Int[torch.Tensor, "n_candidates n_facet_vertices"],
+    Int[torch.Tensor, " n_pairs"],
+    Int[torch.Tensor, " n_pairs"],
+    Bool[torch.Tensor, " n_pairs"],
+    Bool[torch.Tensor, " n_cells"],
+]:
+    """The two cells of each facet that exactly two cells share.
 
-    Such cells are wound inconsistently: two triangles traverse their shared
-    edge in the same direction, or two segments both start or both end at a
-    point. Cells with a repeated vertex are ignored. The pairs are found by
-    sorting, without a host-device synchronization.
+    Cells with a repeated vertex have no orientation: their facets pair with
+    none, and do not count toward the cells that share a facet.
+
+    Parameters
+    ----------
+    cells : torch.Tensor
+        Cell connectivity, shape ``(n_cells, n_vertices)``, ``n_vertices >= 2``.
+    n_points : int
+        Number of points.
+
+    Returns
+    -------
+    candidate_facets : torch.Tensor
+        The facets of :func:`extract_candidate_facets`, each with its vertices
+        sorted: facet ``j`` of cell ``c`` is at position ``c * n_vertices + j``.
+    first, second : torch.Tensor
+        Positions in ``candidate_facets`` of the two candidates of each such
+        facet. The other positions pair with themselves, which links nothing.
+    opposite : torch.Tensor
+        Whether the two cells induce the same orientation on their facet, so
+        that they agree only if exactly one of them flips.
+    is_degenerate : torch.Tensor
+        ``True`` for the cells with a repeated vertex.
+    """
+    ### Orientation that each cell induces on each of its facets
+    induced, is_degenerate = _induced_facet_orientations(cells)
+    candidate_facets, parent_cells = extract_candidate_facets(cells)
+
+    ### Pair the two candidates of every facet shared by exactly two cells
+    # Facets of degenerate cells get the out-of-range vertex ``n_points``, so
+    # they never count toward the cells that share a real facet.
+    candidate_facets.masked_fill_(is_degenerate[parent_cells, None], n_points)
+    _, facet_ids, facet_counts = unique_index_tuples(
+        candidate_facets,
+        index_bound=n_points + 1,
+        return_inverse=True,
+        return_counts=True,
+    )
+    order = torch.argsort(facet_ids)
+    first, second = order[:-1], order[1:]
+    is_pair = (
+        (facet_ids[first] == facet_ids[second])
+        & (facet_counts[facet_ids[first]] == 2)
+        & ~is_degenerate[parent_cells[first]]
+        & ~is_degenerate[parent_cells[second]]
+    )
+    induced = induced.reshape(-1)
+    opposite = is_pair & (induced[first] == induced[second])
+    second = torch.where(is_pair, second, first)
+    return candidate_facets, first, second, opposite, is_degenerate
+
+
+def _flip_labels(
+    a: Int[torch.Tensor, " n_pairs"],
+    b: Int[torch.Tensor, " n_pairs"],
+    opposite: Bool[torch.Tensor, " n_pairs"],
+    n_elements: int,
+) -> tuple[Int[torch.Tensor, " n_elements"], Int[torch.Tensor, " n_elements"]]:
+    """Union-find over the kept (``e``) and flipped (``e + n_elements``) copies.
+
+    Each pair ``(a, b)`` links the copies that agree: the kept copies, and the
+    flipped ones, unless ``opposite``, when each kept copy agrees with the
+    other's flipped copy. Returns the lowest index in the component of each
+    element's kept copy, and of its flipped copy.
+    """
+    agreeing = torch.where(opposite, b + n_elements, b)
+    agreeing_flipped = torch.where(opposite, b, b + n_elements)
+    links = torch.stack(
+        [torch.cat([a, a + n_elements]), torch.cat([agreeing, agreeing_flipped])],
+        dim=1,
+    )
+    labels = vectorized_connected_components(links, 2 * n_elements)
+    return labels[:n_elements], labels[n_elements:]
+
+
+def _flips_around_points(
+    cells: Int[torch.Tensor, "n_cells n_vertices"], n_points: int
+) -> Bool[torch.Tensor, "n_cells n_vertices"]:
+    """Which cells to flip around each point, to orient its cells consistently.
+
+    ``flips[c, i]`` is ``True`` where cell ``c`` must flip, around its vertex
+    ``i``, to agree with the lowest-index cell around that point that it
+    reaches through facets containing the point and shared by exactly two
+    cells. This is :func:`fix_orientation` around each point instead of
+    across the mesh: decided from connectivity alone, so at any angle between
+    the cells, and possible on the Möbius strip, around each point of which
+    the cells are orientable although the strip is not. Consistently wound
+    cells get no flips, nor do cells that cannot be oriented together.
 
     Parameters
     ----------
@@ -96,42 +186,35 @@ def _inconsistently_wound_points(
     Returns
     -------
     torch.Tensor
-        ``True`` for the points on such a facet, shape ``(n_points,)``.
+        The flips, shape ``(n_cells, n_vertices)``.
     """
-    if cells.shape[1] < 2:  # points have no facets
-        return torch.zeros(n_points, dtype=torch.bool, device=cells.device)
-    induced, is_degenerate = _induced_facet_orientations(cells)
-    facets, _ = extract_candidate_facets(cells)
-    # Degenerate cells get the parity 2, which no other cell has
-    parities = induced.to(cells.dtype).masked_fill(is_degenerate[:, None], 2)
-    keys = torch.cat([facets, parities.reshape(-1, 1)], dim=1)
+    n_cells, n_vertices = cells.shape
+    no_flips = torch.zeros_like(cells, dtype=torch.bool)
+    if n_vertices < 2:  # points have no facets
+        return no_flips
+    facets, first, second, opposite, _ = _facet_pairs(cells, n_points)
+    if not opposite.any():  # consistently wound
+        return no_flips
 
-    ### Sort the (facet, parity) keys: packed into integers where they fit,
-    ### otherwise lexicographically, by stable sorts
-    if 3 * n_points ** facets.shape[1] < 2**63:
-        packed = torch.zeros_like(parities.reshape(-1), dtype=torch.int64)
-        for column in facets.unbind(dim=1):
-            packed = packed * n_points + column
-        order = torch.argsort(packed * 3 + parities.reshape(-1))
-    else:
-        order = torch.arange(keys.shape[0], device=cells.device)
-        for column in range(keys.shape[1] - 1, -1, -1):
-            order = order[torch.argsort(keys[order, column], stable=True)]
-    keys = keys[order]
-
-    ### Equal neighbors are facets that two cells orient alike
-    alike = (keys[1:] == keys[:-1]).all(dim=1) & (keys[1:, -1] != 2)
-    on_alike = torch.zeros(keys.shape[0], dtype=torch.bool, device=cells.device)
-    on_alike[1:] |= alike
-    on_alike[:-1] |= alike
-    n_facet_vertices = facets.shape[1]
-    counts = torch.zeros(n_points, dtype=torch.int32, device=cells.device)
-    counts.index_add_(
-        0,
-        keys[:, :-1].reshape(-1),
-        on_alike.repeat_interleave(n_facet_vertices).to(torch.int32),
+    ### Pair the corners of the two cells at each point of their facet, as
+    ### fix_orientation pairs the cells; corner i of cell c is c * n_vertices + i
+    is_pair = first != second
+    pair_cells = torch.stack([first, second], dim=1)[is_pair] // n_vertices
+    points = facets[first[is_pair]]  # sorted, so the same for both cells of a pair
+    del facets, first, second
+    is_corner = cells[pair_cells][..., None, :] == points[:, None, :, None]
+    corners = pair_cells[..., None] * n_vertices + is_corner.byte().argmax(-1)
+    corners = corners.transpose(1, 2).reshape(-1, 2)  # (n_pairs * (n_vertices - 1), 2)
+    del pair_cells, points, is_corner
+    kept_label, flipped_label = _flip_labels(
+        corners[:, 0],
+        corners[:, 1],
+        opposite[is_pair].repeat_interleave(n_vertices - 1),
+        n_cells * n_vertices,
     )
-    return counts > 0
+    # As in fix_orientation: a corner flips when its flipped copy joined the
+    # lowest corner of its component
+    return (kept_label > flipped_label).reshape(n_cells, n_vertices)
 
 
 def _signed_volumes(
@@ -233,52 +316,15 @@ def fix_orientation(
     n_cells = mesh.n_cells
     cells = mesh.cells
 
-    ### Step 1: Orientation that each cell induces on each of its facets
-    induced, is_degenerate = _induced_facet_orientations(cells)
-    candidate_facets, parent_cells = extract_candidate_facets(cells)
-
-    ### Step 2: Pair the two candidates of every facet shared by exactly two cells
-    # Facets of degenerate cells get the out-of-range vertex ``n_points``, so
-    # they never count toward the cells that share a real facet.
-    candidate_facets.masked_fill_(is_degenerate[parent_cells, None], mesh.n_points)
-    _, facet_ids, facet_counts = unique_index_tuples(
-        candidate_facets,
-        index_bound=mesh.n_points + 1,
-        return_inverse=True,
-        return_counts=True,
-    )
-    order = torch.argsort(facet_ids)
-    first, second = order[:-1], order[1:]
-    cell_a, cell_b = parent_cells[first], parent_cells[second]
-    is_pair = (
-        (facet_ids[first] == facet_ids[second])
-        & (facet_counts[facet_ids[first]] == 2)
-        & ~is_degenerate[cell_a]
-        & ~is_degenerate[cell_b]
-    )
+    ### Steps 1-2: Pair the two candidates of every facet shared by exactly two cells
+    _, first, second, opposite, is_degenerate = _facet_pairs(cells, mesh.n_points)
 
     ### Step 3: Union-find over the kept (c) and flipped (c + n_cells) copies
-    # A pair that induces the same orientation on its facet agrees only if
-    # exactly one of its cells flips. Positions that are not pairs become
-    # self-loops, which link nothing.
-    induced = induced.reshape(-1)
-    opposite = induced[first] == induced[second]
-    agreeing = torch.where(opposite, cell_b + n_cells, cell_b)
-    agreeing_flipped = torch.where(opposite, cell_b, cell_b + n_cells)
-    links = torch.stack(
-        [
-            torch.cat([cell_a, cell_a + n_cells]),
-            torch.cat(
-                [
-                    torch.where(is_pair, agreeing, cell_a),
-                    torch.where(is_pair, agreeing_flipped, cell_a + n_cells),
-                ]
-            ),
-        ],
-        dim=1,
+    # Facet j of cell c is candidate c * n_vertices + j
+    n_vertices = cells.shape[1]
+    kept_label, flipped_label = _flip_labels(
+        first // n_vertices, second // n_vertices, opposite, n_cells
     )
-    labels = vectorized_connected_components(links, 2 * n_cells)
-    kept_label, flipped_label = labels[:n_cells], labels[n_cells:]
 
     # Each copy's label is the lowest index in its component. The lowest cell of
     # a component keeps its orientation, so a cell must flip exactly when its

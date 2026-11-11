@@ -171,49 +171,25 @@ def _unoriented_point_normals(
 ) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
     """Unit normals at the points of a codimension-1 mesh, for tangent planes.
 
-    Those of :attr:`~physicsnemo.mesh.Mesh.point_normals`, except at points on
-    a facet of two inconsistently wound cells (as in ``get_boundary_mesh``
-    output or a Mobius strip), whose normals would cancel in the sum. There,
-    each incident cell normal more than 120 degrees from that of the incident
-    cell of largest area (lowest index among ties) is flipped before summing,
-    so the tangent planes do not depend on the winding. Cached, as point
-    normals are.
+    Those of :attr:`~physicsnemo.mesh.Mesh.point_normals`, from the cells
+    around each point oriented consistently first, as
+    :func:`~physicsnemo.mesh.repair.fix_orientation` orients a mesh, but around
+    that point alone. Where neighboring cells are wound oppositely (as in
+    ``get_boundary_mesh`` output or on a Möbius strip), their normals would
+    otherwise cancel in the sum. The orientation follows from connectivity, so
+    the tangent planes do not depend on the winding at any angle between the
+    cells, and consistently wound meshes get exactly ``point_normals``. Cached,
+    as point normals are.
     """
 
     def compute() -> torch.Tensor:
-        from physicsnemo.mesh.repair.orientation import _inconsistently_wound_points
+        from physicsnemo.mesh.repair.orientation import _flips_around_points
 
-        cells = mesh.cells
-        n_cells, n_vertices = cells.shape
-        flagged = mesh._cached(
-            ("topology", "inconsistently_wound_points"),
-            lambda: _inconsistently_wound_points(cells, mesh.n_points),
+        flip = mesh._cached(
+            ("topology", "flips_around_points"),
+            lambda: _flips_around_points(mesh.cells, mesh.n_points),
         )
-
-        ### Reference: each point's incident cell of largest area, the lowest
-        ### index among ties
-        areas = mesh.cell_areas
-        max_areas = areas.new_zeros(mesh.n_points).scatter_reduce_(
-            0, cells.reshape(-1), areas.repeat_interleave(n_vertices), "amax"
-        )
-        cell_indices = torch.arange(n_cells, device=cells.device)
-        candidates = torch.where(
-            areas[:, None] == max_areas[cells], cell_indices[:, None], n_cells
-        )
-        reference = torch.full_like(flagged, n_cells, dtype=torch.long)
-        reference.scatter_reduce_(0, cells.reshape(-1), candidates.reshape(-1), "amin")
-        # Isolated points get a zero reference
-        cell_normals = mesh.cell_normals
-        reference_normals = torch.cat(
-            [cell_normals, cell_normals.new_zeros(1, mesh.n_spatial_dims)]
-        )[reference]
-
-        ### Flip, at flagged points, the cell normals opposed to the reference;
-        ### elsewhere the sum is exactly that of point_normals
-        opposed = (cell_normals.unsqueeze(1) * reference_normals[cells]).sum(-1) < -0.5
-        return mesh._compute_point_normals(
-            mesh._point_normal_weighting, flip=opposed & flagged[cells]
-        )
+        return mesh._compute_point_normals(mesh._point_normal_weighting, flip=flip)
 
     return mesh._cached(("point", "unoriented_normals"), compute)
 

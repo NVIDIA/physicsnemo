@@ -27,6 +27,8 @@ This module consolidates tests from:
 - Code coverage tests (error handling, edge conditions)
 """
 
+import math
+
 import pytest
 import torch
 
@@ -566,6 +568,22 @@ class TestLaplacian:
         assert mean_error < 0.05, f"Mean error: {mean_error:.4f}"
 
 
+def _hinge(fold_degrees: float, reverse_second_flap: bool = False) -> Mesh:
+    """Two flaps of four triangles on the hinge x = 0..2, whose normals are
+    ``fold_degrees`` apart when consistently wound."""
+    half = math.radians(90 - fold_degrees / 2)  # of each flap from the y axis
+    c, s = math.cos(half), math.sin(half)
+    hinge = torch.tensor([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+    points = torch.cat(
+        [hinge, hinge + torch.tensor([0, c, s]), hinge + torch.tensor([0, c, -s])]
+    )
+    cells = torch.tensor([[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]])
+    second = torch.tensor([[1, 0, 6], [1, 6, 7], [2, 1, 7], [2, 7, 8]])
+    if reverse_second_flap:
+        second = second[:, [0, 2, 1]]
+    return Mesh(points=points, cells=torch.cat([cells, second]))
+
+
 class TestManifolds:
     """Test calculus on manifolds (surfaces in higher dimensions)."""
 
@@ -575,25 +593,11 @@ class TestManifolds:
         """Consistently wound meshes take their tangent planes from
         point_normals, bit for bit, also at the cone's apex and at the fold of
         a 10 degree wedge."""
-        import math
-
         from physicsnemo.mesh.calculus.gradient import _unoriented_point_normals
         from physicsnemo.mesh.primitives.surfaces import cone, sphere_icosahedral, torus
 
         if name == "wedge":
-            # Two flaps of three triangles each on the hinge x = 0..2, 10 degrees apart
-            c, s = math.cos(math.radians(5)), math.sin(math.radians(5))
-            hinge = torch.tensor([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
-            points = torch.cat(
-                [
-                    hinge,
-                    hinge + torch.tensor([0, c, s]),
-                    hinge + torch.tensor([0, c, -s]),
-                ]
-            )
-            cells = [[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]]
-            cells += [[1, 0, 6], [1, 6, 7], [2, 1, 7], [2, 7, 8]]
-            mesh = Mesh(points=points, cells=torch.tensor(cells))
+            mesh = _hinge(170)
         else:
             loaders = {"sphere": sphere_icosahedral, "torus": torus, "cone": cone}
             mesh = loaders[name].load()
@@ -608,43 +612,47 @@ class TestManifolds:
         projected = extrinsic - (extrinsic * normals).sum(-1, keepdim=True) * normals
         assert torch.equal(mesh.gradient(phi, method="dec"), projected)
 
-    @pytest.mark.parametrize("sliver", [False, True])
     @pytest.mark.parametrize("method", ["lsq", "dec"])
-    def test_intrinsic_gradient_does_not_depend_on_winding(self, method, sliver):
-        """Reversing a random half of the cells of a sphere leaves its
-        intrinsic gradients unchanged: tangent planes have no orientation.
-        Also in float32 with collinear slivers, whose normals are roundoff,
-        listed first at every vertex."""
+    @pytest.mark.parametrize(
+        "case", ["sphere", "hinge-30", "hinge-90", "hinge-135", "cube", "square"]
+    )
+    def test_intrinsic_gradient_does_not_depend_on_winding(self, case, method):
+        """Intrinsic gradients are those of the same mesh wound consistently,
+        at any angle between neighboring cells: tangent planes have no
+        orientation. The meshes reverse a random half of a sphere's cells, one
+        flap of a hinge, or come from get_boundary_mesh(), whose facets carry no
+        orientation: there the edges and corners of a cube and of a square."""
+        from physicsnemo.mesh.primitives.planar import unit_square
         from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+        from physicsnemo.mesh.repair import fix_orientation
 
-        dtype = torch.float32 if sliver else torch.float64
-        mesh = sphere_icosahedral.load(subdivisions=2).to(dtype=dtype)
-        n_points = mesh.n_points
-        torch.manual_seed(0)
-        flip = torch.rand(mesh.n_cells) < 0.5
-        cells = torch.where(flip[:, None], mesh.cells[:, [0, 2, 1]], mesh.cells)
-        if sliver:
-            # At each vertex, along an edge, listed first
-            p, v = mesh.points, torch.arange(n_points)
-            adjacency = mesh.get_point_to_points_adjacency()
-            w = adjacency.indices[adjacency.offsets[:-1]]
-            thirds = [p + (p[w] - p) / 3, p + (p[w] - p) * 2 / 3]
-            slivers = torch.stack([v, v + n_points, v + 2 * n_points], dim=1)
-            mesh = Mesh(
-                points=torch.cat([p, *thirds]),
-                cells=torch.cat([slivers, mesh.cells]),
+        if case == "sphere":
+            consistent = sphere_icosahedral.load(subdivisions=2)
+            torch.manual_seed(0)
+            flip = torch.rand(consistent.n_cells) < 0.5
+            cells = consistent.cells
+            mixed = Mesh(
+                points=consistent.points,
+                cells=torch.where(flip[:, None], cells[:, [0, 2, 1]], cells),
             )
-            cells = torch.cat([slivers, cells])
-            assert mesh.cell_normals[:n_points].norm(dim=-1).gt(0.5).all()
-        mixed = Mesh(points=mesh.points, cells=cells)
-        p = mesh.points
-        phi = p @ torch.tensor([1.0, -2.0, 0.5], dtype=dtype) + p[:, 0] ** 2
+        elif case.startswith("hinge"):
+            fold = float(case.split("-")[1])
+            consistent, mixed = _hinge(fold), _hinge(fold, reverse_second_flap=True)
+        else:
+            volume = {"cube": cube_volume, "square": unit_square}[case].load()
+            mixed = volume.get_boundary_mesh()
+            consistent, _ = fix_orientation(mixed)
+        consistent, mixed = consistent.to(torch.float64), mixed.to(torch.float64)
+        p = mixed.points
+        g = torch.tensor([1.0, -2.0, 0.5][: mixed.n_spatial_dims], dtype=p.dtype)
+        phi = p @ g + p[:, 0] ** 2
 
-        consistent = mesh.gradient(phi, method=method)[:n_points]
         torch.testing.assert_close(
-            mixed.gradient(phi, method=method)[:n_points],
-            consistent,
-            **({"rtol": 0, "atol": 1e-12} if dtype == torch.float64 else {}),
+            mixed.gradient(phi, method=method),
+            consistent.gradient(phi, method=method),
+            rtol=0,
+            atol=1e-12,
         )
 
     def test_intrinsic_gradient_on_boundary_of_volume_mesh(self):
