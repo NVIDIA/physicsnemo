@@ -500,10 +500,12 @@ def _scale_assumptions(
     tests to ``diag(factor)`` in Python arithmetic: ``|det| > 1e-10``, and the
     ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`, with its
     tolerance for ``dtype``, the dtype the matrix is applied in. Factors that
-    round to zero in ``dtype`` count as zero. A scalar factor is an isotropic
-    scale, hence a similarity, whatever its value. Products use ``*``, which
-    overflows to ``inf`` as tensor arithmetic does, where Python's ``**``
-    raises :class:`OverflowError`.
+    round to zero in ``dtype`` count as zero. They are otherwise unrounded, so
+    the similarity test can differ from the runtime one for a factor that
+    rounding to ``dtype`` moves across its tolerance. A scalar factor is an
+    isotropic scale, hence a similarity, whatever its value. Products use
+    ``*``, which overflows to ``inf`` as tensor arithmetic does, where Python's
+    ``**`` raises :class:`OverflowError`.
 
     Returns
     -------

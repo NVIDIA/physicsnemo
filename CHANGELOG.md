@@ -632,7 +632,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Before, it computed the rotation in float32.
 - `rotate` rotates float64 meshes about a vector axis at float64 precision.
   Before, it rounded the axis to float32, so points on the axis moved.
-- `rotate`, `scale` and `transform` with a square matrix work on float16 and
+- `rotate`, `scale`, and `transform` with a square matrix work on float16 and
   bfloat16 meshes, and keep their dtype. Before, they raised an error.
 - Loop subdivision keeps float16 and bfloat16 points in their dtype, and no
   longer overflows on float16 meshes far from the origin. Before, it returned
