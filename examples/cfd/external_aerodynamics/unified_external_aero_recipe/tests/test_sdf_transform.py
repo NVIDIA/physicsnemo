@@ -266,36 +266,3 @@ def test_sdf_normals_degenerate_hit_face_stays_finite():
     torch.testing.assert_close(
         normals[1], torch.tensor([0.0, 0.0, 1.0]), atol=1e-4, rtol=0.0
     )
-
-
-@pytest.mark.parametrize("device", _DEVICES)
-@pytest.mark.parametrize("signed", [False, True])
-@pytest.mark.parametrize("near_surface_normals", ["face", "zero"])
-def test_distance_sign_and_near_surface_policy(device, signed, near_surface_normals):
-    """Distance signs and near-wall directions are independent options."""
-    points = torch.tensor(
-        [[5.0, 0.0, z] for z in [0.9, 1.0 - 5e-7, 1.0, 1.0 + 5e-7, 1.1]]
-    )
-    domain = _domain_with_interior(points).to(device)
-    before = domain.interior.points.clone()
-    result = ComputeSDFFromBoundary(
-        use_winding_number=False,
-        signed=signed,
-        near_surface_normals=near_surface_normals,
-        direction_threshold=1e-6,
-    ).apply_to_domain(domain)
-    distance = before[:, 2] - 1.0
-    expected_distance = distance if signed else distance.abs()
-    torch.testing.assert_close(
-        result.interior.point_data["sdf"].flatten(),
-        expected_distance,
-    )
-    direction = [-1.0, 1.0, 1.0, 1.0, 1.0]
-    if near_surface_normals == "zero":
-        direction = [-1.0, 0.0, 0.0, 0.0, 1.0]
-    expected_normals = torch.tensor([[0.0, 0.0, z] for z in direction], device=device)
-    torch.testing.assert_close(
-        result.interior.point_data["sdf_normals"], expected_normals
-    )
-    torch.testing.assert_close(result.interior.points, before, rtol=0, atol=0)
-    torch.testing.assert_close(domain.interior.points, before, rtol=0, atol=0)

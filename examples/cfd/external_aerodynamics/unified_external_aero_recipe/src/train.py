@@ -933,9 +933,6 @@ def main(cfg: DictConfig) -> None:
     metric_calculator = MetricCalculator(
         target_config=target_config,
         metrics=metrics_list,
-        normalizer=normalizer
-        if cfg.get("metrics_before_normalization", False)
-        else None,
     )
     loss_calculator = LossCalculator(
         target_config=target_config,

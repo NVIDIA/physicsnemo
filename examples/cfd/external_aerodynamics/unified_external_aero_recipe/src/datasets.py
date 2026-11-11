@@ -408,12 +408,6 @@ def build_dataset(
                 ),
                 len(resolved),
             )
-            before = cfg.pipeline.get("augmentation_before")
-            if before is not None:
-                targets = [t.get("_target_", "") for t in cfg.pipeline.transforms]
-                if before not in targets:
-                    raise ValueError(f"Unknown augmentation insertion target: {before}")
-                insert_idx = targets.index(before)
             resolved[insert_idx:insert_idx] = aug
 
     transforms = resolved if resolved else None
@@ -641,7 +635,6 @@ def _build_manifest_val_dataset(
     ds_yaml: DictConfig,
     *,
     augment: bool,
-    independent: bool = False,
     device: str | torch.device | None,
     num_workers: int,
     pin_memory: bool,
@@ -662,11 +655,9 @@ def _build_manifest_val_dataset(
     against the train reader address the same samples here. When *augment*
     is ``False`` the train and val transform chains are identical, so this
     returns ``None`` and the caller lets validation share the train dataset
-    (avoiding a redundant second reader). ``independent=True`` also builds
-    a separate dataset so training epoch changes do not affect validation readers.
+    (avoiding a redundant second reader).
     """
-    # Keep validation reader epochs independent of training epochs.
-    if not augment and not independent:
+    if not augment:
         return None
     return build_dataset(
         ds_yaml,
@@ -1009,7 +1000,6 @@ def build_dataloaders(
             manifest_val_dataset = _build_manifest_val_dataset(
                 ds_yaml,
                 augment=augment,
-                independent=cfg.get("independent_validation", False),
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
@@ -1030,8 +1020,6 @@ def build_dataloaders(
         combined_train_indices.extend(range(train_offset, train_offset + len(dataset)))
         train_offset += len(dataset)
         val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
-        if not val_datadir and cfg.get("independent_validation", False):
-            val_datadir = train_datadir
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
             val_dataset = build_dataset(

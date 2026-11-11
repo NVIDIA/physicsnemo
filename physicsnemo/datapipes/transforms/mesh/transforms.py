@@ -214,9 +214,6 @@ class CenterMesh(MeshTransform):
     use_area_weighting : bool, default ``True``
         Weight cell centroids by cell area when computing the center. If
         ``False``, use the arithmetic mean of the mesh points.
-    boundary_name : str or None, default ``None``
-        Optional boundary used to determine the common domain translation.
-        The default uses the interior.
     store_center_as : str or None, default ``None``
         Optional ``global_data`` key under which to store the center that was
         subtracted, so inference can shift results back. A dotted name is a
@@ -233,11 +230,9 @@ class CenterMesh(MeshTransform):
         self,
         use_area_weighting: bool = True,
         store_center_as: str | None = None,
-        boundary_name: str | None = None,
     ) -> None:
         super().__init__()
         self.use_area_weighting = use_area_weighting
-        self.boundary_name = boundary_name
         self.store_center_as = (
             None if store_center_as is None else as_nested_key(store_center_as)
         )
@@ -284,12 +279,7 @@ class CenterMesh(MeshTransform):
         DomainMesh
             Centered domain mesh.
         """
-        reference = (
-            domain.interior
-            if self.boundary_name is None
-            else domain.boundaries[self.boundary_name]
-        )
-        com = self._compute_com(reference)
+        com = self._compute_com(domain.interior)
         centered = domain.translate(-com)
         if self.store_center_as is not None:
             global_data = centered.global_data.copy()
@@ -325,77 +315,6 @@ def _compact_points(mesh: Mesh) -> Mesh:
         cell_data=mesh.cell_data,
         global_data=mesh.global_data,
     )
-
-
-@register()
-class CaptureGeometry(MeshTransform):
-    """Retain a full geometry cloud before centering and query subsampling.
-
-    Store cell centroids and their bounding-box midpoint in configurable global
-    fields. Surface meshes retain aligned query coordinates in cell data. Domains
-    retain interior query coordinates in point data and use the named boundary
-    for geometry. Domain boundaries are copied to detach disk mappings.
-
-    Parameters
-    ----------
-    boundary_name : str, default="vehicle"
-        Boundary supplying geometry for DomainMesh inputs.
-    geometry_field : str, default="geometry_points"
-        Global field for the full centroid cloud.
-    center_field : str, default="geometry_center"
-        Global field for the centroid bounding-box midpoint.
-    query_field : str, default="query_coordinates"
-        Field for coordinates before later geometry transforms. Stored in cell
-        data for a Mesh or interior point data for a DomainMesh. Field names
-        support dotted paths for nested TensorDict keys.
-
-    Notes
-    -----
-    Apply augmentations before capture. Compute normals separately with
-    ``ComputeSurfaceNormals`` before any geometry scaling.
-    """
-
-    def __init__(
-        self,
-        boundary_name: str = "vehicle",
-        geometry_field: str = "geometry_points",
-        center_field: str = "geometry_center",
-        query_field: str = "query_coordinates",
-    ) -> None:
-        super().__init__()
-        self.boundary_name = boundary_name
-        self.geometry_field = as_nested_key(geometry_field)
-        self.center_field = as_nested_key(center_field)
-        self.query_field = as_nested_key(query_field)
-
-    def _capture(self, surface: Mesh, global_data: TensorDict):
-        centers = surface.cell_centroids.as_subclass(torch.Tensor)
-        if centers.shape[0] == 0:
-            raise ValueError("Geometry must contain cells")
-        data = global_data.clone()
-        data[self.geometry_field] = centers
-        data[self.center_field] = (centers.amin(0) + centers.amax(0)) * 0.5
-        return centers, data
-
-    def __call__(self, mesh: Mesh) -> Mesh:
-        """Preserve full surface geometry and aligned query coordinates."""
-        centers, data = self._capture(mesh, mesh.global_data)
-        fields = mesh.cell_data.clone()
-        fields[self.query_field] = centers
-        return mesh.with_data(cell_data=fields, global_data=data)
-
-    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
-        """Preserve full boundary geometry separately from interior queries."""
-        _, data = self._capture(
-            domain.boundaries[self.boundary_name], domain.global_data
-        )
-        fields = domain.interior.point_data.clone()
-        fields[self.query_field] = domain.interior.points.as_subclass(torch.Tensor)
-        return DomainMesh(
-            interior=domain.interior.with_data(point_data=fields),
-            boundaries={name: mesh.clone() for name, mesh in domain.boundaries.items()},
-            global_data=data,
-        )
 
 
 @register()
@@ -1229,9 +1148,6 @@ class MeshToDomainMesh(MeshTransform):
         more descriptive name when working outside that convention (e.g.
         ``'wing'``, ``'turbine_blade'``).
 
-    copy_boundary : bool, default=False
-        Copy the output boundary to detach file-backed storage before export.
-
     Raises
     ------
     NotImplementedError
@@ -1278,7 +1194,6 @@ class MeshToDomainMesh(MeshTransform):
         point_data_targets: list[str] | None = None,
         interior_points: Literal["cell_centroids", "vertices"] = "cell_centroids",
         boundary_name: str = "vehicle",
-        copy_boundary: bool = False,
     ) -> None:
         super().__init__()
         ### Defensive runtime check: YAML / Hydra inputs bypass static
@@ -1300,7 +1215,6 @@ class MeshToDomainMesh(MeshTransform):
             )
         self._interior_points = interior_points
         self._boundary_name = boundary_name
-        self._copy_boundary = copy_boundary
 
     def __call__(self, mesh: Mesh) -> DomainMesh:  # type: ignore[override]
         ### v1 supports two diagonal corners:
@@ -1362,11 +1276,7 @@ class MeshToDomainMesh(MeshTransform):
         boundary = mesh.with_data(cell_data=boundary_cell_data)
         return DomainMesh(
             interior=interior,
-            boundaries={
-                self._boundary_name: boundary.clone()
-                if self._copy_boundary
-                else boundary
-            },
+            boundaries={self._boundary_name: boundary},
             global_data=mesh.global_data,
         )
 
@@ -1397,11 +1307,7 @@ class MeshToDomainMesh(MeshTransform):
         boundary = mesh.with_data(point_data=boundary_point_data)
         return DomainMesh(
             interior=interior,
-            boundaries={
-                self._boundary_name: boundary.clone()
-                if self._copy_boundary
-                else boundary
-            },
+            boundaries={self._boundary_name: boundary},
             global_data=mesh.global_data,
         )
 

@@ -534,11 +534,7 @@ def main(cfg: DictConfig) -> None:
 
     # -- Metrics ----------------------------------------------------------------
     metric_calculator = MetricCalculator(
-        target_config=target_config,
-        metrics=resolve_metrics(cfg),
-        normalizer=normalizer
-        if cfg.get("metrics_before_normalization", False)
-        else None,
+        target_config=target_config, metrics=resolve_metrics(cfg)
     )
 
     if is_rank0:

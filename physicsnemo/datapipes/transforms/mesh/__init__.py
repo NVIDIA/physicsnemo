@@ -29,7 +29,6 @@ from physicsnemo.datapipes.transforms.mesh.augmentations import (
 )
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.mesh.transforms import (
-    CaptureGeometry,
     CenterMesh,
     ComputeCellCentroids,
     ComputeSurfaceNormals,
@@ -47,7 +46,6 @@ from physicsnemo.datapipes.transforms.mesh.transforms import (
 )
 
 __all__ = [
-    "CaptureGeometry",
     "MeshTransform",
     "ComputeCellCentroids",
     "ComputeSurfaceNormals",

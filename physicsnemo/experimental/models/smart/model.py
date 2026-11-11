@@ -234,7 +234,7 @@ class SMART(Module):
     parameters : torch.Tensor or None, optional, default=None
         Conditions of shape :math:`(B,P)` or :math:`(B,1,P)`.
     query_features : torch.Tensor or None, optional, default=None
-        Aligned features of shape :math:`(B,M,C)` in the caller's physical units.
+        Aligned features of shape :math:`(B,M,C)` in the caller's chosen units.
     frame_center : torch.Tensor or None, optional, default=None
         Origin of shape :math:`(B,3)` or :math:`(B,1,3)`. Overrides
         ``center_on_geometry``. When omitted, use the geometry's bounding-box

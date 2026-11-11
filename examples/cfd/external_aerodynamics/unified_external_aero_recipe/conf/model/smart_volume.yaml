@@ -15,11 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Select dataset=drivaer_ml_smart_volume.
+# Select dataset=drivaer_ml_volume.
 input_type: tensors
 output_type: tensors
 compile: false
-# SMART conditioning is sensitive to the generic recipe's input and update scales.
 precision: float32
 training:
   loss_type: mse
@@ -32,23 +31,23 @@ dataloader:
   num_workers: 2
   prefetch_factor: 2
   num_streams: 2
-metrics_before_normalization: true
-independent_validation: true
+dataset_reader_overrides:
+  # Keep the full vehicle surface as geometry while queries stay subsampled.
+  subsample_n_cells: null
 forward_kwargs:
-  geometry: global_data.geometry_points
-  queries: interior.point_data.query_coordinates
+  geometry: boundaries.vehicle.cell_centroids
+  queries: interior.points
   query_features:
   - interior.point_data.sdf
   - interior.point_data.sdf_normals
-  parameters: global_data.parameters
-  frame_center: global_data.geometry_center
 model:
   _target_: physicsnemo.experimental.models.smart.SMART
   field: volume
   out_dim: ${out_dim}
   query_feature_channels: 4
-  parameter_channels: 2
-  coordinate_scale: [12.0, 4.5, 3.25]
+  # [12, 4.5, 3.25] m in L_ref units (DrivAerML L_ref = 5 m).
+  coordinate_scale: [2.4, 0.9, 0.65]
+  center_on_geometry: true
   hidden_dim: 448
   num_heads: 8
   num_layers: 6

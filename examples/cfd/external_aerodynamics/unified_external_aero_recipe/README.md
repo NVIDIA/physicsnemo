@@ -15,7 +15,7 @@ Here, you're able to train (and run inference with) the following models:
 - [DoMINO](https://arxiv.org/abs/2501.13350) coming soon
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
-- [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume heads)
+- [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
 
 We currently support the following datasets:
@@ -301,7 +301,7 @@ Available models and datasets:
 | Group | Files |
 |---|---|
 | `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
-| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `drivaer_ml_smart_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
+| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
 
 Pick one of each on the CLI:
 
@@ -465,7 +465,6 @@ unified_external_aero_recipe/
                                #  by load_dataset_config, NOT by Hydra)
     dataset_paths.yaml         # local disk paths (edit me)
     drivaer_ml_{surface,volume}.yaml
-    drivaer_ml_smart_{surface,volume}.yaml
     highlift_{surface,volume}.yaml
     shift_suv_{estate,fastback}_surface.yaml
   src/
@@ -484,15 +483,15 @@ unified_external_aero_recipe/
 | Metrics list | `train.yaml` (`metrics`) |
 | Multi-dataset orchestration | `train.yaml` (`extra_datasets`) + Python in `datasets.build_dataloaders` |
 | Model + forward_kwargs | `conf/model/<name>.yaml` |
-| Training schedule (lr, scheduler, num_epochs, compile) | `train.yaml` defaults, with model-template and CLI overrides |
+| Training schedule (lr, scheduler, num_epochs, compile) | `train.yaml` |
 
 ### `conf/train.yaml`
 
 ```yaml
 defaults:
   - base
-  - _self_
   - model: geotransolver_volume
+  - _self_
 
 # Dataset selection (a string naming a file in datasets/, no `.yaml`)
 dataset: drivaer_ml_volume
@@ -547,9 +546,9 @@ Notes on the composition:
   its contents merge at the global root rather than under the group
   name. This lets one model file declare `model:` AND
   `input_type` / `output_type` / `forward_kwargs:` together.
-- `train.yaml` merges `base`, then `_self_`, then the model template.
-  Model-template settings override the training defaults. CLI overrides
-  take precedence over both.
+- `_self_` is the LAST entry in `train.yaml`'s `defaults:` so any inline
+  `model:` / `training:` / `dataloader:` overrides win over the model
+  template values.
 - Forward kwargs live alongside the model in the same template because
   they are a property of the model class's forward signature, not an
   independent dimension.
@@ -562,10 +561,10 @@ Notes on the composition:
   computes from the chosen dataset's `targets:` block (sum of channel
   counts via `field_dim()`). GLOBE templates declare per-target
   `output_schema` instead and don't touch `out_dim`.
-- `conf/infer.yaml` merges `base`, then the model template, then `_self_`.
-  Its inference settings override the model template, and CLI overrides
-  take precedence. It supplies checkpoint and output paths instead of the
-  training schedule. Both entry points share `base.yaml`.
+- `conf/infer.yaml` follows the same shape:
+  `defaults: - base, - model: ???, - _self_` with checkpoint /
+  output-path knobs in place of the training schedule. `base.yaml` is
+  intentionally training-agnostic so both entry points can share it.
 
 ### Recipe Gallery
 
@@ -614,8 +613,8 @@ python src/train.py model=flare_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
 # SMART (experimental, separate surface and volume models)
-python src/train.py model=smart_surface dataset=drivaer_ml_smart_surface
-python src/train.py model=smart_volume dataset=drivaer_ml_smart_volume
+python src/train.py model=smart_surface dataset=drivaer_ml_surface
+python src/train.py model=smart_volume dataset=drivaer_ml_volume
 
 # GLOBE (mesh-native)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
@@ -645,39 +644,12 @@ Note the `+` prefix on `+model.attention_type=...` — Hydra requires `+`
 when the override key isn't already present in the model template (FA
 attention is opt-in, not the default).
 
-### SMART with independent geometry and query sampling
+### SMART
 
-Use the SMART dataset templates shown in the gallery. They retain the full CFD
-vehicle-cell centroid cloud as geometry, without CAD or STL inputs.
-
-- Each encoder layer samples 16,384 geometry points. The 2,048 initial latents
-  come from the same full cloud. The entire cloud is never embedded or attended to.
-- `sampling_resolution=200000` controls field queries independently. Surface
-  coordinates, normals, targets, and integration areas stay aligned. Volume reads
-  use cyclic blocks, so a spatially shuffled on-disk order is preferable.
-- Training uses the datapipe RNG for field queries and PyTorch RNG for geometry.
-  Validation uses separate readers and fixed geometry sampling. Surface query
-  samples can vary between validation passes. Checkpoint resume restores training
-  state, but does not replay the exact random samples of an uninterrupted run.
-
-Surface features are native normals. Volume features are unsigned physical CFD
-boundary distances and closest-surface directions. The volume template uses
-`ComputeSDFFromBoundary` before geometry scaling with unsigned distances and zero
-directions within 1e-6 length units of the surface. Conditioning and
-normalization settings are defined in the YAML templates. Physical freestream
-metadata remains unchanged for export and force integration.
-
-Inference encodes geometry once and decodes in chunks of 8,192 queries. Set the
-query cap above the mesh size for full fields and forces. Full input and output
-arrays still occupy memory. For example:
-
-```bash
-python src/infer.py model=smart_surface dataset=drivaer_ml_smart_surface \
-    run_id=<training_run_id> infer_split=val sampling_resolution=200000000
-```
-
-`metrics_before_normalization=true` undoes field standardization for metrics.
-Final comparisons should use full-mesh inference.
+Surface SMART uses the sampled query cells as geometry, while volume SMART retains
+the full vehicle surface and uses the standard STL-based SDF features. Each model
+samples up to 16,384 geometry points per encoder layer and decodes inference queries
+in chunks of 8,192.
 
 ### Dataset config anatomy
 

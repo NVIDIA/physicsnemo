@@ -108,6 +108,7 @@ def _compose_train_cfg(
     "model,dataset,expected_drop",
     [
         ("globe_volume", "drivaer_ml_volume", False),
+        ("smart_volume", "drivaer_ml_volume", False),
         ("geotransolver_volume", "drivaer_ml_volume", True),
         ("geotransolver_volume_highlift", "highlift_volume", True),
         ("transolver_volume", "drivaer_ml_volume", True),
@@ -226,12 +227,8 @@ class _RecipeSpec(NamedTuple):
 
 
 _TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
-    _RecipeSpec(
-        "smart_surface", "smart_surface", "drivaer_ml_smart_surface", "surface", []
-    ),
-    _RecipeSpec(
-        "smart_volume", "smart_volume", "drivaer_ml_smart_volume", "volume", []
-    ),
+    _RecipeSpec("smart_surface", "smart_surface", "drivaer_ml_surface", "surface", []),
+    _RecipeSpec("smart_volume", "smart_volume", "drivaer_ml_volume", "volume", []),
     _RecipeSpec(
         "geotransolver_surface",
         "geotransolver_surface",
@@ -352,19 +349,6 @@ def test_tensor_input_config_synthetic_e2e(
         ds = _volume_domain_mesh(target_config)
     else:  # pragma: no cover -- table-only typo guard
         raise ValueError(f"Unknown domain {domain!r}")
-
-    if model in ("smart_surface", "smart_volume"):
-        # Supply the post-pipeline fields used by the SMART dataset templates.
-        vehicle = ds.boundaries["vehicle"]
-        geometry = vehicle.cell_centroids
-        ds.global_data["geometry_points"] = geometry
-        ds.global_data["geometry_center"] = (geometry.amin(0) + geometry.amax(0)) / 2
-        ds.global_data["parameters"] = torch.tensor([1.205, 30.0])
-        if domain == "surface":
-            vehicle.cell_data["query_coordinates"] = geometry.clone()
-            vehicle.cell_data["query_normals"] = vehicle.cell_data["normals"].clone()
-        else:
-            ds.interior.point_data["query_coordinates"] = ds.interior.points.clone()
 
     ### Build the recipe collate the same way `build_dataloaders` would.
     forward_kwargs_spec = OmegaConf.to_container(train_cfg.forward_kwargs, resolve=True)
