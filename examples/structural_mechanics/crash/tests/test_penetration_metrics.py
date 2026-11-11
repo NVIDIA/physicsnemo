@@ -140,6 +140,7 @@ def test_known_depths_on_two_plates():
 
 
 def test_prediction_clear_of_contact_misses_every_target_crossing():
+    """A prediction clear of contact misses every target crossing and adds none."""
     sample, prediction, target, stats = _case(prediction_z=GAP, target_z=-2.0)
     metrics = _metrics()
     metrics.accumulate(prediction, target, sample, stats)
