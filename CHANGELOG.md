@@ -450,6 +450,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The container build compiles NATTEN from source with C++20 when no
+  prebuilt NATTEN wheel is supplied, so it builds on PyTorch 2.15 base
+  images, whose headers require C++20.
+- The container build compiles pyg-lib from source without the uv cache, so
+  it no longer reuses a pyg-lib wheel built against an older PyTorch, which
+  failed to load with an undefined symbol after a base image upgrade.
 - `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
   its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
   `cleanup()` no longer raises after a failed initialization.
