@@ -16,6 +16,13 @@
 
 name: data_loader_hrrr_era5.HrrrEra5Dataset # Dataset class module and name, in any module in `datasets` folder
 
+# How batches are produced; see LoaderConfig in utils/config.py. Defaults to
+# the classic PyTorch DataLoader ("torch"); a dataset can additionally
+# implement a PhysicsNeMo datapipe by overriding `make_loader` and setting
+# backend: "datapipes" here.
+loader:
+  backend: "torch"
+
 # Main dataset
 location: 'data' # Path to the dataset
 conus_dataset_name: 'hrrr_v3' # Version name for the dataset

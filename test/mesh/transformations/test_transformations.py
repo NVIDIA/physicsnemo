@@ -1636,6 +1636,21 @@ class TestMatrixHelpers:
         assert R.shape == (3, 3)
         assert R.dtype == torch.float64
 
+    @pytest.mark.parametrize(
+        ("dtype", "atol"),
+        [(torch.float64, 1e-15), (torch.float32, 1e-6), (torch.bfloat16, 1e-2)],
+    )
+    @pytest.mark.parametrize("axis", [None, "z"])
+    def test_rotation_matrix_precision_follows_dtype(self, dtype, atol, axis):
+        """A Python-float angle is evaluated at the precision of ``dtype``."""
+        n = 2 if axis is None else 3
+        R = rotation_matrix(0.3, axis, n, torch.device("cpu"), dtype)
+        assert R.dtype == dtype
+        c, s = np.cos(0.3), np.sin(0.3)
+        expected = torch.eye(n, dtype=torch.float64)
+        expected[:2, :2] = torch.tensor([[c, -s], [s, c]], dtype=torch.float64)
+        torch.testing.assert_close(R.double(), expected, rtol=0, atol=atol)
+
     def test_scale_matrix_uniform(self):
         M = scale_matrix(
             factor=2.0,

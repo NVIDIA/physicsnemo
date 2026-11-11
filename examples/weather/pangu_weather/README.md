@@ -133,7 +133,7 @@ If running inside a docker container, add the `--allow-run-as-root` flag.
 Training progress can be monitored using MLFlow:
 
 ```bash
-mlflow ui -p 2458
+mlflow ui --backend-store-uri sqlite:///outputs/mlruns/mlflow.db -p 2458
 ```
 
 View progress in a browser at [http://127.0.0.1:2458](http://127.0.0.1:2458)
@@ -142,7 +142,8 @@ View progress in a browser at [http://127.0.0.1:2458](http://127.0.0.1:2458)
 
 ```text
 @article{bi2023pangu,
-  title={Pangu-Weather: A 3D High-Resolution Model for Fast and Accurate Global Weather Forecast},
+  title={Pangu-Weather: A 3D High-Resolution Model for Fast and Accurate Global
+         Weather Forecast},
   author={Bi, Kaifeng and Xie, Lingxi and Zhang, Hengheng and others},
   journal={arXiv preprint arXiv:2211.02556},
   year={2023}

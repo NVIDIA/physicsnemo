@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trainer class for StormCast/StormScope training."""
+"""Trainer class for Regional Weather Diffusion training."""
 
 import os
 import time
@@ -29,13 +29,19 @@ from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, load_model_weights, save_checkpoint
 
-from physicsnemo.diffusion.metrics.losses import WeightedMSEDSMLoss
-from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler, NoiseScheduler
+from physicsnemo.diffusion.metrics.losses import (
+    WeightedFlowMatchingLoss,
+    WeightedMSEDSMLoss,
+)
+from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 
 from utils.loss import (
     RegressionLoss,
     SigmaBinTracker,
+    build_diffusion_loss,
     build_noise_scheduler,
+    build_sampling_scheduler,
+    sampling_formulation,
 )
 
 from utils.config import MainConfig
@@ -56,7 +62,7 @@ from datasets import dataset_classes
 
 class Trainer:
     r"""
-    StormCast Trainer class.
+    Regional Weather Diffusion Trainer class.
 
     Encapsulates all training logic including model and optimizer setup,
     training and validation loops, checkpointing, logging, and validation plotting.
@@ -227,6 +233,9 @@ class Trainer:
         # Model type
         self.loss_type = cfg.training.loss.type
         self.net_name = "regression" if self.loss_type == "regression" else "diffusion"
+        # Noise schedule family and the quantity the network predicts
+        self.formulation = sampling_formulation(self.loss_type)
+        self.prediction_type = cfg.training.loss.prediction_type
 
         # Invalid-region masking for the DiT NATTEN backend. When enabled, the
         # per-sample mask from the dataloader is passed to the model's forward
@@ -332,6 +341,9 @@ class Trainer:
         dataset_cls = dataset_classes[self.cfg.dataset.name]
         dataset_kwargs = self.cfg.dataset.__dict__.copy()
         del dataset_kwargs["name"]
+        # `loader` configures how batches are produced (see _setup_loader), it
+        # is not forwarded to the dataset constructor.
+        self._loader_cfg = dataset_kwargs.pop("loader", None)
         self.dataset_train = dataset_cls(dataset_kwargs, train=True)
         self.dataset_valid = dataset_cls(dataset_kwargs, train=False)
 
@@ -342,13 +354,10 @@ class Trainer:
 
         self._channel_loss_weight = self._build_channel_loss_weight()
 
-        # Dataloaders
-        num_workers = self.cfg.training.num_data_workers
-        self.train_dataloader = self.parallel_helper.sharded_dataloader(
-            self.dataset_train,
-            batch_size=self.local_batch_size,
-            num_workers=num_workers,
-        )
+        # Dataloaders. The dataset owns its loading strategy (see
+        # `CustomDataSource.make_loader`); the trainer only states what it
+        # needs via the LoaderSpec.
+        self.train_dataloader = self._setup_loader(self.dataset_train)
         self.dataset_iterator = self.parallel_helper.sharded_data_iter(
             self.train_dataloader
         )
@@ -378,6 +387,63 @@ class Trainer:
             raise ValueError(
                 "Scalar conditions are only supported for the 'dit' architecture."
             )
+
+    def _setup_loader(
+        self,
+        source,
+        *,
+        shuffle: bool = True,
+        seed: int | None = None,
+        num_workers: int | None = None,
+    ):
+        r"""Build a batch stream for a data source.
+
+        Combines the rank-sharded sampler and the trainer's batch/device
+        requirements into a :class:`~datasets.dataset.LoaderSpec`, then lets the
+        source build whatever loader it wants from it (a PyTorch ``DataLoader``
+        by default, a PhysicsNeMo datapipe when the source implements one).
+
+        Parameters
+        ----------
+        source : CustomDataSource
+            Data source to draw batches from.
+        shuffle : bool, optional
+            Whether the sampler shuffles the rank-local slice.
+        seed : int or None, optional
+            Master seed for sampling and stochastic transforms.
+        num_workers : int or None, optional
+            Worker override; ``None`` uses ``cfg.dataset.loader.num_workers``
+            and falls back to ``cfg.training.num_data_workers``.
+
+        Returns
+        -------
+        Iterable[Mapping[str, torch.Tensor]]
+            Iterable of batch mappings.
+        """
+        options = (
+            dict(self._loader_cfg.__dict__) if self._loader_cfg is not None else {}
+        )
+        configured_workers = options.pop("num_workers", None)
+        if num_workers is None:
+            num_workers = (
+                configured_workers
+                if configured_workers is not None
+                else self.cfg.training.num_data_workers
+            )
+        spec = self.parallel_helper.loader_spec(
+            source,
+            batch_size=self.local_batch_size,
+            num_workers=num_workers,
+            device=self.device,
+            seed=seed,
+            shuffle=shuffle,
+            **options,
+        )
+        self.logger.info(
+            f"Building '{spec.backend}' loader for {type(source).__name__}: "
+            f"batch_size={spec.batch_size} num_workers={spec.num_workers}"
+        )
+        return source.make_loader(spec)
 
     def _build_channel_loss_weight(self) -> torch.Tensor:
         r"""Build a ``(1, C, 1, 1)`` per-channel loss weight tensor from config.
@@ -419,7 +485,6 @@ class Trainer:
 
         # Compute condition channels
         num_cond = {
-            "state": len(self.state_channels),
             "background": len(self.background_channels),
             "regression": len(self.state_channels),
             "invariant": 0
@@ -444,6 +509,8 @@ class Trainer:
                 lead_time_steps=self.lead_time_steps,
                 amp_mode=self.enable_amp,
                 use_apex_gn=self.use_apex_gn,
+                preconditioner=model_cfg.preconditioner,
+                time_scale=model_cfg.time_scale,
                 **model_cfg.hyperparameters,
             )
         elif model_cfg.architecture == "dit":
@@ -453,11 +520,14 @@ class Trainer:
                 conditional_channels=num_condition_channels,
                 scalar_condition_channels=len(self.scalar_cond_channels),
                 lead_time_steps=self.lead_time_steps,
+                preconditioner=model_cfg.preconditioner,
+                time_scale=model_cfg.time_scale,
                 **model_cfg.hyperparameters,
             )
             # Capture patch_size directly from the DiT before FSDP wrapping
-            # changes the module hierarchy. EDMPreconditioner.model is the
-            # ConcatConditionWrapper; .model of that is the DiT.
+            # changes the module hierarchy. EDMPreconditioner.model (or
+            # TimeScaledModel.model) is the ConcatConditionWrapper; .model of
+            # that is the DiT.
             self._dit_patch_size = net.model.model.patch_size
         else:
             raise ValueError("model.architecture must be 'unet' or 'dit'")
@@ -598,7 +668,9 @@ class Trainer:
     # Loss and Optimizer Setup
     # =========================================================================
 
-    def _setup_loss(self) -> WeightedMSEDSMLoss | RegressionLoss:
+    def _setup_loss(
+        self,
+    ) -> WeightedMSEDSMLoss | WeightedFlowMatchingLoss | RegressionLoss:
         r"""
         Create the loss function.
 
@@ -606,7 +678,12 @@ class Trainer:
         For diffusion models, creates a
         :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
         with an
-        :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`.
+        :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`
+        (``training.loss.type: edm``), or a
+        :class:`~physicsnemo.diffusion.metrics.losses.WeightedFlowMatchingLoss`
+        with a
+        :class:`~physicsnemo.diffusion.noise_schedulers.RectifiedFlowNoiseScheduler`
+        (``training.loss.type: flow_matching``).
         When domain parallelism is active the scheduler is wrapped via
         :meth:`~utils.parallel.ParallelHelper.make_domain_parallel_scheduler`
         so that sampled sigmas are broadcast across spatial shards.
@@ -614,37 +691,35 @@ class Trainer:
         A separate sampling scheduler is also created for validation-time
         diffusion sampling.
 
-        When ``training.perf.torch_compile`` is enabled (and domain parallelism
-        is off), the loss callable is wrapped with :func:`torch.compile` so the
-        forward path through the preconditioned model and loss is compiled.
+        When ``training.perf.torch_compile`` is enabled, the loss callable is
+        wrapped with :func:`torch.compile` so the forward path through the
+        preconditioned model and loss is compiled. This also applies under
+        domain parallelism (ShardTensor).
 
         Returns
         -------
-        WeightedMSEDSMLoss | RegressionLoss
+        WeightedMSEDSMLoss | WeightedFlowMatchingLoss | RegressionLoss
             The loss function (possibly ``torch.compile``-wrapped).
         """
         self.logger.info("Setting up loss function...")
 
         self.sampling_scheduler = None
 
-        compile_loss = self.use_torch_compile and not self.use_shard_tensor
-        if self.use_torch_compile and self.use_shard_tensor:
-            self.logger.info(
-                "Skipping torch.compile on loss: not supported with "
-                "domain parallelism / ShardTensor."
-            )
-
         if self.loss_type == "regression":
             loss_fn = RegressionLoss(self.net)
-            if compile_loss:
+            if self.use_torch_compile:
                 self.logger.info("Compiling loss function with torch.compile...")
                 loss_fn = torch.compile(loss_fn)
             return loss_fn
 
         loss_params = self.cfg.training.loss
-        self.logger.info(
-            f"Using modern diffusion loss: {loss_params.sigma_distribution}"
-        )
+        if self.loss_type == "flow_matching":
+            self.logger.info(
+                f"Using flow matching loss with {loss_params.prediction_type} "
+                f"prediction and t in [{loss_params.t_min}, {loss_params.t_max}]"
+            )
+        else:
+            self.logger.info(f"Using diffusion loss: {loss_params.sigma_distribution}")
 
         noise_scheduler = build_noise_scheduler(
             loss_params,
@@ -653,20 +728,17 @@ class Trainer:
         noise_scheduler = self.parallel_helper.make_domain_parallel_scheduler(
             noise_scheduler,
         )
-        loss_fn = WeightedMSEDSMLoss(self.net, noise_scheduler, reduction="none")
-        self.train_noise_scheduler = loss_fn.noise_scheduler
+        loss_fn = build_diffusion_loss(self.net, noise_scheduler, loss_params)
+        self.train_noise_scheduler = noise_scheduler
 
-        sa = self.cfg.sampler.args.__dict__
-        sampling_scheduler = EDMNoiseScheduler(
-            sigma_min=sa.get("sigma_min", 0.002),
-            sigma_max=sa.get("sigma_max", 80.0),
-            rho=sa.get("rho", 7.0),
+        sampling_scheduler = build_sampling_scheduler(
+            loss_params, self.cfg.sampler.args.__dict__
         )
         self.sampling_scheduler = self.parallel_helper.make_domain_parallel_scheduler(
             sampling_scheduler
         )
 
-        if compile_loss:
+        if self.use_torch_compile:
             self.logger.info("Compiling loss function with torch.compile...")
             loss_fn = torch.compile(loss_fn)
 
@@ -777,14 +849,14 @@ class Trainer:
 
         for _ in range(self.num_accumulation_rounds):
             batch = next(self.dataset_iterator)
-            background, state, mask, lead_time_label, scalar_conditions = unpack_batch(
+            background, target, mask, lead_time_label, scalar_conditions = unpack_batch(
                 batch, self.device, memory_format=self.memory_format
             )
 
             with torch.autocast("cuda", dtype=self.amp_dtype, enabled=self.enable_amp):
                 condition, target, _ = build_network_condition_and_target(
                     background,
-                    state,
+                    target,
                     self.invariant_tensor,
                     lead_time_label=lead_time_label,
                     scalar_conditions=scalar_conditions,
@@ -792,7 +864,7 @@ class Trainer:
                     condition_list=self.condition_list,
                     regression_condition_list=self.cfg.model.regression_conditions,
                 )
-                del background, state, scalar_conditions
+                del background, scalar_conditions
 
                 # Translate the dataloader mask into a loss weight
                 # (token-granularity for DiT, pixel-level otherwise) and an
@@ -899,8 +971,8 @@ class Trainer:
             Average validation loss across all validation steps.
         plot_outputs : torch.Tensor or None
             Model outputs from first batch for plotting.
-        plot_state : List or None
-            Input/target state tensors from first batch.
+        plot_target : torch.Tensor or None
+            Target state tensor from first batch.
         plot_background : torch.Tensor or None
             Background conditioning from first batch.
         """
@@ -910,23 +982,21 @@ class Trainer:
         np.random.seed(val_seed % (1 << 31))
         torch.manual_seed(val_seed)
 
-        valid_dataloader = self.parallel_helper.sharded_dataloader(
+        valid_dataloader = self._setup_loader(
             self.dataset_valid,
-            batch_size=self.local_batch_size,
+            shuffle=False,
             seed=0,
             num_workers=0,  # self.cfg.training.num_data_workers,
-            shuffle=False,
-            pin_memory=False,
         )
         valid_iter = self.parallel_helper.sharded_data_iter(
             valid_dataloader, self.validation_steps
         )
         valid_loss_sum = torch.zeros((), device=self.device)
-        plot_outputs, plot_state, plot_background = None, None, None
+        plot_outputs, plot_target, plot_background = None, None, None
 
         with torch.no_grad():
             for v_i, batch in enumerate(valid_iter):
-                background, state, mask, lead_time_label, scalar_conditions = (
+                background, target_raw, mask, lead_time_label, scalar_conditions = (
                     unpack_batch(batch, self.device, memory_format=self.memory_format)
                 )
 
@@ -935,7 +1005,7 @@ class Trainer:
                 ):
                     condition, target, reg_out = build_network_condition_and_target(
                         background,
-                        state,
+                        target_raw,
                         self.invariant_tensor,
                         lead_time_label=lead_time_label,
                         scalar_conditions=scalar_conditions,
@@ -957,11 +1027,15 @@ class Trainer:
                         target, weight, condition=condition, **loss_kwargs
                     )
 
-                    if v_i == 0:
-                        plot_state, plot_background = state, background
+                    if v_i == 0 and self.cfg.training.validation_plot_variables:
+                        # plot_target holds the raw (pre-residual) target so
+                        # validation plots show physical truth, matching
+                        # _get_plot_outputs adding the regression estimate
+                        # back onto the diffusion (residual) prediction.
+                        plot_target, plot_background = target_raw, background
                         plot_outputs = self._get_plot_outputs(
                             condition,
-                            state,
+                            target_raw,
                             lead_time_label,
                             reg_out,
                             invalid_mask=invalid_mask,
@@ -989,10 +1063,10 @@ class Trainer:
             logger=self.logger,
         )
 
-        return val_loss, plot_outputs, plot_state, plot_background
+        return val_loss, plot_outputs, plot_target, plot_background
 
     def _get_plot_outputs(
-        self, condition, state, lead_time_label, reg_out, invalid_mask=None
+        self, condition, target, lead_time_label, reg_out, invalid_mask=None
     ):
         r"""
         Get outputs for validation plotting.
@@ -1004,8 +1078,9 @@ class Trainer:
         ----------
         condition : torch.Tensor
             Conditioning tensor for the model.
-        state : tuple
-            Tuple of (input_state, target_state) tensors.
+        target : torch.Tensor
+            Raw (pre-residual) target tensor; only its shape/dtype/device are
+            used, to size the sampled output.
         lead_time_label : torch.Tensor or None
             Lead time embedding indices if using lead time conditioning.
         reg_out : torch.Tensor or None
@@ -1023,13 +1098,15 @@ class Trainer:
             outputs = diffusion_model_forward(
                 self.net,
                 condition,
-                shape=state[1].shape,
+                shape=target.shape,
                 scheduler=self.sampling_scheduler,
-                dtype=state[1].dtype,
-                device=state[1].device,
+                dtype=target.dtype,
+                device=target.device,
                 sampler_args=self.cfg.sampler.args.__dict__,
                 lead_time_label=lead_time_label,
                 invalid_mask=invalid_mask if self.use_nan_mask_tokens else None,
+                formulation=self.formulation,
+                prediction_type=self.prediction_type,
             )
             if "regression" in self.condition_list:
                 outputs += reg_out
@@ -1131,7 +1208,7 @@ class Trainer:
             # Validation
             if self.total_steps % self.cfg.training.validation_freq == 0:
                 valid_start = time.time()
-                val_loss_channel, plot_outputs, plot_state, plot_background = (
+                val_loss_channel, plot_outputs, plot_target, plot_background = (
                     self.validate()
                 )
                 self.val_loss = float(val_loss_channel.mean())
@@ -1144,20 +1221,15 @@ class Trainer:
                     plot_outputs = (
                         None if plot_outputs is None else plot_outputs.full_tensor()
                     )
-                    plot_state = (
-                        None
-                        if plot_state is None
-                        else [
-                            s.full_tensor() if s is not None else None
-                            for s in plot_state
-                        ]
+                    plot_target = (
+                        None if plot_target is None else plot_target.full_tensor()
                     )
                     plot_background = (
                         None
                         if plot_background is None
                         else plot_background.full_tensor()
                     )
-                save_validation_plots(self, plot_outputs, plot_state, plot_background)
+                save_validation_plots(self, plot_outputs, plot_target, plot_background)
                 self.valid_time = time.time() - valid_start
 
             # Log progress

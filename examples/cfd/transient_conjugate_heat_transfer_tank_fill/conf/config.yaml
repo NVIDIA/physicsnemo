@@ -186,6 +186,9 @@ train:
   checkpoint_dir: ${project.output_root}/checkpoints
   checkpoint_interval: 10
   resume: true
+  dataloader:
+    preload_depth: 1
+    pin_memory: true # pin arrays read from disk before copying them to the GPU
 
 # ┌───────────────────────────────────────────┐
 # │            Validation Configs             │
@@ -193,6 +196,9 @@ train:
 val:
   batch_size: 1
   num_workers: 0
+  dataloader:
+    preload_depth: 1
+    pin_memory: true
 
 # ┌───────────────────────────────────────────┐
 # │              Logging Configs              │

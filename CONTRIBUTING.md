@@ -23,6 +23,21 @@ If you are considering collaborating with NVIDIA PhysicsNeMo team to enhance Phy
 fill this [proposal form](https://forms.gle/fYsbZEtgRWJUQ3oQ9) and
 we will get back to you.
 
+### External Issues and Pull Requests are Encouraged
+
+You are encouraged to open real issues regarding your usage of PhysicsNeMo,
+request features, discuss items with the maintainers, or other topics.
+You do not need to open a corresponding Pull Request to open an issue, though you
+are welcome to do so.  Please follow the issue templates as much as you can,
+within reason.
+
+Usage of automated bots to find and open issues
+(that is, those NOT encountered naturally in the course of development and usage),
+and submit corresponding Pull Requests,
+is discouraged strongly.  Issues or Pull Requests that the maintainers
+deem are submitted entirely by bots,
+without human review, will be closed without review.
+
 ## Contribute to PhysicsNeMo-Core
 
 ### Codebase Structure

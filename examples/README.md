@@ -49,6 +49,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Pre-trained DPOT for Navier-Stokes*](./cfd/navier_stokes_dpot/)|Denoising Operator Transformer|YES|
 |[Fine-tuning of DoMINO NIM](./cfd/external_aerodynamics/domino_nim_finetuning/)|DoMINO|NO|
 |[Transolver for External Aerodynamics on Irregular Meshes](./cfd/external_aerodynamics/transformer_models/)|Transolver|NO|
+|[Rotor37 Compressor Blade](./cfd/rotor37_geotransolver/)|GeoTransolver|NO|
 
 ### TCAD
 

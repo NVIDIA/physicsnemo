@@ -40,6 +40,7 @@ from .module.attention_layers import (
     EarthAttention2D,
     EarthAttention3D,
     UNetAttention,
+    UNetAttention3D,
 )
 from .module.ball_query import BQWarp
 from .module.concrete_dropout import (
@@ -57,6 +58,7 @@ from .module.conditioning_embedders import (
 )
 from .module.conv_layers import (
     Conv2d,
+    Conv3D,
     ConvBlock,
     ConvGRULayer,
     ConvLayer,
@@ -116,7 +118,7 @@ from .module.gale import (
     GALEStructuredMesh2D,
     GALEStructuredMesh3D,
 )
-from .module.group_norm import GroupNorm, get_group_norm
+from .module.group_norm import GroupNorm, GroupNorm3D, get_group_norm
 from .module.gumbel_softmax import GumbelSoftmax, gumbel_softmax
 from .module.hpx import (
     HEALPixAvgPool,
@@ -165,7 +167,7 @@ from .module.transformer_layers import (
     FuserLayer,
     SwinTransformer,
 )
-from .module.unet_layers import UNetBlock
+from .module.unet_layers import UNetBlock, UNetBlock3D
 from .module.utils.weight_init import shrink_and_perturb_
 from .module.weight_fact import WeightFactLinear
 from .module.weight_norm import WeightNormLinear

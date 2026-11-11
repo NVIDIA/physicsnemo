@@ -596,12 +596,13 @@ def test_depthwise_conv_is_depthwise_and_preserves_shape():
 
 
 @torch.no_grad()
-def test_depthwise_conv_chunked_matches_plain():
+@pytest.mark.parametrize("chunk_size", [4, "auto"])
+def test_depthwise_conv_chunked_matches_plain(chunk_size):
     """The chunked torch.vmap path (used by bilinear_dw) matches the plain conv."""
     torch.manual_seed(0)
     # chunk_size triggers the vmapped implementation; copy its weights to a plain
     # DepthwiseConv (standard nn.Conv2d forward) and check the outputs agree.
-    chunked = DepthwiseConv(8, kernel_size=3, padding=1, chunk_size=4)
+    chunked = DepthwiseConv(8, kernel_size=3, padding=1, chunk_size=chunk_size)
     plain = DepthwiseConv(8, kernel_size=3, padding=1)
     plain.load_state_dict(chunked.state_dict())
     x = torch.randn(2, 8, 6, 6)
@@ -609,7 +610,8 @@ def test_depthwise_conv_chunked_matches_plain():
 
 
 @torch.no_grad()
-def test_depthwise_conv_chunked_deepcopy_uses_own_weights():
+@pytest.mark.parametrize("chunk_size", [2, "auto"])
+def test_depthwise_conv_chunked_deepcopy_uses_own_weights(chunk_size):
     """A deep-copied chunked DepthwiseConv must use its OWN parameters.
 
     Regression: the chunked forward reads ``self.weight`` / ``self.bias`` live
@@ -618,7 +620,7 @@ def test_depthwise_conv_chunked_deepcopy_uses_own_weights():
     aliased the source's weights, zeroing the copy would have no effect.
     """
     torch.manual_seed(0)
-    conv = DepthwiseConv(4, kernel_size=3, padding=1, chunk_size=2)
+    conv = DepthwiseConv(4, kernel_size=3, padding=1, chunk_size=chunk_size)
     clone = copy.deepcopy(conv)
     clone.weight.zero_()
     clone.bias.zero_()
@@ -630,7 +632,8 @@ def test_depthwise_conv_chunked_deepcopy_uses_own_weights():
 
 
 @torch.no_grad()
-def test_depthwise_conv_chunked_no_bias_matches_and_moves(device):
+@pytest.mark.parametrize("chunk_size", [4, "auto"])
+def test_depthwise_conv_chunked_no_bias_matches_and_moves(device, chunk_size):
     """bias=False chunked conv matches the plain conv and survives a device move.
 
     Regression: the synthetic zero-bias must be built from live module state at
@@ -638,9 +641,9 @@ def test_depthwise_conv_chunked_no_bias_matches_and_moves(device):
     after ``.to(device)`` and the chunked forward errors on a cross-device call.
     """
     torch.manual_seed(0)
-    chunked = DepthwiseConv(8, kernel_size=3, padding=1, bias=False, chunk_size=4).to(
-        device
-    )
+    chunked = DepthwiseConv(
+        8, kernel_size=3, padding=1, bias=False, chunk_size=chunk_size
+    ).to(device)
     plain = DepthwiseConv(8, kernel_size=3, padding=1, bias=False).to(device)
     plain.load_state_dict(chunked.state_dict())
     x = torch.randn(2, 8, 6, 6, device=device)

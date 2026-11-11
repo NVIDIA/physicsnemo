@@ -121,7 +121,9 @@ class MeshDataReader(Reader):
         if not filepath.exists():
             raise FileNotFoundError(f"Mesh store {filepath} not found")
 
-        mesh = Mesh.load(str(filepath))
+        # mode="r": copy-on-write maps, so in-place edits of a sample never
+        # reach the dataset files, and readers on Lustre take no write locks.
+        mesh = Mesh.load(str(filepath), mode="r")
         cell_data = mesh.cell_data
         global_data = mesh.global_data
 
@@ -197,7 +199,7 @@ class MeshDataReader(Reader):
             return cached
 
         filepath = self.data_path / filename
-        mesh = Mesh.load(str(filepath))
+        mesh = Mesh.load(str(filepath), mode="r")
         cell_data = mesh.cell_data
         global_data = mesh.global_data
 

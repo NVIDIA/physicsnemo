@@ -26,9 +26,7 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.transforms import SubsamplePoints
 from physicsnemo.datapipes.transforms.subsample import shuffle_array
 
-sampling_module = importlib.import_module(
-    "physicsnemo.nn.functional.weighted_multinomial"
-)
+sampling_module = importlib.import_module("physicsnemo.utils.weighted_multinomial")
 
 
 def test_subsample_points_basic():

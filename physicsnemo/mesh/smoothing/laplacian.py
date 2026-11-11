@@ -172,9 +172,15 @@ def smooth_laplacian(
         bbox_diagonal = torch.norm(bbox_max - bbox_min)
         convergence_threshold = convergence * bbox_diagonal
 
+    ### Total edge weight per vertex: Σ_j w_ij
+    # The weights come from the initial geometry, so this is fixed across iterations.
+    weight_sum = torch.zeros(n_points, dtype=dtype, device=device)
+    weight_sum.scatter_add_(0, edges[:, 0], edge_weights)
+    weight_sum.scatter_add_(0, edges[:, 1], edge_weights)
+    weight_sum.clamp_(min=safe_eps(dtype))
+
     ### Pre-allocate buffers for iterative smoothing (avoid per-iteration allocation)
     laplacian = torch.zeros((n_points, n_spatial_dims), dtype=dtype, device=device)
-    weight_sum = torch.zeros(n_points, dtype=dtype, device=device)
 
     ### Iterative smoothing
     for iteration in range(n_iter):
@@ -184,13 +190,10 @@ def smooth_laplacian(
 
         ### Compute Laplacian at each vertex: L(p_i) = Σ_j w_ij (p_j - p_i)
         laplacian.zero_()
-        weight_sum.zero_()
 
         # For each edge (i, j) with weight w:
         #   laplacian[i] += w * (p_j - p_i)
         #   laplacian[j] += w * (p_i - p_j)
-        #   weight_sum[i] += w
-        #   weight_sum[j] += w
 
         # Edge vectors: p_j - p_i
         edge_vectors = mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]
@@ -210,22 +213,18 @@ def smooth_laplacian(
             -weighted_vectors,
         )
 
-        # Accumulate weight sums
-        weight_sum.scatter_add_(0, edges[:, 0], edge_weights)
-        weight_sum.scatter_add_(0, edges[:, 1], edge_weights)
-
         ### Normalize by total weight per vertex (in place, to actually reuse the
-        # pre-allocated buffers across iterations rather than reallocating each step).
-        weight_sum.clamp_(min=safe_eps(dtype))
+        # pre-allocated buffer across iterations rather than reallocating each step).
         laplacian /= weight_sum.unsqueeze(-1)
 
-        ### Apply relaxation
-        mesh.points = mesh.points + relaxation_factor * laplacian
-
-        ### Restore constrained vertices to original positions
-        # Written unconditionally to avoid a torch.compile graph break;
-        # masked assignment on an all-False mask is a no-op.
-        mesh.points[constrained_vertices] = original_points[constrained_vertices]
+        ### Apply relaxation, keeping constrained vertices at their original positions
+        # torch.where instead of boolean-mask indexing, which would synchronize the
+        # device twice per iteration (and break a torch.compile graph).
+        mesh.points = torch.where(
+            constrained_vertices.unsqueeze(-1),
+            original_points,
+            mesh.points + relaxation_factor * laplacian,
+        )
 
         ### Check convergence
         if convergence > 0:

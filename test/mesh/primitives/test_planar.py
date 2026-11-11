@@ -48,6 +48,25 @@ class TestPlanarPrimitives:
         assert mesh.n_points > 0
         assert mesh.n_cells > 0
 
+    @pytest.mark.parametrize(
+        "example_name",
+        [
+            "unit_square",
+            "rectangle",
+            "equilateral_triangle",
+            "regular_polygon",
+            "circle_2d",
+            "annulus_2d",
+            "l_shape",
+            "structured_grid",
+        ],
+    )
+    def test_planar_mesh_positively_oriented(self, example_name):
+        """Every cell is wound counterclockwise, with positive signed area."""
+        mesh = getattr(primitives.planar, example_name).load()
+
+        assert mesh.validate(check_inverted_cells=True)["n_inverted_cells"] == 0
+
     def test_subdivision_control(self):
         """Test that subdivision parameter works."""
         square_coarse = primitives.planar.unit_square.load(subdivisions=0)

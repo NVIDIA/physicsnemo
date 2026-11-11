@@ -23,7 +23,9 @@ from benchmarks.physicsnemo.nn.functional.plot_functional_benchmarks import (
     _build_fallback_params,
     _collect_grouped_data,
 )
+from benchmarks.physicsnemo.nn.functional.registry import FUNCTIONAL_SPECS
 from physicsnemo.core.function_spec import FunctionSpec
+from physicsnemo.mesh.utilities._normalization import SafeNormalize
 
 
 class FirstPlottableSpec(FunctionSpec):
@@ -158,3 +160,17 @@ def test_unlabeled_fallback_values_map_to_runner_keys():
     )
     assert "SingleImplementationSpec" not in grouped["forward"]
     assert "SingleImplementationSpec" not in grouped["backward"]
+
+
+def test_safe_normalize_benchmark_registration():
+    """The shared benchmark runner discovers both normalization phases."""
+    assert SafeNormalize in FUNCTIONAL_SPECS
+    keys, specs = build_benchmark_plan(
+        device="cpu",
+        phases=("forward", "backward"),
+        selected_specs=(SafeNormalize,),
+    )
+
+    assert {key[0] for key in keys} == {"forward", "backward"}
+    assert {key[2] for key in keys} == {"torch"}
+    assert all(spec is SafeNormalize for spec in specs.values())

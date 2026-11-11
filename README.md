@@ -229,8 +229,7 @@ The diagram is simplified. Follow the links below for the public surfaces.
   including distributed FFTs;
   and the [model lifecycle core](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/core).
 
-Cross-cutting [deployment helpers](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/deploy)
-cover ONNX export and runtime. [Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
+[Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
 incubate models such as [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe)
 and [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa),
 alongside uncertainty quantification, guardrails, parameter-efficient fine-tuning
@@ -312,7 +311,7 @@ Contributions to the library, examples, and documentation are welcome.
   and coordinate the proposed work with maintainers in an issue or discussion.**
   Every pull request should correspond to an open issue. For substantial changes,
   wait for maintainer feedback before starting implementation.
-- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.MD),
+- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.md),
   and report vulnerabilities privately through the
   [security policy](https://github.com/NVIDIA/physicsnemo/blob/main/SECURITY.md).
 
@@ -327,15 +326,17 @@ If PhysicsNeMo supports your research, cite the project using the metadata in
 [CITATION.cff](https://github.com/NVIDIA/physicsnemo/blob/main/CITATION.cff). Work that
 uses PhysicsNeMo domain parallelism should also cite
 [*ShardTensor: Domain Parallelism for Scientific Machine Learning*](https://arxiv.org/abs/2605.11111).
+Work that uses PhysicsNeMo-Mesh (`physicsnemo.mesh`) should also cite
+[*PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI*](https://arxiv.org/abs/2610.39072).
 
 ## Share Your Research
 
 Publishing a paper that uses PhysicsNeMo? Add it to our
-[Research and Publications Using PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md)
+[Research and Publications Using PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst)
 page so the community can find it. Open a
 [research paper submission](https://github.com/NVIDIA/physicsnemo/issues/new?template=research_paper.yml)
 with your paper's details, or edit
-[`docs/research.md`](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md)
+[`docs/research.rst`](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst)
 directly and open a pull request.
 
 ## License

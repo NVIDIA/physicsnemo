@@ -31,7 +31,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
-from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples, unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -60,7 +60,8 @@ def merge_duplicate_points(
     cells : torch.Tensor
         Cell connectivity, shape (n_cells, n_vertices_per_cell).
     point_data : TensorDict
-        Point data to merge (values are averaged across merged groups).
+        Point data to merge (values are averaged across merged groups; point
+        measures are summed).
     tolerance : float, optional
         Absolute L2 distance threshold for considering two points as
         duplicates.
@@ -140,7 +141,7 @@ def _merge_point_data(
     unique_indices: torch.Tensor,
     n_unique: int,
 ) -> TensorDict:
-    """Merge point data by averaging over merged points.
+    """Merge point data by averaging over merged points (summing point measures).
 
     Parameters
     ----------
@@ -176,20 +177,29 @@ def _merge_point_data(
     output_indices = reverse_map[point_mapping]
 
     ### For each unique point, average the data from all points that map to it
-    def _merge_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    def _merge_tensor(tensor: torch.Tensor, aggregation: str = "mean") -> torch.Tensor:
         ### Use scatter aggregation utility
         return scatter_aggregate(
             src_data=tensor,
             src_to_dst_mapping=output_indices,
             n_dst=n_unique,
             weights=None,
-            aggregation="mean",
+            aggregation=aggregation,
         )
 
-    return point_data.apply(
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+    merged = point_data.exclude(EFFECTIVE_MEASURE_KEY).apply(
         _merge_tensor,
         batch_size=torch.Size([n_unique]),
     )
+    # Point measures are complete contributions to integrals: merged points
+    # carry the sum of their measures
+    if EFFECTIVE_MEASURE_KEY in point_data.keys():
+        merged[EFFECTIVE_MEASURE_KEY] = _merge_tensor(
+            point_data[EFFECTIVE_MEASURE_KEY], "sum"
+        )
+    return merged
 
 
 def remove_duplicate_cells(
@@ -233,7 +243,7 @@ def remove_duplicate_cells(
         return cells, cell_data
 
     ### Sort vertices within each cell to canonical form
-    sorted_cells = torch.sort(cells, dim=-1)[0]
+    sorted_cells = sort_index_tuples(cells)
 
     ### Find unique cells using vectorized first-occurrence detection
     n_cells = len(cells)
@@ -260,26 +270,24 @@ def remove_duplicate_cells(
     # First element is always a boundary (first occurrence)
     is_first_in_group = torch.cat(
         [
-            torch.tensor([True], device=device),
+            torch.ones(1, dtype=torch.bool, device=device),
             sorted_inverse[1:] != sorted_inverse[:-1],
         ]
     )
 
-    # Map back to original indices: first_occurrence_indices are the cells to keep
-    first_occurrence_indices = sorted_order[is_first_in_group]
+    # Map back to original indices: keep the first occurrence of each group
+    keep_mask = torch.empty(n_cells, dtype=torch.bool, device=device)
+    keep_mask[sorted_order] = is_first_in_group
 
-    # Build keep_mask from first occurrences
-    keep_mask = torch.zeros(n_cells, dtype=torch.bool, device=device)
-    keep_mask[first_occurrence_indices] = True
-
-    ### Filter cells and data
-    unique_cells = cells[keep_mask]
+    ### Filter cells and data (one nonzero, so one device sync, for both)
+    kept = torch.nonzero(keep_mask).squeeze(1)
+    unique_cells = cells[kept]
     unique_cell_data = (
-        cell_data[keep_mask]
+        cell_data[kept]
         if len(cell_data.keys()) > 0
         else TensorDict(
             {},
-            batch_size=torch.Size([keep_mask.sum().item()]),
+            batch_size=torch.Size([len(kept)]),
             device=cell_data.device,
         )
     )
@@ -340,7 +348,7 @@ def remove_unused_points(
         return (
             torch.empty((0, points.shape[1]), dtype=points.dtype, device=device),
             cells,
-            TensorDict({}, batch_size=torch.Size([0]), device=device),
+            point_data[:0],
             torch.full((n_points,), -1, dtype=torch.int64, device=device),
         )
 

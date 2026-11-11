@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
+from physicsnemo.utils._tracing import is_tracing
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -99,8 +101,17 @@ def point_measures(mesh: "Mesh") -> torch.Tensor:
 
 
 def set_cell_measures(mesh: "Mesh", values: torch.Tensor) -> None:
-    """Set complete per-cell measures in place, without changing geometry."""
-    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = _validate_measures(mesh, values, "cells")
+    """Set complete per-cell measures in place, without changing geometry.
+
+    The cached ``cell_areas`` tensor is stored as a copy, so the measure never
+    aliases the cache.
+    """
+    values = _validate_measures(mesh, values, "cells")
+    # While traced, reading _cache would guard on it, and cell_measures then
+    # never returns the cached tensor anyway (see Mesh._cached).
+    if not is_tracing() and values is mesh._cache.get(("cell", "areas"), None):
+        values = values.clone()
+    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = values
 
 
 def set_point_measures(mesh: "Mesh", values: torch.Tensor, *, dimension: int) -> None:
@@ -119,8 +130,9 @@ def set_point_measures(mesh: "Mesh", values: torch.Tensor, *, dimension: int) ->
         )
     values = _validate_measures(mesh, values, "points")
     mesh.point_data[EFFECTIVE_MEASURE_KEY] = values
-    mesh.global_data[POINT_MEASURE_DIMENSION_KEY] = torch.tensor(
-        dimension, device=mesh.points.device
+    # torch.full fills on the device; torch.tensor would copy from the host and sync.
+    mesh.global_data[POINT_MEASURE_DIMENSION_KEY] = torch.full(
+        (), dimension, dtype=torch.int64, device=mesh.points.device
     )
 
 
@@ -135,7 +147,7 @@ def point_measure_dimension(mesh: "Mesh") -> torch.Tensor:
         raise ValueError(
             "Point measure dimension is missing or not scalar; use set_point_measures"
         )
-    if not torch.compiler.is_compiling() and not bool(
+    if not is_tracing() and not bool(
         (dimension >= 0)
         & (dimension <= mesh.n_spatial_dims)
         & (dimension == dimension.round())
@@ -198,9 +210,7 @@ def _transfer_cell_measures(
     old_areas = source.cell_areas
     if parents is not None:
         measures, old_areas = measures[parents], old_areas[parents]
-    if not torch.compiler.is_compiling() and bool(
-        ((old_areas == 0) & (measures != 0)).any()
-    ):
+    if not is_tracing() and bool(((old_areas == 0) & (measures != 0)).any()):
         raise ValueError(
             "Cannot transform nonzero effective measure on a zero-measure cell; supply replacement measures"
         )
@@ -219,9 +229,16 @@ def _require_preserved_point_measures(mesh: "Mesh") -> None:
 
 
 def _transform_point_measures(
-    source: "Mesh", result: "Mesh", matrix: torch.Tensor
+    source: "Mesh",
+    result: "Mesh",
+    matrix: torch.Tensor,
+    assume_similarity: bool | None = None,
 ) -> None:
-    """Transform counting, full-dimensional, or similarity-mapped point measures."""
+    """Transform counting, full-dimensional, or similarity-mapped point measures.
+
+    ``assume_similarity`` follows :func:`~physicsnemo.mesh.transformations.geometric.transform`;
+    ``None`` tests ``matrix`` when the answer is needed.
+    """
     if EFFECTIVE_MEASURE_KEY not in source.point_data:
         return
     dimension = point_measure_dimension(source)
@@ -232,7 +249,9 @@ def _transform_point_measures(
     else:
         from physicsnemo.mesh.transformations.geometric import _is_similarity_transform
 
-        if not _is_similarity_transform(matrix):
+        if assume_similarity is None:
+            assume_similarity = _is_similarity_transform(matrix)
+        if not assume_similarity:
             raise ValueError(
                 "Anisotropic transformation of point measures requires support geometry; transform the source cells before constructing quadrature, or explicitly preserve reference measures"
             )

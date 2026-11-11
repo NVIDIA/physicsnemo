@@ -5,7 +5,7 @@ Metrics and Losses
 
 .. currentmodule:: physicsnemo.diffusion.metrics
 
-This module provides two categories of tools: 
+This module provides two categories of tools:
 
 * **training losses** for learning diffusion models
 * **evaluation metrics** for measuring the quality of generated samples
@@ -96,3 +96,8 @@ API Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: physicsnemo.diffusion.metrics.fid.calculate_fid_from_inception_stats
+
+:code:`wasserstein_from_normal`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: physicsnemo.diffusion.metrics.wasserstein.wasserstein_from_normal

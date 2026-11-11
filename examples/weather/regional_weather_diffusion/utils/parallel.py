@@ -16,12 +16,12 @@
 
 """Domain parallelization utilities."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Literal
 
 import numpy as np
 import torch
-from datasets.dataset import worker_init
+from datasets.dataset import LoaderSpec, CustomDataSource
 from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy
@@ -36,6 +36,70 @@ from physicsnemo.domain_parallel.shard_tensor import (
     ShardTensor,
     scatter_tensor,
 )
+
+
+def _contiguous_shard(start: int, stop: int, rank: int, world_size: int) -> np.ndarray:
+    """Return the contiguous slice of ``[start, stop)`` owned by ``rank``.
+
+    Splits the range into ``world_size`` near-equal pieces; a piece may be
+    empty if ``stop - start`` is smaller than ``world_size`` and this rank
+    drew none.
+    """
+    count = stop - start
+    if count <= 0:
+        return np.empty(0, dtype=int)
+    offsets = np.arange(count)
+    owner = (offsets / count * world_size).astype(int)
+    return start + offsets[owner == rank]
+
+
+def local_shard_indices(
+    num_samples: int,
+    *,
+    rank: int,
+    world_size: int,
+    segments: Sequence[int] | None = None,
+) -> np.ndarray:
+    """Return the indices a rank owns, optionally sharding within segments.
+
+    Without ``segments`` this is one contiguous slice of ``[0, num_samples)``.
+    With them, each segment is sharded independently and the per-segment slices
+    are concatenated, so every rank owns part of every segment. See
+    :meth:`ParallelHelper.shard_sampler` for why that matters when the index
+    space concatenates several domains.
+
+    Parameters
+    ----------
+    num_samples : int
+        Total number of drawable items.
+    rank : int
+        Rank whose indices are returned.
+    world_size : int
+        Total number of ranks.
+    segments : Sequence[int] or None, optional
+        Lengths of contiguous groups to shard independently; must sum to
+        ``num_samples``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Indices owned by ``rank``, ascending.
+
+    Raises
+    ------
+    ValueError
+        If ``segments`` does not sum to ``num_samples``.
+    """
+    if segments is None:
+        return _contiguous_shard(0, num_samples, rank, world_size)
+    if sum(segments) != num_samples:
+        raise ValueError(f"segments sum to {sum(segments)}, expected {num_samples}")
+    bounds = np.cumsum([0, *segments])
+    slices = [
+        _contiguous_shard(int(start), int(stop), rank, world_size)
+        for start, stop in zip(bounds[:-1], bounds[1:])
+    ]
+    return np.concatenate(slices or [np.empty(0, dtype=int)])
 
 
 class ParallelHelper:
@@ -74,7 +138,12 @@ class ParallelHelper:
             mesh_shape=(self.data_parallel_size, domain_parallel_size),
             mesh_dim_names=["ddp", "domain"],
         )
-        self.domain_rank = self.mesh["domain"].get_local_rank()
+        # Slice each submesh once and reuse the object: every mesh["..."] builds a
+        # new, equal DeviceMesh, and a compiled graph that meets one it does not
+        # track fails in Inductor (pytorch/pytorch#201701).
+        self.domain_mesh = self.mesh["domain"]
+        self.ddp_mesh = self.mesh["ddp"]
+        self.domain_rank = self.domain_mesh.get_local_rank()
         self.use_shard_tensor = use_shard_tensor
 
     def get_domain_group_zero_rank(self) -> int:
@@ -85,7 +154,7 @@ class ParallelHelper:
         int
             Global rank for local domain rank 0.
         """
-        return torch.distributed.get_global_rank(self.mesh["domain"].get_group(), 0)
+        return torch.distributed.get_global_rank(self.domain_mesh.get_group(), 0)
 
     def local_batch_size(self, global_batch_size: int) -> int:
         """Compute per-rank batch size for data parallelism.
@@ -102,72 +171,152 @@ class ParallelHelper:
         """
         return global_batch_size // self.data_parallel_size
 
-    def sharded_dataloader(
+    def shard_sampler(
         self,
-        dataset: torch.utils.data.Dataset,
-        batch_size: int = 1,
+        num_samples: int,
+        *,
         seed: int | None = None,
-        num_workers: int = 2,
         shuffle: bool = True,
-        pin_memory: bool = True,
-    ) -> torch.utils.data.DataLoader:
-        """Create a rank-sharded DataLoader.
+        segments: Sequence[int] | None = None,
+    ) -> Iterator[int]:
+        """Yield the rank-local index stream, cycling forever.
 
-        Each rank accesses the dataset at indices [i_start : i_end] where
-        i_start = int(rank / world_size * len(dataset))
-        i_end = int((rank+1) / world_size * len(dataset))
+        Each rank gets a contiguous slice of the index space (see
+        :func:`local_shard_indices`), in contrast to torch's
+        ``DistributedSampler`` which gives a strided slice. This helps with
+        caching as forecasting models frequently access subsequent time steps.
 
-        Therefore each rank gets a contiguous slice of samples, in contrast to torch
-        DistributedSampler which gives a strided slice. This helps with caching as
-        forecasting models frequently access subsequent time steps.
+        ``segments`` shards *within* each segment instead of across the whole
+        index space. A multi-domain dataset concatenates its domains, so a
+        single global slice would hand low ranks nothing but the first domain
+        and high ranks nothing but the second -- every local batch
+        single-domain, with the domains meeting only in the gradient all-reduce.
+        Passing the per-domain lengths gives every rank a contiguous slice of
+        *every* domain, so domains mix inside each local batch too, at no cost
+        to intra-domain contiguity. It also means no rank has to read a domain
+        it never samples.
+
+        The stream is infinite: it reshuffles the local slice and starts over
+        each time it is exhausted, so the training loop can draw batches
+        indefinitely without epoch bookkeeping. Both loader backends consume
+        this same stream (the PhysicsNeMo ``DataLoader`` accepts any iterable as
+        its ``sampler``), so index-space behavior cannot drift between them.
 
         Parameters
         ----------
-        dataset : torch.utils.data.Dataset
-            Dataset to sample from.
-        batch_size : int, optional
-            Batch size per rank.
+        num_samples : int
+            Total number of drawable items across all ranks.
         seed : int or None, optional
-            RNG seed base for shuffling.
-        num_workers : int, optional
-            Number of worker processes.
+            RNG seed base for shuffling. ``None`` draws non-reproducibly.
         shuffle : bool, optional
             Whether to shuffle local indices.
-        pin_memory : bool, optional
-            Whether to use pinned memory with the dataloader.
+        segments : Sequence[int] or None, optional
+            Lengths of contiguous groups (e.g. per-domain sample counts) to
+            shard independently. ``None`` shards the whole range at once.
 
         Returns
         -------
-        torch.utils.data.DataLoader
-            DataLoader that yields data from the local shard only.
+        Iterator[int]
+            Infinite iterator over indices owned by the current rank.
+
+        Raises
+        ------
+        ValueError
+            If ``segments`` does not sum to ``num_samples``, or if this rank
+            would own zero samples (which would otherwise hang the training
+            loop waiting on an index stream that never yields).
         """
+        local_samples = local_shard_indices(
+            num_samples,
+            rank=self.dist.rank,
+            world_size=self.dist.world_size,
+            segments=segments,
+        )
+        if len(local_samples) == 0:
+            raise ValueError(
+                f"Rank {self.dist.rank} of {self.dist.world_size} would own 0 "
+                f"samples out of {num_samples} total (segments={segments}). "
+                "An empty rank-local shard would hang the training loop "
+                "waiting on an index stream that never yields. Reduce the "
+                "number of ranks, disable shard_by_domain, or grow the "
+                "dataset/segment so every rank has at least one sample."
+            )
 
-        # determine samples used by the current rank
-        global_samples = np.arange(len(dataset))
-        num_samples_global = len(global_samples)
-        source_rank = (
-            global_samples / num_samples_global * self.dist.world_size
-        ).astype(int)
-        local_samples = global_samples[source_rank == self.dist.rank]
+        local_seed = None if seed is None else seed + self.dist.rank
+        rng = np.random.default_rng(seed=local_seed)
+        while True:
+            if shuffle:
+                rng.shuffle(local_samples)
+            yield from local_samples
 
-        def sampler():
-            """Iterate sample indices accessed by the current rank."""
-            local_seed = None if seed is None else seed + self.dist.rank
-            rng = np.random.default_rng(seed=local_seed)
-            while True:
-                if shuffle:
-                    rng.shuffle(local_samples)
-                yield from local_samples
+    def loader_spec(
+        self,
+        source: CustomDataSource,
+        *,
+        batch_size: int,
+        num_workers: int = 0,
+        device: torch.device | None = None,
+        seed: int | None = None,
+        shuffle: bool = True,
+        **options: Any,
+    ) -> LoaderSpec:
+        """Build the :class:`~datasets.dataset.LoaderSpec` for a data source.
 
-        return torch.utils.data.DataLoader(
-            dataset=dataset,
+        Bundles the rank-sharded sampler with the trainer's batch/device/worker
+        requirements. Recognized ``options`` (typically forwarded straight from
+        ``cfg.dataset.loader``) populate the matching spec fields; anything else
+        is passed through in :attr:`~datasets.dataset.LoaderSpec.options` for a
+        backend to interpret.
+
+        Parameters
+        ----------
+        source : CustomDataSource
+            Source the loader will draw from; only its length is read here.
+        batch_size : int
+            Local (per-rank) batch size in training samples.
+        num_workers : int, optional
+            Worker count for the loader.
+        device : torch.device or None, optional
+            Training device, for backends that deliver batches on-device.
+        seed : int or None, optional
+            Master seed for sampling and stochastic transforms.
+        shuffle : bool, optional
+            Whether the sampler shuffles the rank-local slice.
+        **options
+            Backend options (``backend``, ``prefetch_factor``, ``use_streams``,
+            ``pin_memory``, ``drop_last``, plus any extras).
+
+        Returns
+        -------
+        LoaderSpec
+            Spec to hand to :meth:`~datasets.dataset.CustomDataSource.make_loader`.
+        """
+        spec_fields = {
+            "backend",
+            "drop_last",
+            "pin_memory",
+            "prefetch_factor",
+            "use_streams",
+        }
+        known = {key: options.pop(key) for key in list(options) if key in spec_fields}
+
+        # Shard within each of the source's index segments (its domains, when it
+        # declares them) so every rank draws from all of them; see shard_sampler.
+        segments = None
+        if options.pop("shard_by_domain", True):
+            index_segments = getattr(source, "index_segments", None)
+            segments = index_segments() if callable(index_segments) else None
+
+        return LoaderSpec(
             batch_size=batch_size,
-            sampler=sampler(),
+            sampler=self.shard_sampler(
+                len(source), seed=seed, shuffle=shuffle, segments=segments
+            ),
             num_workers=num_workers,
-            worker_init_fn=worker_init,
-            drop_last=True,
-            pin_memory=torch.cuda.is_available() and pin_memory,
-            prefetch_factor=2 if num_workers > 0 else None,
+            device=device,
+            seed=seed,
+            options=options,
+            **known,
         )
 
     def sharded_data_iter(
@@ -195,7 +344,7 @@ class ParallelHelper:
 
         i = 0
         batch = None
-        domain_group = self.mesh["domain"].get_group()
+        domain_group = self.domain_mesh.get_group()
         while True:
             # the source rank within the domain group (always 0 when domain_parallel_size == 1)
             source_rank_in_mesh = i % self.domain_parallel_size
@@ -287,10 +436,10 @@ class ParallelHelper:
                 if not p.is_contiguous():
                     p.data = p.data.contiguous()
 
-        sync_module_over_mesh(model, self.mesh["domain"])
+        sync_module_over_mesh(model, self.domain_mesh)
         if self.use_shard_tensor:
             self._shard_spatial_params(model)
-        fully_shard(model, mesh=self.mesh["ddp"])
+        fully_shard(model, mesh=self.ddp_mesh)
         return model
 
     def _shard_spatial_params(self, model: torch.nn.Module) -> None:
@@ -307,7 +456,7 @@ class ParallelHelper:
         model : torch.nn.Module
             Model whose spatial parameters/buffers should be sharded in place.
         """
-        domain_mesh = self.mesh["domain"]
+        domain_mesh = self.domain_mesh
         for module in model.modules():
             for name, param in list(module.named_parameters(recurse=False)):
                 shard_dim = shard_dim_selector(name)
@@ -356,7 +505,7 @@ class ParallelHelper:
 
         return DomainParallelNoiseScheduler(
             scheduler,
-            self.mesh["domain"],
+            self.domain_mesh,
             shard_dim=self.shard_dim,
         )
 
@@ -379,7 +528,7 @@ class ParallelHelper:
         if not self.use_shard_tensor or isinstance(t, DTensor):
             return t
         return DTensor.from_local(
-            t, device_mesh=self.mesh["domain"], placements=[Replicate()]
+            t, device_mesh=self.domain_mesh, placements=[Replicate()]
         )
 
     def sync_replicated_grads(self, model: torch.nn.Module) -> None:
@@ -409,7 +558,7 @@ class ParallelHelper:
         """
         if not self.use_shard_tensor:
             return
-        mesh = self.mesh["domain"]
+        mesh = self.domain_mesh
         mesh_size = mesh.size(0)
         if mesh_size == 1:
             return
@@ -479,7 +628,7 @@ class ParallelHelper:
             x = scatter_tensor(
                 x,
                 global_rank_of_source,
-                self.mesh["domain"],
+                self.domain_mesh,
                 placements=(placement,),  # Shard along height (H dimension)
                 global_shape=x.shape,
                 dtype=x.dtype,

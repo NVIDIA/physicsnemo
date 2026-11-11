@@ -18,8 +18,11 @@ import importlib
 
 import torch
 from einops import rearrange
+from jaxtyping import Float
 from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 from physicsnemo.nn.module.utils.utils import _validate_amp
 
 # Import apex GroupNorm if installed only
@@ -67,6 +70,87 @@ def _compute_groupnorm_groups(
             "num_channels must be divisible by num_groups or min_channels_per_group"
         )
     return num_groups
+
+
+class GroupNorm3D(Module):
+    r"""
+    Group normalization for 5D tensors :math:`(B, C, D, H, W)`.
+
+    Divides the channel dimension into groups and normalizes within each group
+    independently. During training, uses :func:`torch.nn.functional.group_norm`.
+    During inference, uses a manual implementation compatible with channels-last
+    memory layouts.
+
+    Parameters
+    ----------
+    num_channels : int
+        Number of channels in the input tensor.
+    num_groups : int, optional, default=32
+        Target number of groups. Adjusted downward if
+        ``num_channels // num_groups < min_channels_per_group``.
+    min_channels_per_group : int, optional, default=4
+        Minimum channels allowed per group.
+    eps : float, optional, default=1e-5
+        Epsilon for numerical stability.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Normalized tensor of shape :math:`(B, C, D, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn import GroupNorm3D
+    >>> gn = GroupNorm3D(num_channels=32)
+    >>> x = torch.randn(2, 32, 4, 12, 16)
+    >>> gn(x).shape
+    torch.Size([2, 32, 4, 12, 16])
+    """
+
+    def __init__(
+        self,
+        num_channels: int,
+        num_groups: int = 32,
+        min_channels_per_group: int = 4,
+        eps: float = 1e-5,
+    ):
+        super().__init__(meta=ModelMetaData())
+        self.num_groups = min(num_groups, num_channels // min_channels_per_group)
+        self.eps = eps
+        self.weight = torch.nn.Parameter(torch.ones(num_channels))
+        self.bias = torch.nn.Parameter(torch.zeros(num_channels))
+
+    def forward(
+        self, x: Float[torch.Tensor, "B C D H W"]
+    ) -> Float[torch.Tensor, "B C D H W"]:
+        if self.training:
+            x = torch.nn.functional.group_norm(
+                x,
+                num_groups=self.num_groups,
+                weight=self.weight.to(x.dtype),
+                bias=self.bias.to(x.dtype),
+                eps=self.eps,
+            )
+        else:
+            # Preserve the established corrected-variance inference calculation.
+            dtype = x.dtype
+            x = x.float()
+            x = rearrange(x, "b (g c) d h w -> b g c d h w", g=self.num_groups)
+            mean = x.mean(dim=[2, 3, 4, 5], keepdim=True)
+            var = x.var(dim=[2, 3, 4, 5], keepdim=True)
+            x = (x - mean) * (var + self.eps).rsqrt()
+            x = rearrange(x, "b g c d h w -> b (g c) d h w")
+            x = x * rearrange(self.weight, "c -> 1 c 1 1 1") + rearrange(
+                self.bias, "c -> 1 c 1 1 1"
+            )
+            x = x.to(dtype)
+        return x
 
 
 def get_group_norm(

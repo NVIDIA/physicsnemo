@@ -51,6 +51,7 @@ pipeline:
         high:
           _target_: torch.tensor
           data: [1.0, 1.0, 0.0]
+        validate_args: false
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]

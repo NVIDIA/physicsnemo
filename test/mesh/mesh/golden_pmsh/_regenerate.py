@@ -14,27 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regenerate the committed ``.pmsh`` golden fixture used to lock in the
-on-disk format of :class:`physicsnemo.mesh.Mesh`.
+"""Build and write the canonical ``.pmsh`` golden fixture.
 
-The companion test :mod:`test.mesh.mesh.test_pmsh_golden` loads this fixture
-and asserts every field round-trips intact, so any future change that
-quietly alters the on-disk layout (renaming a tensorclass field, dropping
-``shadow=True``, swapping the decorator for inheritance, etc.) will fail
-the test.
+``v2.0_two_triangles.pmsh`` is immutable data written by the decorator-based
+``Mesh`` implementation. The companion test checks that it loads exactly and
+that a fresh save reproduces its directory and metadata layout.
 
-Run this script only when the ``.pmsh`` format intentionally changes:
+If the writer layout intentionally changes, keep this fixture for backward
+reads and write a new one beside it:
 
 .. code-block:: bash
 
-    uv run --no-sync python test/mesh/mesh/golden_pmsh/_regenerate.py
-
-Then commit the resulting ``v2.0_two_triangles.pmsh/`` directory tree.
+    uv run --no-sync python -m test.mesh.mesh.golden_pmsh._regenerate <new_fixture_dir>
 """
 
 from __future__ import annotations
 
-import shutil
+import sys
 from pathlib import Path
 
 import torch
@@ -44,9 +40,7 @@ from physicsnemo.mesh.primitives.basic import two_triangles_2d
 
 ### Fixture identity #########################################################
 
-# Bumping this name (e.g. ``v2.1_...``) lets us keep historical fixtures
-# alongside new ones if we want to test multiple format generations at once.
-FIXTURE_DIR: Path = (Path(__file__).parent / "v2.0_two_triangles.pmsh").resolve()
+LEGACY_FIXTURE_DIR: Path = (Path(__file__).parent / "v2.0_two_triangles.pmsh").resolve()
 
 
 def build_canonical_mesh() -> Mesh:
@@ -83,20 +77,13 @@ def build_canonical_mesh() -> Mesh:
     return mesh
 
 
-def regenerate(fixture_dir: Path = FIXTURE_DIR) -> None:
-    """Rebuild the on-disk fixture, replacing any prior copy.
-
-    Memmap save refuses to overwrite an existing directory, so the prior
-    fixture is wiped first.
-    """
+def regenerate(fixture_dir: Path) -> None:
+    """Write the canonical mesh to a new fixture directory."""
     if fixture_dir.exists():
-        shutil.rmtree(fixture_dir)
-    fixture_dir.parent.mkdir(parents=True, exist_ok=True)
+        raise FileExistsError(f"{fixture_dir} exists; committed fixtures are immutable")
     build_canonical_mesh().save(fixture_dir)
-    n_files = sum(1 for p in fixture_dir.rglob("*") if p.is_file())
-    n_bytes = sum(p.stat().st_size for p in fixture_dir.rglob("*") if p.is_file())
-    print(f"Wrote {fixture_dir.relative_to(Path.cwd())} ({n_files} files, {n_bytes} B)")
+    print(f"Wrote {fixture_dir}")
 
 
 if __name__ == "__main__":
-    regenerate()
+    regenerate(Path(sys.argv[1]))

@@ -40,7 +40,7 @@ dependencies = [
     "jaxtyping>=0.3.11",
     "termcolor>=3.3.0",
     "hydra-core>=1.3.7",
-    "tensordict[zarr]>=0.14.2",
+    "tensordict[zarr]>=0.15.3,<0.16.0",
     "omegaconf>=2.3.1",
     "importlib-metadata>=9.0.1",
     "psutil>=7.2.2",
@@ -410,6 +410,7 @@ SongUNet = "physicsnemo.models.diffusion_unets:SongUNet"
 SongUNetPosEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosEmbd"
 SongUNetPosLtEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosLtEmbd"
 DhariwalUNet = "physicsnemo.models.diffusion_unets:DhariwalUNet"
+DiffusionUNet3D = "physicsnemo.models.diffusion_unets:DiffusionUNet3D"
 
 # DiT
 DiT = "physicsnemo.models.dit:DiT"

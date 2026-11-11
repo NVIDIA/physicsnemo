@@ -16,7 +16,7 @@
 
 import torch
 
-from physicsnemo.metrics.general.wasserstein import wasserstein_from_normal
+from .wasserstein import wasserstein_from_normal
 
 
 def calculate_fid_from_inception_stats(

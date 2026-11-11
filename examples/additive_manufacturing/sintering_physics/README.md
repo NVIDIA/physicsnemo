@@ -20,7 +20,8 @@ built up during the sintering process,
 e.g., gravitational sag, gravitational slump, surface drag.  
 
 <p align="center">
-<img src="../../../docs/img/vfgn_doc/HP-MetalJet-process.png" width="700" />
+<img src="../../../docs/img/vfgn_doc/HP-MetalJet-process.png" width="700"
+  alt="HP Metal Jet steps from powder and binder to sintering, plus machine photos" />
 </p>
 
 In this work, we use a graph-based deep learning approach to
@@ -34,7 +35,8 @@ deviation for a 63mm testing part, for a single sintering step
 (equivalent to 8.3 minutes physical sintering time), and a 0.3mm
 mean deviation for the complete sintering cycle (~4 hrs physical sintering time).  
 <p align="center">
-<img src="../../../docs/img/vfgn_doc/4-parts-final.png" width="700" />
+<img src="../../../docs/img/vfgn_doc/4-parts-final.png" width="700"
+  alt="Four test parts plotted by run time versus max node error over part size" />
 </p>
 
 Full paper on:
@@ -42,16 +44,20 @@ Full paper on:
 
 For more sample parts simulation:
 <p align="center">
-<img src="../../../docs/img/vfgn_doc/usb.gif" width="560" />
+<img src="../../../docs/img/vfgn_doc/usb.gif" width="560"
+  alt="Animation of the sintering deformation simulation for a USB part" />
 </p>
 <p align="center">
-<img src="../../../docs/img/vfgn_doc/pushing-grip.gif" width="560" />
+<img src="../../../docs/img/vfgn_doc/pushing-grip.gif" width="560"
+  alt="Animation of the sintering deformation simulation for a pushing grip part" />
 </p>
 <p align="center">
-<img src="../../../docs/img/vfgn_doc/screw.gif" width="560" />
+<img src="../../../docs/img/vfgn_doc/screw.gif" width="560"
+  alt="Animation of the sintering deformation simulation for a screw part" />
 </p>
 <p align="center">
-<img src="../../../docs/img/vfgn_doc/busbar.gif" width="560" />
+<img src="../../../docs/img/vfgn_doc/busbar.gif" width="560"
+  alt="Animation of the sintering deformation simulation for a busbar part" />
 </p>
 
 ## Setup with PhysicsNeMo package

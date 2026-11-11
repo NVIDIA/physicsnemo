@@ -368,6 +368,81 @@ class TestTensorStoreZarrReader:
 
         assert data["positions"].is_pinned()
 
+    def test_coordinated_subsampling_absent_leading_key_falls_back(
+        self, tensorstore_available, zarr_v2_data_dir
+    ):
+        """The window comes from the first *present* configured key."""
+        from physicsnemo.datapipes.readers.tensorstore_zarr import (
+            TensorStoreZarrReader,
+        )
+
+        reader = TensorStoreZarrReader(
+            zarr_v2_data_dir,
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={
+                "n_points": 10,
+                "target_keys": ["not_in_store", "positions"],
+            },
+        )
+        data, _ = reader[0]
+        assert data["positions"].shape == (10, 3)
+        assert data["features"].shape == (100, 8)
+
+    def test_coordinated_subsampling_no_target_present_reads_full(
+        self, tensorstore_available, zarr_v2_data_dir
+    ):
+        from physicsnemo.datapipes.readers.tensorstore_zarr import (
+            TensorStoreZarrReader,
+        )
+
+        reader = TensorStoreZarrReader(
+            zarr_v2_data_dir,
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={"n_points": 10, "target_keys": ["not_in_store"]},
+        )
+        data, _ = reader[0]
+        assert data["positions"].shape == (100, 3)
+        assert data["features"].shape == (100, 8)
+
+    def test_finalize_merges_arrays_attributes_and_defaults(
+        self, tensorstore_available, zarr_v2_data_dir
+    ):
+        """Subsampled arrays, attributes and defaults land in one sample;
+        a default never overrides a field that was actually read."""
+        from physicsnemo.datapipes.readers.tensorstore_zarr import (
+            TensorStoreZarrReader,
+        )
+
+        reader = TensorStoreZarrReader(
+            zarr_v2_data_dir,
+            fields=["positions", "sample_id", "missing"],
+            default_values={
+                "missing": torch.zeros(3),
+                "positions": torch.ones(1),
+            },
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={"n_points": 10, "target_keys": ["positions"]},
+        )
+        data, _ = reader[2]
+        assert data["positions"].shape == (10, 3)
+        assert data["sample_id"].item() == 2
+        torch.testing.assert_close(data["missing"], torch.zeros(3))
+
+    def test_include_index_in_metadata_false(
+        self, tensorstore_available, zarr_v2_data_dir
+    ):
+        from physicsnemo.datapipes.readers.tensorstore_zarr import (
+            TensorStoreZarrReader,
+        )
+
+        reader = TensorStoreZarrReader(
+            zarr_v2_data_dir,
+            group_pattern="sample_*.zarr",
+            include_index_in_metadata=False,
+        )
+        _, meta = reader[0]
+        assert "index" not in meta
+
 
 # ============================================================================
 # VTKReader Tests

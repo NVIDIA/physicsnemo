@@ -375,6 +375,33 @@ class TestCrossBranchConsistency:
         n_general = _normals_general(vecs)
         torch.testing.assert_close(n_rot, n_general, atol=1e-12, rtol=0)
 
+    @pytest.mark.parametrize("n_spatial_dims", [1, 2, 3, 4])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    def test_from_points_matches_relative_vectors(self, n_spatial_dims, dtype):
+        """The per-vertex entry point gives the same values and gradients."""
+        from physicsnemo.mesh.geometry._cell_normals import (
+            _compute_cell_normals_from_points,
+        )
+
+        generator = torch.Generator().manual_seed(n_spatial_dims)
+        points = torch.randn(20, n_spatial_dims, generator=generator).to(dtype)
+        cells = torch.stack(
+            [
+                torch.randperm(20, generator=generator)[:n_spatial_dims]
+                for _ in range(30)
+            ]
+        )
+
+        points_a = points.clone().requires_grad_(True)
+        points_b = points.clone().requires_grad_(True)
+        result = _compute_cell_normals_from_points(points_a, cells)
+        expected = compute_cell_normals(points_b[cells[:, 1:]] - points_b[cells[:, :1]])
+        assert torch.equal(result, expected)
+
+        result.sum().backward()
+        expected.sum().backward()
+        torch.testing.assert_close(points_a.grad, points_b.grad)
+
 
 ### Device parametrization ###
 

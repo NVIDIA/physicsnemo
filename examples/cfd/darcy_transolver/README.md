@@ -6,7 +6,8 @@ This example demonstrates how to set up a data-driven model for a 2D Darcy flow
 using the Transolver inside of PhysicsNeMo.
 
 <p align="center">
-<img src="../../../docs/img/transolver.png" />
+<img src="../../../docs/img/transolver.png"
+  alt="Darcy flow field: ground truth, Transolver prediction, and error" />
 </p>
 
 Training progress can be tracked through

@@ -25,7 +25,7 @@ body:
       value: |
         Thanks for taking the time to help PhysicsNeMo and share your research!
         - By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md)
-        - You also confirm that you have searched the [existing research list](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md) and this paper is not already included
+        - You also confirm that you have searched the [existing research list](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.rst) and this paper is not already included
         - Inclusion does not imply endorsement; submissions are reviewed before being added. Authors may also request a correction or removal through this form.
         - Put the paper title in the issue title above, after `[PAPER]:`.
 

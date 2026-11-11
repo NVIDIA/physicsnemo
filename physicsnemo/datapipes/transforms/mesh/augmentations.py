@@ -119,6 +119,9 @@ class RandomScaleMesh(MeshTransform):
         """
         super().__init__()
         self._distribution = distribution or torch.distributions.Uniform(0.9, 1.1)
+        # The default factors lie in [0.9, 1.1], so the scale is invertible and
+        # need not be tested on the device; other distributions may reach zero.
+        self._assume_invertible = True if distribution is None else None
         self.transform_point_data = transform_point_data
         self.transform_cell_data = transform_cell_data
         self.transform_global_data = transform_global_data
@@ -155,6 +158,7 @@ class RandomScaleMesh(MeshTransform):
             transform_point_data=self.transform_point_data,
             transform_cell_data=self.transform_cell_data,
             transform_global_data=self.transform_global_data,
+            assume_invertible=self._assume_invertible,
         )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
@@ -179,6 +183,7 @@ class RandomScaleMesh(MeshTransform):
             transform_point_data=self.transform_point_data,
             transform_cell_data=self.transform_cell_data,
             transform_global_data=self.transform_global_data,
+            assume_invertible=self._assume_invertible,
         )
 
     def extra_repr(self) -> str:
@@ -460,6 +465,7 @@ class RandomRotateMesh(MeshTransform):
                     transform_cell_data=self.transform_cell_data,
                     transform_global_data=self.transform_global_data,
                     assume_invertible=True,
+                    assume_similarity=True,
                 )
             case "axis_aligned":
                 axis, angle = self._sample_axis_and_angle()
@@ -506,6 +512,7 @@ class RandomRotateMesh(MeshTransform):
                     transform_cell_data=self.transform_cell_data,
                     transform_global_data=self.transform_global_data,
                     assume_invertible=True,
+                    assume_similarity=True,
                 )
             case "axis_aligned":
                 axis, angle = self._sample_axis_and_angle()

@@ -16,6 +16,7 @@
 
 """Tests for match_points (near-exact vertex matching via KNN + tolerance)."""
 
+import pytest
 import torch
 
 from physicsnemo.mesh.sampling import match_points
@@ -72,3 +73,14 @@ class TestMatchPoints:
         src_idx, tgt_idx = match_points(source, target, tolerance=1e-6)
         assert src_idx.tolist() == [0, 1]
         assert tgt_idx.tolist() == [0, 0]
+
+    @pytest.mark.parametrize("n_source, n_target", [(0, 2), (2, 0), (0, 0)])
+    def test_empty_inputs(self, n_source, n_target, device):
+        """An empty source or target has no matches."""
+        source = torch.zeros(n_source, 3, device=device)
+        target = torch.zeros(n_target, 3, device=device)
+        src_idx, tgt_idx = match_points(source, target)
+        for idx in (src_idx, tgt_idx):
+            assert idx.shape == (0,)
+            assert idx.dtype == torch.int64
+            assert idx.device == source.device

@@ -232,11 +232,12 @@ def polar_and_dipole_basis(
     # Compute e_kappa, the basis vector in the dipole direction
     e_kappa = vector_project(-n_hat, r_hat)
     r_hat_is_zero = torch.all(r_hat == 0.0, dim=-1)
-    e_kappa[r_hat_is_zero] = 0.0
+    e_kappa = e_kappa.masked_fill(r_hat_is_zero[..., None], 0.0)
     if normalize_basis_vectors:
         norm = torch.linalg.norm(e_kappa, dim=-1)
         e_kappa = e_kappa / norm[..., None]
-        e_kappa[norm == 0] = 0.0  # Overwrites any NaNs with zero vectors
+        # Overwrites any NaNs with zero vectors
+        e_kappa = e_kappa.masked_fill((norm == 0)[..., None], 0.0)
 
     return e_r, e_theta, e_kappa
 
@@ -313,11 +314,12 @@ def spherical_basis(
     # Compute e_theta, the basis vector in the polar direction
     e_theta = vector_project(-n_hat, r_hat)
     r_hat_is_zero = torch.all(r_hat == 0.0, dim=-1)
-    e_theta[r_hat_is_zero] = 0.0
+    e_theta = e_theta.masked_fill(r_hat_is_zero[..., None], 0.0)
     if normalize_basis_vectors:
         norm = torch.linalg.norm(e_theta, dim=-1)
         e_theta = e_theta / norm[..., None]
-        e_theta[norm == 0] = 0.0  # Overwrites any NaNs with zero vectors
+        # Overwrites any NaNs with zero vectors
+        e_theta = e_theta.masked_fill((norm == 0)[..., None], 0.0)
 
     # Compute e_phi, the basis vector in the azimuthal direction
     e_phi = torch.cross(e_r, e_theta, dim=-1)

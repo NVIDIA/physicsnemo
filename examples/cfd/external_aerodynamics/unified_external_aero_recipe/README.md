@@ -79,6 +79,9 @@ and each model YAML's `forward_kwargs:` block declaratively maps
 DomainMesh paths into the model's `forward()` kwargs. The recipe collate
 either passes those values through (mesh-native models like GLOBE) or
 batch-wraps them into `(B, N, C)` tensors (transformer-style models).
+Section 5 of the [PhysicsNeMo-Mesh paper](https://arxiv.org/abs/2610.39072)
+describes this design, with one stored DrivAerML dataset feeding Transolver,
+GeoTransolver, and GLOBE.
 
 ```mermaid
 flowchart LR
@@ -128,7 +131,8 @@ flowchart LR
   Augmentations are inserted after `CenterMesh` by the dataset builder.
   Rotation is restricted to the vertical axis.  Translation is restricted
   to horizontal axes by setting the vertical component of the offset
-  distribution to zero.
+  distribution to zero (`low == high`), which needs
+  `validate_args: false` on the `Uniform`.
 
 - **NonDimensionalizeByMetadata** — Converts raw physical fields into
   non-dimensional coefficients using the per-sample freestream
@@ -409,6 +413,30 @@ python src/train.py benchmark_io=true +training.benchmark_max_steps=20
 
 Measures per-sample load time and throughput without running the model.
 
+### Domain parallelism
+
+The unified external aero recipe supports domain parallelism for select models.
+This recipe uses ``ShardTensor`` in physicsnemo, supported natively in physicsnemo's
+datapipes and mesh objects, to perform domain parallel IO + preprocessing as well
+as model training.
+
+Set `domain_parallelism.domain_size=N` to shard each sample across N GPUs;
+the remaining GPUs form the data-parallel (DDP) axis (so `world_size` must be
+a multiple of N).
+
+```bash
+torchrun --nproc-per-node 4 src/train.py model=geotransolver_volume \
+    dataset=drivaer_ml_volume domain_parallelism.domain_size=4
+```
+
+The other keys in the `domain_parallelism` block (`auto_shard_size`,
+`placements`) are the readers' sharding policy; see the
+[Domain Parallelism Guide](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/domain_parallelism_entry_point.html)
+for more information on domain parallelism.
+
+In the recipe, both surface and volume training are supported for domain parallelism.
+Transolver, GeoTransolver, and FLARE are supported.  GLOBE is not yet supported.
+
 ## Configuration
 
 A single canonical `conf/train.yaml` drives every training run. It picks
@@ -648,6 +676,7 @@ pipeline:
         high:
           _target_: torch.tensor
           data: [1.0, 1.0, 0.0]
+        validate_args: false
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]

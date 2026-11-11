@@ -29,7 +29,9 @@ from physicsnemo.distributed import DistributedManager
 from utils.trainer import Trainer
 
 
-@hydra.main(version_base=None, config_path="config", config_name="regression")
+@hydra.main(
+    version_base=None, config_path="config", config_name="reference_downscaling"
+)
 def main(cfg: DictConfig) -> None:
     """Train regression or diffusion models for use in the StormCast (https://arxiv.org/abs/2408.10958) ML-based weather model"""
 
@@ -43,6 +45,11 @@ def main(cfg: DictConfig) -> None:
     )
     warnings.filterwarnings(
         "ignore", message="^.*You are importing from 'physicsnemo.experimental'.*$"
+    )
+    # Flow matching trains up to t = 1 (pure noise), which is safe: the loss and
+    # the flow used for sampling stay finite there
+    warnings.filterwarnings(
+        "ignore", message="^RectifiedFlowNoiseScheduler was constructed with t_max=1.0"
     )
 
     # Initialize

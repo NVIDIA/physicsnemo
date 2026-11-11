@@ -18,7 +18,7 @@
 
 This documentation figure is self-contained. It builds both meshes directly
 with PyTorch, calls the real :meth:`physicsnemo.mesh.Mesh.shrinkwrap` API, and
-renders all three panels directly.
+renders all three panels with the shared figure style.
 
 The Torch backend is validated on CPU. When CUDA is available, the Warp result
 is also checked against Torch.
@@ -29,9 +29,23 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pyvista as pv
 import torch
 import torch.nn.functional as F
+from _style import (
+    ACCENT_LIGHTING,
+    FIXED,
+    FOURTH,
+    SEQUENTIAL,
+    SURFACE,
+    SURFACE_EDGE,
+    mesh_label,
+    save,
+    spheres,
+)
+from matplotlib.colors import Normalize
+from matplotlib.lines import Line2D
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import to_pyvista
@@ -41,11 +55,10 @@ pv.OFF_SCREEN = True
 OUTPUT = Path(__file__).with_suffix(".png")
 MAX_DISTANCE = 0.34
 
-TARGET_COLOR = "#79AFCB"
-SOURCE_COLOR = "#EE9B5A"
-EDGE_COLOR = "#334155"
-FIXED_COLOR = "#138A72"
-TEXT_COLOR = "#172B3A"
+TARGET_COLOR = SURFACE
+SOURCE_COLOR = FOURTH
+EDGE_COLOR = SURFACE_EDGE
+FIXED_COLOR = FIXED
 
 
 def structured_cells(
@@ -326,19 +339,37 @@ def camera_position(mesh: Mesh) -> list[list[float]]:
     ]
 
 
-def add_fixed_root(
-    plotter: pv.Plotter,
+def render_panel(
     mesh: Mesh,
-    movable: torch.Tensor,
-) -> None:
-    """Mark root vertices held by the point-weight mask."""
+    camera: list[list[float]],
+    movable: torch.Tensor | None = None,
+    **kwargs,
+):
+    """Render one panel from the shared camera and return the image array."""
 
-    plotter.add_points(
-        mesh.points[~movable].detach().cpu().numpy(),
-        color=FIXED_COLOR,
-        point_size=7.0,
-        render_points_as_spheres=True,
+    plotter = pv.Plotter(off_screen=True, window_size=(1000, 900))
+    plotter.enable_anti_aliasing("ssaa")
+    plotter.set_background("white")
+    plotter.add_mesh(
+        to_pyvista(mesh) if "scalars" not in kwargs else kwargs.pop("dataset"),
+        smooth_shading=True,
+        show_edges=True,
+        edge_color=EDGE_COLOR,
+        line_width=0.6,
+        ambient=0.35,
+        diffuse=0.7,
+        show_scalar_bar=False,
+        **kwargs,
     )
+    if movable is not None:
+        # Mark the root vertices held by the point-weight mask.
+        root = mesh.points[~movable].detach().cpu().numpy()
+        plotter.add_mesh(spheres(root, 0.012), color=FIXED_COLOR, **ACCENT_LIGHTING)
+    plotter.camera_position = camera
+    plotter.camera.zoom(0.95)
+    image = plotter.screenshot(return_img=True)
+    plotter.close()
+    return image
 
 
 def render(
@@ -352,101 +383,62 @@ def render(
     correction_mm = (
         1000.0 * torch.linalg.vector_norm(result.points - source.points, dim=1)
     ).numpy()
-
-    target_pv = to_pyvista(target)
-    source_pv = to_pyvista(source)
     result_pv = to_pyvista(result)
-    result_pv.point_data["correction [mm]"] = correction_mm
-
-    plotter = pv.Plotter(
-        shape=(1, 3),
-        window_size=(1920, 640),
-        border=False,
-    )
-    plotter.enable_anti_aliasing("ssaa")
-
-    plotter.subplot(0, 0)
-    plotter.add_mesh(
-        target_pv,
-        color=TARGET_COLOR,
-        smooth_shading=True,
-        show_edges=True,
-        edge_color=EDGE_COLOR,
-        line_width=0.28,
-        ambient=0.24,
-        diffuse=0.76,
-    )
-    plotter.add_text(
-        f"Target\ncurved engineering panel · {target.n_cells:,} triangles",
-        position=(26, 572),
-        font_size=11,
-        color=TEXT_COLOR,
-    )
-
-    plotter.subplot(0, 1)
-    plotter.add_mesh(
-        source_pv,
-        color=SOURCE_COLOR,
-        smooth_shading=True,
-        show_edges=True,
-        edge_color=EDGE_COLOR,
-        line_width=0.46,
-        ambient=0.24,
-        diffuse=0.76,
-    )
-    add_fixed_root(plotter, source, movable)
-    plotter.add_text(
-        "Before\nlifted springback sheet · green root fixed",
-        position=(26, 572),
-        font_size=11,
-        color=TEXT_COLOR,
-    )
-
-    plotter.subplot(0, 2)
-    plotter.add_mesh(
-        result_pv,
-        scalars="correction [mm]",
-        cmap="viridis",
-        clim=(0.0, max(1.0, float(correction_mm.max()))),
-        smooth_shading=True,
-        show_edges=True,
-        edge_color=EDGE_COLOR,
-        line_width=0.42,
-        ambient=0.24,
-        diffuse=0.76,
-        scalar_bar_args={
-            "title": "vertex correction [mm]",
-            "vertical": False,
-            "position_x": 0.20,
-            "position_y": 0.80,
-            "width": 0.60,
-            "height": 0.055,
-            "n_labels": 2,
-            "fmt": "%.0f",
-            "title_font_size": 10,
-            "label_font_size": 9,
-            "color": TEXT_COLOR,
-        },
-    )
-    add_fixed_root(plotter, result, movable)
-    plotter.add_text(
-        "After\nshrinkwrap fitted to target panel",
-        position=(26, 572),
-        font_size=11,
-        color=TEXT_COLOR,
-    )
-
+    result_pv.point_data["correction"] = correction_mm
+    upper = max(1.0, float(correction_mm.max()))
     camera = camera_position(target)
-    for column in range(3):
-        plotter.subplot(0, column)
-        plotter.camera_position = camera
-        plotter.camera.zoom(0.84)
-        plotter.hide_axes()
 
-    plotter.set_background("white", all_renderers=True)
-    plotter.render()
-    plotter.screenshot(OUTPUT, transparent_background=False)
-    plotter.close()
+    panels = (
+        (
+            f"target panel\n{mesh_label(target)}",
+            render_panel(target, camera, color=TARGET_COLOR),
+        ),
+        (
+            f"lifted source sheet\n{mesh_label(source)}, root fixed",
+            render_panel(source, camera, movable, color=SOURCE_COLOR),
+        ),
+        (
+            "shrinkwrap(point_weights=movable)\nmovable vertices on the target",
+            render_panel(
+                result,
+                camera,
+                movable,
+                dataset=result_pv,
+                scalars="correction",
+                cmap=SEQUENTIAL,
+                clim=(0.0, upper),
+            ),
+        ),
+    )
+    figure, axes = plt.subplots(1, 3, figsize=(14.0, 5.0))
+    for axis, (title, image) in zip(axes, panels, strict=True):
+        axis.imshow(image)
+        axis.set_title(title)
+        axis.set_axis_off()
+    colorbar = figure.colorbar(
+        plt.cm.ScalarMappable(norm=Normalize(0.0, upper), cmap=SEQUENTIAL),
+        cax=axes[2].inset_axes((0.15, -0.06, 0.7, 0.045)),
+        orientation="horizontal",
+    )
+    colorbar.set_label("vertex correction (mm)")
+    figure.legend(
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="none",
+                markerfacecolor=FIXED_COLOR,
+                markeredgecolor="white",
+                markersize=12,
+                label="fixed root vertices",
+            )
+        ],
+        loc="lower left",
+        bbox_to_anchor=(0.36, 0.0),
+        frameon=False,
+    )
+    save(figure, OUTPUT, tight=True, full_color=True)
 
 
 def main() -> None:
@@ -455,7 +447,6 @@ def main() -> None:
     target, source, movable = build_case()
     result = run_backends(target, source, movable)
     render(target, source, result, movable)
-    print(f"Saved {OUTPUT}")
 
 
 if __name__ == "__main__":

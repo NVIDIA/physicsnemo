@@ -83,7 +83,8 @@ to generate both datasets.
 #### Expected Data Format
 
 - **Format**: ECLIPSE/IX compatible binary files
-- **Required files per case**: `.INIT`, `.EGRID`, `.UNRST` (or `.X00xx`), `.UNSMRY` (or `.S00xx`)
+- **Required files per case**: `.INIT`, `.EGRID`, `.UNRST` (or `.X00xx`), `.UNSMRY`
+  (or `.S00xx`)
 - **Storage**: All cases in a single directory
 
 #### Example Visualization: Norne Field
@@ -236,7 +237,7 @@ with your experiment name from the config):
 
 ```bash
 cd outputs/<your-experiment-name>
-mlflow ui --host 0.0.0.0 --port 5000
+mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db --host 0.0.0.0 --port 5000
 ```
 
 Access the dashboard at: <http://localhost:5000>
