@@ -137,6 +137,30 @@ class TestSurfacePrimitives:
         with pytest.raises(ValueError, match="normal must be finite and nonzero"):
             primitives.surfaces.plane.load(normal=normal)
 
+    @pytest.mark.parametrize(
+        "example_name, kwargs",
+        [
+            ("cone", {}),
+            ("disk", {}),
+            ("plane", {}),
+            ("plane", {"normal": (1.0, 0.0, 0.0)}),
+            ("plane", {"normal": (0.0, 0.0, -1.0)}),
+        ],
+    )
+    def test_float64_default_dtype(self, example_name, kwargs):
+        """A float64 default dtype does not change the generated mesh."""
+        load = getattr(primitives.surfaces, example_name).load
+        expected = load(**kwargs)
+        default_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.float64)
+        try:
+            mesh = load(**kwargs)
+        finally:
+            torch.set_default_dtype(default_dtype)
+        assert mesh.points.dtype == expected.points.dtype
+        assert torch.equal(mesh.points, expected.points)
+        assert torch.equal(mesh.cells, expected.cells)
+
     def test_torus_radii(self):
         """Test that torus has correct radii."""
         major_radius = 2.0

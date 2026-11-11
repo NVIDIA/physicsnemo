@@ -203,6 +203,32 @@ class TestPCATangentSpace:
         tangent_norms = torch.norm(tangent_basis, dim=-1)
         assert torch.allclose(tangent_norms, torch.ones_like(tangent_norms), atol=1e-4)
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_half_precision_curve(self, device, dtype):
+        """16-bit curves get 16-bit tangents, and intrinsic LSQ gradients,
+        close to those of the same points in float32."""
+        from physicsnemo.mesh.primitives.curves import helix_3d
+
+        curve = helix_3d.load(n_points=40, device=device)
+        half = Mesh(points=curve.points.to(dtype), cells=curve.cells)
+        single = Mesh(points=half.points.float(), cells=curve.cells)
+        g = torch.tensor([1.0, 2.0, -3.0], device=device)
+
+        tangents, normals = estimate_tangent_space_pca(half)
+        gradient = half.gradient(half.points @ g.to(dtype))
+
+        assert tangents.dtype == normals.dtype == gradient.dtype == dtype
+        alignment = (tangents.float() * estimate_tangent_space_pca(single)[0]).sum(-1)
+        torch.testing.assert_close(
+            alignment.abs(), torch.ones_like(alignment), atol=1e-2, rtol=0
+        )
+        torch.testing.assert_close(
+            gradient.float(),
+            single.gradient(single.points @ g),
+            atol=2e-2 * g.norm(),
+            rtol=0,
+        )
+
 
 class TestGradientProjection:
     """Tests for gradient projection to tangent space."""
@@ -360,3 +386,43 @@ class TestPCAEdgeCases:
 
         assert not torch.any(torch.isnan(tangent_basis))
         assert not torch.any(torch.isnan(normal_basis))
+
+    @pytest.mark.parametrize(
+        "points, cells",
+        [
+            ([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], [[0, 1]]),
+            ([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], [[0, 1], [1, 2]]),
+            (
+                [[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+                [[0, 1, 2]],
+            ),
+        ],
+        ids=["edge", "straight-polyline", "right-triangle-in-4d"],
+    )
+    def test_gradients_where_eigenvalues_tie(self, device, points, cells):
+        """Flat neighborhoods tie their zero normal eigenvalues, and the right
+        angle of the triangle its tangent ones: the tangent and normal
+        projectors still have the gradients of finite differences."""
+        cells = torch.tensor(cells, device=device)
+
+        def projectors(points):
+            mesh = Mesh(points=points, cells=cells)
+            tangents, normals = estimate_tangent_space_pca(mesh)
+            return tangents.mT @ tangents, normals.mT @ normals
+
+        points = torch.tensor(points, dtype=torch.float64, device=device)
+        assert torch.autograd.gradcheck(projectors, points.requires_grad_())
+
+    def test_gradients_where_tangent_space_is_undefined(self, device):
+        """At a right-angle corner with equal edges, a tangent and a normal
+        eigenvalue tie: the bases and their gradients stay finite."""
+        points = torch.tensor(
+            [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device=device
+        ).requires_grad_()
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1], [1, 2]], device=device))
+
+        tangent_basis, normal_basis = estimate_tangent_space_pca(mesh)
+        (tangent_basis.sum() + normal_basis.sum()).backward()
+
+        assert tangent_basis.isfinite().all() and normal_basis.isfinite().all()
+        assert points.grad.isfinite().all()
