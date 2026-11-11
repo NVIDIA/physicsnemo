@@ -59,12 +59,21 @@ Set the dataset location via one of:
 
 To train with SLURM on one node of 4 GPUs (the reference setup), set
 `DRIVAER_DATA_DIR` in `run.sh` to your dataset root. A full run takes about
-2.5 days on 4 GB300 GPUs, longer than one 4-hour job. Each job saves a
-checkpoint before its time limit, and the next job with the same name resumes
-from it (`--dependency=singleton`), so queue enough jobs at once:
+2.5 days on 4 GB300 GPUs as one job. If your cluster allows a job that long,
+set `--time` in `run.sh` to 3 days (`--time=3-00:00:00`), and submit it:
 
 ```bash
-for i in $(seq 18); do sbatch run.sh; done
+sbatch run.sh
+```
+
+Otherwise, queue the run as a chain of shorter jobs. Each job saves a
+checkpoint before its time limit, and the next job with the same name resumes
+from it (`--dependency=singleton`). Each job spends about 75 minutes
+compiling, so a 4-hour job trains about 19 epochs. A full run then takes
+about 24 jobs and 4 days. Queue a few spare jobs:
+
+```bash
+for i in $(seq 26); do sbatch run.sh; done
 ```
 
 If the run stops before epoch 450, queue more jobs. A job that starts after
@@ -158,13 +167,29 @@ This section describes a healthy run with the default settings, so you can
 sanity-check your own runs.
 
 - Reference hardware: 1 node of 4 NVIDIA GB300 GPUs
-- Wall time per epoch: about 460 seconds (about 4.0 seconds per training
-  step). The first epoch takes about 72 minutes, almost all of it
-  `torch.compile`, and a few early epochs take about 13 minutes while one GPU
-  recompiles the training step. These times were measured with the
-  preprocessing cache already built. A new run also writes the cache during
-  its first epoch, which then takes longer.
-- Peak memory per GPU: about 120 GiB in `nvidia-smi` (about 117 GiB in
+- Wall time per epoch: about 454 seconds (7.6 minutes), at 3.9 seconds per
+  training step. The first epoch of each job takes about 60 to 75 minutes,
+  almost all of it `torch.compile`. A few of the next epochs take 12 to 14
+  minutes each, while one GPU recompiles the training step. These times were
+  measured with the preprocessing cache already built. A new run also writes
+  the cache during its first epoch, which then takes longer.
+- Peak memory per GPU: about 118 GiB in `nvidia-smi` (about 117 GiB in
   MLflow's `system/vram_gb`)
-- At epoch 20, train loss ~0.012 and validation loss ~0.011. Both are still
-  decreasing.
+- Losses:
+
+  | Epoch | Train loss | Validation loss |
+  | --- | --- | --- |
+  | 20 | 0.0118 | 0.0114 |
+  | 100 | 0.00478 | 0.00541 |
+  | 200 | 0.00352 | 0.00401 |
+  | 300 | 0.00193 | 0.00270 |
+  | 400 | 0.00176 | 0.00265 |
+  | 450 | 0.00165 | 0.00255 |
+
+  Both losses step down when the learning rate drops at epoch 201 (MLflow's
+  `lr` metric shows the drop one epoch early). The lowest validation loss,
+  0.00252, came at epoch 414, and `best_model.mdlus` holds that epoch's model.
+
+  These are one run's values. Expect yours to agree to about 10%. From epoch
+  20 to epoch 200, the validation loss changes from one epoch to the next by
+  3% (median) and by up to 13%. A second run was 10% higher at epoch 19.
