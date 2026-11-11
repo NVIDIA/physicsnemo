@@ -395,7 +395,7 @@ If training seems slow, check your GPU utilization. If it's low, the problem is 
 
 Enabling BF16 training (`training.perf.fp_optimizations=amp-bf16`) speeds up training considerably; if using a DiT model, `model.hyperparameters.attn_kwargs.qk_norm=true` should be set to ensure stability.
 
-Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile=True`), which will also compile the model forward pass, also typically improves performance. This recipe disables it under domain parallelism, as compilation is not yet fully supported by PhysicsNeMo ShardTensor.
+Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile=True`), which will also compile the model forward pass, also typically improves performance. This also works under domain parallelism (ShardTensor).
 
 ### Training Is Unstable / Not Converging
 

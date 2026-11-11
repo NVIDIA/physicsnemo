@@ -10,11 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
+  implementation with interacting surface/volume anchors, reusable query
+  contexts, input scaling and chunked forward decoding, and a finite-difference
+  vorticity helper that undoes coordinate and velocity scaling.
+
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- `Mean` and `Variance` now support opt-in tensor-aware streaming with detached
+  state, state combination, and `ShardTensor` reductions over declared
+  observation axes.
+  Existing metric constructors retain their behavior. Public `TensorAccumulator`
+  and `StatisticRule` support custom statistics through `summarize`, `merge`, and
+  `result` hooks, with built-in `MeanRule` and `VarianceRule`. `SumReduction`
+  defines the type of the completed-reduction callback, including its `keepdim`
+  argument. Fresh summaries transfer ownership to the accumulator. Variance
+  merging reuses scratch storage while preserving both input states and rollback
+  after failed updates. The examples cover weighted means, Gaussian process (GP)
+  mixtures, Concrete Dropout, observables, and conformal calibration.
 - Groups experimental scalar and field GP heads under `experimental.uq.gp`.
   Both this namespace and `experimental.uq` expose the heads without `gpytorch`;
   constructing a head raises an installation error if it is missing.
@@ -434,6 +450,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
+  its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
+  `cleanup()` no longer raises after a failed initialization.
 - The GLOBE DrivAerML example integrates the friction force on the car with
   the right sign. Its drag coefficients were about 0.055 too low.
 - The unified external aero recipe integrates force coefficients with the
@@ -473,6 +492,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks whether its own code is being traced, because since torch 2.13
   `torch.compiler.is_compiling()` is True in every thread during a compile,
   which made data-loading threads drop caches and skip validation.
+- `Mesh` geometric properties, curvatures, and the calculus operators give
+  correct gradients when the points require gradients, even after a read under
+  `torch.no_grad()`, and a second `backward()` on the same mesh no longer
+  fails. Such meshes now compute these properties on every access instead of
+  caching them.
 - GraphCast and MeshGraphNet run on graphs partitioned across GPUs again
   (`partition_size > 1`, or a `DistributedGraph` in place of the PyG graph),
   so the distributed shallow-water example works. This broke when the DGL
@@ -565,6 +589,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mesh now return float64 results instead of raising. DEC gradients and
   Laplacians of tensor fields, and LSQ cell gradients, no longer fail on meshes
   without cells, and `flat` handles fields with several trailing dimensions.
+- Intrinsic LSQ gradients no longer raise on float32 point clouds or on 16-bit
+  curves, and raise a `TypeError` for integer fields instead of truncating the
+  result. On surfaces in four or more dimensions they are now correct at points
+  with two neighbors, and DEC intrinsic gradients of curves in 3D are now
+  correct at their endpoints.
+- Derivatives of intrinsic gradients with respect to the points are no longer
+  NaN on straight curves in 3D, or flat surfaces in 4D, that lie along the axes.
+  On curves in 3D and surfaces in 4D, only first derivatives are exact.
+- DEC gradients of planar triangle meshes are no longer NaN at the vertices of
+  zero-area triangles, such as those `Mesh.pad` adds. DEC divergences are now
+  correct on float32 meshes a few millimetres across in metres.
+- `Mesh.clean` now sums the point measures of merged points, so integrals by
+  point quadrature no longer change.
 - `DefaultCollator` with a `stack_dim` past the batch dimensions of the
   samples stacks each tensor with `torch.stack`, without TensorDict behaviour
   that 0.15 deprecates. The batch's `batch_size` now matches its tensors, and
