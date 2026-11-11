@@ -72,8 +72,8 @@ the `shell_contact` functional.
 | `biw_yaris_deformer` | network | the same network on the body-in-white VTP data (26 frames, 100 epochs) |
 
 Recipe names start with their dataset: `px_yaris_*` is the full-vehicle
-Toyota Yaris dataset (Zarr stores) and `biw_yaris_*` the body-in-white Yaris
-VTP data. The three PX Yaris recipes share one data recipe
+Toyota Yaris dataset produced by PhysicsX (PX; Zarr stores) and `biw_yaris_*`
+the body-in-white Yaris VTP data. The three PX Yaris recipes share one data recipe
 (`conf/reader/px_yaris_full.yaml`, `conf/datapipe/px_yaris_full.yaml`) and
 differ only in the model group and the corrector's additions; `conf/README.md`
 lists every key.
@@ -85,9 +85,12 @@ The Yaris recipes read one Zarr store per design with a shared reference mesh:
 `edges` (`[E, 2]` shell edges), `shell/connectivity` (`[S, 4]` quads,
 triangles with the last id repeated), optionally `solid/connectivity`
 (`[H, 8]` hexahedra) and optionally `nodes/part_id` (`[N]`, copied into the
-node metadata written with the node-error maps). The Yaris stores are delivered in
-this layout by the dataset's own preparation pipeline, together with the two
-files below. It is not the layout PhysicsNeMo-Curator's crash ETL writes
+node metadata written with the node-error maps). The stores, the split manifest
+and the outlier mask below were produced and delivered in this layout by
+PhysicsX, the dataset's owner; this example ships no converter for them. The
+dataset is not public at the time of writing, and the checkpoints trained on
+it are not distributed, so the recipes document the protocol and the numbers
+rather than a download. The layout is not the one PhysicsNeMo-Curator's crash ETL writes
 (`mesh_pos`, `thickness`, `edges`, read by `zarr_reader.py` for the VTP-derived
 recipes; see [Data Preprocessing](../README.md#data-preprocessing)); a store in another
 layout is rejected with a message naming the missing arrays. Two more files are

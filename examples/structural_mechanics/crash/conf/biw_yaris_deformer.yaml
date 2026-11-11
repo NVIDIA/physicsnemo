@@ -53,6 +53,13 @@ training:
   reproducible_sampling: true
   sampler_seed: 0
   num_time_steps: 26
+  # The DeFormer protocol on this data holds 15 of the 150 runs out as a test set
+  # (Run1-5, Run51-55, Run101-105) that no script of this example scores, and
+  # splits the other 135 into these 127 training cases and the 8 validation
+  # cases shared with the one-shot siblings (Run14, 31, 48, 70, 86, 108, 125,
+  # 142). The siblings keep the example's original 135-case training split, so
+  # their training sets differ from this one and the numbers are not directly
+  # comparable.
   num_training_samples: 127
   num_validation_samples: 8
   epochs: 100

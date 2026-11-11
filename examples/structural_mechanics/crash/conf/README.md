@@ -153,7 +153,7 @@ datapipe); the datapipe builds the matching neighbourhoods and caches them
 under `datapipe.local_knn_cache_dir`.
 
 `evaluate_biw.py` scores a body-in-white time-conditional checkpoint with
-the PX Yaris validation suite (one implementation, `validation_suite.py`,
+the PX (PhysicsX) Yaris validation suite (one implementation, `validation_suite.py`,
 serves the Yaris trainer and both evaluators; both evaluators require
 `hydra.run.dir` inside `training.validation_output_dir`); the penetration
 metrics need the shell facets

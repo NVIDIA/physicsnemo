@@ -320,7 +320,7 @@ falls outside the calibrated training envelope.  Warnings do not halt inference.
 
 ## Experiments
 
-Each experiment is a YAML file in `conf/` that selects the shared component defaults and holds its own settings; the two PX Yaris recipes derived from `px_yaris_deformer` inherit it rather than copying it.
+Each experiment is a YAML file in `conf/` that selects the shared component defaults and holds its own settings; the two PX (PhysicsX) Yaris recipes derived from `px_yaris_deformer` inherit it rather than copying it.
 
 ### Anatomy of an experiment config
 
