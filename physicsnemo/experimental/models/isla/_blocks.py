@@ -238,7 +238,7 @@ class _QueryTokens(nn.Module):
     ``seed``, which maps their seed (the K terms n_q.g_k, the global scalars, the
     built-in signed distance to the boundary surface as ``[s, asinh(s / 1e-6)]``,
     ``s = d / L``) to the token width, followed, as a boundary condition's input layer is, by the model's
-    shared GELU and linear layer. The tokens are passive (the interior form): they carry no
+    shared GELU and linear layer. The tokens are passive (the query-independent form): they carry no
     routing weight, so they own no routing parameter."""
 
     def __init__(self, hidden: int, n_seed: int) -> None:

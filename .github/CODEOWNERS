@@ -289,8 +289,6 @@ physicsnemo/models/figconvnet/ @coreyjadams
 # FNO
 physicsnemo/models/fno/ @ktangsali
 
-physicsnemo/models/geotransolver/ @coreyjadams @mnabian
-
 # GraphCast and GNN
 physicsnemo/models/graphcast/ @mnabian
 physicsnemo/models/mesh_reduced/ @mnabian

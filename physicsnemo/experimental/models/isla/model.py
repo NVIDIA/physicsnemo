@@ -737,8 +737,8 @@ class ISLA(Module):
         no ``prediction_points`` and the model has no prediction-point parameters.
         ``True``: an interior task, the outputs are predicted at
         ``prediction_points``, which enter the encoder as passive tokens
-        (the interior form): they carry no routing weight, pass through every block with
-        the same weights and read its slices at matched depth, and after every
+        (the query-independent form): they carry no routing weight, pass through every
+        block with the same weights and read its slices at matched depth, and after every
         block they also read every boundary cell (module docstring), so each
         prediction depends on its own point and the boundary only. ``forward``
         requires them. The boundary read breaks the whole-model fullgraph compile
@@ -889,8 +889,8 @@ class ISLA(Module):
         boundary only, so any subset of a case's points (a training sample, one
         chunk of a large evaluation) gives the same values at those points, up to
         summation order. The points enter the encoder as passive readers of the
-        boundary (the interior form); each one's built-in geometry, its signed distance to
-        the boundary surface (the cells of ``boundary_meshes``) and the direction
+        boundary (the query-independent form); each one's built-in geometry, its signed
+        distance to the boundary surface (the cells of ``boundary_meshes``) and the direction
         from it, is computed inside the model from the exact closest point on the
         surface's cells (``exact_boundary_geometry``) and is never an input.
         They run after the boundary side in chunks of consecutive points of at
@@ -1102,7 +1102,7 @@ class ISLA(Module):
         ### The task structure: a surface task predicts at the cells of the boundaries
         ### forward names and has no prediction-point parameters; an interior task
         ### predicts at prediction points that enter the encoder as tokens, passive
-        ### readers of the boundary (the interior form).
+        ### readers of the boundary (the query-independent form).
         self.interior = bool(interior)
         if self.interior and self.n_spatial_dims not in (2, 3):
             raise NotImplementedError(
@@ -1286,8 +1286,8 @@ class ISLA(Module):
         ### Prediction-point tokens (interior=True): the prediction points enter the
         ### encoder as tokens, carrying the same {n_q, g_k} invariant seeds as the
         ### boundary tokens plus the parameters of _QueryTokens. They are passive
-        ### (the interior form), with no routing weight. Outputs are returned for these tokens
-        ### only. Registered last, so the boundary-side parameter order is that of a
+        ### (the query-independent form), with no routing weight. Outputs are returned for
+        ### these tokens only. Registered last, so the boundary-side parameter order is that of a
         ### surface model; a surface model (interior=False) has none of them, so
         ### every parameter it owns takes part in every forward pass.
         self._n_query_features = 2  # the built-in distance channels
@@ -1664,7 +1664,7 @@ class ISLA(Module):
 
         The arguments are those of :func:`torch.compile`. With the Inductor backend
         (named, or the default one when ``backend`` is absent or ``None``) a ``mode``
-        is passed as its options (:func:`torch._inductor.list_mode_options`) and the
+        is passed as its options (``torch._inductor.list_mode_options``) and the
         option is added to ``options`` unless they set it; another backend gets the
         arguments as given.
         """
@@ -2291,7 +2291,7 @@ class ISLA(Module):
 
     def _condition_shift(self, boundary: TensorDict, dtype: torch.dtype) -> torch.Tensor:
         r"""Each declared condition's log share shift ``-log A_k + beta_k`` ``(B, C)`` in
-        ``dtype``, for the interior form's nodes (:func:`walk_range_pairs`): ``-log A_k`` that of
+        ``dtype``, for the interior task's tree nodes (:func:`walk_range_pairs`): ``-log A_k`` that of
         the condition's tokens, cast as :meth:`_log_shift` casts it (so a node of one
         condition takes exactly its cells' shift), zero for a condition without tokens
         (no node holds it)."""

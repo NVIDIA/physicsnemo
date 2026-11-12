@@ -11,13 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
-- Adds `physicsnemo.experimental.models.isla.ISLA` (Invariant Slice Attention),
-  an experimental mesh-native surrogate for steady boundary-value problems that
-  takes the boundary as named meshes and returns fields of declared tensor
-  rank, and `case_scales`, which gives other models its length unit and
-  declared scales. Its outputs follow rotations, reflections and translations
-  of the problem exactly, up to roundoff, except on some symmetric or nearly
-  symmetric boundaries described on its documentation page.
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference
@@ -105,6 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `physicsnemo.experimental.models.isla.ISLA` (Invariant Slice Attention),
+  an experimental mesh-native surrogate for steady boundary-value problems that
+  takes the boundary as named meshes, and `case_scales`, which gives other
+  models its length and field scales. ISLA's outputs follow rotations,
+  reflections and translations of the problem exactly, up to roundoff, except
+  on some symmetric or nearly symmetric boundaries described on its
+  documentation page.
 - Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
   `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
   `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports

@@ -519,7 +519,8 @@ def _check_boundary_meshes(boundary_meshes) -> None:
         elif (d, dtype) != ref[1:]:
             raise ValueError(
                 f"boundary_meshes[{name!r}] has {d} spatial dimensions and {dtype} points, "
-                f"boundary_meshes[{ref[0]!r}] {ref[1]} and {ref[2]}: every boundary has the same"
+                f"boundary_meshes[{ref[0]!r}] {ref[1]} and {ref[2]}: every boundary must have the "
+                f"same number of spatial dimensions and dtype"
             )
 
 
