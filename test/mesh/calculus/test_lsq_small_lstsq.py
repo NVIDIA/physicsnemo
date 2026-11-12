@@ -273,12 +273,13 @@ def _backward_of_both_paths(
     """First and second derivatives, with respect to the points and the
     values, of the assembled and the grouped LSQ gradients of one vector field.
 
-    Both paths differentiate one ``Mesh``, so they share its point normals and
-    tangent bases. Recomputed, those differ by rounding on CUDA, whose sums
-    use atomics. Where the face normals around a point nearly cancel, as at a
-    fold of a coarse boundary surface, that rounding turns the tangent plane
-    there, which changes the intrinsic gradient and its derivatives by far
-    more than the solves do.
+    A mesh whose points require gradients does not cache its point normals,
+    so each path recomputes them. On CUDA their sums use atomics, which round
+    differently from run to run. Where the face normals around a point nearly
+    cancel, as at a fold of a coarse boundary surface, that rounding turns the
+    tangent plane there, which changes the intrinsic gradient and its
+    derivatives by far more than the solves do. Deterministic algorithms make
+    the two recomputations agree bit for bit.
     """
     generator = torch.Generator().manual_seed(seed)
     values = _parity_fields(mesh.points, torch.float32)[1]
@@ -302,13 +303,18 @@ def _backward_of_both_paths(
         first = torch.autograd.grad(
             (weights * gradient).sum(), (points, field), create_graph=True
         )
-        # The graph of the shared normals serves the other path too
         second = torch.autograd.grad(
-            sum(d.square().sum() for d in first), (points, field), retain_graph=True
+            sum(d.square().sum() for d in first), (points, field)
         )
         return [*first, *second]
 
-    return list(zip(derivatives(False), derivatives(True)))
+    enabled = torch.are_deterministic_algorithms_enabled()
+    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(True)
+    try:
+        return list(zip(derivatives(False), derivatives(True)))
+    finally:
+        torch.use_deterministic_algorithms(enabled, warn_only=warn_only)
 
 
 @pytest.mark.parametrize("mesh_name", ["unstructured_ball", "ball_surface"])
