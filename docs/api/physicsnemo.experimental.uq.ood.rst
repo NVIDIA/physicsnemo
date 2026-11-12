@@ -17,20 +17,24 @@ It does not emit warnings or choose an acceptance threshold.
     scores = scorer.score(query_embeddings)
     flagged = scores > threshold     # Application policy
 
-With ``normalize=True``, each vector is divided by its L2 norm plus ``1e-8``.
-The score is the mean **Euclidean** distance to the nearest normalized reference
+With ``normalize=True``, the scorer divides each vector by its L2 norm plus
+``1e-8``.
+The score is the mean *Euclidean* distance to the nearest normalized reference
 vectors, matching the former embedding guard. This is not a cosine-distance
 score. With ``normalize=False``, distances use the supplied feature units.
-Neither score is a calibrated probability or a prediction interval.
+Neither score represents a calibrated probability or a prediction interval.
 
-Use separate reference-validation data to select a threshold. Scoring the fitted
-reference against itself includes each sample's zero-distance self-neighbor.
+Use validation data separate from the fitted reference data to select a
+threshold. Scoring the fitted reference against itself includes each sample's
+zero-distance self-neighbor.
 ``reference_scores()`` provides leave-one-out scores when a validation split is
-unavailable, preserving the former guard's threshold workflow. Only the row itself
-is excluded. Distinct rows with identical features remain valid neighbors.
-Reference normalization is cached at fit time. Exact torch distances use bounded
-query and reference blocks. ``query_chunk_size`` and ``reference_chunk_size``
-control memory independently of the stored reference population.
+unavailable, preserving the former guard's threshold workflow. The method
+excludes only each row's self-neighbor. Distinct rows with identical features
+remain valid neighbors.
+The scorer caches reference normalization at fit time. Exact PyTorch distance
+calculations use bounded query and reference blocks. ``query_chunk_size`` and
+``reference_chunk_size`` control memory independently of the stored reference
+population.
 
 Persistence
 -----------
@@ -51,11 +55,18 @@ Persistence
     flagged = restored.score(query_embeddings) > saved["threshold"]
 
 The application supplies ``feature_metadata`` as a dictionary of serializable
-values identifying the model checkpoint, pooling, preprocessing, descriptor
-schema and version, and units as applicable. The scorer persists its own reference,
-neighbor count, and normalization setting. Matching feature dimensions alone
-does not establish compatibility. Query tensors must use the fitted device.
-Half-precision reference features are stored in ``float32``.
+values that identify the following applicable metadata:
+
+- Model checkpoint
+- Pooling
+- Preprocessing
+- Descriptor schema and version
+- Units
+
+The scorer persists its own reference, neighbor count, and normalization
+setting. Matching feature dimensions alone does not establish compatibility.
+Query tensors must be on the same device as the fitted reference data.
+The scorer stores half-precision reference features in ``float32``.
 
 .. autoclass:: physicsnemo.experimental.uq.ood.KNNScorer
     :members:
@@ -87,49 +98,71 @@ The scorer accepts arbitrary feature matrices. Geometry is optional.
         torch.load("density.pt", weights_only=True, map_location="cpu")
     )
 
-Both scorers provide versioned tensor ``state_dict`` and ``load_state_dict`` for
-weights-only persistence. Density also retains explicit NumPy support and moves
-inputs to its configured device. The kNN scorer requires tensors on the reference
-device.
+Both scorers provide ``state_dict`` and ``load_state_dict`` interfaces for
+versioned tensor state and weights-only persistence. ``DensityScorer`` also
+retains explicit NumPy support and moves inputs to its configured device. The
+kNN scorer requires tensors on the reference device.
 
 ``get_state`` and ``set_state`` retain the existing NumPy serialization format,
-including fitted GMM parameters or PCE standardization, principal component
-analysis (PCA), polynomial state, and reference scores. New PCE fits accumulate
-the small polynomial covariance and precision matrix in ``float64`` to avoid
-invalid scores on collinear features. Restoration preserves that dtype and
-still accepts existing ``float32`` artifacts.
-Artifacts with non-finite reference scores require refitting. Percentile scoring
-rejects non-finite values rather than treating them as low novelty. Persist feature
-metadata and decision thresholds alongside this state, just as for the distance
-scorer.
+including:
+
+- Fitted GMM parameters or PCE standardization
+- Principal component analysis (PCA)
+- Polynomial state
+- Reference scores
+
+New PCE fits accumulate the small polynomial covariance and precision matrix
+in ``float64`` to avoid invalid scores on collinear features. Restoration
+preserves that dtype and still accepts existing ``float32`` artifacts.
+Artifacts with non-finite reference scores require refitting. Percentile
+scoring rejects non-finite values rather than treating them as low novelty.
+Persist feature metadata and decision thresholds alongside this state, as for
+the distance scorer.
 
 Training percentiles are optimistic ranks, not false-positive probabilities.
-Use held-out calibration features for reference ranks and separate evaluation data
-to measure the resulting policy. Percentile resolution is ``100 / N``. Thresholds
-must be distinguishable with the available calibration sample count. Calibration
-does not fix an overparameterized model. Small-sample PCE and GMM fits warn when the
-number of terms or feature width is large relative to the training population.
-PCE standardizes inputs, but does not whiten PCA components or build polynomial
-features in ``float64``. Its covariance calculation uses ``float64``. GMM retains
-full covariance in raw feature units. Scale heterogeneous features consistently
-before fitting and scoring. Whitening, shrinkage, and alternative covariance
-models would change fitting behavior and are not introduced by this migration.
+Use held-out calibration features for reference ranks and separate evaluation
+data to measure the resulting policy. Percentile resolution is ``100 / N``,
+where ``N`` is the calibration sample count. Thresholds must be distinguishable
+with the available calibration sample count. Calibration does not fix an
+overparameterized model. The PCE and GMM fitting methods warn for small samples
+when the number of terms or feature width is large relative to the training
+population.
+PCE standardizes inputs but does not whiten PCA components or build polynomial
+features in ``float64``. Its covariance calculation uses ``float64``. GMM
+retains full covariance in raw feature units. Scale heterogeneous features
+consistently before fitting and scoring. Whitening, shrinkage, and alternative
+covariance models would change fitting behavior, so this migration does not
+introduce them.
 
-Mesh-specific descriptors are explicitly imported from
-``physicsnemo.experimental.uq.ood.geometry``. Schema v1.1 corrects the PCA
-feature names to match the existing interleaved column order (axis1_x, axis2_x,
-axis1_y, axis2_y, axis1_z, axis2_z). Numerical descriptors are unchanged, but
-``FEATURE_VERSION`` and the name hash change. Existing v1.0 metadata must be
-explicitly reviewed and updated before use with the recipe. Do not reorder
-fitted model parameters. Generic scorer imports do not import these utilities
-or require mesh loading. Use ``physicsnemo.mesh.io`` to convert meshes before
-extracting features.
+Explicitly import mesh-specific descriptors from
+``physicsnemo.experimental.uq.ood.geometry``. Schema ``v1.1`` corrects the PCA
+feature names to match the following existing interleaved column order:
+
+- ``axis1_x``
+- ``axis2_x``
+- ``axis1_y``
+- ``axis2_y``
+- ``axis1_z``
+- ``axis2_z``
+
+Numerical descriptors are unchanged, but ``FEATURE_VERSION`` and the name hash
+change. Explicitly review and update existing ``v1.0`` metadata before using it
+with the recipe. Do not reorder fitted model parameters. Generic scorer imports
+do not import these utilities or require mesh loading. Use
+``physicsnemo.mesh.io`` to convert meshes before extracting features.
 
 ``GeoTransolver.forward_with_geometry_features`` returns predictions and
-detached geometry tokens in one pass. This output is distinct from combined context
-embeddings. The model completes pending domain reductions before returning it.
-Pooling, checkpoint identity, scoring, and accept/reject decisions belong to the
-recipe. Refer to ``examples/minimal/uq/feature_scoring.py``.
+detached geometry tokens in one pass. This output is distinct from combined
+context embeddings. The model completes pending domain reductions before
+returning it.
+The following decisions belong to the recipe:
+
+- Pooling
+- Checkpoint identity
+- Scoring
+- Acceptance and rejection
+
+Refer to ``examples/minimal/uq/feature_scoring.py``.
 
 .. autoclass:: physicsnemo.experimental.uq.ood.DensityScorer
     :members:
@@ -137,9 +170,17 @@ recipe. Refer to ``examples/minimal/uq/feature_scoring.py``.
 Migration from Experimental Guardrails
 --------------------------------------
 
-The experimental guardrail namespace and its model/geometry wrappers are removed.
+This migration removes the experimental guardrail namespace and its model and
+geometry wrappers.
 Use ``KNNScorer`` or ``DensityScorer`` with caller-provided features. Geometry
-descriptors remain available through ``experimental.uq.ood.geometry``. The recipes
-control reference collection, input bounds, thresholds, warnings, and fallback
-policy. Refer to ``examples/minimal/uq`` and ``examples/minimal/guardrails`` for
+descriptors remain available through ``experimental.uq.ood.geometry``. The
+recipes control:
+
+- Reference collection
+- Input bounds
+- Thresholds
+- Warnings
+- Fallback policy
+
+Refer to ``examples/minimal/uq`` and ``examples/minimal/guardrails`` for
 examples that combine these components.
