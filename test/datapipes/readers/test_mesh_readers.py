@@ -874,3 +874,35 @@ class TestDomainMeshReaderExtraBoundaryLoading:
         )
         loaded, _ = reader[0]
         assert loaded.boundaries["farfield"].n_points == 9
+
+
+def test_independent_point_sets_share_indices_and_reject_wrong_sources(tmp_path):
+    """Shared selections preserve labels and cannot index an unrelated mesh."""
+    points = torch.arange(60, dtype=torch.float32).reshape(20, 3)
+    domain = DomainMesh(
+        interior=Mesh(points=points, point_data={"id": torch.arange(20)}),
+        boundaries={"wall": Mesh(points=points + 100)},
+    )
+    domain.save(tmp_path / "domain.pdmsh")
+    specs = {
+        "anchors": {"source": "interior", "count": 5, "stream": 1},
+        "interior": {
+            "source": "interior",
+            "indices_from": "anchors",
+            "stream": 2,
+            "fields": {"id": "target.id"},
+        },
+    }
+    reader = DomainMeshReader(tmp_path, point_sets=specs)
+    reader.set_generator(torch.Generator().manual_seed(7))
+    sample, _ = reader[0]
+    torch.testing.assert_close(
+        sample.interior.points, sample.boundaries["anchors"].points
+    )
+    ids = sample.interior.point_data["target", "id"]
+    torch.testing.assert_close(sample.interior.points, points[ids])
+    specs["interior"]["source"] = "wall"
+    with pytest.raises(ValueError, match="same source"):
+        reader[0]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        DomainMeshReader(tmp_path, point_sets=specs, subsample_n_points=3)

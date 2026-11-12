@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Single-branch ablation: only the selected field and anchor stream are loaded.
+train_datadir: ${dataset_paths.drivaer_ml}
+independent_validation: true
+validation_reader_overrides:
+  point_sets:
+    interior: {indices_from: null}
+
+pipeline:
+  reader:
+    _target_: ${dp:DomainMeshReader}
+    path: ${train_datadir}
+    pattern: "run_*/domain_*.pdmsh"
+    point_sets:
+      geometry:
+        source: vehicle
+        count: 65536
+        stream: 0
+      supernodes:
+        source: geometry
+        count: 16384
+        stream: 1
+      surface_anchors:
+        source: vehicle
+        association: cell_centroids
+        count: 16384
+        stream: 2
+      interior:
+        source: vehicle
+        association: cell_centroids
+        count: ${sampling_resolution}
+        stream: 4
+        indices_from: null
+        retain_cells_as: vehicle
+        fields:
+          pMeanTrim: pressure
+          wallShearStressMeanTrim: wss
+  transforms:
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      association: point_data
+      fields:
+        pressure: pressure
+        wss: stress
+    - _target_: ${dp:NormalizeMeshFields}
+      association: point_data
+      fields:
+        wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
+
+targets:
+  pressure: scalar
+  wss: vector
