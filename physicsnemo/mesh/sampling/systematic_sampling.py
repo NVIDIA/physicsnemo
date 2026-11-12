@@ -134,9 +134,63 @@ def _(x, place=None):
     return torch.empty_like(x)
 
 
+def _group_index(
+    sizes: list[int], device: torch.device
+) -> tuple[
+    list[int],
+    Int[torch.Tensor, " n_cells"] | None,
+    Int[torch.Tensor, " n_cells"],
+    Int[torch.Tensor, " n_groups"] | int,
+    Int[torch.Tensor, " n_groups"] | int,
+]:
+    """Groups of ``sizes`` cells (each at least 1) laid end to end:
+    ``(sizes, group, place, count, first)``, each cell's group and its place in its
+    group, and each group's cell count and first cell, on ``device`` without a host
+    copy.
+
+    One group is the fast path: ``group`` is ``None`` and ``count`` and ``first``
+    are Python ints, so :func:`_spread` and :func:`_per_group` keep a group's
+    values 0-d, as for one ungrouped tensor.
+    """
+    n = sum(sizes)
+    if len(sizes) == 1:
+        return sizes, None, torch.arange(n, device=device), n, 0
+    starts = [sum(sizes[:i]) for i in range(len(sizes))]
+    count = torch.stack([torch.full((), k, device=device) for k in sizes])
+    first = torch.stack([torch.full((), k, device=device) for k in starts])
+    group = torch.cat([torch.full((k,), i, device=device) for i, k in enumerate(sizes)])
+    return sizes, group, torch.arange(n, device=device) - first[group], count, first
+
+
+def _spread(x: torch.Tensor | int, group: Int[torch.Tensor, " n_cells"] | None):
+    """Each cell's row of the per-group ``x`` (``x`` itself for one group)."""
+    return x if group is None else x[group]
+
+
+def _per_group(x: torch.Tensor, sizes: list[int], reduce) -> torch.Tensor:
+    """``reduce`` of each group's own rows of ``x``, stacked (unstacked for one group)."""
+    if len(sizes) == 1:
+        return reduce(x)
+    return torch.stack([reduce(part) for part in x.split(sizes)])
+
+
+def _group_sort(
+    x: torch.Tensor, sizes: list[int], descending: bool = False
+) -> tuple[torch.Tensor, Int[torch.Tensor, " n_cells"]]:
+    """Each group's own stable sort of ``x``: the values, and indices into ``x``."""
+    if len(sizes) == 1:
+        return x.sort(descending=descending, stable=True)
+    parts = [part.sort(descending=descending, stable=True) for part in x.split(sizes)]
+    starts = [sum(sizes[:i]) for i in range(len(sizes))]
+    return torch.cat([part.values for part in parts]), torch.cat(
+        [part.indices + k for part, k in zip(parts, starts)]
+    )
+
+
 def _pps_inclusion_probabilities(
     measures: Float[torch.Tensor, " n_cells"],
-    n_samples: float | Float[torch.Tensor, ""],
+    n_samples: float | Float[torch.Tensor, ""] | Float[torch.Tensor, " n_groups"],
+    index: tuple | None = None,
 ) -> Float[torch.Tensor, " n_cells"]:
     r"""Inclusion probabilities proportional to size, capped at one, summing to ``n_samples``.
 
@@ -150,6 +204,12 @@ def _pps_inclusion_probabilities(
     :math:`\pi_i = 0`, so the probabilities sum to the smaller of ``n_samples`` and
     the count of positive measures.
 
+    With ``index``, ``measures`` concatenates groups of cells and ``n_samples``
+    holds each group's share, shape ``(n_groups,)``: each group's probabilities are
+    bit for bit those of the group alone (in float64), as the sorts are stable
+    sorts of each group's own cells and the tail sums restart at each group
+    (:func:`_cumsum`).
+
     Parameters
     ----------
     measures : torch.Tensor
@@ -160,6 +220,9 @@ def _pps_inclusion_probabilities(
         The expected sample size :math:`b`, the sum of the probabilities. It may be
         fractional. At least the count of positive measures gives every cell of
         positive measure :math:`\pi_i = 1` exactly.
+    index : tuple, optional
+        The groups, :func:`_group_index` of their cell counts. Defaults to one group
+        of all the cells.
 
     Returns
     -------
@@ -177,22 +240,29 @@ def _pps_inclusion_probabilities(
     if measures.ndim != 1:
         raise ValueError(f"measures must be 1-D, got shape {tuple(measures.shape)}")
     share = torch.as_tensor(n_samples, dtype=torch.float64, device=measures.device)
-    n = measures.shape[0]
-    a, order = measures.sort(descending=True, stable=True)
-    tail = _cumsum(a.flip(0)).flip(0)  # sum of the measures from rank m on
-    rank = torch.arange(n, device=a.device, dtype=a.dtype)
-    uncapped = (share - rank) * a < tail
+    sizes, group, place, count, first = index or _group_index(
+        [measures.shape[0]], measures.device
+    )
+    a, order = _group_sort(measures, sizes, descending=True)
+    ### The sum of the measures from rank m on, restarting at each group.
+    size = _spread(count, group)
+    rest = None if group is None else (size - 1 - place).flip(0)
+    tail = _cumsum(a.flip(0), rest).flip(0)
+    rank = place.to(a.dtype)
+    uncapped = (_spread(share, group) - rank) * a < tail
     ### The first uncapped rank as a min, not an argmax: Inductor splits a min over
     ### every cell across thread blocks, but runs an argmax in one.
-    m = torch.where(uncapped, torch.arange(n, device=a.device), n).amin()
+    m = _per_group(torch.where(uncapped, place, size), sizes, torch.amin)
     ### (a gather, not tail[m]: indexing by a 0-d tensor would read it on the host)
-    tail_m = tail.gather(0, m.clamp_max(n - 1).reshape(1))[0]
+    tail_m = tail.gather(0, (first + m.clamp_max(count - 1)).reshape(-1)).view(m.shape)
     c = (share - m) / tail_m.clamp_min(torch.finfo(a.dtype).tiny)
-    pi = torch.where(rank < m, 1.0, (c * a).clamp(max=1.0))
+    pi = torch.where(
+        rank < _spread(m, group), 1.0, (_spread(c, group) * a).clamp(max=1.0)
+    )
     ### share >= n_pos keeps every positive cell, and no zero one: float tails can
     ### leave one a rounding below 1, and the search caps the zeros at 1.
-    n_pos = (a > 0).sum()
-    pi = torch.where(share >= n_pos, (a > 0).to(pi.dtype), pi)
+    n_pos = _per_group(a > 0, sizes, torch.sum)
+    pi = torch.where(_spread(share >= n_pos, group), (a > 0).to(pi.dtype), pi)
     return torch.empty_like(pi).scatter_(0, order, pi)
 
 
@@ -333,25 +403,7 @@ def _cell_line(
     for :func:`_systematic_sample`: lay them with one call per group, or all at once
     with :func:`_cell_lines`, which gives the same bits.
     """
-    pi = _pps_inclusion_probabilities(measures, share)
-    ### More samples than positive-measure cells keeps every positive cell, and the
-    ### zero-measure cells fill the rest of the share equally, at Horvitz-Thompson
-    ### weight 0.
-    zero = measures == 0
-    n_cells = measures.shape[0]
-    n_pos = n_cells - zero.sum()
-    pi = torch.where(
-        zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
-    )
-    ### Morton order of the centroids on cubic cells, ties broken by index. The grid
-    ### spans the cells of positive measure (all if none), and the others are
-    ### clamped onto it, so padding leaves the order of the rest alone.
-    xyz = frame_coordinates(centroids, frame)
-    inside = (~zero | zero.all())[:, None]
-    lo = torch.where(inside, xyz, torch.inf).amin(0)
-    hi = torch.where(inside, xyz, -torch.inf).amax(0)
-    code = _compute_morton_codes(xyz.clamp(lo, hi), isotropic=True)
-    return pi, code.argsort(stable=True)
+    return _cell_lines(measures, centroids, share, frame, [measures.shape[0]])
 
 
 def _cell_lines(
@@ -366,60 +418,31 @@ def _cell_lines(
     Bit for bit :func:`_cell_line` of each group, concatenated (``order`` shifted
     to index the concatenation), in one call: ``measures`` and
     ``centroids`` are the groups' concatenation in float64, ``sizes`` their cell
-    counts (each at least 1) and ``shares`` their float64 shares. Elementwise
-    steps run once on the concatenation with each cell's group; a sum or bound of
-    a group is taken on its own cells, the sorts are stable sorts of its own
-    cells, and the tail sums restart at each group (:func:`_cumsum`).
+    counts (each at least 1) and ``shares`` their float64 shares (a scalar for one
+    group). Elementwise steps run once on the concatenation with each cell's group;
+    a sum or bound of a group is taken on its own cells, and the sorts are stable
+    sorts of its own cells (:func:`_group_index`). One group skips the grouping.
     """
-    n_groups = len(sizes)
-    starts = [sum(sizes[:i]) for i in range(n_groups)]
-    ### On the device without a host copy: each group's count and first cell, and
-    ### each cell's group, its group's count and its place in the group.
-    count = torch.stack([shares.new_full((), k, dtype=torch.int64) for k in sizes])
-    first = torch.stack([shares.new_full((), k, dtype=torch.int64) for k in starts])
-    group = torch.cat(
-        [shares.new_full((k,), i, dtype=torch.int64) for i, k in enumerate(sizes)]
-    )
-    size = count[group]
-    place = torch.arange(measures.shape[0], device=measures.device) - first[group]
-
-    def per_group(x, reduce):
-        """``reduce`` of each group's own rows of ``x``, stacked."""
-        return torch.stack([reduce(part) for part in x.split(sizes)])
-
-    ### _pps_inclusion_probabilities, each group in decreasing measure.
-    parts = [part.sort(descending=True, stable=True) for part in measures.split(sizes)]
-    a = torch.cat([part.values for part in parts])
-    order = torch.cat([part.indices + k for part, k in zip(parts, starts)])
-    tail = _cumsum(a.flip(0), (size - 1 - place).flip(0)).flip(0)
-    rank = place.to(a.dtype)
-    uncapped = (shares[group] - rank) * a < tail
-    m = per_group(torch.where(uncapped, place, size), torch.amin)
-    tail_m = tail.gather(0, first + m.clamp_max(count - 1))
-    c = (shares - m) / tail_m.clamp_min(torch.finfo(a.dtype).tiny)
-    pi = torch.where(rank < m[group], 1.0, (c[group] * a).clamp(max=1.0))
-    n_pos = per_group(a > 0, torch.sum)
-    pi = torch.where((shares >= n_pos)[group], (a > 0).to(pi.dtype), pi)
-    pi = torch.empty_like(pi).scatter_(0, order, pi)
-    ### The zero-measure fill.
+    index = _group_index(sizes, measures.device)
+    _, group, _, count, _ = index
+    pi = _pps_inclusion_probabilities(measures, shares, index)
+    ### More samples than positive-measure cells keeps every positive cell, and the
+    ### zero-measure cells fill the rest of the share equally, at Horvitz-Thompson
+    ### weight 0.
     zero = measures == 0
-    n_zero = per_group(zero, torch.sum)
+    n_zero = _per_group(zero, sizes, torch.sum)
     fill = ((shares - (count - n_zero)) / n_zero.clamp_min(1)).clamp_min(0)
-    pi = torch.where(zero, fill[group], pi)
-    ### Each group's Morton order on the grid of its positive-measure cells. The
-    ### clamped cells of a group span exactly that grid, so the grouped codes'
-    ### bounds are the group's own.
+    pi = torch.where(zero, _spread(fill, group), pi)
+    ### Morton order of the centroids on cubic cells, ties broken by index. Each
+    ### group's grid spans its cells of positive measure (all if none), and the
+    ### others are clamped onto it, so padding leaves the order of the rest alone.
     xyz = frame_coordinates(centroids, frame)
-    inside = (~zero | (n_zero == count)[group])[:, None]
-    lo = per_group(torch.where(inside, xyz, torch.inf), lambda t: t.amin(0))
-    hi = per_group(torch.where(inside, xyz, -torch.inf), lambda t: t.amax(0))
-    code = _compute_morton_codes(
-        xyz.clamp(lo[group], hi[group]), isotropic=True, groups=group, n_groups=n_groups
-    )
-    order = torch.cat(
-        [part.argsort(stable=True) + k for part, k in zip(code.split(sizes), starts)]
-    )
-    return pi, order
+    inside = (~zero | _spread(n_zero == count, group))[:, None]
+    lo = _per_group(torch.where(inside, xyz, torch.inf), sizes, lambda t: t.amin(0))
+    hi = _per_group(torch.where(inside, xyz, -torch.inf), sizes, lambda t: t.amax(0))
+    xyz = xyz.clamp(_spread(lo, group), _spread(hi, group))
+    code = _compute_morton_codes(xyz, isotropic=True, groups=group, n_groups=len(sizes))
+    return pi, _group_sort(code, sizes)[1]
 
 
 def sample_cells_systematic(
