@@ -52,7 +52,7 @@ hydra:
     dir: ${yaris.work_dir}
 
 training:
-  trainer_class: px_yaris_trainer.YarisFullTrainer  # exact, horizon-aware validation
+  trainer_class: trainers.px_yaris_trainer.YarisFullTrainer  # exact, horizon-aware validation
   raw_data_dir: ${yaris.data_root}
   raw_data_dir_validation: ${yaris.data_root}
   global_features_filepath: null

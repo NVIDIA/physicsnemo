@@ -18,7 +18,8 @@
 
 import numpy as np
 import torch
-from local_neighborhoods import LocalNeighborhoodData
+
+from datapipes.local_neighborhoods import LocalNeighborhoodData
 
 
 class SurfaceContactData(LocalNeighborhoodData):

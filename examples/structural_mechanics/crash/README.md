@@ -16,9 +16,9 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 DeFormer is one model family of this pipeline: a time-conditional deformation
 transformer with static kNN neighbourhood attention around a GeoTransolver/FLARE
 backbone, followed by a decoupled, contact-aware MeshGraphNet corrector. Its model
-wrappers live in `rollout.py` beside the other models, its evaluation metrics in
-`penetration_metrics.py`, and the full-vehicle Yaris datapipe in `px_yaris_reader.py`,
-`px_yaris_dataset.py` and `px_yaris_trainer.py`; its recipes are `px_yaris_deformer`,
+wrappers live in `models/rollout.py` beside the other models, its evaluation metrics in
+`metrics/penetration_metrics.py`, and the full-vehicle Yaris datapipe in `readers/px_yaris_reader.py`,
+`datapipes/px_yaris_dataset.py` and `trainers/px_yaris_trainer.py`; its recipes are `px_yaris_deformer`,
 `px_yaris_deformer_corrector`, `px_yaris_geotransolver` and `biw_yaris_deformer`
 (see [Provided experiments](#provided-experiments)). The [DeFormer section](#deformer-recipes-data-preparation-training-and-evaluation)
 covers the model, data preparation, training, the corrector and evaluation.
@@ -177,6 +177,31 @@ This format is directly compatible with the Zarr reader in this recipe.
 
 Training is managed via Hydra configurations located in `conf/`.
 The main script is `train.py`.
+
+### Code layout
+
+The entry points stay at the top of the example; every other module lives in a
+folder named by its role:
+
+```
+train.py, inference.py           # training and VTP inference of every recipe
+px_yaris_prepare.py              # DeFormer: Yaris statistics and neighbourhood cache
+evaluate_px_yaris.py             # DeFormer: score a Yaris checkpoint
+evaluate_biw.py                  # DeFormer: score a body-in-white checkpoint
+readers/     vtp_reader.py, zarr_reader.py, px_yaris_reader.py
+datapipes/   datapipe.py (SimSample, graph and point-cloud datasets),
+             px_yaris_dataset.py, local_neighborhoods.py (static kNN cache),
+             surface_topology.py (contact facets and exclusions)
+models/      rollout.py: every model wrapper, DeFormer's network and corrector included
+trainers/    px_yaris_trainer.py: the exact held-out validation of the Yaris recipes
+metrics/     losses.py, penetration_metrics.py, validation_suite.py
+utils/       global_features, optimizers, warm_start, distributed, random_state
+conf/        Hydra configs (next section); post_processing/, tests/
+```
+
+Scripts run from this directory (`cd examples/structural_mechanics/crash`), which
+puts the folders on the import path; Hydra targets name modules by dotted path
+(`models.rollout.GeoTransolverOneShot`, `readers.vtp_reader.Reader`).
 
 ### Config Structure
 
@@ -520,7 +545,7 @@ The reader opens preprocessed simulation data and produces the arrays the datapi
 
 ### Built‑in VTP reader (PolyData)
 
-A lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
+A lightweight VTP reader is provided in `readers/vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
 
 - loads the reference coordinates from `poly.points`
 - builds absolute positions per timestep as `[t0: coords, t>0: coords + displacement_t]`
@@ -534,7 +559,7 @@ Example Hydra configuration for the VTP reader:
 
 ```yaml
 # conf/reader/vtp.yaml
-_target_: vtp_reader.Reader
+_target_: readers.vtp_reader.Reader
 ```
 
 Select it in your experiment config defaults:
@@ -560,7 +585,7 @@ datapipe:
 
 ### Built‑in Zarr reader
 
-A Zarr reader provided in `zarr_reader.py`. It reads pre-processed Zarr stores created by PhysicsNeMo-Curator, where all heavy computation (node filtering, edge building, thickness computation) has already been done during the ETL pipeline. The reader:
+A Zarr reader provided in `readers/zarr_reader.py`. It reads pre-processed Zarr stores created by PhysicsNeMo-Curator, where all heavy computation (node filtering, edge building, thickness computation) has already been done during the ETL pipeline. The reader:
 
 - loads pre-computed temporal positions directly from `mesh_pos` (no displacement reconstruction)
 - loads pre-computed edges (no connectivity-to-edge conversion needed)
@@ -578,7 +603,7 @@ Example Hydra configuration for the Zarr reader:
 
 ```yaml
 # conf/reader/zarr.yaml
-_target_: zarr_reader.Reader
+_target_: readers.zarr_reader.Reader
 ```
 
 Select it in your experiment config defaults:
@@ -604,11 +629,11 @@ datapipe:
 
 ### Data layout expected by readers
 
-- VTP reader (`vtp_reader.py`):
+- VTP reader (`readers/vtp_reader.py`):
   - `<DATA_DIR>/*.vtp` (each `.vtp` is treated as one run)
   - Displacements stored as 3‑component arrays in point_data with names like `displacement_t0.000`, `displacement_t0.005`, ... (fallback accepts any `displacement_t*`).
 
-- Zarr reader (`zarr_reader.py`):
+- Zarr reader (`readers/zarr_reader.py`):
   - `<DATA_DIR>/*.zarr/` (each `.zarr` directory is treated as one run)
   - Contains pre-computed `mesh_pos`, `edges`, and feature arrays
 
@@ -616,11 +641,12 @@ datapipe:
 
 To write your own reader, implement a Hydra‑instantiable function or class whose call returns a three‑tuple `(srcs, dsts, point_data)`. The first two entries are lists of integer arrays describing edges per run (they can be empty lists if you are not producing a graph), and `point_data` is a list of Python dicts with one dict per run. Each dict must contain `'coords'` as a `[T, N, 3]` array and one array per feature name listed in `conf/datapipe/*.yaml` under `features`. Feature arrays can be `[N]` or `[N, K]` and should use the same node indexing as `'coords'`. For convenience, a simple class reader can accept the Hydra `split` argument (e.g., "train" or "test") and decide whether to save VTP frames, but this is optional.
 
-As a starting point, your YAML can point to a class by dotted path:
+As a starting point, save the class under `readers/` (for example
+`readers/my_reader.py`) and point your YAML to it by dotted path:
 
 ```yaml
 # conf/reader/my_reader.yaml
-_target_: my_reader.MyReader
+_target_: readers.my_reader.MyReader
 # any constructor kwargs here, e.g. thresholds or unit conversions
 ```
 
@@ -717,7 +743,7 @@ spurious shell crossings about sevenfold within the metric's 5 mm search band
 Transformers with Contact-Aware Local Corrections for Full-Vehicle Crash
 Simulation", is in preparation; a link will follow.
 
-The network (`rollout.DeFormerTimeConditional`,
+The network (`models.rollout.DeFormerTimeConditional`,
 `conf/model/deformer_time_conditional.yaml`):
 
 * a GeoTransolver/FLARE global stage (`attention_type: GALE_FA`, 6 blocks,
@@ -736,7 +762,7 @@ The network (`rollout.DeFormerTimeConditional`,
   forward fits one GPU.
   9,672,505 parameters.
 
-The corrector (`rollout.ResidualTimeConditional` around
+The corrector (`models.rollout.ResidualTimeConditional` around
 `physicsnemo.experimental.models.deformer.DeFormerCorrector`,
 `conf/model/deformer_corrector.yaml`):
 
@@ -789,7 +815,7 @@ PhysicsX, the dataset's owner; this example ships no converter for them. The
 dataset is not public at the time of writing, and the checkpoints trained on
 it are not distributed, so the recipes document the protocol and the numbers
 rather than a download. The layout is not the one PhysicsNeMo-Curator's crash ETL writes
-(`mesh_pos`, `thickness`, `edges`, read by `zarr_reader.py` for the VTP-derived
+(`mesh_pos`, `thickness`, `edges`, read by `readers/zarr_reader.py` for the VTP-derived
 recipes; see [Data Preprocessing](#data-preprocessing)); a store in another
 layout is rejected with a message naming the missing arrays. Two more files are
 needed:
@@ -904,7 +930,7 @@ the neighbourhood cache are read from `datapipe.stats_dir` and never recomputed
 or written, and no training dataset, optimizer or TensorBoard writer is created.
 `hydra.run.dir` must lie inside the output directory, since the recipe's own run
 directory is the training run. The suite is one implementation
-(`validation_suite.py`) shared by the Yaris trainer's validation epochs and both
+(`metrics/validation_suite.py`) shared by the Yaris trainer's validation epochs and both
 evaluators.
 
 For the network or the baseline use their recipe with `datapipe.contact_surface=true`

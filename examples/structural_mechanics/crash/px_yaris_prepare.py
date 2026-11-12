@@ -25,10 +25,10 @@ import time
 from pathlib import Path
 
 import hydra
+from datapipes.px_yaris_dataset import STATS_FILE
 from hydra.utils import instantiate
-from px_yaris_dataset import STATS_FILE
-from px_yaris_reader import file_sha256
-from validation_suite import atomic_json
+from metrics.validation_suite import atomic_json
+from readers.px_yaris_reader import file_sha256
 
 
 @hydra.main(

@@ -21,7 +21,7 @@ evaluated exactly once regardless of the rank count (the generic loader
 floors the case count to a multiple of the ranks), and cases have different
 horizons (94-152 frames at stride 5), so errors are pooled per rollout step
 with explicit counts instead of assuming one horizon. The suite itself lives
-in :mod:`validation_suite` and is shared with ``evaluate_px_yaris.py`` and
+in :mod:`metrics.validation_suite` and is shared with ``evaluate_px_yaris.py`` and
 ``evaluate_biw.py``; this module adds what is Yaris-specific: the split
 dataset, the node metadata next to the node maps and the record's
 identification keys.
@@ -36,8 +36,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from hydra.utils import instantiate
-from train import Trainer
-from validation_suite import (
+from metrics.validation_suite import (
     ExactShardSampler,
     SuiteResult,
     atomic_json,
@@ -47,6 +46,7 @@ from validation_suite import (
     save_node_rmse,
     training_stats,
 )
+from train import Trainer
 
 # Reference-x bounds (mm) splitting the full-vehicle mesh into regions (rear,
 # middle, front) for the translational-error breakdown.

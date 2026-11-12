@@ -759,7 +759,7 @@ class CrashGraphDataset(CrashBaseDataset):
         # cached neighbourhood object); see _attach_local_neighborhood.
         self._shared_local_neighborhoods: dict[int, dict] = {}
         if self.local_knn_k is not None:
-            from local_neighborhoods import LocalNeighborhoodCache
+            from datapipes.local_neighborhoods import LocalNeighborhoodCache
 
             self.local_knn_cache = LocalNeighborhoodCache(
                 self.local_knn_cache_dir, logger=self.logger
@@ -796,7 +796,7 @@ class CrashGraphDataset(CrashBaseDataset):
                     [self.rigid_wall_position], dtype=torch.float32
                 )
             if self.contact_surface:
-                from surface_topology import (
+                from datapipes.surface_topology import (
                     SurfaceContactData,
                     surface_faces_from_cells,
                     surface_one_ring_exclusions,
@@ -911,7 +911,7 @@ class CrashGraphDataset(CrashBaseDataset):
         ``[N, K, 4]`` features (some 25 bytes per slot) are built once per mesh,
         not once per sample, like ``edge_index`` above.
         """
-        from local_neighborhoods import (
+        from datapipes.local_neighborhoods import (
             LocalNeighborhoodData,
             knn_edge_features,
             with_self_slot,

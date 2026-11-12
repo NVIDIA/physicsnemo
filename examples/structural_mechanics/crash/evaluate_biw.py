@@ -18,11 +18,11 @@ the evaluation suite of the PX Yaris recipes.
 
 The body-in-white recipes train with the generic :class:`train.Trainer`, whose validation
 is the pooled normalized MSE only. This script applies the suite that
-:class:`px_yaris_trainer.YarisFullTrainer` wires into its validation to a body-in-white
+:class:`trainers.px_yaris_trainer.YarisFullTrainer` wires into its validation to a body-in-white
 checkpoint: the exact held-out validation (every case once on any rank count)
 with the pooled and per-time vector RMSE in millimetres, per-case and
 per-region breakdowns, node-error maps and percentiles, the target-relative
-penetration metrics (:class:`penetration_metrics.PenetrationMetrics`: shell
+penetration metrics (:class:`metrics.penetration_metrics.PenetrationMetrics`: shell
 surface and, with ``datapipe.rigid_wall_position``, the rigid wall). Runs
 inside the training
 environment, sharded over GPUs like training::
@@ -41,7 +41,7 @@ Only the validation split is built; the normalization statistics are loaded
 from ``datapipe.stats_dir`` (the run's ``stats`` directory, written when the
 training split was built), so nothing is ever written next to the run, and
 ``hydra.run.dir`` must lie inside ``training.validation_output_dir``. The suite
-is :mod:`validation_suite`, shared with the Yaris trainer and evaluator. The
+is :mod:`metrics.validation_suite`, shared with the Yaris trainer and evaluator. The
 record goes to ``<out>/epoch_<E>.json`` with the keys of the PX Yaris validation
 JSON, plus ``node_rmse_epoch_<E>.npy``.
 
@@ -64,10 +64,9 @@ from pathlib import Path
 
 import hydra
 import torch
-from datapipe import EPS
+from datapipes.datapipe import EPS
 from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf, open_dict
-from validation_suite import (
+from metrics.validation_suite import (
     amp_settings,
     atomic_json,
     data_stats_of,
@@ -79,6 +78,7 @@ from validation_suite import (
     run_suite,
     save_node_rmse,
 )
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -90,7 +90,7 @@ DEFAULT_REGION_BOUNDS = (-3000.0, -1500.0)
 def case_names(data_dir, count: int) -> list[str]:
     """Stems of the split's VTP files in the reader's order, or indices."""
     try:
-        from vtp_reader import find_run_folders
+        from readers.vtp_reader import find_run_folders
 
         names = [Path(path).stem for path in find_run_folders(str(data_dir))[:count]]
     except Exception:  # noqa: BLE001 - names are labels only

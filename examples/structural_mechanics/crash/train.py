@@ -58,17 +58,17 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 _tabulate = OptionalImport("tabulate")
 _torchinfo = OptionalImport("torchinfo")
 
-from datapipe import GLOBAL_STATS_FILE, SimSample, simsample_collate
-from losses import PositionLoss
+from datapipes.datapipe import GLOBAL_STATS_FILE, SimSample, simsample_collate
+from metrics.losses import PositionLoss
 from omegaconf import open_dict
-from utils import (
-    build_muon_optimizer,
+from utils.distributed import initialize_datasets
+from utils.optimizers import build_muon_optimizer
+from utils.random_state import (
     configure_deterministic_training,
     gather_rng_states,
-    initialize_datasets,
-    load_warm_start,
     restore_rank_rng,
 )
+from utils.warm_start import load_warm_start
 
 
 class ValidationEarlyStopping:
@@ -227,7 +227,7 @@ class Trainer:
 
     Training options read from ``cfg.training`` beyond the defaults of
     ``conf/training/default.yaml``: ``loss`` / ``loss_space`` / ``loss_scale_mm``
-    (:class:`losses.PositionLoss`), ``auxiliary_loss_weight`` (position loss on a
+    (:class:`metrics.losses.PositionLoss`), ``auxiliary_loss_weight`` (position loss on a
     model's ``auxiliary_prediction``), ``lr_warmup_epochs``, ``warm_start_model`` (initialise from another
     run's weights), ``manual_gradient_allreduce``, ``reproducible_sampling`` /
     ``sampler_seed``, ``deterministic`` and ``early_stopping_*``.

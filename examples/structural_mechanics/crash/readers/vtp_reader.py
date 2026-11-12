@@ -21,7 +21,7 @@ import re
 import numpy as np
 import pyvista as pv
 import torch
-from utils import get_global_features_for_run, load_global_features
+from utils.global_features import get_global_features_for_run, load_global_features
 
 VTP_CACHE_VERSION = 1
 

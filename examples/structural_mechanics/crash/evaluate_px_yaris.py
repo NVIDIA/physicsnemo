@@ -15,8 +15,8 @@
 # limitations under the License.
 """Score a Yaris checkpoint with the exact held-out validation suite.
 
-Runs the suite of :mod:`validation_suite` (the one
-:class:`px_yaris_trainer.YarisFullTrainer` validates with) on a trained
+Runs the suite of :mod:`metrics.validation_suite` (the one
+:class:`trainers.px_yaris_trainer.YarisFullTrainer` validates with) on a trained
 checkpoint, inside the training environment and sharded over GPUs like
 training: pooled and per-frame vector RMSE in millimetres, per-case and
 per-region breakdowns, the target-relative penetration statistics of the
@@ -55,19 +55,19 @@ from pathlib import Path
 import hydra
 import torch
 from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf, open_dict
-from px_yaris_trainer import (
-    SPLITS,
-    build_split_dataset,
-    evaluate_split,
-    write_outputs,
-)
-from validation_suite import (
+from metrics.validation_suite import (
     amp_settings,
     data_stats_of,
     load_evaluation_weights,
     log_summary,
     require_output_run_dir,
+)
+from omegaconf import DictConfig, OmegaConf, open_dict
+from trainers.px_yaris_trainer import (
+    SPLITS,
+    build_split_dataset,
+    evaluate_split,
+    write_outputs,
 )
 
 from physicsnemo.distributed import DistributedManager

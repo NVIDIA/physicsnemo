@@ -22,7 +22,7 @@ from inputs, targets and neighborhoods; positions and thickness are read per
 case and per frame, so no trajectory is preloaded. The reader also exposes the
 structural connectivity (shell edges, optionally the solid-element edges) and
 the shell facets of the contact surface, both renumbered to the kept nodes.
-The datapipe built on it is :mod:`px_yaris_dataset`.
+The datapipe built on it is :mod:`datapipes.px_yaris_dataset`.
 """
 
 from __future__ import annotations

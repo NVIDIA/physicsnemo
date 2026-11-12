@@ -29,8 +29,8 @@ CRASH_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))
 if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
-from datapipe import SimSample  # noqa: E402
-from penetration_metrics import PenetrationMetrics  # noqa: E402
+from datapipes.datapipe import SimSample  # noqa: E402
+from metrics.penetration_metrics import PenetrationMetrics  # noqa: E402
 
 SPACING = 10.0
 GAP = 20.0  # reference distance between the plates (beyond the 10 mm clearance)

@@ -14,14 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Time-conditional DeFormer (rollout.DeFormerTimeConditional): the
+# Time-conditional DeFormer (models.rollout.DeFormerTimeConditional): the
 # GeoTransolver/FLARE backbone with a latent pre-processor, a post stage A whose
 # zero-initialised side head gives a provisional position, and an independent
 # post stage B whose gated correction gives the final position. The local
 # stages are static kNN neighbourhood attention (k = 32) with the fused kernel.
 # The values are the Yaris recipe's (px_yaris_deformer); the body-in-white recipe overrides
 # the neighbourhood metric and the memory policy.
-_target_: rollout.DeFormerTimeConditional
+_target_: models.rollout.DeFormerTimeConditional
 _convert_: all
 # node inputs: coords (3) + thickness (1) + fourier time code (time_dim)
 functional_dim: 36

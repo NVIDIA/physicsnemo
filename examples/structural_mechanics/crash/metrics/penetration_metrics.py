@@ -80,7 +80,7 @@ validation. Every rank logs its own failure; the reasons are gathered in
 false``, ``failure_reasons`` and ``null`` in place of every count and depth,
 so a disabled probe can never read as a perfect score. Results are written
 under ``penetration`` in the validation JSON by
-:class:`px_yaris_trainer.YarisFullTrainer`; ``evaluate_px_yaris.py`` fails
+:class:`trainers.px_yaris_trainer.YarisFullTrainer`; ``evaluate_px_yaris.py`` fails
 when the probe ends disabled.
 """
 

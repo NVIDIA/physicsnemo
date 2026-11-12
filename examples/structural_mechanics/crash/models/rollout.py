@@ -24,10 +24,10 @@ from pathlib import Path
 from typing import NamedTuple
 
 import torch
-from datapipe import SimSample
+from datapipes.datapipe import SimSample
 from torch import nn
 from torch.utils.checkpoint import checkpoint as ckpt
-from utils import load_warm_start
+from utils.warm_start import load_warm_start
 
 import physicsnemo
 from physicsnemo.experimental.models.deformer import (
@@ -938,7 +938,7 @@ class DeFormerTimeConditional(DeFormer):
 # ---- DeFormer: teacher-plus-corrector wrapper ----------------------------------------
 # DeFormer: a frozen time-conditional network followed by its corrector.
 #
-# The teacher is a finished :class:`rollout.DeFormerTimeConditional`,
+# The teacher is a finished :class:`models.rollout.DeFormerTimeConditional`,
 # loaded from its checkpoint and frozen; the student is a
 # :class:`physicsnemo.experimental.models.deformer.DeFormerCorrector` trained on
 # top of it. The teacher's prediction at the queried time is recomputed on the fly;
@@ -992,8 +992,7 @@ class ResidualTimeConditional(physicsnemo.Module):
     architecture and loads everything from the state dict. A teacher file may
     still be given at reload with
     ``override_args={"teacher_weights": <network .mdlus>}``; it is read and then
-    overwritten by the state dict. Correctors saved by earlier revisions record
-    the training-time path and take the same override.
+    overwritten by the state dict.
     """
 
     # The teacher path is the one argument a saved corrector lets the loader override.

@@ -16,7 +16,7 @@
 
 """The full-vehicle Yaris datapipe: full-resolution cases, static kNN neighborhoods.
 
-The stores are read through :class:`px_yaris_reader.YarisFullReader`. This
+The stores are read through :class:`readers.px_yaris_reader.YarisFullReader`. This
 datapipe keeps the mesh at full resolution: no coarsening, no prolongation. The
 static kNN neighborhoods and their standardized features are built once from
 the shared reference geometry; positions and thickness are read per case and
@@ -47,9 +47,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import zarr
-from datapipe import EPS, KNN_EDGE_STATS_FILE, SimSample
+from metrics.validation_suite import atomic_json
 from torch.utils.data import Dataset
-from validation_suite import atomic_json
+
+from datapipes.datapipe import EPS, KNN_EDGE_STATS_FILE, SimSample
 
 STATS_FILE = "yaris_full_stats.json"
 NORMALIZATION = "yaris-full-train-equal-case-axis-std-v1"
@@ -182,7 +183,7 @@ class YarisFullGraphDataset(Dataset):
         Attach the structural shell connectivity in both directions with its
         standardized reference features (``graph.mesh_edge_index``,
         ``mesh_edge_attr``, ``mesh_edge_mean``, ``mesh_edge_std``) for the
-        MeshGraphNet corrector; ``edge_index`` itself stays as the local
+        DeFormer corrector; ``edge_index`` itself stays as the local
         operator expects it (empty under the Euclidean metric).
     """
 
@@ -352,13 +353,12 @@ class YarisFullGraphDataset(Dataset):
     def _build_graph(self, cache_dir, stats_mode):
         """The shared graph: kNN neighbourhoods with standardized features and the
         optional mesh edges, contact topology and rigid wall."""
-        from local_neighborhoods import (
+        from datapipes.local_neighborhoods import (
             LocalNeighborhoodCache,
             LocalNeighborhoodData,
             knn_edge_features,
             with_self_slot,
         )
-
         from physicsnemo.experimental.models.deformer import mesh_edge_features
 
         reference = torch.from_numpy(self.reader.reference.copy())
@@ -419,7 +419,7 @@ class YarisFullGraphDataset(Dataset):
                 "same local_knn settings first"
             )
         if self.contact_surface:
-            from surface_topology import SurfaceContactData
+            from datapipes.surface_topology import SurfaceContactData
 
             graph = SurfaceContactData(
                 edge_index=edge_index,
@@ -475,7 +475,7 @@ class YarisFullGraphDataset(Dataset):
 
     def _contact_exclusions(self, faces):
         """One-ring node/facet exclusions, cached next to the statistics."""
-        from surface_topology import surface_one_ring_exclusions
+        from datapipes.surface_topology import surface_one_ring_exclusions
 
         digest = hashlib.sha256(faces.numpy().tobytes()).hexdigest()[:16]
         path = self._stats_dir / f"contact_one_ring_{digest}.pt"

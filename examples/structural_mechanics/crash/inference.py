@@ -33,8 +33,8 @@ from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils import load_checkpoint
 
-from datapipe import simsample_collate
-from utils import load_warm_start
+from datapipes.datapipe import simsample_collate
+from utils.warm_start import load_warm_start
 
 
 def denormalize_positions(

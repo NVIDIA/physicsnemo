@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-_target_: px_yaris_reader.YarisFullReader
+_target_: readers.px_yaris_reader.YarisFullReader
 _convert_: all
 manifest_path: ${yaris.split_manifest}
 outlier_mask_path: ${yaris.outlier_mask}
