@@ -77,4 +77,4 @@ model:
   out_dim: 250        # (num_time_steps - 1) * 5 = 50 * 5
   global_dim: 3       # must match len(datapipe.global_features)
   # For OOD scoring, request geometry features from GeoTransolver and pass
-  # pooled tokens to experimental.uq.ood.KNNScorer; see the README.
+  # pooled tokens to experimental.uq.ood.KNNScorer. Refer to the README.
