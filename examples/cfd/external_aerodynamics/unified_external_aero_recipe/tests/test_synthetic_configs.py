@@ -44,6 +44,10 @@ because their ``forward_kwargs`` references fields the dataset doesn't expose
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import warnings
 from pathlib import Path
 from typing import NamedTuple
@@ -503,3 +507,249 @@ def test_mesh_input_config_synthetic_e2e(
     )
     loss, _ = lc(pred_td, batch["targets"])
     assert torch.isfinite(loss), f"loss not finite: {float(loss)}"
+
+
+### ---------------------------------------------------------------------------
+### Train + infer on several prediction sets, end to end
+### ---------------------------------------------------------------------------
+
+_SETS_MODELS = """
+import torch
+from physicsnemo.mesh import Mesh
+
+
+class Branch(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.surface, self.volume = torch.nn.Linear(3, 4), torch.nn.Linear(3, 4)
+
+    def forward(self, surface_points, volume_points):
+        return self.surface(surface_points), self.volume(volume_points)
+
+
+class Pointwise(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.head = torch.nn.Linear(3, 4)
+
+    def forward(self, prediction_points):
+        out = self.head(prediction_points.points)
+        return Mesh(
+            points=prediction_points.points,
+            point_data={"p": out[..., 0], "vec": out[..., 1:]},
+        )
+"""
+
+_SETS_DATASET = {
+    "pipeline": {
+        "reader": {
+            "_target_": "${dp:DomainMeshReader}",
+            "path": "${train_datadir}",
+            "pattern": "run_*/domain_*.pdmsh",
+        },
+        "transforms": [
+            {
+                "_target_": "${dp:NonDimensionalizeByMetadata}",
+                "fields": {
+                    "pressure": "pressure",
+                    "velocity": "velocity",
+                    "wss": "stress",
+                },
+            },
+            {
+                "_target_": "${dp:NormalizeMeshFields}",
+                "fields": {
+                    "pressure": {"type": "scalar", "mean": 0.5, "std": 2.0},
+                    "velocity": {"type": "vector", "mean": [0.1, 0, 0], "std": 0.5},
+                    "wss": {"type": "vector", "mean": [0, 0, 0], "std": 0.01},
+                },
+            },
+        ],
+    },
+    ### The README's naming: targets named apart from their source fields.
+    "targets": {
+        "volume.pressure": "scalar",
+        "volume.velocity": "vector",
+        "surface.pressure": "scalar",
+        "surface.wss": "vector",
+    },
+    "target_sources": {
+        "volume.pressure": "interior.point_data.pressure",
+        "volume.velocity": "interior.point_data.velocity",
+        "surface.pressure": "boundaries.surface_queries.point_data.pressure",
+        "surface.wss": "boundaries.surface_queries.point_data.wss",
+    },
+}
+
+_SETS_LAYOUTS = {
+    "branch": {
+        "input_type": "tensors",
+        "output_type": "tensors",
+        "forward_kwargs": {
+            "surface_points": "boundaries.surface_queries.points",
+            "volume_points": "interior.points",
+        },
+        "output_groups": [
+            ["surface.pressure", "surface.wss"],
+            ["volume.pressure", "volume.velocity"],
+        ],
+        "model": {"_target_": "e2e_models.Branch"},
+    },
+    "single_decoder": {
+        "input_type": "mesh",
+        "output_type": "mesh",
+        "forward_kwargs": {
+            "prediction_points": {
+                "concat_point_sets": ["interior", "boundaries.surface_queries"]
+            }
+        },
+        "output_sets": {
+            "interior": {"volume.pressure": "p", "volume.velocity": "vec"},
+            "boundaries.surface_queries": {
+                "surface.pressure": "p",
+                "surface.wss": "vec",
+            },
+        },
+        "model": {"_target_": "e2e_models.Pointwise"},
+    },
+}
+
+
+def _write_sets_data(root: Path) -> dict[str, DomainMesh]:
+    """Volume samples with a surface point set at the vehicle cell centroids."""
+    g = torch.Generator().manual_seed(0)
+    val = {}
+    for split, n in (("train", 2), ("val", 2)):
+        for i in range(n):
+            vehicle = Mesh(
+                points=torch.randn(16, 3, generator=g),
+                cells=torch.stack(
+                    [torch.randperm(16, generator=g)[:3] for _ in range(8)]
+                ),
+            )
+            surface = Mesh(
+                points=vehicle.cell_centroids,
+                point_data={
+                    "pressure": torch.randn(8, generator=g) * 100,
+                    "wss": torch.randn(8, 3, generator=g),
+                },
+            )
+            interior = Mesh(
+                points=torch.randn(20, 3, generator=g) * 3,
+                point_data={
+                    "pressure": torch.randn(20, generator=g) * 100,
+                    "velocity": torch.randn(20, 3, generator=g) * 30,
+                },
+            )
+            domain = DomainMesh(
+                interior=interior,
+                boundaries={"vehicle": vehicle, "surface_queries": surface},
+                global_data={
+                    "U_inf": torch.tensor([30.0, 0.0, 0.0]),
+                    "p_inf": torch.tensor(10.0),
+                    "rho_inf": torch.tensor(1.2),
+                    "L_ref": torch.tensor(2.0),
+                },
+            )
+            path = root / split / f"run_{i}" / "domain_0.pdmsh"
+            path.parent.mkdir(parents=True)
+            domain.save(str(path))
+            if split == "val":
+                val[f"run_{i}"] = domain
+    return val
+
+
+@pytest.mark.parametrize("layout", list(_SETS_LAYOUTS))
+def test_prediction_sets_train_and_infer(layout: str, tmp_path: Path) -> None:
+    """Train one epoch and infer: exports are physical, forces use the surface set."""
+    raw = _write_sets_data(tmp_path / "data")
+    dataset = {
+        "train_datadir": str(tmp_path / "data" / "train"),
+        "val_datadir": str(tmp_path / "data" / "val"),
+        **_SETS_DATASET,
+    }
+    OmegaConf.save(OmegaConf.create(dataset), tmp_path / "sets.yaml")
+    (tmp_path / "conf" / "model").mkdir(parents=True)
+    (tmp_path / "conf" / "model" / "sets.yaml").write_text(
+        "# @package _global_\n" + OmegaConf.to_yaml(_SETS_LAYOUTS[layout])
+    )
+    (tmp_path / "e2e_models.py").write_text(_SETS_MODELS)
+
+    common = [
+        "model=sets",
+        f"dataset={tmp_path / 'sets'}",
+        f"hydra.searchpath=[file://{tmp_path / 'conf'}]",
+        "run_id=sets",
+        "compile=false",
+        "precision=float32",
+        "augment=false",
+        "sampling_resolution=null",
+        "train_split=null",
+        "dataloader.num_workers=1",
+        "dataloader.use_streams=false",
+        "dataloader.pin_memory=false",
+    ]
+    env = {
+        **os.environ,
+        "CUDA_VISIBLE_DEVICES": "",
+        "PYTHONPATH": os.pathsep.join(
+            [str(tmp_path), *sys.path, os.environ.get("PYTHONPATH", "")]
+        ),
+    }
+    runs = tmp_path / "runs"
+    for script, extra in (
+        ("train.py", ["val_split=null", "training.num_epochs=1", f"output_dir={runs}"]),
+        (
+            "infer.py",
+            [
+                "infer_split=null",
+                f"checkpoint_dir={runs}",
+                f"output_dir={tmp_path / 'infer'}",
+            ],
+        ),
+    ):
+        result = subprocess.run(  # noqa: S603 - the recipe scripts, with test arguments
+            [
+                sys.executable,
+                str(_RECIPE_ROOT / "src" / script),
+                *common,
+                *extra,
+                f"hydra.run.dir={tmp_path / 'hydra' / script}",
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+
+    predictions = sorted((tmp_path / "infer" / "sets" / "predictions").glob("*.pdmsh"))
+    assert len(predictions) == len(raw)
+    for path in predictions:
+        saved = DomainMesh.load(str(path))
+        source = next(d for run, d in raw.items() if run in path.name)
+        for mesh, fields in (
+            ("interior", ("pressure", "velocity")),
+            ("surface_queries", ("pressure", "wss")),
+        ):
+            got = saved.interior if mesh == "interior" else saved.boundaries[mesh]
+            want = source.interior if mesh == "interior" else source.boundaries[mesh]
+            for field in fields:
+                torch.testing.assert_close(
+                    got.point_data[f"true_{field}"].reshape(
+                        want.point_data[field].shape
+                    ),
+                    want.point_data[field],
+                    rtol=1e-4,
+                    atol=1e-3,
+                )
+                assert got.point_data[f"pred_{field}"].shape[0] == got.n_points
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "infer" / "sets" / "metrics.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    forces = [r for r in records if r.get("phase") == "infer_forces_summary"]
+    assert forces and forces[0]["num_samples"] == len(raw)
