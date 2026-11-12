@@ -248,7 +248,7 @@ if flagged.any():
 
 `GeoTransolverOneShot` in `rollout.py` exposes the separate
 `forward_with_geometry_features` method, returning the normal prediction plus
-detached geometry tokens. Direct calls bypass model-level forward hooks;
+detached geometry tokens. Direct calls bypass model-level forward hooks.
 Ordinary `model(...)` calls preserve those hooks and return predictions only.
 Other rollout classes can adopt the separate method.
 
