@@ -35,6 +35,12 @@ block around it still holds the :math:`[N, K, E]` edge latent and the float32
 :math:`[N, K, H]` logit bias. With checkpoint segments the processor's edge
 encoder runs inside each segment, so those per-slot tensors are recomputed in
 backward instead of being held for the whole processor.
+
+The name is shared with NATTEN (Neighborhood Attention Transformer), which
+restricts attention to a sliding window on a regular grid of pixels or voxels.
+Here a node's neighborhood is an explicit set of ``K`` mesh nodes selected once
+on the reference geometry: there is no grid, window or dilation, and NATTEN's
+kernels are not used.
 """
 
 from __future__ import annotations
