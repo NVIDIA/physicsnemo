@@ -62,6 +62,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `QuantileRegressionScore`, and `AuxScale`. Custom scores subclass
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
+- Adds `physicsnemo.experimental.nn.shell_contact`: shell contact as pure
+  functions over tensors (node-to-facet pair search with a Warp BVH broad
+  phase and fused Warp narrow phase, crossing-aware signed gaps, edge
+  features and tapers, penetration depths and rigid-wall clamp), and
+  `physicsnemo.experimental.nn.geodesic_knn` (k-nearest neighbourhoods of a
+  mesh along its edges; Euclidean ones use `physicsnemo.nn.functional.knn`).
+- Adds `physicsnemo.experimental.models.deformer`: the DeFormer
+  network (a GeoTransolver/FLARE backbone with static kNN-attention
+  stages and a fused kernel) and its contact-aware corrector (message passing
+  on the structural edges and on the contact edges discovered on a predicted
+  shape).
+- Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
+  the time-conditional network and corrector wrappers, the three full-vehicle Yaris
+  recipes (`px_yaris_deformer`, `px_yaris_deformer_corrector`,
+  `px_yaris_geotransolver`), the body-in-white recipe `biw_yaris_deformer`
+  and target-relative penetration metrics.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
@@ -165,6 +181,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
+  `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
+  `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
+  recipe of the example now names its dataset (`px_yaris_*` full vehicle,
+  `biw_yaris_*` body-in-white, `bumper_*` bumper beam).
+- &#9888;&#65039; **BC-impact (crash example global features):** the datapipe of
+  `examples/structural_mechanics/crash` standardizes the global features with
+  train-split statistics stored in `stats/global_stats.json`, which changes the
+  inputs of the three bumper recipes. A run directory written before this
+  change holds checkpoints but no such file: `train.py` refuses to resume it
+  instead of recomputing the statistics and continuing on rescaled inputs, and
+  `inference.py` needs the file. Start such runs afresh.
+- &#9888;&#65039; **BC-impact (crash example edge statistics):** the graph datapipe
+  of the crash example divides the first sample's contribution to the edge
+  statistics by the sample count like every other sample's, which fixes an
+  edge-length standard deviation that collapsed to about 1e-4. Existing runs
+  keep the values stored in their own `stats` directory; new runs compute the
+  corrected ones, so their models are not interchangeable with the old runs'.
+- &#9888;&#65039; **BC-impact (crash example frame names):** `inference.py` of the
+  crash example writes the predicted frames as `frame_001` to `frame_T`
+  (prediction `k` belongs to frame `k + 1`) instead of starting at
+  `frame_000`; `post_processing/compute_l2_error.py` reads the new names.
 - &#9888;&#65039; **BC-impact (diffusion metric imports):** Cleans up
   `physicsnemo.diffusion` dependencies and imports. General-purpose metrics can
   no longer be imported from `physicsnemo.diffusion.metrics`. Use the following

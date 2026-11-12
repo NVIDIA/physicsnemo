@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import os
 import re
+from typing import Any, Callable, Optional
+
 import numpy as np
 import torch
-from typing import Any, Callable, Optional
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
@@ -31,6 +33,8 @@ from physicsnemo.utils.logging import PythonLogger
 NODE_STATS_FILE = "node_stats.json"
 FEATURE_STATS_FILE = "feature_stats.json"
 EDGE_STATS_FILE = "edge_stats.json"
+KNN_EDGE_STATS_FILE = "knn_edge_stats.json"
+GLOBAL_STATS_FILE = "global_stats.json"
 EPS = 1e-8  # numerical stability for std
 
 
@@ -56,11 +60,14 @@ class SimSample:
         global_features: Optional[dict[str, torch.Tensor]] = None,
         target_series: Optional[dict[str, torch.Tensor]] = None,
     ):
-        assert isinstance(node_features, dict), "node_features must be a dict"
-        assert "coords" in node_features, "node_features must contain 'coords'"
-        assert (
-            node_features["coords"].ndim == 2 and node_features["coords"].shape[1] == 3
-        ), f"'coords' must be [N,3], got {node_features['coords'].shape}"
+        if not isinstance(node_features, dict):
+            raise ValueError("node_features must be a dict")
+        if "coords" not in node_features:
+            raise ValueError("node_features must contain 'coords'")
+        if node_features["coords"].ndim != 2 or node_features["coords"].shape[1] != 3:
+            raise ValueError(
+                f"'coords' must be [N,3], got {node_features['coords'].shape}"
+            )
         self.node_features = node_features
         self.node_target = node_target
         self.graph = graph  # PyG Data or None
@@ -68,11 +75,16 @@ class SimSample:
         self.target_series = target_series
 
     def to(self, device: torch.device):
+        """Move sample tensors without mutating the cached graph attribute store."""
         for k, v in self.node_features.items():
             self.node_features[k] = v.to(device)
         self.node_target = self.node_target.to(device)
         if self.graph is not None:
-            self.graph = self.graph.to(device)
+            # PyG Data.to mutates its attribute store in place. The graph may
+            # belong to CrashGraphDataset.graphs, so isolate the store before
+            # transfer; otherwise every visited graph remains cached on GPU.
+            # Data.__copy__ copies stores without duplicating tensor storage.
+            self.graph = copy.copy(self.graph).to(device)
         if self.global_features is not None:
             self.global_features = {
                 k: v.to(device) for k, v in self.global_features.items()
@@ -80,15 +92,17 @@ class SimSample:
         return self
 
     def is_graph(self) -> bool:
+        """Return whether this sample carries structural graph connectivity."""
         return self.graph is not None
 
     def __repr__(self) -> str:
         n = self.node_features["coords"].shape[0]
-        keys = {k: tuple(v.shape) for k, v in self.node_features.items()}
         din = 3
         for k, v in self.node_features.items():
             if k != "coords":
-                din += v.shape[1]
+                # Per-node features are [N, F]; scalar or [N] entries (for
+                # example a time-conditional sample's time) count as one channel.
+                din += v.shape[1] if v.ndim >= 2 else 1
         dout = (
             self.node_target.shape[1]
             if self.node_target.ndim == 2
@@ -135,7 +149,14 @@ class CrashBaseDataset:
         logger=None,
         dt: float = 5e-3,
         stats_dir: str = "stats",
+        stats_mode: str = "compute",
         sample_type: str = "all_time_steps",
+        contact_surface: bool = False,
+        contact_surface_exclusion: str = "incidence",
+        local_knn_k: int | None = None,
+        local_knn_metric: str = "geodesic",
+        local_knn_cache_dir: Optional[str] = None,
+        rigid_wall_position: float | None = None,
     ):
         super().__init__()
         self.name = name
@@ -152,11 +173,47 @@ class CrashBaseDataset:
         self.logger = logger or PythonLogger()
         self.dt = dt
         self.sample_type = sample_type
+        self.contact_surface = bool(contact_surface)
+        # Static reference neighborhoods for DeFormer's kNN attention.
+        # ``None`` keeps the validated MeshGraphNet recipes byte-for-byte.
+        if local_knn_k is not None and (
+            isinstance(local_knn_k, bool)
+            or not isinstance(local_knn_k, int)
+            or local_knn_k <= 0
+        ):
+            raise ValueError("local_knn_k must be a positive integer or None")
+        if local_knn_metric not in ("geodesic", "euclidean"):
+            raise ValueError("local_knn_metric must be 'geodesic' or 'euclidean'")
+        self.local_knn_k = local_knn_k
+        self.local_knn_metric = local_knn_metric
+        self.local_knn_cache_dir = local_knn_cache_dir
+        if contact_surface_exclusion not in ("incidence", "one_ring"):
+            raise ValueError("contact_surface_exclusion must be incidence or one_ring")
+        if not contact_surface and contact_surface_exclusion != "incidence":
+            raise ValueError("surface exclusions require contact_surface=True")
+        self.contact_surface_exclusion = contact_surface_exclusion
+        if stats_mode not in {"compute", "load"}:
+            raise ValueError("stats_mode must be either 'compute' or 'load'")
+        self.stats_mode = stats_mode
+        # Analytic rigid-wall plane (graph.rigid_wall, physical units) for the
+        # wall clamp and the wall penetration statistics; the axis and sign are
+        # model settings (body-in-white: x = -29.8 mm, the furthest any node travels).
+        if rigid_wall_position is not None and not np.isfinite(
+            float(rigid_wall_position)
+        ):
+            raise ValueError("rigid_wall_position must be finite or None")
+        self.rigid_wall_position = (
+            None if rigid_wall_position is None else float(rigid_wall_position)
+        )
 
-        if sample_type not in ["all_time_steps", "one_time_step"]:
+        valid_sample_types = {"all_time_steps", "one_time_step"}
+        if sample_type not in valid_sample_types:
             raise ValueError(
-                f"Invalid sample type: {sample_type} Expected 'all_time_steps' or 'one_time_step'"
+                f"Invalid sample type: {sample_type}. Expected one of "
+                f"{sorted(valid_sample_types)}"
             )
+        if num_steps < 2:
+            raise ValueError(f"num_steps must be at least 2, got {num_steps}")
 
         # Precompute batch_idx logic
         rollout_steps = num_steps - 1
@@ -204,6 +261,20 @@ class CrashBaseDataset:
             global_features_filepath=self.global_features_filepath,
             logger=self.logger,
         )
+        self.mesh_cells = []
+        reference_cells = None
+        for record in point_data:
+            cells = record.get("mesh_cells")
+            if contact_surface and cells is None:
+                raise ValueError(
+                    "Contact requires element connectivity; enable reader.include_contact_topology"
+                )
+            if cells is not None:
+                if reference_cells is None:
+                    reference_cells = cells
+                elif np.array_equal(cells, reference_cells):
+                    cells = reference_cells
+            self.mesh_cells.append(cells)
         # Check if any global features are present
         # global_features is a list of dictionaries, each containing the global features for a sample
         has_global = global_features and any(gf for gf in global_features)
@@ -226,9 +297,32 @@ class CrashBaseDataset:
 
             self.global_features = global_features
 
+        global_stats_path = os.path.join(self._stats_dir, GLOBAL_STATS_FILE)
+        if self.global_features is None:
+            self.global_stats = {
+                "global_mean": torch.zeros(0, dtype=torch.float32),
+                "global_std": torch.ones(0, dtype=torch.float32),
+            }
+        elif self.split == "train" and self.stats_mode == "compute":
+            self.global_stats = self._compute_global_stats()
+            save_json(self.global_stats, global_stats_path)
+        elif os.path.exists(global_stats_path):
+            self.global_stats = load_json(global_stats_path)
+        else:
+            raise FileNotFoundError(
+                f"Global stats file {global_stats_path} not found. "
+                "Build the training split before validation or inference."
+            )
+        self.global_stats = {
+            key: torch.as_tensor(value, dtype=torch.float32)
+            for key, value in self.global_stats.items()
+        }
+
         # Storage for per-sample tensors
         self.mesh_pos_seq: list[torch.Tensor] = []  # [T,N,3]
+        self.contact_reference_positions: list[torch.Tensor] = []
         self.node_features_data: list[torch.Tensor] = []  # [N,F]
+        self.shell_thickness_data: list[torch.Tensor] = []  # physical [N]
         self._feature_slices: dict[
             str, tuple[int, int]
         ] = {}  # per-sample feature slices
@@ -237,12 +331,38 @@ class CrashBaseDataset:
         for rec in point_data:
             # Coordinates
             if "coords" not in rec:
-                raise KeyError(f"Missing coordinates key 'coords' in reader record")
+                raise KeyError("Missing coordinates key 'coords' in reader record")
             coords_np = rec["coords"][:num_steps]
-            assert coords_np.ndim == 3 and coords_np.shape[-1] == 3, (
-                f"coords must be [T,N,3], got {coords_np.shape}"
-            )
+            if not (coords_np.ndim == 3 and coords_np.shape[-1] == 3):
+                raise ValueError(f"coords must be [T,N,3], got {coords_np.shape}")
             self.mesh_pos_seq.append(torch.as_tensor(coords_np, dtype=torch.float32))
+            if self.local_knn_k is not None:
+                # Freeze the physical initial geometry before normalization; the
+                # reference neighbourhoods are built on it.
+                self.contact_reference_positions.append(
+                    self.mesh_pos_seq[-1][0].clone()
+                )
+
+            try:
+                raw_thickness = self._get_static_feature(rec, "thickness")
+            except KeyError:
+                raw_thickness = None
+            if raw_thickness is None:
+                if self.contact_surface:
+                    raise ValueError(
+                        "surface contact requires supplied physical thickness"
+                    )
+                thickness_np = np.zeros(coords_np.shape[1], dtype=np.float32)
+            else:
+                thickness_np = np.asarray(raw_thickness, dtype=np.float32)
+                if thickness_np.ndim == 2 and thickness_np.shape[-1] == 1:
+                    thickness_np = thickness_np[:, 0]
+                if thickness_np.shape != (coords_np.shape[1],):
+                    raise ValueError(
+                        "thickness must have shape [N] or [N, 1], got "
+                        f"{thickness_np.shape}"
+                    )
+            self.shell_thickness_data.append(torch.from_numpy(thickness_np.copy()))
 
             # Features: concatenate requested keys if present; allow empty
             parts = []
@@ -270,9 +390,10 @@ class CrashBaseDataset:
                 if len(parts) > 0
                 else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
             )
-            assert feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1], (
-                f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
-            )
+            if not (feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1]):
+                raise ValueError(
+                    f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
+                )
 
             # build slice map on first record to make future slicing trivial
             if len(self._feature_slices) == 0:
@@ -308,7 +429,7 @@ class CrashBaseDataset:
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
         feat_stats_path = os.path.join(self._stats_dir, FEATURE_STATS_FILE)
 
-        if self.split == "train":
+        if self.split == "train" and self.stats_mode == "compute":
             self.node_stats = self._compute_autoreg_node_stats()
             self.feature_stats = self._compute_feature_stats()
             save_json(self.node_stats, node_stats_path)
@@ -353,21 +474,22 @@ class CrashBaseDataset:
             - 'features': [N, F] concatenated (static + flattened dynamic)
         y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
-        assert 0 <= batch_idx < self.num_samples, f"batch_idx {batch_idx} out of range"
+        if not (0 <= batch_idx < self.num_samples):
+            raise ValueError(f"batch_idx {batch_idx} out of range")
         if time_idx is not None:
-            assert 0 <= time_idx < self.num_steps - 1, (
-                f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
-            )
+            if not (0 <= time_idx < self.num_steps - 1):
+                raise ValueError(
+                    f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
+                )
         pos_seq = self.mesh_pos_seq[batch_idx]  # [T,N,3]
         feats = self.node_features_data[batch_idx]  # [N,F]
         T, N, _ = pos_seq.shape
         F = feats.shape[1]
 
-        pos_t0 = pos_seq[0]  # [N,3]
-        x = {"coords": pos_t0, "features": feats}
+        x = {"coords": pos_seq[0], "features": feats}
 
         # pos_seq[1:]: [T-1, N, 3]
-        pos_rollout = pos_seq[1:]  # [T-1, N, 3]
+        pos_rollout = pos_seq[1:]
 
         if len(self.dynamic_targets) > 0:
             # Collect dynamic targets [T-1, N, C_k] for each target
@@ -398,21 +520,25 @@ class CrashBaseDataset:
             y = y[:, time_idx]
 
             Fo = y.shape[-1]
-            assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
-                f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
-            )
-            assert y.shape == (N, Fo), (
-                f"target shape {y.shape} does not match expected (N={N}, Fo={Fo})"
-            )
+            if not (x["coords"].shape == (N, 3) and x["features"].shape == (N, F)):
+                raise ValueError(
+                    f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+                )
+            if not (y.shape == (N, Fo)):
+                raise ValueError(
+                    f"target shape {y.shape} does not match expected (N={N}, Fo={Fo})"
+                )
 
         else:
             T_out, Fo = y.shape[1], y.shape[2]
-            assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
-                f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
-            )
-            assert y.shape == (N, T_out, Fo), (
-                f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
-            )
+            if not (x["coords"].shape == (N, 3) and x["features"].shape == (N, F)):
+                raise ValueError(
+                    f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+                )
+            if not (y.shape == (N, T_out, Fo)):
+                raise ValueError(
+                    f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
+                )
         return x, y
 
     # ---- stats helpers ----
@@ -470,7 +596,8 @@ class CrashBaseDataset:
         # If no features, return empty stats compatible with normalization branch
         fdim = self.node_features_data[0].shape[1]
         for t in self.node_features_data:
-            assert t.shape[1] == fdim, f"Feature dim mismatch: {t.shape[1]} vs {fdim}"
+            if not (t.shape[1] == fdim):
+                raise ValueError(f"Feature dim mismatch: {t.shape[1]} vs {fdim}")
 
         if fdim == 0:
             mu = torch.zeros(0, dtype=torch.float32)
@@ -489,14 +616,51 @@ class CrashBaseDataset:
         feat_std = torch.sqrt(feat_var + EPS)
         return {"feature_mean": feat_mean, "feature_std": feat_std}
 
+    def _compute_global_stats(self):
+        if self.global_features is None or not self.global_features_keys:
+            return {
+                "global_mean": torch.zeros(0, dtype=torch.float32),
+                "global_std": torch.ones(0, dtype=torch.float32),
+            }
+        values = torch.tensor(
+            [
+                [float(features[key]) for key in self.global_features_keys]
+                for features in self.global_features
+            ],
+            dtype=torch.float32,
+        )
+        global_mean = values.mean(dim=0)
+        global_var = torch.clamp(
+            (values * values).mean(dim=0) - global_mean**2, min=0.0
+        )
+        return {
+            "global_mean": global_mean,
+            "global_std": torch.sqrt(global_var + EPS),
+        }
+
+    def _normalized_global_features(self, batch_idx: int):
+        if self.global_features is None:
+            return None
+        mean = self.global_stats["global_mean"]
+        std = self.global_stats["global_std"]
+        return {
+            key: (
+                torch.tensor(self.global_features[batch_idx][key], dtype=torch.float32)
+                - mean[index]
+            )
+            / (std[index] + EPS)
+            for index, key in enumerate(self.global_features_keys)
+        }
+
     @staticmethod
     def _normalize_node_tensor(
         invar: torch.Tensor, mu: torch.Tensor, std: torch.Tensor
     ):
         # invar: [T,N,3], mu/std: [3]
-        assert invar.shape[-1] == mu.shape[-1] == std.shape[-1] == 3, (
-            f"Expected last dim=3, got {invar.shape[-1]} / {mu.shape} / {std.shape}"
-        )
+        if not (invar.shape[-1] == mu.shape[-1] == std.shape[-1] == 3):
+            raise ValueError(
+                f"Expected last dim=3, got {invar.shape[-1]} / {mu.shape} / {std.shape}"
+            )
         return (invar - mu.view(1, 1, -1)) / (std.view(1, 1, -1) + EPS)
 
     @staticmethod
@@ -546,10 +710,11 @@ class CrashBaseDataset:
         N = series[0].shape[0]
         C = series[0].shape[1]
         for x in series:
-            assert x.shape[0] == N and x.shape[1] == C, (
-                f"Inconsistent shapes in dynamic feature '{key}': "
-                f"expected (N={N},C={C}), got {x.shape}"
-            )
+            if not (x.shape[0] == N and x.shape[1] == C):
+                raise ValueError(
+                    f"Inconsistent shapes in dynamic feature '{key}': "
+                    f"expected (N={N},C={C}), got {x.shape}"
+                )
         # Stack to [T', N, C]
         arr = np.stack(series, axis=0)
         Tprime = arr.shape[0]
@@ -570,6 +735,8 @@ class CrashGraphDataset(CrashBaseDataset):
       - Returns SimSample with graph, global_features, and target_series (parity with point-cloud).
     """
 
+    sample_kinds = ("graph",)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -583,20 +750,83 @@ class CrashGraphDataset(CrashBaseDataset):
 
         Data = _pyg_data.Data
         self.graphs = []
-        for i in range(self.num_samples):
-            g = self.create_graph(
-                self.srcs[i],
-                self.dsts[i],
-                num_nodes=self.mesh_pos_seq[i][0].shape[0],
-                dtype=torch.long,
+        reference_src = None
+        reference_dst = None
+        reference_num_nodes = None
+        reference_edge_index = None
+        self.local_knn_cache = None
+        # Per-mesh kNN tensors shared by the samples of one mesh (keyed by the
+        # cached neighbourhood object); see _attach_local_neighborhood.
+        self._shared_local_neighborhoods: dict[int, dict] = {}
+        if self.local_knn_k is not None:
+            from datapipes.local_neighborhoods import LocalNeighborhoodCache
+
+            self.local_knn_cache = LocalNeighborhoodCache(
+                self.local_knn_cache_dir, logger=self.logger
             )
+        for i in range(self.num_samples):
+            num_nodes = int(self.mesh_pos_seq[i][0].shape[0])
+            shares_reference_topology = (
+                reference_src is not None
+                and num_nodes == reference_num_nodes
+                and np.array_equal(self.srcs[i], reference_src)
+                and np.array_equal(self.dsts[i], reference_dst)
+            )
+            if shares_reference_topology:
+                # Crash ensembles normally deform the same mesh. Reuse its
+                # immutable connectivity instead of coalescing it for every run.
+                g = Data(edge_index=reference_edge_index, num_nodes=num_nodes)
+            else:
+                g = self.create_graph(
+                    self.srcs[i],
+                    self.dsts[i],
+                    num_nodes=num_nodes,
+                    dtype=torch.long,
+                )
+                if reference_src is None:
+                    reference_src = self.srcs[i]
+                    reference_dst = self.dsts[i]
+                    reference_num_nodes = num_nodes
+                    reference_edge_index = g.edge_index
             pos0 = self.mesh_pos_seq[i][0]
             g = self.add_edge_features(g, pos0)
+            g.shell_thickness = self.shell_thickness_data[i]
+            if self.rigid_wall_position is not None:
+                g.rigid_wall = torch.tensor(
+                    [self.rigid_wall_position], dtype=torch.float32
+                )
+            if self.contact_surface:
+                from datapipes.surface_topology import (
+                    SurfaceContactData,
+                    surface_faces_from_cells,
+                    surface_one_ring_exclusions,
+                )
+
+                g = SurfaceContactData(**g.to_dict())
+                if (
+                    shares_reference_topology
+                    and self.mesh_cells[i] is self.mesh_cells[0]
+                ):
+                    g.contact_faces = self.graphs[0].contact_faces
+                    if self.contact_surface_exclusion == "one_ring":
+                        g.contact_surface_exclusions = self.graphs[
+                            0
+                        ].contact_surface_exclusions
+                else:
+                    g.contact_faces = surface_faces_from_cells(
+                        self.mesh_cells[i], num_nodes
+                    )
+                    if self.contact_surface_exclusion == "one_ring":
+                        g.contact_surface_exclusions = surface_one_ring_exclusions(
+                            g.contact_faces, num_nodes
+                        )
+            if self.local_knn_k is not None:
+                g = self._attach_local_neighborhood(g, i, pos0)
             self.graphs.append(g)
 
         # Edge stats
         edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
-        if self.split == "train":
+        if self.split == "train" and self.stats_mode == "compute":
             self.edge_stats = self._compute_edge_stats()
             save_json(self.edge_stats, edge_stats_path)
         else:
@@ -621,22 +851,45 @@ class CrashGraphDataset(CrashBaseDataset):
                 self.edge_stats["edge_std"],
             )
 
+        if self.local_knn_k is not None:
+            knn_stats_path = os.path.join(self._stats_dir, KNN_EDGE_STATS_FILE)
+            if self.split == "train" and self.stats_mode == "compute":
+                self.knn_edge_stats = self._compute_knn_edge_stats()
+                save_json(self.knn_edge_stats, knn_stats_path)
+            elif os.path.exists(knn_stats_path):
+                self.knn_edge_stats = load_json(knn_stats_path)
+            else:
+                raise FileNotFoundError(
+                    f"kNN edge stats file {knn_stats_path} not found; build the "
+                    "training split with the same local_knn settings first"
+                )
+            self.knn_edge_stats = {
+                key: torch.as_tensor(value, dtype=torch.float32)
+                for key, value in self.knn_edge_stats.items()
+            }
+            knn_mean = self.knn_edge_stats["knn_edge_mean"].view(1, 1, -1)
+            knn_std = self.knn_edge_stats["knn_edge_std"].view(1, 1, -1) + EPS
+            # Samples of one mesh share their raw features; normalize each
+            # shared tensor once so they keep sharing the normalized one.
+            normalized: dict[int, torch.Tensor] = {}
+            for i in range(self.num_samples):
+                raw = self.graphs[i].knn_edge_attr
+                if id(raw) not in normalized:
+                    normalized[id(raw)] = (raw - knn_mean) / knn_std
+                self.graphs[i].knn_edge_attr = normalized[id(raw)]
+            for entry in self._shared_local_neighborhoods.values():
+                entry["knn_edge_attr"] = normalized.get(
+                    id(entry["knn_edge_attr"]), entry["knn_edge_attr"]
+                )
+
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        if not (0 <= idx < self._max_idx):
+            raise ValueError(f"Index {idx} out of range")
         batch_idx, time_idx = self._resolve_idx(idx)
         g = self.graphs[batch_idx]
         x, y = self.build_xy(batch_idx, time_idx)
-        if self.global_features is not None:
-            gf = {
-                k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[batch_idx].items()
-            }
-        else:
-            gf = None
-        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
-        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
-        # stress/strain from pred); training uses node_target only. Inference always uses
-        # all_time_steps, so it never receives one_time_step samples.
+        gf = self._normalized_global_features(batch_idx)
+        # One-frame training samples do not need the full target series on device.
         ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
@@ -646,9 +899,73 @@ class CrashGraphDataset(CrashBaseDataset):
             target_series=ts,
         )
 
+    def _attach_local_neighborhood(self, g, index: int, pos0: torch.Tensor):
+        """Attach static reference kNN neighborhoods and raw per-slot features.
+
+        Neighbor selection uses the frozen PHYSICAL initial geometry (isotropic
+        distances); features use the same normalized initial geometry as the
+        structural edges. Slot zero is the node itself. Distinct initial meshes
+        each cost one bounded Dijkstra/KD-tree pass; shared meshes hit the cache,
+        which returns the same neighbourhood object for them, and then share the
+        attached tensors as well: the ``[N, K]`` slot index and mask and the
+        ``[N, K, 4]`` features (some 25 bytes per slot) are built once per mesh,
+        not once per sample, like ``edge_index`` above.
+        """
+        from datapipes.local_neighborhoods import (
+            LocalNeighborhoodData,
+            knn_edge_features,
+            with_self_slot,
+        )
+
+        neighborhood = self.local_knn_cache.get(
+            self.contact_reference_positions[index],
+            g.edge_index,
+            self.local_knn_k,
+            self.local_knn_metric,
+        )
+        key = id(neighborhood)
+        entry = self._shared_local_neighborhoods.get(key)
+        if entry is None or not torch.equal(entry["pos0"], pos0):
+            knn_index, knn_mask = with_self_slot(neighborhood)
+            entry = {
+                "neighborhood": neighborhood,  # keeps the key's object alive
+                "pos0": pos0,
+                "knn_index": knn_index,
+                "knn_mask": knn_mask,
+                "knn_edge_attr": knn_edge_features(pos0, knn_index),
+            }
+            self._shared_local_neighborhoods[key] = entry
+        if not isinstance(g, LocalNeighborhoodData):
+            g = LocalNeighborhoodData(**g.to_dict())
+        g.knn_index = entry["knn_index"]
+        g.knn_mask = entry["knn_mask"]
+        g.knn_edge_attr = entry["knn_edge_attr"]
+        g.knn_metric = self.local_knn_metric
+        return g
+
+    def _compute_knn_edge_stats(self):
+        """Per-sample means over real (non-self, unmasked) slots, weighted equally."""
+        if self.num_samples <= 0:
+            raise ValueError("Cannot compute kNN edge statistics without samples")
+        dim = self.graphs[0].knn_edge_attr.shape[-1]
+        mean = torch.zeros(dim, dtype=torch.float32)
+        meansqr = torch.zeros(dim, dtype=torch.float32)
+        for i in range(self.num_samples):
+            graph = self.graphs[i]
+            valid = graph.knn_mask.clone()
+            valid[:, 0] = False
+            values = graph.knn_edge_attr[valid].to(torch.float32)
+            if values.numel() == 0:
+                raise ValueError("no valid kNN neighbors to compute statistics")
+            mean += values.mean(dim=0) / self.num_samples
+            meansqr += (values * values).mean(dim=0) / self.num_samples
+        variance = torch.clamp(meansqr - mean * mean, min=0.0)
+        return {"knn_edge_mean": mean, "knn_edge_std": torch.sqrt(variance + EPS)}
+
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
     @staticmethod
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        """Build coalesced bidirectional structural edges and node self-loops."""
         src = torch.as_tensor(src, dtype=dtype)
         dst = torch.as_tensor(dst, dtype=dtype)
         edge_index = torch.stack(
@@ -661,6 +978,7 @@ class CrashGraphDataset(CrashBaseDataset):
     @staticmethod
     def add_edge_features(data, pos: torch.Tensor):
         # data: PyG Data; pos: [N,3]
+        """Attach reference displacement and distance to each structural edge."""
         row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
         disp = pos_t[row] - pos_t[col]  # [E,3]
@@ -669,16 +987,17 @@ class CrashGraphDataset(CrashBaseDataset):
         return data
 
     def _compute_edge_stats(self):
-        edge_mean = None
-        edge_meansqr = None
+        if self.num_samples <= 0:
+            raise ValueError("Cannot compute edge statistics without samples")
+        edge_dim = self.graphs[0].edge_attr.shape[-1]
+        edge_mean = torch.zeros(edge_dim, dtype=torch.float32)
+        edge_meansqr = torch.zeros(edge_dim, dtype=torch.float32)
         for i in range(self.num_samples):
             x_e = self.graphs[i].edge_attr.to(torch.float32)  # [E,De]
             m = torch.mean(x_e, dim=0)
             msq = torch.mean(x_e * x_e, dim=0)
-            edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
-            edge_meansqr = (
-                msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
-            )
+            edge_mean += m / self.num_samples
+            edge_meansqr += msq / self.num_samples
 
         edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
         edge_std = torch.sqrt(edge_var + EPS)
@@ -689,9 +1008,10 @@ class CrashGraphDataset(CrashBaseDataset):
 
     @staticmethod
     def _normalize_edge(edge_x: torch.Tensor, mu: torch.Tensor, std: torch.Tensor):
-        assert edge_x.shape[-1] == mu.shape[-1] == std.shape[-1], (
-            f"Edge feature dim mismatch: {edge_x.shape[-1]} vs {mu.shape[-1]} / {std.shape[-1]}"
-        )
+        if not (edge_x.shape[-1] == mu.shape[-1] == std.shape[-1]):
+            raise ValueError(
+                f"Edge feature dim mismatch: {edge_x.shape[-1]} vs {mu.shape[-1]} / {std.shape[-1]}"
+            )
         return (edge_x - mu.view(1, -1)) / (std.view(1, -1) + EPS)
 
 
@@ -703,25 +1023,19 @@ class CrashPointCloudDataset(CrashBaseDataset):
       - Provides empty edge_stats dict for compatibility
     """
 
+    sample_kinds = ("points",)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_stats: dict[str, Any] = {}
 
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        if not (0 <= idx < self._max_idx):
+            raise ValueError(f"Index {idx} out of range")
         batch_idx, time_idx = self._resolve_idx(idx)
         x, y = self.build_xy(batch_idx, time_idx)
-        if self.global_features is not None:
-            gf = {
-                k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[batch_idx].items()
-            }
-        else:
-            gf = None
-        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
-        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
-        # stress/strain from pred); training uses node_target only. Inference always uses
-        # all_time_steps, so it never receives one_time_step samples.
+        gf = self._normalized_global_features(batch_idx)
+        # One-frame training samples do not need the full target series on device.
         ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.MeshGraphNetOneShot
+_target_: models.rollout.MeshGraphNetOneShot
 _convert_: all
 
 input_dim_nodes: 4   # coords (3) + features; override in experiment if using global_features

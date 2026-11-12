@@ -700,20 +700,75 @@ class GeoTransolver(Module):
         local_positions: tuple[torch.Tensor, ...] | None,
         geometry: torch.Tensor | None,
         global_embedding: torch.Tensor | None,
+        *,
+        detach_geometry_context: bool = True,
     ) -> tuple[
         torch.Tensor | None,
         list[torch.Tensor] | None,
         torch.Tensor | None,
     ]:
-        r"""Build context directly or under activation checkpointing."""
+        r"""Build context directly or under activation checkpointing.
+
+        Extension point: subclasses that condition further stages on the live
+        geometry tokens (:class:`~physicsnemo.experimental.models.deformer.DeFormer`)
+        call this with ``detach_geometry_context=False`` and then
+        :meth:`_process_preprocessed_embeddings`; keep both seams stable.
+        """
+        inputs = (local_embedding, local_positions, geometry, global_embedding)
+        if not detach_geometry_context:
+            # Only the live-token request adds an input; GeoTransolver's own
+            # checkpointed call keeps its arity.
+            inputs += (False,)
         return self._run_checkpointed_component(
-            "context",
-            self.context_builder.build_context,
-            local_embedding,
-            local_positions,
-            geometry,
-            global_embedding,
+            "context", self.context_builder.build_context, *inputs
         )
+
+    def _process_preprocessed_embeddings(
+        self,
+        embeddings: list[torch.Tensor],
+        context: torch.Tensor | None,
+        local_features: list[torch.Tensor] | None,
+        *,
+        return_point_features: bool = False,
+        compute_outputs: bool = True,
+    ) -> list[torch.Tensor] | tuple[list[torch.Tensor] | None, list[torch.Tensor]]:
+        r"""Process native hidden states, allowing hybrid mesh refinement.
+
+        Each input is ``[B, N, n_hidden]``. This seam lets mesh processors
+        refine the projected state without a bottleneck back to raw features.
+        Both regular and hybrid forwards share checkpointing and output heads.
+        With ``compute_outputs=False`` the output projection is skipped and
+        ``None`` stands in for the outputs, for callers that consume the
+        hidden states only (requires ``return_point_features=True``).
+        Extension point relied on by
+        :class:`~physicsnemo.experimental.models.deformer.DeFormer` together with
+        :meth:`_build_context`.
+        """
+        if self.include_local_features and local_features is not None:
+            embeddings = [
+                torch.cat([embeddings[i], local_features[i]], dim=-1)
+                for i in range(len(embeddings))
+            ]
+        for block_idx, block in enumerate(self.blocks):
+            if self._should_checkpoint_block(block_idx):
+                embeddings = self._checkpoint_block(block, embeddings, context)
+            else:
+                embeddings = block(tuple(embeddings), context)
+
+        point_features = list(embeddings)
+        if not compute_outputs:
+            if not return_point_features:
+                raise ValueError(
+                    "compute_outputs=False requires return_point_features=True"
+                )
+            return None, point_features
+        outputs = [
+            self._run_checkpointed_component("output", self.ln_mlp_out[i], value)
+            for i, value in enumerate(embeddings)
+        ]
+        if return_point_features:
+            return outputs, point_features
+        return outputs
 
     def forward(
         self,
@@ -988,28 +1043,9 @@ class GeoTransolver(Module):
             for i, le in enumerate(local_embedding)
         ]
 
-        # Concatenate local features if enabled
-        if self.include_local_features and local_embedding_bq is not None:
-            x = [
-                torch.cat([x[i], local_embedding_bq[i]], dim=-1) for i in range(len(x))
-            ]
-
-        # Pass through GALE transformer blocks with context cross-attention
-        for block_idx, block in enumerate(self.blocks):
-            if self._should_checkpoint_block(block_idx):
-                x = self._checkpoint_block(block, x, embedding_states)
-            else:
-                x = block(tuple(x), embedding_states)
-
-        # Per-point features just before the output projection. Shape per
-        # stream: (B, N, effective_hidden). Captured for pointwise heads.
-        point_features = list(x)
-
-        # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
-        x = [
-            self._run_checkpointed_component("output", self.ln_mlp_out[i], x[i])
-            for i in range(len(x))
-        ]
+        x, point_features = self._process_preprocessed_embeddings(
+            x, embedding_states, local_embedding_bq, return_point_features=True
+        )
 
         if self.structured_shape is not None and unflatten_output:
             B = x[0].shape[0]

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Car body-in-white crash experiment using GeoTransolver (one-shot).
-# Usage: python train.py --config-name=crash_geotransolver
+# Usage: python train.py --config-name=biw_yaris_geotransolver_oneshot
 
 hydra:
   job:
@@ -23,7 +23,7 @@ hydra:
   run:
     dir: ./outputs/
 
-experiment_name: "Car-Crash-GeoTransolver"
+experiment_name: "BIW-Yaris-GeoTransolver"
 
 defaults:
   - reader: vtp
