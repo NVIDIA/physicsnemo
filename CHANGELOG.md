@@ -512,8 +512,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GLOBE` accepts `boundary_meshes` as a TensorDict, as the DrivAerML example
   passes them. Before, every forward pass of that example failed.
 - A `GLOBE` model built with a `torch.device` as `tree_build_device` can now be
-  saved; before, `save()` raised `TypeError` because the device is not JSON
-  serializable.
+  saved. Before, `save()` raised `TypeError`, because JSON cannot hold a device.
 - Under `torch.compile`, GLOBE no longer recompiles on its second training
   step, nor for each new sample of a similar size. Each of these recompiles
   took minutes at DrivAerML sizes.
