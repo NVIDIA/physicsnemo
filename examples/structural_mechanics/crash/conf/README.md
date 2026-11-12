@@ -39,7 +39,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `training.auxiliary_loss_weight` | 0.1 | weight of the position loss on the provisional head |
 | `training.validation_freq`, `save_checkpoint_freq` | 5, 5 | epochs |
 | `datapipe.sample_type` | `one_time_step` | one (case, future frame) pair per sample, from the initial frame |
-| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | 32, `euclidean`, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash; the neighbourhood-attention models read `k` and the metric from here |
+| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` | 32, `euclidean`, `<stats_dir>/local_knn_cache` | the static neighbourhoods, built once and cached by content hash; the kNN-attention models read `k` and the metric from here |
 | `datapipe.contact_surface`, `mesh_edges`, `rigid_wall_position` | false, false, null | graph attachments the corrector and the metrics need (see below) |
 
 ### Keys of `model/deformer_time_conditional.yaml`
@@ -52,7 +52,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | `num_time_steps`, `dt` | `${training.num_time_steps}`, `${oc.select:datapipe.dt,null}` | frame bound and the dataset's frame interval (null for a datapipe without one) |
 | `mesh_hidden_dim`, `num_pre_processor_layers`, `num_post_processor_layers` | 256, 1, 1 | width and depth of the local stages (stage B is an independent copy of stage A) |
 | `mesh_pre_residual_gate_init`, `mesh_post_residual_gate_init`, `mesh_context_fusion` | 0, 1, `pre_post` | residual gates and FiLM conditioning on the mesh context |
-| `local_neighborhood`, `local_knn_k` | `${datapipe.local_knn_metric}`, `${datapipe.local_knn_k}` | static kNN neighbourhood attention over the datapipe's neighbourhoods (Euclidean for the Yaris stores, whose edges cover shells only) |
+| `local_neighborhood`, `local_knn_k` | `${datapipe.local_knn_metric}`, `${datapipe.local_knn_k}` | static kNN attention over the datapipe's neighbourhoods (Euclidean for the Yaris stores, whose edges cover shells only) |
 | `local_num_heads`, `local_mlp_ratio`, `local_edge_dim`, `local_activation` | 8, 2, 32, `gelu` | attention block |
 | `local_attention_fused`, `local_attention_backend` | true, `auto` | the fused kernel (Triton on CUDA) |
 | `activation_checkpointing`, `checkpointing_ratio`, `activation_checkpointing_components`, `num_*_processor_checkpoint_segments` | true, 1.0, `[blocks, context]`, 1 | memory policy of the 1.48M-node forward |
@@ -130,7 +130,7 @@ and `evaluate_px_yaris.py` then exits with an error.
 | `training.evaluation_split` | `validation` | the manifest split `evaluate_px_yaris.py` scores (`validation` or `test`) |
 | `reader.include_contact_topology` (`reader/vtp.yaml`) | false | also cache the shell cells of the VTP files, for `datapipe.contact_surface` |
 | `datapipe.contact_surface`, `contact_surface_exclusion`, `rigid_wall_position` (`datapipe/graph.yaml`) | false, `incidence`, null | contact topology and rigid wall on the structural graph |
-| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` (`datapipe/graph.yaml`) | null, `geodesic`, null | static kNN neighbourhoods for neighbourhood attention; null keeps the MeshGraphNet graph unchanged |
+| `datapipe.local_knn_k`, `local_knn_metric`, `local_knn_cache_dir` (`datapipe/graph.yaml`) | null, `geodesic`, null | static kNN neighbourhoods for kNN attention; null keeps the MeshGraphNet graph unchanged |
 | `training.num_training_samples`, `num_validation_samples` | `???`, 0 (69 and 20 in `px_yaris_deformer`) | the manifest's split sizes; a larger train split is truncated to its first N cases (the frozen statistics still use every train case), the validation count must equal the manifest's |
 
 Re-running a training command resumes from `<work_dir>/checkpoints`.

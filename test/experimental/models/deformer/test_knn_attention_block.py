@@ -13,17 +13,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""The neighborhood attention block: parameterization, precision rules and
+"""The kNN attention block: parameterization, precision rules and
 input validation (CPU)."""
 
 import pytest
 import torch
 
-from physicsnemo.experimental.models.deformer.fused_neighborhood_attention import (
-    neighborhood_attention,
+from physicsnemo.experimental.models.deformer.fused_knn_attention import (
+    knn_attention,
 )
 from physicsnemo.experimental.models.deformer.local_attention import (
-    NeighborhoodAttentionBlock,
+    KNNAttentionBlock,
 )
 
 
@@ -41,7 +41,7 @@ def _inputs(n=40, k=6, dim=32, edge_dim=8, seed=0, dtype=torch.float32):
 
 def _block(fused, backend="torch", seed=1, **options):
     torch.manual_seed(seed)
-    return NeighborhoodAttentionBlock(
+    return KNNAttentionBlock(
         32, 4, 8, mlp_ratio=2, fused=fused, fused_backend=backend, **options
     )
 
@@ -124,7 +124,7 @@ def test_kernel_returns_detached_lse():
     k = torch.randn(40, 4, 8, requires_grad=True)
     v = torch.randn(40, 4, 8, requires_grad=True)
     bias = torch.randn(40, 6, 4)
-    out, edge_out, lse = neighborhood_attention(
+    out, edge_out, lse = knn_attention(
         q,
         k,
         v,
@@ -146,7 +146,7 @@ def test_kernel_returns_detached_lse():
     )
     assert (
         len(
-            neighborhood_attention(
+            knn_attention(
                 q, k, v, bias, edge_latent, index, mask, 8**-0.5, backend="torch"
             )
         )

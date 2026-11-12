@@ -685,7 +685,7 @@ def correct_shape(
 #   that enters every node's input and, with ``time_as_global``, the global token
 #   of the backbone.
 # * The **local stages** are the base model's local operator (static kNN
-#   neighbourhood attention in the DeFormer recipe), FiLM-conditioned on the
+#   attention in the DeFormer recipe), FiLM-conditioned on the
 #   mesh context: a pre-processor before the backbone and two post stages after
 #   it. Stage A feeds a zero-initialised coarse head (the provisional shape,
 #   supervised with ``training.auxiliary_loss_weight``); stage B is an independent,

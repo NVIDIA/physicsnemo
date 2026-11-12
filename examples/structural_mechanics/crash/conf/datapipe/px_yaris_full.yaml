@@ -28,7 +28,7 @@ dynamic_targets: []
 global_features: null
 # static reference kNN neighbourhoods of the local attention (built once, cached)
 # static reference kNN neighbourhoods (a dataset product, cached by content hash);
-# the neighbourhood-attention models read these two keys from here
+# the kNN-attention models read these two keys from here
 local_knn_k: 32
 local_knn_metric: euclidean  # the Yaris store edges cover shells only
 local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache

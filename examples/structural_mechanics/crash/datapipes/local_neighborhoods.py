@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Static reference kNN neighborhoods for DeFormer's neighborhood attention.
+"""Static reference kNN neighborhoods for DeFormer's kNN attention.
 
 The datapipe computes, once per distinct initial mesh, each node's ``k``
 nearest reference neighbors (geodesic along structural edges or Euclidean),

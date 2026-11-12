@@ -36,7 +36,7 @@ contact_surface_exclusion: incidence  # incidence or one_ring
 # Analytic rigid wall plane (x = position, physical units) for the wall clamp
 # and the wall penetration metrics; null for none
 rigid_wall_position: null
-# Static reference kNN neighbourhoods for neighbourhood attention (DeFormer);
+# Static reference kNN neighbourhoods for kNN attention (DeFormer);
 # null keeps the graph exactly as the MeshGraphNet recipes use it
 local_knn_k: null
 local_knn_metric: geodesic  # geodesic or euclidean

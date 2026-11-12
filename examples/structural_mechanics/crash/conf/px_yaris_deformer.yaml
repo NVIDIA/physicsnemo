@@ -18,7 +18,7 @@
 # designs, 20 held-out designs): every future frame (stride 5, 5 ms) is predicted
 # independently from the initial mesh by the time-conditional DeFormer
 # (conf/model/deformer_time_conditional.yaml: FLARE backbone, Fourier time code,
-# static kNN neighbourhood attention with k = 32 Euclidean neighbours, two-stage
+# static kNN attention with k = 32 Euclidean neighbours, two-stage
 # local decoder). Loss: MSE of the position error in millimetres over one 10 mm
 # scale for all three axes, plus 0.1 x the same loss on the provisional head.
 # Muon/AdamW, cosine 2e-4 -> 1e-6 over 60 epochs, bf16 autocast, 16 GPUs.

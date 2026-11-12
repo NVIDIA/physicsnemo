@@ -16,9 +16,9 @@
 
 r"""DeFormer: the network of the DeFormer crash surrogate.
 
-A static kNN neighbourhood-attention processor refines the native GeoTransolver
+A static kNN-attention processor refines the native GeoTransolver
 node latent, geometry-aware FLARE communicates globally, and a second
-neighbourhood-attention processor refines the physical outputs. The crash
+kNN-attention processor refines the physical outputs. The crash
 recipe selects point-space FLARE (``GALE_FA``) and geometry conditioning before
 and after attention.
 
@@ -41,7 +41,7 @@ from physicsnemo.nn import get_activation
 from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
-from .local_attention import LocalNeighborhood, NeighborhoodAttentionProcessor
+from .local_attention import KNNAttentionProcessor, LocalNeighborhood
 
 MeshContextFusionStage = Literal["none", "post", "pre_post"]
 
@@ -385,7 +385,7 @@ class DeFormer(GeoTransolver):
     DeFormer always has strictly more parameters for a matching configuration.
 
     The local operator run before and after the FLARE blocks is a
-    :class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionProcessor`
+    :class:`~physicsnemo.experimental.models.deformer.local_attention.KNNAttentionProcessor`
     stack over static reference neighborhoods. It needs the datapipe to attach
     ``knn_index`` (``[N, local_knn_k + 1]`` including the node itself),
     ``knn_mask``, ``knn_edge_attr`` (``[N, local_knn_k + 1, input_dim_edges]``)
@@ -470,7 +470,7 @@ class DeFormer(GeoTransolver):
         Default is ``"gelu"``.
     local_attention_fused : bool, optional
         Run the kNN attention with the fused kernel of
-        :mod:`~physicsnemo.experimental.models.deformer.fused_neighborhood_attention`
+        :mod:`~physicsnemo.experimental.models.deformer.fused_knn_attention`
         (same math, no gathered ``[N, K, H, d_h]`` key/value tensors). Default
         is ``True``.
     local_attention_backend : {"auto", "triton", "torch"}, optional
@@ -478,7 +478,7 @@ class DeFormer(GeoTransolver):
         is ``"auto"``.
     local_dropout, local_concrete_dropout
         Forwarded to every
-        :class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionBlock`
+        :class:`~physicsnemo.experimental.models.deformer.local_attention.KNNAttentionBlock`
         as ``dropout`` and ``concrete_dropout``.
     output_head : bool, optional
         Build the output path: GeoTransolver's output projection, the post
@@ -776,7 +776,7 @@ class DeFormer(GeoTransolver):
             self.post_node_encoder = None
             self.post_node_decoder = None
 
-        # Static reference-neighborhood attention before and after the backbone.
+        # Static kNN attention over the reference neighborhoods before and after the backbone.
         # Checkpoint segments are contiguous block groups recomputed during
         # backward, optionally offloaded to host memory.
         self._local_processor_kwargs = dict(
@@ -1035,7 +1035,7 @@ class DeFormer(GeoTransolver):
     def forward_with_geometry_features(self, *args, **kwargs):
         r"""Not available: DeFormer's entry point is :meth:`forward`.
 
-        The inherited GeoTransolver path would skip the neighbourhood-attention
+        The inherited GeoTransolver path would skip the kNN-attention
         stages and the mesh-context conditioning, so it is refused instead of
         silently returning a different model's output.
         """
@@ -1118,7 +1118,7 @@ class DeFormer(GeoTransolver):
     def make_local_processor(
         self, num_layers: int, checkpoint_segments: int = 0
     ) -> nn.Module:
-        """A fresh neighbourhood-attention processor, ``num_layers`` deep.
+        """A fresh kNN-attention processor, ``num_layers`` deep.
 
         Used for the pre and post stages at construction and by recipes that
         add further stages of the same operator (for example a deeper
@@ -1126,7 +1126,7 @@ class DeFormer(GeoTransolver):
         """
         if num_layers < 1:
             raise ValueError("num_layers must be at least 1")
-        return NeighborhoodAttentionProcessor(
+        return KNNAttentionProcessor(
             num_layers=num_layers,
             checkpoint_segments=min(checkpoint_segments, num_layers),
             **self._local_processor_kwargs,

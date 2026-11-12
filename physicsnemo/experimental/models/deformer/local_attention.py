@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-r"""Neighborhood attention over static reference neighborhoods.
+r"""kNN attention over static reference neighborhoods.
 
 This is DeFormer's local operator, run before and after its FLARE backbone.
 Each node attends over a fixed set of ``K`` reference
@@ -28,7 +28,7 @@ an irregular edge scatter. Neighbor order is irrelevant; masked slots have no
 influence. In the reference path keys and values are materialized per neighbor,
 so peak memory per block scales as :math:`O(N K D)`; use checkpoint segments for
 long rollouts. ``fused=True`` selects
-:func:`~physicsnemo.experimental.models.deformer.fused_neighborhood_attention.neighborhood_attention`,
+:func:`~physicsnemo.experimental.models.deformer.fused_knn_attention.knn_attention`,
 which computes the same map while reading neighbor keys and values on the fly;
 the kernel's own extra activation memory is :math:`O(N (H + D))`, while the
 block around it still holds the :math:`[N, K, E]` edge latent and the float32
@@ -36,11 +36,10 @@ block around it still holds the :math:`[N, K, E]` edge latent and the float32
 encoder runs inside each segment, so those per-slot tensors are recomputed in
 backward instead of being held for the whole processor.
 
-The name is shared with NATTEN (Neighborhood Attention Transformer), which
-restricts attention to a sliding window on a regular grid of pixels or voxels.
-Here a node's neighborhood is an explicit set of ``K`` mesh nodes selected once
-on the reference geometry: there is no grid, window or dilation, and NATTEN's
-kernels are not used.
+Unlike NATTEN's neighborhood attention, which restricts attention to a sliding
+window on a regular grid of pixels or voxels, a node's neighborhood here is an
+explicit set of ``K`` mesh nodes selected once on the reference geometry: there
+is no grid, window or dilation, and NATTEN's kernels are not used.
 """
 
 from __future__ import annotations
@@ -56,9 +55,9 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.nn import ConcreteDropout, get_activation
 
-from .fused_neighborhood_attention import (
+from .fused_knn_attention import (
     Backend,
-    neighborhood_attention,
+    knn_attention,
     resolve_backend,
 )
 
@@ -113,7 +112,7 @@ class LocalNeighborhood:
         )
 
 
-class NeighborhoodAttentionBlock(nn.Module):
+class KNNAttentionBlock(nn.Module):
     r"""Pre-norm attention over a node's static neighbors with a MeshGraphNet-style update.
 
     Keys come from the normalized latent and values from the raw residual
@@ -142,7 +141,7 @@ class NeighborhoodAttentionBlock(nn.Module):
     activation : str, optional
         Feed-forward activation name. Default is ``"gelu"``.
     fused : bool, optional
-        Use the fused neighborhood attention kernel instead of gathering keys
+        Use the fused kNN attention kernel instead of gathering keys
         and values per neighbor. Same math, lower memory; ``False`` keeps the
         validated reference path. Default is ``False``.
     fused_backend : {"auto", "triton", "torch"}, optional
@@ -289,7 +288,7 @@ class NeighborhoodAttentionBlock(nn.Module):
         if self.fused:
             # Same logits, mask, softmax and weighted sums as below, computed by
             # reading key[index] / value[index] on the fly (no [N, K, H, dh]).
-            aggregated, edge_aggregate, lse = neighborhood_attention(
+            aggregated, edge_aggregate, lse = knn_attention(
                 query,
                 key.view(num_nodes, heads, head_dim),
                 value.view(num_nodes, heads, head_dim),
@@ -350,8 +349,8 @@ class NeighborhoodAttentionBlock(nn.Module):
         return x + self.dropout(self.update_mlp(features))
 
 
-class NeighborhoodAttentionProcessor(nn.Module):
-    r"""Stack of :class:`NeighborhoodAttentionBlock` layers with a shared edge encoder.
+class KNNAttentionProcessor(nn.Module):
+    r"""Stack of :class:`KNNAttentionBlock` layers with a shared edge encoder.
 
     Parameters
     ----------
@@ -376,12 +375,12 @@ class NeighborhoodAttentionProcessor(nn.Module):
     checkpoint_offloading : bool, optional
         Offload checkpointed activations to host memory. Default is ``False``.
     fused_attention : bool, optional
-        Build every block with the fused neighborhood attention kernel. Default
+        Build every block with the fused kNN attention kernel. Default
         is ``False`` (reference gather implementation).
     fused_backend : {"auto", "triton", "torch"}, optional
         Backend for the fused kernel. Default is ``"auto"``.
     dropout, concrete_dropout
-        Forwarded to every :class:`NeighborhoodAttentionBlock`.
+        Forwarded to every :class:`KNNAttentionBlock`.
 
     Forward
     -------
@@ -431,7 +430,7 @@ class NeighborhoodAttentionProcessor(nn.Module):
         )
         self.blocks = nn.ModuleList(
             [
-                NeighborhoodAttentionBlock(
+                KNNAttentionBlock(
                     hidden_dim,
                     num_heads,
                     edge_dim,

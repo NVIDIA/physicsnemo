@@ -63,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.experimental.nn.geodesic_knn` (k-nearest neighbourhoods of a
   mesh along its edges; Euclidean ones use `physicsnemo.nn.functional.knn`).
 - Adds `physicsnemo.experimental.models.deformer`: the DeFormer
-  network (a GeoTransolver/FLARE backbone with static kNN neighbourhood-attention
+  network (a GeoTransolver/FLARE backbone with static kNN-attention
   stages and a fused kernel) and its contact-aware corrector (message passing
   on the structural edges and on the contact edges discovered on a predicted
   shape).

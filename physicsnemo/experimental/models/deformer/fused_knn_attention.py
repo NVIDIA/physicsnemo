@@ -15,7 +15,7 @@
 # limitations under the License.
 r"""Fused attention over static ``K``-slot neighborhoods.
 
-:class:`~physicsnemo.experimental.models.deformer.local_attention.NeighborhoodAttentionBlock`
+:class:`~physicsnemo.experimental.models.deformer.local_attention.KNNAttentionBlock`
 computes, per node :math:`n` and head :math:`h`,
 
 .. math::
@@ -79,7 +79,7 @@ Backend = Literal["auto", "triton", "torch"]
 __all__ = [
     "TRITON_AVAILABLE",
     "Backend",
-    "neighborhood_attention",
+    "knn_attention",
     "resolve_backend",
     "triton_available",
 ]
@@ -101,7 +101,7 @@ def resolve_backend(backend: str, device: torch.device | str) -> str:
     if backend == "triton":
         if not triton_available(device):
             raise RuntimeError(
-                "fused neighborhood attention backend 'triton' needs a CUDA tensor "
+                "fused kNN attention backend 'triton' needs a CUDA tensor "
                 "and an importable `triton`; use backend='torch' or 'auto'"
             )
         return backend
@@ -279,7 +279,7 @@ if triton is not None:
 
     @triton.autotune(configs=_FWD_CONFIGS, key=["K", "H", "DH_PAD", "E_PAD"])
     @triton.jit
-    def _neighborhood_attention_fwd_kernel(
+    def _knn_attention_fwd_kernel(
         Q,
         KEY,
         VAL,
@@ -398,7 +398,7 @@ if triton is not None:
         reset_to_zero=["DKEY", "DVAL"],
     )
     @triton.jit
-    def _neighborhood_attention_bwd_kernel(
+    def _knn_attention_bwd_kernel(
         Q,
         KEY,
         VAL,
@@ -592,7 +592,7 @@ def _triton_forward(query, key, value, bias, edge, index, valid, scale):
 
     # Triton launches on the current device; the model may live elsewhere.
     with torch.cuda.device(query.device):
-        _neighborhood_attention_fwd_kernel[grid](
+        _knn_attention_fwd_kernel[grid](
             query,
             key,
             value,
@@ -675,7 +675,7 @@ def _triton_backward(
         return (triton.cdiv(num_nodes, meta["BLOCK_N"]), heads)
 
     with torch.cuda.device(query.device):
-        _neighborhood_attention_bwd_kernel[grid](
+        _knn_attention_bwd_kernel[grid](
             query,
             key,
             value,
@@ -743,7 +743,7 @@ def _triton_backward(
 # --------------------------------------------------------------------------- #
 
 
-class _NeighborhoodAttention(torch.autograd.Function):
+class _KNNAttention(torch.autograd.Function):
     @staticmethod
     def forward(ctx, query, key, value, bias, edge, index, mask, scale, backend):
         if backend == "triton":
@@ -798,7 +798,7 @@ class _NeighborhoodAttention(torch.autograd.Function):
         return d_query, d_key, d_value, d_bias, d_edge, None, None, None, None
 
 
-def neighborhood_attention(
+def knn_attention(
     query: Float[torch.Tensor, "num_nodes heads head_dim"],
     key: Float[torch.Tensor, "num_nodes heads head_dim"],
     value: Float[torch.Tensor, "num_nodes heads head_dim"],
@@ -893,7 +893,7 @@ def neighborhood_attention(
                 f"index holds neighbor IDs outside [0, {num_nodes}) on valid slots"
             )
     resolved = resolve_backend(backend, query.device)
-    out, edge_out, lse = _NeighborhoodAttention.apply(
+    out, edge_out, lse = _KNNAttention.apply(
         query, key, value, bias, edge_latent, index, mask, float(scale), resolved
     )
     if return_lse:

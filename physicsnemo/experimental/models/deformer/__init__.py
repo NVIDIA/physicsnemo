@@ -16,8 +16,8 @@
 
 r"""DeFormer: the network, its contact-aware corrector and their building blocks.
 
-The network is a GeoTransolver/FLARE backbone with static kNN
-neighbourhood-attention stages before and after it, FiLM-conditioned on a mesh
+The network is a GeoTransolver/FLARE backbone with static kNN-attention
+stages before and after it, FiLM-conditioned on a mesh
 context. The corrector is a MeshGraphNet-style message-passing model over the
 structural edges and the contact edges discovered on a predicted shape.
 """
@@ -31,9 +31,9 @@ from .deformer import (
     MeshGeometryContextEncoder,
 )
 from .local_attention import (
+    KNNAttentionBlock,
+    KNNAttentionProcessor,
     LocalNeighborhood,
-    NeighborhoodAttentionBlock,
-    NeighborhoodAttentionProcessor,
 )
 
 __all__ = [
@@ -44,7 +44,7 @@ __all__ = [
     "DeFormerMetaData",
     "LocalNeighborhood",
     "LocalNeighborhoodData",
-    "NeighborhoodAttentionBlock",
-    "NeighborhoodAttentionProcessor",
+    "KNNAttentionBlock",
+    "KNNAttentionProcessor",
     "mesh_edge_features",
 ]

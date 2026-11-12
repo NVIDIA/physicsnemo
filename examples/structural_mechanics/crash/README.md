@@ -14,7 +14,7 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 ### DeFormer: deformation transformer with a contact-aware corrector
 
 DeFormer is one model family of this pipeline: a time-conditional deformation
-transformer with static kNN neighbourhood attention around a GeoTransolver/FLARE
+transformer with static kNN attention around a GeoTransolver/FLARE
 backbone, followed by a decoupled, contact-aware MeshGraphNet corrector. Its model
 wrappers live in `models/rollout.py` beside the other models, its evaluation metrics in
 `metrics/penetration_metrics.py`, and the full-vehicle Yaris datapipe in `readers/px_yaris_reader.py`,
@@ -749,7 +749,7 @@ The network (`models.rollout.DeFormerTimeConditional`,
 * a GeoTransolver/FLARE global stage (`attention_type: GALE_FA`, 6 blocks,
   width 256, 128 slices) made time-conditional with a learned Fourier time code
   (8 bands, 32 channels) that enters every node's input and the global token;
-* local stages of static kNN neighbourhood attention over the undeformed mesh
+* local stages of static kNN attention over the undeformed mesh
   (k = 32 Euclidean neighbours, the fused Triton kernel of
   `physicsnemo.experimental.models.deformer`): a pre-processor before the
   backbone and a two-stage decoder after it, where stage A emits a provisional
@@ -877,7 +877,7 @@ the exact validation additionally holds about three float64 `[N, T, 3]`
 tensors of metric overhead (about 1.1 GB each; about 4.4 with the node-error
 maps and regions on) on every device.
 
-At full-vehicle scale the three neighbourhood-attention processors dominate the
+At full-vehicle scale the three kNN-attention processors dominate the
 activation memory: with the recipe widths under bf16 each one-layer processor
 would hold about 20 GB of activations after the forward pass without
 checkpointing, about 60 GB for the three. The recipe runs every local

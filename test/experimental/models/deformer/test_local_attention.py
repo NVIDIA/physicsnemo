@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Neighborhood attention processors, the fused kernel and their use in DeFormer."""
+"""kNN attention processors, the fused kernel and their use in DeFormer."""
 
 import contextlib
 
@@ -22,9 +22,9 @@ import torch
 
 from physicsnemo.experimental.models.deformer import (
     DeFormer,
+    KNNAttentionProcessor,
     LocalNeighborhood,
     LocalNeighborhoodData,
-    NeighborhoodAttentionProcessor,
 )
 from physicsnemo.experimental.nn.geodesic_knn import geodesic_knn
 
@@ -105,7 +105,7 @@ def test_processor_is_neighbor_order_invariant_and_ignores_padding():
     num_nodes, k = 11, 5
     _, _, index, mask, edge_attr = _neighborhood(num_nodes, k, break_at=8)
     assert not mask.all()  # the three-node component has only two neighbors
-    processor = NeighborhoodAttentionProcessor(2, 16, 4, edge_input_dim=4, edge_dim=8)
+    processor = KNNAttentionProcessor(2, 16, 4, edge_input_dim=4, edge_dim=8)
     x = torch.randn(num_nodes, 16)
     reference = processor(x, LocalNeighborhood(index, mask, edge_attr))
     assert reference.shape == (num_nodes, 16) and torch.isfinite(reference).all()
@@ -132,8 +132,8 @@ def test_processor_is_neighbor_order_invariant_and_ignores_padding():
 def test_processor_checkpoint_segments_match_plain_execution():
     torch.manual_seed(2)
     _, _, index, mask, edge_attr = _neighborhood(8, 3)
-    plain = NeighborhoodAttentionProcessor(3, 16, 4, edge_dim=8).train()
-    checkpointed = NeighborhoodAttentionProcessor(
+    plain = KNNAttentionProcessor(3, 16, 4, edge_dim=8).train()
+    checkpointed = KNNAttentionProcessor(
         3, 16, 4, edge_dim=8, checkpoint_segments=2
     ).train()
     checkpointed.load_state_dict(plain.state_dict())
@@ -155,7 +155,7 @@ def test_processor_checkpoint_segments_match_plain_execution():
         exact = {} if name.startswith("edge_encoder.") else dict(atol=0, rtol=0)
         torch.testing.assert_close(b.grad, a.grad, msg=name, **exact)
     with pytest.raises(ValueError, match="checkpoint_segments"):
-        NeighborhoodAttentionProcessor(2, 16, 4, checkpoint_segments=3)
+        KNNAttentionProcessor(2, 16, 4, checkpoint_segments=3)
     with pytest.raises(ValueError, match="at least one valid"):
         plain(x, LocalNeighborhood(index, torch.zeros_like(mask), edge_attr))
 
@@ -244,15 +244,15 @@ def test_rejects_mismatched_neighborhoods_and_invalid_settings():
 
 
 # --------------------------------------------------------------------------- #
-# Fused neighborhood attention (no gathered [N, K, H, dh] tensors).           #
+# Fused kNN attention (no gathered [N, K, H, dh] tensors).           #
 # --------------------------------------------------------------------------- #
 
-from physicsnemo.experimental.models.deformer.fused_neighborhood_attention import (  # noqa: E402
-    neighborhood_attention,
+from physicsnemo.experimental.models.deformer.fused_knn_attention import (  # noqa: E402
+    knn_attention,
     triton_available,
 )
 from physicsnemo.experimental.models.deformer.local_attention import (  # noqa: E402
-    NeighborhoodAttentionBlock,
+    KNNAttentionBlock,
 )
 
 # bf16 autocast tolerances for the fused path against the bf16 reference. Both
@@ -330,8 +330,8 @@ def _block_inputs(num_nodes, k, hidden, edge_dim, device, dtype=torch.float32, s
 
 def _block_pair(hidden, heads, edge_dim, device, backend, seed=0):
     torch.manual_seed(seed)
-    reference = NeighborhoodAttentionBlock(hidden, heads, edge_dim).to(device)
-    fused = NeighborhoodAttentionBlock(
+    reference = KNNAttentionBlock(hidden, heads, edge_dim).to(device)
+    fused = KNNAttentionBlock(
         hidden, heads, edge_dim, fused=True, fused_backend=backend
     ).to(device)
     fused.load_state_dict(reference.state_dict())
@@ -387,9 +387,7 @@ def test_fused_functional_passes_gradcheck_in_float64():
     edge = torch.randn(num_nodes, slots, edge_dim, **kwargs)
 
     def op(q, k, v, b, e):
-        return neighborhood_attention(
-            q, k, v, b, e, index, mask, head_dim**-0.5, "torch"
-        )
+        return knn_attention(q, k, v, b, e, index, mask, head_dim**-0.5, "torch")
 
     assert torch.autograd.gradcheck(
         op, (query, key, value, bias, edge), atol=1e-6, rtol=1e-5
@@ -420,7 +418,7 @@ def test_fused_processor_is_neighbor_order_invariant_and_ignores_padding():
     torch.manual_seed(1)
     num_nodes, k = 11, 5
     _, _, index, mask, edge_attr = _neighborhood(num_nodes, k, break_at=8)
-    processor = NeighborhoodAttentionProcessor(
+    processor = KNNAttentionProcessor(
         2,
         16,
         4,
@@ -447,7 +445,7 @@ def test_fused_processor_is_neighbor_order_invariant_and_ignores_padding():
     )
     torch.testing.assert_close(processor(x, corrupted), reference, atol=0, rtol=0)
     # The gather reference and the fused processor agree as whole stacks.
-    plain = NeighborhoodAttentionProcessor(2, 16, 4, edge_input_dim=4, edge_dim=8)
+    plain = KNNAttentionProcessor(2, 16, 4, edge_input_dim=4, edge_dim=8)
     plain.load_state_dict(processor.state_dict())
     torch.testing.assert_close(
         plain(x, LocalNeighborhood(index, mask, edge_attr)),
@@ -456,16 +454,16 @@ def test_fused_processor_is_neighbor_order_invariant_and_ignores_padding():
         rtol=1e-5,
     )
     with pytest.raises(ValueError, match="fused_backend"):
-        NeighborhoodAttentionBlock(16, 4, 8, fused_backend="cuda")
+        KNNAttentionBlock(16, 4, 8, fused_backend="cuda")
 
 
 def test_fused_processor_checkpoint_segments_match_plain_execution():
     torch.manual_seed(2)
     _, _, index, mask, edge_attr = _neighborhood(8, 3)
-    plain = NeighborhoodAttentionProcessor(
+    plain = KNNAttentionProcessor(
         3, 16, 4, edge_dim=8, fused_attention=True, fused_backend="torch"
     ).train()
-    checkpointed = NeighborhoodAttentionProcessor(
+    checkpointed = KNNAttentionProcessor(
         3,
         16,
         4,
@@ -585,16 +583,14 @@ def test_functional_rejects_neighbor_ids_outside_the_node_range():
     stale = index.clone()
     stale[0, 1] = n
     with pytest.raises(ValueError, match="outside"):
-        neighborhood_attention(q, key, value, bias, edge, stale, mask, **kwargs)
+        knn_attention(q, key, value, bias, edge, stale, mask, **kwargs)
     stale[0, 1] = -1
     with pytest.raises(ValueError, match="outside"):
-        neighborhood_attention(q, key, value, bias, edge, stale, mask, **kwargs)
+        knn_attention(q, key, value, bias, edge, stale, mask, **kwargs)
     masked = mask.clone()
     masked[0, 1] = False
-    expected = neighborhood_attention(
-        q, key, value, bias, edge, index, masked, **kwargs
-    )
-    actual = neighborhood_attention(q, key, value, bias, edge, stale, masked, **kwargs)
+    expected = knn_attention(q, key, value, bias, edge, index, masked, **kwargs)
+    actual = knn_attention(q, key, value, bias, edge, stale, masked, **kwargs)
     for a, e in zip(actual, expected, strict=True):
         torch.testing.assert_close(a, e, atol=0, rtol=0)
 
@@ -606,7 +602,7 @@ def test_fused_triton_block_compiles_and_matches_eager():
     x, index, mask, edge_latent, weight = _block_inputs(
         256, 8, hidden, edge_dim, device
     )
-    block = NeighborhoodAttentionBlock(
+    block = KNNAttentionBlock(
         hidden, heads, edge_dim, fused=True, fused_backend="triton"
     ).to(device)
     with _strict_fp32():

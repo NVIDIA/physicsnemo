@@ -174,7 +174,7 @@ class CrashBaseDataset:
         self.dt = dt
         self.sample_type = sample_type
         self.contact_surface = bool(contact_surface)
-        # Static reference neighborhoods for DeFormer's neighborhood attention.
+        # Static reference neighborhoods for DeFormer's kNN attention.
         # ``None`` keeps the validated MeshGraphNet recipes byte-for-byte.
         if local_knn_k is not None and (
             isinstance(local_knn_k, bool)
