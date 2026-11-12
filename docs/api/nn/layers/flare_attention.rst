@@ -27,6 +27,13 @@ linear complexity in the number of input tokens for a fixed query count.
 For details, see the `FLARE++ paper
 <https://arxiv.org/abs/2608.11519>`__.
 
+.. note::
+
+   :class:`~physicsnemo.nn.module.flare_attention.FLAREPlusPlus` does not yet
+   support token-sharded (``ShardTensor``) inputs and raises
+   ``NotImplementedError`` for them. Use replicated inputs with data
+   parallelism.
+
 .. autoclass:: physicsnemo.nn.module.flare_attention.FLAREPlusPlus
    :show-inheritance:
    :members:
