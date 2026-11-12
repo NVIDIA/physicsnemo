@@ -34,6 +34,9 @@ training:
   seed: 42
   save_interval: 25
   loss_type: "huber"
+  # Leave non-finite target elements (points of a set that lack a field)
+  # out of the loss and metrics.
+  mask_nonfinite_targets: false
   batch_size: 1
   scheduler_update_mode: "epoch"
   optimizer:

@@ -38,7 +38,12 @@ import torch
 from jaxtyping import Float
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
-from utils import FieldType, align_scalar_shapes, validate_field_coverage
+from utils import (
+    FieldType,
+    align_scalar_shapes,
+    mask_nonfinite,
+    validate_field_coverage,
+)
 
 from physicsnemo.datapipes.keys import as_nested_key
 
@@ -150,6 +155,8 @@ class MetricCalculator:
         metrics: Names of metrics to compute. Subset of
             ``METRIC_FUNCTIONS``. Defaults to :data:`DEFAULT_METRICS`.
         prefix: Optional prefix on the returned metric keys.
+        mask_nonfinite_targets: When ``True``, target elements that are not
+            finite are left out, as in :class:`loss.LossCalculator`.
     """
 
     def __init__(
@@ -158,6 +165,7 @@ class MetricCalculator:
         n_spatial_dims: int = 3,
         metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
+        mask_nonfinite_targets: bool = False,
     ) -> None:
         ### `target_config` values are required to be lowercase per the
         ### `FieldType` contract; copy verbatim so callers can mutate their
@@ -168,6 +176,7 @@ class MetricCalculator:
             list(metrics) if metrics is not None else list(DEFAULT_METRICS)
         )
         self.prefix = prefix
+        self.mask_nonfinite_targets = mask_nonfinite_targets
 
         for m in self.metric_names:
             if m not in METRIC_FUNCTIONS:
@@ -212,12 +221,18 @@ class MetricCalculator:
         return keys
 
     def _metrics_for_tensor(
-        self, pred: torch.Tensor, target: torch.Tensor, name_parts: tuple[str, ...]
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        name_parts: tuple[str, ...],
+        fraction: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        return {
-            self._make_key(*name_parts, m): METRIC_FUNCTIONS[m](pred, target)
-            for m in self.metric_names
-        }
+        values = {m: METRIC_FUNCTIONS[m](pred, target) for m in self.metric_names}
+        ### With masked targets (``fraction``), the mean (``mae``) is rescaled
+        ### to the valid elements; the relative norms are sum ratios already.
+        if fraction is not None and "mae" in values:
+            values["mae"] = values["mae"] / fraction
+        return {self._make_key(*name_parts, m): v for m, v in values.items()}
 
     def __call__(
         self,
@@ -254,7 +269,11 @@ class MetricCalculator:
                 p, t = pred[key], target[key]
                 if field_type == "scalar":
                     p, t = align_scalar_shapes(p, t)
-                    out.update(self._metrics_for_tensor(p, t, (name,)))
+                fraction = None
+                if self.mask_nonfinite_targets:
+                    p, t, fraction = mask_nonfinite(p, t, field_type)
+                if field_type == "scalar":
+                    out.update(self._metrics_for_tensor(p, t, (name,), fraction))
                 else:  # vector
                     n_components = p.shape[-1]
                     ### Per-component metrics.
@@ -265,14 +284,18 @@ class MetricCalculator:
                             else str(i)
                         )
                         out.update(
-                            self._metrics_for_tensor(p[..., i], t[..., i], (name, comp))
+                            self._metrics_for_tensor(
+                                p[..., i], t[..., i], (name, comp), fraction
+                            )
                         )
                     ### Aggregate vector metric under the bare field name:
                     ### all components jointly, flattened so the relative
                     ### norms reduce over the whole field (Frobenius for
                     ### l2) and direction errors count.
                     out.update(
-                        self._metrics_for_tensor(p.flatten(-2), t.flatten(-2), (name,))
+                        self._metrics_for_tensor(
+                            p.flatten(-2), t.flatten(-2), (name,), fraction
+                        )
                     )
 
         return TensorDict(out)
