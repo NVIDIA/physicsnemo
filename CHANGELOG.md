@@ -504,7 +504,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Padé networks (pytorch/pytorch#193194).
 - Stabilizes PCE density scores for collinear features by fitting polynomial
   covariance/precision in float64. Rejects non-finite density scores before
-  percentile decisions, and isolates scorer initialization from prediction RNGs.
+  percentile decisions and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
 - `torch.compile` with ShardTensor: neighborhood attention (`na1d`/`na2d`/
