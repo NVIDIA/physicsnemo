@@ -902,6 +902,56 @@ def test_parent_provenance_rejects_unknown_parent(monkeypatch):
         from_pyvista(grid)
 
 
+def test_simplices_outside_their_parent_are_rejected(monkeypatch):
+    """A triangle that uses points outside its parent cell is refused."""
+    grid = _make_two_quad_grid()
+    original_triangulate = pv.UnstructuredGrid.triangulate
+
+    def borrow_points_of_the_other_quad(mesh, *args, **kwargs):
+        triangulated = original_triangulate(mesh, *args, **kwargs)
+        parents = np.asarray(triangulated.cell_data["__physicsnemo_parent_cell_id"])
+        cells = triangulated.cells_dict[pv.CellType.TRIANGLE]
+        ### Rebuild parent 1's first triangle from parent 0's points.
+        cells[np.flatnonzero(parents == 1)[0]] = cells[np.flatnonzero(parents == 0)[0]]
+        corrupted = pv.UnstructuredGrid(
+            {pv.CellType.TRIANGLE: cells}, np.asarray(triangulated.points)
+        )
+        corrupted.cell_data["__physicsnemo_parent_cell_id"] = parents
+        return corrupted
+
+    monkeypatch.setattr(
+        pv.UnstructuredGrid, "triangulate", borrow_points_of_the_other_quad
+    )
+
+    with pytest.raises(ValueError, match=r"outside their parent.*parent 1 \(QUAD\)"):
+        from_pyvista(grid)
+
+
+def test_polygon_vtk_cannot_split_never_becomes_foreign_triangles():
+    """A polygon that VTK's ear cutting fails on raises or keeps its own points.
+
+    VTK 9.7's vtkDataSetTriangleFilter turns such a polygon into triangles on
+    the grid's first points, here the six unused ones.
+    """
+    angles = np.linspace(0.0, 2.0 * np.pi, 6, endpoint=False)
+    star = np.stack(
+        [np.cos(angles), np.sin(angles), 3.0 * np.cos(3.0 * angles)], axis=1
+    )[[0, 3, 1, 4, 2, 5]]
+    unused = 100.0 + np.arange(18, dtype=float).reshape(6, 3)
+    grid = pv.UnstructuredGrid(
+        np.array([6, 6, 7, 8, 9, 10, 11]),
+        np.array([pv.CellType.POLYGON], dtype=np.uint8),
+        np.vstack([unused, star]),
+    )
+
+    try:
+        mesh = from_pyvista(grid)
+    except ValueError as error:
+        assert "outside their parent" in str(error)
+    else:
+        assert bool((mesh.cells >= 6).all())
+
+
 def test_malformed_inputs_raise_in_one_subprocess():
     """Malformed attributes and topology are checked in one isolated process."""
     script = textwrap.dedent(

@@ -452,6 +452,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `from_pyvista` raises a `ValueError` when VTK splits an `UnstructuredGrid`
+  cell into simplices on points that are not that cell's. VTK does this for
+  polygons its ear cutting cannot split, which used to convert silently into a
+  mesh with holes and stray triangles.
 - `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
   path. They used to raise unless `copy_existing=True` was passed, because the
   loaded tensors are memory-mapped to the original files.

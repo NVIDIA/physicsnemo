@@ -1105,6 +1105,59 @@ def _triangulate_with_parent_ids(
     return triangulated, output_parent_ids
 
 
+def _require_simplices_within_parents(
+    simplices: np.ndarray,
+    parent_rows: np.ndarray,
+    parents: "pv.UnstructuredGrid",
+    parent_ids: np.ndarray,
+    cell_types: np.ndarray,
+) -> None:
+    """Raise if a simplex uses a point that its parent cell does not have.
+
+    ``parent_rows[i]`` is the row in ``parents`` of the cell that produced
+    ``simplices[i]``; ``parent_ids`` maps those rows to source cell IDs.
+    vtkDataSetTriangleFilter (``UnstructuredGrid.triangulate``) ignores a cell
+    triangulation that fails. For a polygon that ear cutting cannot split, VTK
+    9.7 then inserts the fallback triangles' positions within the polygon as
+    point IDs, so the polygon vanishes and its triangles join the grid's first
+    points.
+    """
+    offsets = np.asarray(parents.cell_offsets, dtype=np.int64)
+    n_points = np.int64(parents.n_points)
+    ### One sorted key per (cell row, point) incidence: row * n_points + point.
+    incidence = np.repeat(
+        np.arange(len(offsets) - 1, dtype=np.int64) * n_points, np.diff(offsets)
+    )
+    incidence += np.asarray(parents.GetCells().GetConnectivityArray(), dtype=np.int64)
+    incidence.sort()
+    bad_rows: list[np.ndarray] = []
+    chunk_size = 4_000_000
+    for start in range(0, len(simplices), chunk_size):
+        stop = start + chunk_size
+        chunk_rows = parent_rows[start:stop].astype(np.int64)
+        keys = chunk_rows[:, None] * n_points + simplices[start:stop]
+        found = (
+            incidence[np.minimum(np.searchsorted(incidence, keys), len(incidence) - 1)]
+            == keys
+        )
+        bad_rows.append(chunk_rows[~found.all(axis=1)])
+    bad = np.unique(np.concatenate(bad_rows))
+    if len(bad) > 0:
+        shown = ", ".join(
+            f"parent {int(parent_ids[row])} "
+            f"({_vtk_cell_type_name(int(cell_types[parent_ids[row]]))})"
+            for row in bad[:5]
+        )
+        raise ValueError(
+            "VTK simplex conversion built simplices from points outside their "
+            f"parent cell for {len(bad)} parent cell(s): {shown}"
+            f"{', ...' if len(bad) > 5 else ''}. VTK's vtkDataSetTriangleFilter, "
+            "which UnstructuredGrid.triangulate() also uses, does this for "
+            "polygons its ear cutting cannot split. Split these cells into "
+            "simplices yourself before conversion."
+        )
+
+
 def _polydata_surface_triangles(
     pyvista_mesh: "pv.PolyData",
     topology: dict[str, tuple[np.ndarray, np.ndarray]],
@@ -1304,6 +1357,17 @@ def _select_and_linearize_unstructured_grid(
             f"Could not linearize manifold dimension {target_dim} to "
             f"{simplex_type.name}; VTK returned {output_names}."
         )
+
+    ### Every output simplex must be built from its parent's points.
+    _require_simplices_within_parents(
+        np.asarray(linearized.cell_connectivity, dtype=np.int64).reshape(
+            -1, target_dim + 1
+        ),
+        np.searchsorted(selected_parent_ids, output_parent_ids),
+        selected,
+        selected_parent_ids,
+        cell_types,
+    )
 
     original_point_ids = (
         None
