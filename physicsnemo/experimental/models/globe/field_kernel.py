@@ -478,6 +478,10 @@ class Kernel(Module):
         If ``True``, applies ``torch.utils.checkpoint.checkpoint`` during
         training to trade compute for memory. Disable for small models or
         when profiling.
+    self_regularization_beta : float or None, optional, default=None
+        If not ``None``, bounds the output of the Pade network (see
+        :class:`~physicsnemo.nn.Pade`). Must be positive. Has no effect with
+        ``network_type="mlp"``.
 
     Forward
     -------
@@ -2060,6 +2064,13 @@ class MultiscaleKernel(Module):
     use_gradient_checkpointing : bool, optional, default=True
         Forwarded to each :class:`Kernel` branch. See
         :class:`Kernel` for details.
+    leaf_size : int, optional, default=1
+        Maximum points per leaf node of the cluster trees that
+        :meth:`forward` builds when none are given (see
+        :class:`BarnesHutKernel`).
+    self_regularization_beta : float or None, optional, default=None
+        Forwarded to each :class:`Kernel` branch. See :class:`Kernel` for
+        details.
 
     Forward
     -------
@@ -2109,22 +2120,29 @@ class MultiscaleKernel(Module):
 
     Examples
     --------
+    >>> import torch
+    >>> from tensordict import TensorDict
     >>> kernel = MultiscaleKernel(
     ...     n_spatial_dims=2,
     ...     output_schema={"phi": {"rank": 0}, "u": {"rank": 1}},
     ...     reference_length_names=["viscous_length", "chord_length"],
     ...     source_schema={"normal": {"rank": 1}},
-    ...     hidden_layer_sizes=[64, 64],
+    ...     hidden_layer_sizes=[16],
     ... )
+    >>> n_sources, n_targets = 20, 30
+    >>> normals = torch.nn.functional.normalize(torch.randn(n_sources, 2), dim=-1)
     >>> result = kernel(
-    ...     source_points=boundary_face_centers,
-    ...     target_points=query_points,
+    ...     source_points=torch.randn(n_sources, 2),
+    ...     target_points=torch.randn(n_targets, 2),
     ...     reference_lengths={"viscous_length": torch.tensor(0.001),
     ...                        "chord_length": torch.tensor(1.0)},
     ...     source_data=TensorDict({"normal": normals}, batch_size=[n_sources]),
-    ...     source_strengths=TensorDict({"viscous_length": strengths_v,
-    ...                                  "chord_length": strengths_c}, ...),
+    ...     source_strengths=TensorDict({"viscous_length": torch.ones(n_sources),
+    ...                                  "chord_length": torch.ones(n_sources)},
+    ...                                 batch_size=[n_sources]),
     ... )
+    >>> result["phi"].shape, result["u"].shape
+    (torch.Size([30]), torch.Size([30, 2]))
     """
 
     def __init__(

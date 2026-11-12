@@ -162,6 +162,19 @@ class GLOBE(Module):
         Maximum number of source points per leaf node in the cluster tree.
         Larger values produce shallower trees (fewer traversal iterations) at
         the cost of more exact near-field interactions per leaf hit.
+    network_type : {"pade", "mlp"}, optional, default="pade"
+        Type of neural network in each kernel: a Pade rational network or an
+        MLP (see :class:`~physicsnemo.experimental.models.globe.field_kernel.Kernel`).
+    self_regularization_beta : float or None, optional, default=None
+        If not ``None``, bounds the output of each kernel's Pade network (see
+        :class:`~physicsnemo.nn.Pade`). Must be positive. Has no effect with
+        ``network_type="mlp"``.
+    latent_compression_scale : float or None, optional, default=None
+        If not ``None``, the outputs of each communication hyperlayer are
+        compressed logarithmically beyond this scale :math:`C`, as
+        :math:`C \operatorname{arcsinh}(x / C)` of each scalar and of each
+        vector's magnitude, which keeps the latents from growing from layer
+        to layer. Must be positive. ``None`` disables compression.
     expand_far_targets : bool, optional, default=True
         If ``True``, far-field target nodes are expanded to individual points,
         converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
@@ -198,6 +211,10 @@ class GLOBE(Module):
     global_data : TensorDict or None, optional, default=None
         Nondimensional conditioning features. Leaf keys and ranks must match
         ``global_schema``. Passed through to the output Mesh.
+    prediction_chunk_size : int or "auto" or None, optional, default="auto"
+        Maximum number of prediction points evaluated in one pass through the
+        final hyperlayer. ``"auto"`` uses the total number of boundary faces;
+        ``None`` evaluates all points in one pass.
 
     Outputs
     -------
@@ -234,18 +251,26 @@ class GLOBE(Module):
 
     Examples
     --------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.procedural import lumpy_sphere
     >>> model = GLOBE(
     ...     n_spatial_dims=3,
     ...     output_schema={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
     ...     boundary_source_schemas={"no_slip": {}, "freestream": {}},
     ...     reference_length_names=["delta_FS", "chord"],
     ...     reference_area=1.0,
+    ...     n_communication_hyperlayers=1,
+    ...     hidden_layer_sizes=[16],
     ... )
+    >>> wing_mesh = lumpy_sphere.load(subdivisions=1)  # 80 triangles
+    >>> freestream_mesh = lumpy_sphere.load(radius=10.0, subdivisions=0)
     >>> result = model(
     ...     prediction_points=torch.randn(100, 3),
     ...     boundary_meshes={"no_slip": wing_mesh, "freestream": freestream_mesh},
     ...     reference_lengths={"delta_FS": torch.tensor(0.01), "chord": torch.tensor(1.0)},
     ... )
+    >>> result.point_data["pressure"].shape, result.point_data["velocity"].shape
+    (torch.Size([100]), torch.Size([100, 3]))
     """
 
     reference_area: torch.Tensor
