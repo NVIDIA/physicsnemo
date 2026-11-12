@@ -231,12 +231,12 @@ def mask_nonfinite(
     """Zero *p* and *t* where the target is not finite (any component, for vectors).
 
     Returns ``(p, t, valid_fraction)``: sums then cover the valid elements only,
-    and a mean divided by ``valid_fraction`` is their mean (0 if none is valid).
+    and a mean divided by ``valid_fraction`` is their mean (0 / 0 if none is valid).
     """
     valid = torch.isfinite(t)
     if field_type == "vector":
         valid = valid.all(dim=-1, keepdim=True)
-    fraction = valid.sum().clamp_min(1) / valid.numel()
+    fraction = valid.sum() / valid.numel()
     return torch.where(valid, p, 0.0), torch.where(valid, t, 0.0), fraction
 
 

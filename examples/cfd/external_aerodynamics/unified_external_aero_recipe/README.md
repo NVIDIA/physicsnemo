@@ -358,7 +358,9 @@ targets, such as the volume interior and a surface point set. The keys:
 - `output_groups` or `output_sets` (model YAML, not both) map the model
   output onto the sets; see the examples below.
 - `training.mask_nonfinite_targets: true` leaves non-finite target elements
-  (NaN where a point lacks a field) out of the loss and metrics.
+  (NaN where a point lacks a field) out of the loss and metrics. A field with
+  no finite target in a sample adds 0 to the loss and gets NaN metrics, which
+  the epoch and inference means skip.
 
 Each target is scored on its own set's points. Inference applies the same
 model-config hooks, inverts every `NormalizeMeshFields` of the pipeline,

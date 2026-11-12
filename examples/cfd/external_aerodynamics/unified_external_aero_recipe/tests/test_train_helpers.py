@@ -56,6 +56,7 @@ pytest.importorskip("tensorboard")
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
     _reduce_and_average,
+    _skip_nan,
     _walk_batch_for_logging,
 )
 
@@ -236,6 +237,30 @@ class TestReduceAndAverage:
         )
         assert loss == pytest.approx(4.0)
         assert losses == {} and metrics == {}
+
+    def test_metric_counts_skip_nan_metrics(self):
+        """With counts, a NaN metric (no finite target) is left out of its mean."""
+        steps = [
+            TensorDict({"a_l2": torch.tensor(1.0), "b_l2": torch.tensor(b)})
+            for b in (2.0, float("nan"), 4.0)
+        ]
+        parts = [_skip_nan(m) for m in steps]
+        sums = parts[0][0] + parts[1][0] + parts[2][0]
+        counts = parts[0][1] + parts[1][1] + parts[2][1]
+        _, _, means = _reduce_and_average(
+            torch.tensor(0.0), TensorDict(), sums, 3, device="cpu", metric_counts=counts
+        )
+        assert means == pytest.approx({"a_l2": 1.0, "b_l2": 3.0})
+        ### One step whose field has no finite target: NaN, not 0.
+        _, _, step = _reduce_and_average(
+            torch.tensor(0.0),
+            TensorDict(),
+            parts[1][0],
+            1,
+            device="cpu",
+            metric_counts=parts[1][1],
+        )
+        assert step["a_l2"] == 1.0 and step["b_l2"] != step["b_l2"]
 
     def test_zero_local_count_avoids_zero_division(self):
         """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""

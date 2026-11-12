@@ -563,11 +563,16 @@ def test_masked_union_set_equals_split_sets(loss_type):
     for key in split_metrics.keys():
         torch.testing.assert_close(union_metrics[key], split_metrics[key])
 
-    ### A field with no finite target contributes 0, not NaN.
+    ### A field with no finite target adds 0 to the loss, and has NaN metrics.
     empty = union_true.clone()
     empty["a"] = torch.full_like(empty["a"], nan)
     _, empty_td = masked(union_pred, empty)
     assert empty_td["loss/a"] == 0
+    empty_metrics = MetricCalculator(target_config, mask_nonfinite_targets=True)(
+        union_pred, empty
+    )
+    assert all(empty_metrics[k].isnan() for k in empty_metrics.keys() if "a_" in k)
+    torch.testing.assert_close(empty_metrics["b_l2"], split_metrics["b_l2"])
 
 
 class TestForcesAndExport:

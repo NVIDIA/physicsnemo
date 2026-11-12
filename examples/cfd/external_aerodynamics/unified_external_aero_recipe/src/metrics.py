@@ -156,7 +156,8 @@ class MetricCalculator:
             ``METRIC_FUNCTIONS``. Defaults to :data:`DEFAULT_METRICS`.
         prefix: Optional prefix on the returned metric keys.
         mask_nonfinite_targets: When ``True``, target elements that are not
-            finite are left out, as in :class:`loss.LossCalculator`.
+            finite are left out, as in :class:`loss.LossCalculator`; a field
+            with no finite target gets NaN metrics.
     """
 
     def __init__(
@@ -230,8 +231,13 @@ class MetricCalculator:
         values = {m: METRIC_FUNCTIONS[m](pred, target) for m in self.metric_names}
         ### With masked targets (``fraction``), the mean (``mae``) is rescaled
         ### to the valid elements; the relative norms are sum ratios already.
-        if fraction is not None and "mae" in values:
-            values["mae"] = values["mae"] / fraction
+        ### A field with no valid element has no error to report: NaN.
+        if fraction is not None:
+            if "mae" in values:
+                values["mae"] = values["mae"] / fraction
+            values = {
+                m: torch.where(fraction > 0, v, torch.nan) for m, v in values.items()
+            }
         return {self._make_key(*name_parts, m): v for m, v in values.items()}
 
     def __call__(

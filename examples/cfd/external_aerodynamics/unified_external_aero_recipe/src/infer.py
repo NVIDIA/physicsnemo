@@ -75,6 +75,7 @@ Caveats:
   trained.
 """
 
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -626,6 +627,7 @@ def main(cfg: DictConfig) -> None:
     ### when world_size exceeds the split size). ForceAccumulator does the
     ### same for the force sums.
     totals: dict[str, float] = {k: 0.0 for k in metric_calculator.expected_keys()}
+    valid = dict.fromkeys(totals, 0.0)
     count = 0
     sampling_cap = cfg.get("sampling_resolution", None)
     subsampling_warned = False
@@ -648,8 +650,12 @@ def main(cfg: DictConfig) -> None:
         ### whole TensorDict host-side once so each .item() is a free CPU index.
         metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
         sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
+        ### With masked targets, a field with no finite target in a sample
+        ### has NaN metrics, which the means skip.
         for k, v in sample_metrics.items():
-            totals[k] += v
+            if not (metric_calculator.mask_nonfinite_targets and math.isnan(v)):
+                totals[k] += v
+                valid[k] += 1
         count += 1
 
         pred_pts = _to_pointwise(pred_td, output_type)
@@ -745,11 +751,15 @@ def main(cfg: DictConfig) -> None:
 
     # -- Aggregate (all-reduce when distributed) --------------------------------
     totals, count = _allreduce_sums(totals, count, device)
+    valid, _ = _allreduce_sums(valid, 0, device)
     force_acc.totals, force_acc.count = _allreduce_sums(
         force_acc.totals, force_acc.count, device
     )
 
-    averages = {k: totals[k] / max(count, 1) for k in sorted(totals)}
+    averages = {
+        k: math.nan if count and not valid[k] else totals[k] / max(valid[k], 1)
+        for k in sorted(totals)
+    }
     if is_rank0:
         table = tabulate(
             [[k, f"{v:.6f}"] for k, v in averages.items()],
