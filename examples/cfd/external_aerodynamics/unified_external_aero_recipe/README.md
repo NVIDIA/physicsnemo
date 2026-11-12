@@ -15,6 +15,7 @@ Here, you're able to train (and run inference with) the following models:
 - [DoMINO](https://arxiv.org/abs/2501.13350) coming soon
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
+- [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
 
 We currently support the following datasets:
@@ -64,7 +65,7 @@ python src/infer.py model=geotransolver_surface dataset=highlift_surface \
 ```
 
 For the canonical CLI invocations of every named recipe (FA variants,
-GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
+SMART, GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
 [Recipe Gallery](#recipe-gallery) section below.
 
 ## Pipeline architecture
@@ -302,7 +303,7 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
 | `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
 
 Pick one of each on the CLI:
@@ -517,6 +518,7 @@ unified_external_aero_recipe/
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
       flare_{surface,volume}.yaml
+      smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
       domino_{surface,volume}.yaml
   datasets/                    # one file per dataset (loaded at runtime
@@ -670,6 +672,10 @@ python src/train.py model=flare_surface dataset=drivaer_ml_surface \
 python src/train.py model=flare_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
+# SMART (experimental, separate surface and volume models)
+python src/train.py model=smart_surface dataset=drivaer_ml_surface
+python src/train.py model=smart_volume dataset=drivaer_ml_volume
+
 # GLOBE (mesh-native)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
 # 180 GB-class devices. First epoch includes ~90 s of torch.compile warmup.
@@ -697,6 +703,13 @@ python src/train.py model=domino_volume dataset=drivaer_ml_volume \
 Note the `+` prefix on `+model.attention_type=...` — Hydra requires `+`
 when the override key isn't already present in the model template (FA
 attention is opt-in, not the default).
+
+### SMART
+
+Surface SMART uses the sampled query cells as geometry, while volume SMART retains
+the full vehicle surface and uses the standard STL-based SDF features. Each model
+samples up to 16,384 geometry points per encoder layer and decodes inference queries
+in chunks of 8,192.
 
 ### Dataset config anatomy
 

@@ -233,8 +233,8 @@ def _norm_stats_match(a: dict[str, dict], b: dict[str, dict]) -> bool:
         if sa["type"] != sb["type"]:
             return False
         for stat in ("mean", "std"):
-            va = torch.as_tensor(sa[stat], dtype=torch.float32)
-            vb = torch.as_tensor(sb[stat], dtype=torch.float32)
+            va = torch.as_tensor(sa[stat], dtype=torch.float32, device="cpu")
+            vb = torch.as_tensor(sb[stat], dtype=torch.float32, device="cpu")
             if va.shape != vb.shape or not torch.allclose(va, vb):
                 return False
     return True
@@ -503,7 +503,7 @@ def main(cfg: DictConfig) -> None:
     ### training-space metrics, and the inverses consistent with training.
     norm_stats_path = Path(ckpt_path) / "norm_stats.pt"
     if normalizer is not None and norm_stats_path.exists():
-        saved_stats = torch.load(norm_stats_path, weights_only=True)
+        saved_stats = torch.load(norm_stats_path, map_location="cpu", weights_only=True)
         if not _norm_stats_match(normalizer.stats, saved_stats):
             logger.warning(
                 f"Dataset-YAML normalization stats differ from the "
