@@ -15,7 +15,7 @@
 # limitations under the License.
 """The exact held-out validation suite, shared by the trainer and the evaluators.
 
-One implementation serves :class:`px_yaris.trainer.YarisFullTrainer` (its
+One implementation serves :class:`px_yaris_trainer.YarisFullTrainer` (its
 validation epochs), ``evaluate_px_yaris.py`` and ``evaluate_biw.py``: every
 held-out case is evaluated exactly once on any rank count
 (:class:`ExactShardSampler`), the squared errors are pooled per rollout step
@@ -23,7 +23,7 @@ with explicit counts so cases of different horizons mix, and the record carries
 the pooled and per-frame vector RMSE in millimetres, the per-case breakdown,
 the per-region translational share and node-error percentiles (with a shared
 mesh) and the target-relative penetration statistics of
-:class:`deformer.penetration_metrics.PenetrationMetrics`.
+:class:`penetration_metrics.PenetrationMetrics`.
 
 :func:`run_suite` takes a model, a held-out dataset with the names of its cases,
 the frozen normalization statistics and the metric settings and returns a
@@ -42,9 +42,9 @@ from pathlib import Path
 import numpy as np
 import torch
 from datapipe import EPS, simsample_collate
-from deformer.penetration_metrics import PenetrationMetrics
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import get_original_cwd
+from penetration_metrics import PenetrationMetrics
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 
@@ -136,7 +136,7 @@ def accumulate_validation(
     columns 0-2 hold the summed squared normalized error per channel, column 3
     the number of nodes contributing at that step, column 4 the summed squared
     physical error (mm^2, all three channels), plus the list of case names seen.
-    An optional :class:`deformer.penetration_metrics.PenetrationMetrics` accumulates its own statistics, and an
+    An optional :class:`penetration_metrics.PenetrationMetrics` accumulates its own statistics, and an
     optional ``node_errors`` tensor ``[N, 2]`` (float64) accumulates per node the
     summed squared physical error (mm^2, all channels) and the frame count.
     Optional ``regions`` = ``(masks [R, N] bool, totals [T, R, 6] float64, cases)``

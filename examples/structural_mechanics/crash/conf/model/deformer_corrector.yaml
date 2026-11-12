@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# DeFormer corrector: deformer.residual.ResidualTimeConditional (frozen teacher
+# DeFormer corrector: rollout.ResidualTimeConditional (frozen teacher
 # recomputed on the fly) around physicsnemo.experimental.models.deformer.DeFormerCorrector
 # (message
 # passing on the shell mesh edges and on contact edges discovered on the
@@ -22,7 +22,7 @@
 # architecture) and model.teacher_weights (its checkpoint). dt, local_knn_k
 # and local_neighborhood are the teacher's datapipe properties, interpolated
 # from the datapipe config.
-_target_: deformer.residual.ResidualTimeConditional
+_target_: rollout.ResidualTimeConditional
 _convert_: all
 teacher_weights: ???
 num_time_steps: ${training.num_time_steps}

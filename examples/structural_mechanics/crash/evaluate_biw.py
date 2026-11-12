@@ -18,11 +18,11 @@ the evaluation suite of the PX Yaris recipes.
 
 The body-in-white recipes train with the generic :class:`train.Trainer`, whose validation
 is the pooled normalized MSE only. This script applies the suite that
-:class:`px_yaris.trainer.YarisFullTrainer` wires into its validation to a body-in-white
+:class:`px_yaris_trainer.YarisFullTrainer` wires into its validation to a body-in-white
 checkpoint: the exact held-out validation (every case once on any rank count)
 with the pooled and per-time vector RMSE in millimetres, per-case and
 per-region breakdowns, node-error maps and percentiles, the target-relative
-penetration metrics (:class:`deformer.penetration_metrics.PenetrationMetrics`: shell
+penetration metrics (:class:`penetration_metrics.PenetrationMetrics`: shell
 surface and, with ``datapipe.rigid_wall_position``, the rigid wall). Runs
 inside the training
 environment, sharded over GPUs like training::

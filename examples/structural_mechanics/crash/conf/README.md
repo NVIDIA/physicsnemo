@@ -13,8 +13,8 @@ VTP data and `bumper_*` the bumper beam.
 
 | Recipe | Model | What it trains |
 | --- | --- | --- |
-| `px_yaris_deformer` | `model/deformer_time_conditional.yaml` (`deformer.time_conditional.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
-| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`deformer.residual.ResidualTimeConditional` around `physicsnemo.experimental.models.deformer.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
+| `px_yaris_deformer` | `model/deformer_time_conditional.yaml` (`rollout.DeFormerTimeConditional`) | the DeFormer network: 60 epochs, physical MSE, provisional-head loss 0.1 |
+| `px_yaris_deformer_corrector` | `model/deformer_corrector.yaml` (`rollout.ResidualTimeConditional` around `physicsnemo.experimental.models.deformer.DeFormerCorrector`) | the contact-aware corrector on the frozen network: 30 epochs, one warm-up epoch, wall clamp at evaluation |
 | `px_yaris_geotransolver` | `model/geotransolver_time_conditional.yaml` (`rollout.GeoTransolverTimeConditional`) | the point-model baseline under the network's protocol |
 
 `px_yaris_deformer` is self-contained (reader `px_yaris_full`, datapipe `px_yaris_full`,
@@ -27,7 +27,7 @@ required paths are the `yaris.*` keys; everything else has a value.
 | --- | --- | --- |
 | `yaris.data_root`, `yaris.split_manifest`, `yaris.outlier_mask`, `yaris.work_dir` | required | stores, `splits.csv`, `outlier_nodes.npz` (or `null`), run directory (an absolute path: Hydra changes into it) |
 | `yaris.stride`, `yaris.dt` | 5, 0.005 | every fifth 1 ms frame; the frame interval in seconds (`stride * reader.raw_dt`), read by the datapipe and, through it, by the time-conditional models |
-| `training.trainer_class` | `px_yaris.trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
+| `training.trainer_class` | `px_yaris_trainer.YarisFullTrainer` | exact, horizon-aware validation over every validation design |
 | `training.num_training_samples` / `num_validation_samples` | 69 / 20 | the manifest's split sizes |
 | `training.num_time_steps` | 31 | frame bound per case (`ceil(152 / 5)`); the time label `k / 30` is normalized by it |
 | `training.optimizer`, `muon_min_dim` | `muon`, 9 | Muon for matrices, AdamW for vectors and matrices narrower than 9 |

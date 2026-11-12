@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-_target_: px_yaris.dataset.YarisFullGraphDataset
+_target_: px_yaris_dataset.YarisFullGraphDataset
 _convert_: all
 data_dir: ${yaris.data_root}
 num_samples: ${training.num_training_samples}

@@ -30,7 +30,7 @@ if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
 from datapipe import SimSample  # noqa: E402
-from deformer.time_conditional import DeFormerTimeConditional  # noqa: E402
+from rollout import DeFormerTimeConditional  # noqa: E402
 
 K = 4
 TIME_DIM = 8

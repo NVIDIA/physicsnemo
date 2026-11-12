@@ -87,7 +87,7 @@ validation_output_dir: null     # Where the evaluators write their records (they
 evaluation_split: validation    # evaluate_px_yaris.py: the manifest split to score (validation or test)
 validation_node_errors: false   # Per-node RMSE map and per-region translational share
 validation_region_bounds: null  # Reference-x bounds (mm) of the per-region readouts (null: the suite's default)
-validation_penetration:         # Target-relative penetration metrics (deformer/penetration_metrics.py)
+validation_penetration:         # Target-relative penetration metrics (penetration_metrics.py)
   enabled: false
   tolerance_mm: 0.5             # A node penetrates when its depth exceeds this
   activation_distance_mm: 5.0   # Shell-clearance band of the contact search

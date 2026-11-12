@@ -33,7 +33,8 @@ CRASH_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))
 if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
-from px_yaris.dataset import YarisFullGraphDataset, YarisFullReader  # noqa: E402
+from px_yaris_dataset import YarisFullGraphDataset  # noqa: E402
+from px_yaris_reader import YarisFullReader  # noqa: E402
 
 NX, NY, FRAMES = 6, 3, 8
 CASES = {"train": ["case_a", "case_b"], "validation": ["case_c"], "test": ["case_d"]}

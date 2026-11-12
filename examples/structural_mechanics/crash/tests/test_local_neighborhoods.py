@@ -32,6 +32,7 @@ if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
 from local_neighborhoods import euclidean_knn, with_self_slot  # noqa: E402
+
 from physicsnemo.experimental.nn.geodesic_knn import geodesic_knn  # noqa: E402
 
 
