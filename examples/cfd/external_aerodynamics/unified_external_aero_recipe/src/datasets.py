@@ -72,6 +72,7 @@ import nondim  # noqa: F401, E402  (registers NonDimensionalizeByMetadata)
 import sdf  # noqa: F401, E402  (registers ComputeSDFFromBoundary, DropBoundary)
 from collate import build_collate_fn  # noqa: E402
 from metrics import MetricName  # noqa: E402
+from output_normalize import check_output_sets  # noqa: E402
 from utils import FieldType, field_dim, resolve_dict  # noqa: E402
 
 ### Module-level logger used for warnings emitted from helpers below
@@ -228,19 +229,53 @@ def _maybe_inject_targets(t_cfg: DictConfig, target_names: list[str]) -> DictCon
     return t_cfg
 
 
+class ChainedNormalizer:
+    """Several :class:`NormalizeMeshFields` of one pipeline, inverted as one.
+
+    ``inverse_td`` undoes each in reverse pipeline order; ``stats`` merges
+    their stats, and setting it hands each normalizer back its own fields.
+    """
+
+    def __init__(self, normalizers: list[NormalizeMeshFields]) -> None:
+        self.normalizers = normalizers
+
+    def inverse_td(self, td: Any) -> Any:
+        """Undo every normalizer, last applied first."""
+        for normalizer in reversed(self.normalizers):
+            td = normalizer.inverse_td(td)
+        return td
+
+    @property
+    def stats(self) -> dict[str, dict]:
+        """The merged statistics of every normalizer."""
+        return {k: v for n in self.normalizers for k, v in n.stats.items()}
+
+    @stats.setter
+    def stats(self, stats: dict[str, dict]) -> None:
+        """Hand each normalizer its own fields of *stats*."""
+        for n in self.normalizers:
+            n.stats = {k: stats[k] for k in n.stats if k in stats}
+
+
 def find_normalizer(
     datasets: list[MeshDataset],
-) -> NormalizeMeshFields | None:
-    """Return the first :class:`NormalizeMeshFields` found across *datasets* pipelines.
+) -> NormalizeMeshFields | ChainedNormalizer | None:
+    """Return the normalization of the first of *datasets* that has one.
 
-    Used at checkpoint-save time to persist normalization stats alongside
-    the model weights so inference can re-apply the inverse. Returns
-    ``None`` when no dataset has a ``NormalizeMeshFields`` transform.
+    That is its :class:`NormalizeMeshFields`, or a :class:`ChainedNormalizer`
+    of all of them when its pipeline has several (e.g. one an ``extra_task``
+    adds). Used at checkpoint-save time to persist normalization stats
+    alongside the model weights so inference can re-apply the inverse.
+    Returns ``None`` when no dataset has a ``NormalizeMeshFields`` transform.
     """
     for ds in datasets:
-        for t in getattr(ds, "transforms", []):
-            if isinstance(t, NormalizeMeshFields):
-                return t
+        found = [
+            t
+            for t in getattr(ds, "transforms", [])
+            if isinstance(t, NormalizeMeshFields)
+        ]
+        if found:
+            return found[0] if len(found) == 1 else ChainedNormalizer(found)
     return None
 
 
@@ -438,13 +473,13 @@ def build_dataset(
     reader = hydra.utils.instantiate(cfg.pipeline.reader, **reader_kwargs)
     resolved = []
 
-    target_names = list(
-        OmegaConf.to_container(
-            OmegaConf.select(cfg, "targets", default=OmegaConf.create({})),
-            resolve=True,
-        )
-        or {}
-    )
+    ### Only targets on the interior (the default) come from MeshToDomainMesh.
+    sources = resolve_dict(cfg, "target_sources") or {}
+    target_names = [
+        name
+        for name in resolve_dict(cfg, "targets") or {}
+        if sources.get(name, "interior.").startswith("interior.")
+    ]
 
     if "transforms" in cfg.pipeline and cfg.pipeline.transforms:
         for t in cfg.pipeline.transforms:
@@ -1122,15 +1157,12 @@ def build_dataloaders(
     ### resolves before `hydra.utils.instantiate(cfg.model)`.  GLOBE's
     ### model template doesn't reference `out_dim`, so the extra key is
     ### a harmless no-op for it.
-    ### A model predicting several sets at once (``output_sets``) emits one
-    ### set's channels per point.
-    out_targets = first_targets or {}
+    out_dim_total = sum(
+        field_dim(cast(FieldType, ftype)) for ftype in (first_targets or {}).values()
+    )
     output_sets = resolve_dict(cfg, "output_sets")
     if output_sets:
-        out_targets = {n: out_targets[n] for n in next(iter(output_sets.values()))}
-    out_dim_total = sum(
-        field_dim(cast(FieldType, ftype)) for ftype in out_targets.values()
-    )
+        check_output_sets(output_sets, first_target_sources)
     OmegaConf.update(cfg, "out_dim", out_dim_total, force_add=True)
 
     normalizer = find_normalizer(train_datasets)

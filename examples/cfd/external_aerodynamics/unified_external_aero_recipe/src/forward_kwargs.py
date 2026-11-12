@@ -46,8 +46,7 @@ Spec value semantics:
   order, into one point-cloud ``Mesh`` (points, plus the ``point_data``
   fields every set holds), the single prediction set of a model that
   predicts every set at once (see ``output_sets`` in
-  :mod:`output_normalize`). An optional ``select: <path>`` instead
-  concatenates that path of each set along dim 0, e.g. ``select: points``.
+  :mod:`output_normalize`).
 
 Targets are extracted separately by :func:`extract_targets` from the
 DomainMesh's ``interior.point_data`` by default, or from explicit
@@ -200,11 +199,9 @@ def resolve_spec(spec: Any, source: Any) -> Any:
     return spec
 
 
-def _concat_point_sets(spec: dict[str, Any], source: Any) -> Mesh | torch.Tensor:
-    """Resolve a ``{concat_point_sets: [...], select: ...}`` spec (see module docstring)."""
+def _concat_point_sets(spec: dict[str, Any], source: Any) -> Mesh:
+    """Resolve a ``{concat_point_sets: [...]}`` spec (see module docstring)."""
     meshes = [walk_path(source, path) for path in spec["concat_point_sets"]]
-    if "select" in spec:
-        return torch.cat([walk_path(m, spec["select"]) for m in meshes])
     leaves = [set(m.point_data.keys(True, True)) for m in meshes]
     shared = sorted(set.intersection(*leaves), key=str)
     return Mesh(

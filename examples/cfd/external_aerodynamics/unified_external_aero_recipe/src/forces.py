@@ -312,14 +312,28 @@ def force_moment_coefficients(
 
 def surface_force_fields(
     field_types: dict[str, NondimFieldType],
+    target_sources: dict[str, str] | None = None,
 ) -> tuple[str, str] | None:
     """Identify the (pressure, shear) field names for force integration.
 
     Returns the field names whose non-dim recipes are ``"pressure"`` and
     ``"stress"`` (i.e. :math:`C_p` and :math:`C_f`), or ``None`` if the
     dataset does not declare both -- e.g. volume runs, which carry no
-    surface traction, so force integration auto-skips.
+    surface traction, so force integration auto-skips. With
+    *target_sources*, the first pair whose fields share a source mesh.
     """
+    if target_sources is not None:
+        mesh = {
+            n: target_sources.get(n, "interior").split(".point_data.")[0]
+            for n in field_types
+        }
+        pairs = (
+            (p, s)
+            for p, tp in field_types.items()
+            for s, ts in field_types.items()
+            if tp == "pressure" and ts == "stress" and mesh[p] == mesh[s]
+        )
+        return next(pairs, None)
     pressure = next((n for n, t in field_types.items() if t == "pressure"), None)
     shear = next((n for n, t in field_types.items() if t == "stress"), None)
     if pressure is None or shear is None:
@@ -358,6 +372,7 @@ class ForceContext:
         field_types: dict[str, NondimFieldType],
         device: torch.device | str,
         dataset_cfg: DictConfig | None = None,
+        target_sources: dict[str, str] | None = None,
     ) -> "ForceContext | None":
         """Build a context from the ``force_coefficients`` config block.
 
@@ -365,6 +380,8 @@ class ForceContext:
         ``surface_normals_point`` and ``wall_shear_acts_on`` declare the
         conventions of the stored surface (see the module docstring). A
         missing key, or no dataset config, means ``outward`` and ``body``.
+        ``target_sources`` picks fields on one mesh (see
+        :func:`surface_force_fields`).
 
         Returns ``None`` when the block is absent, disabled, or the
         dataset declares no pressure + shear surface fields (so callers
@@ -372,7 +389,7 @@ class ForceContext:
         """
         if force_cfg is None or not force_cfg.get("enabled", False):
             return None
-        fields = surface_force_fields(field_types)
+        fields = surface_force_fields(field_types, target_sources)
         if fields is None:
             return None
         pressure_field, shear_field = fields

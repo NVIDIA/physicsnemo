@@ -28,8 +28,8 @@ Different model output conventions need different unpacking:
 
 Several prediction point sets (``target_sources``) map onto outputs by the
 model YAML's ``output_groups`` (one tensor per group of targets, for branch
-models) or ``output_sets`` (one output on the sets' merged points, split back
-by set size, for single-decoder models).
+models) or ``output_sets`` (one Mesh output on the sets' merged points, split
+back by set size, for single-decoder models).
 
 Kept in its own module (separate from ``train.py``) so tests can exercise
 the slicing logic without paying the cost of importing tensorboard.
@@ -184,7 +184,7 @@ def normalize_output_to_tensordict(
         n_spatial_dims: Vector-field dimensionality. Default 3.
         output_groups: Ordered target-name lists, one per output tensor.
         output_sets: Ordered ``{set: {target: output field}}`` of a merged
-            output.
+            Mesh output (``output_type='mesh'`` only).
         targets: The batch targets; ``output_sets`` reads each set's size
             from them.
 
@@ -193,7 +193,7 @@ def normalize_output_to_tensordict(
     """
     if output_sets is not None:
         return _split_output_sets(
-            output, target_config, output_type, output_sets, targets, n_spatial_dims
+            output, target_config, output_type, output_sets, targets
         )
     if output_type == "mesh":
         if not isinstance(output, Mesh):
@@ -274,33 +274,48 @@ def _split_by_groups(
     return result
 
 
+def check_output_sets(
+    output_sets: dict[str, dict[str, str]], target_sources: dict[str, str] | None
+) -> None:
+    """Raise unless each ``output_sets`` key is the set its targets come from.
+
+    The split follows the key order, so a key must name its targets' source
+    mesh; several sets need ``target_sources``.
+    """
+    if target_sources is None:
+        if len(output_sets) > 1:
+            raise ValueError("output_sets with several sets needs target_sources")
+        return
+    for key, mapping in output_sets.items():
+        prefix = f"{key}.point_data."
+        wrong = [n for n in mapping if not target_sources.get(n, "").startswith(prefix)]
+        if wrong:
+            raise ValueError(
+                f"output_sets[{key!r}] lists targets {wrong!r} whose "
+                f"target_sources do not start with {prefix!r}"
+            )
+
+
 def _split_output_sets(
     output: Any,
     target_config: dict[str, FieldType],
     output_type: IOType,
     output_sets: dict[str, dict[str, str]],
     targets: TensorDict | None,
-    n_spatial_dims: int,
 ) -> TensorDict:
-    """Split one merged output back into the prediction sets of ``output_sets``."""
+    """Split one merged Mesh output back into the prediction sets of ``output_sets``."""
     groups = [list(mapping) for mapping in output_sets.values()]
     _check_partition(groups, target_config, "output_sets")
-    if targets is None:
-        raise ValueError("output_sets needs the batch targets to size each set")
-    ### A set's size is its targets' point count: the last axis of a scalar
-    ### leaf, the one before the components of a vector leaf.
-    sizes = [
-        targets[as_nested_key(g[0])].shape[
-            -1 if target_config[g[0]] == "scalar" else -2
-        ]
-        for g in groups
-    ]
-    if not isinstance(output, Mesh if output_type == "mesh" else torch.Tensor):
-        raise TypeError(f"output_sets got a {type(output).__name__} output")
-    if output_type == "tensors":
-        return _split_by_groups(
-            output.split(sizes, 1), groups, target_config, n_spatial_dims
-        )
+    if output_type != "mesh" or not isinstance(output, Mesh):
+        raise TypeError("output_sets requires output_type: mesh and a Mesh output")
+    ### One set covers every output row. Several sets have target_sources,
+    ### whose targets' root batch excludes the point axis (see extract_targets).
+    sizes = [output.point_data.batch_size[0]]
+    if len(groups) > 1:
+        if targets is None:
+            raise ValueError("output_sets needs the batch targets to size each set")
+        axis = targets.batch_dims
+        sizes = [targets[as_nested_key(g[0])].shape[axis] for g in groups]
     result = TensorDict({}, device=output.points.device)
     for part, mapping in zip(output.point_data.split(sizes, 0), output_sets.values()):
         for name, field in mapping.items():

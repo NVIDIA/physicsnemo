@@ -25,18 +25,29 @@ One sample carries the volume interior and a surface point set
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import hydra
 import pytest
 import torch
 from collate import build_collate_fn
-from datasets import apply_model_config
-from forces import ForceContext
+from datasets import (
+    ChainedNormalizer,
+    apply_model_config,
+    build_dataset,
+    find_normalizer,
+)
+from forces import ForceContext, surface_force_fields
 from forward_kwargs import extract_targets, resolve_forward_kwargs
-from infer import attach_and_save
+from infer import attach_and_save, redimensionalize
 from loss import LossCalculator
 from metrics import MetricCalculator
 from omegaconf import OmegaConf
-from output_normalize import normalize_output_to_tensordict, resolve_output_layout
+from output_normalize import (
+    check_output_sets,
+    normalize_output_to_tensordict,
+    resolve_output_layout,
+)
 from tensordict import TensorDict
 from utils import resolve_field_weights
 
@@ -90,19 +101,16 @@ def _domain() -> DomainMesh:
 
 
 class _Pointwise(torch.nn.Module):
-    """A pointwise decoder: one ``(pressure, vector)`` prediction per point."""
+    """A pointwise mesh-in/mesh-out decoder: ``(pressure, vec)`` per point."""
 
-    def __init__(self, mesh_output: bool) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.mesh_output = mesh_output
         self.head = torch.nn.Linear(3, 4)
 
-    def forward(self, prediction_points: torch.Tensor):
-        out = self.head(prediction_points)
-        if not self.mesh_output:
-            return out
+    def forward(self, prediction_points: Mesh) -> Mesh:
+        out = self.head(prediction_points.points)
         return Mesh(
-            points=prediction_points,
+            points=prediction_points.points,
             point_data={"pressure": out[..., 0], "vec": out[..., 1:]},
         )
 
@@ -214,48 +222,73 @@ class TestOutputSets:
             merged.points[N_VOLUME:], domain.boundaries["surface_queries"].points
         )
 
-    @pytest.mark.parametrize("output_type", ["mesh", "tensors"])
-    def test_split_predictions_equal_per_set_calls(self, output_type):
+    OUTPUT_SETS = {
+        "interior": {"volume.pressure": "pressure", "volume.velocity": "vec"},
+        "boundaries.surface_queries": {
+            "surface.pressure": "pressure",
+            "surface.wss": "vec",
+        },
+    }
+
+    def _split(self, domain, targets=TARGETS, sources=SOURCES):
+        """Collate *domain*, run the merged model and split its output."""
+        spec = {"prediction_points": {"concat_point_sets": MERGED}}
+        batch = build_collate_fn("mesh", spec, targets, sources)([(domain, {})])
+        model = _Pointwise()
+        output = model(**batch["forward_kwargs"])
+        layout = resolve_output_layout(
+            OmegaConf.create({"output_sets": self.OUTPUT_SETS})
+        )
+        pred = normalize_output_to_tensordict(
+            output, targets, "mesh", targets=batch["targets"], **layout
+        )
+        return model, batch, pred
+
+    def test_split_predictions_equal_per_set_calls(self):
         """The split merged prediction equals calling the model on each set."""
         domain = _domain()
-        cfg = OmegaConf.create(
-            {
-                "output_sets": {
-                    "interior": {
-                        "volume.pressure": "pressure",
-                        "volume.velocity": "vec",
-                    },
-                    "boundaries.surface_queries": {
-                        "surface.pressure": "pressure",
-                        "surface.wss": "vec",
-                    },
-                }
-            }
-        )
-        spec = {"prediction_points": {"concat_point_sets": MERGED, "select": "points"}}
-        batch = build_collate_fn(output_type, spec, TARGETS, SOURCES)([(domain, {})])
-        model = _Pointwise(mesh_output=output_type == "mesh")
-        output = model(**batch["forward_kwargs"])
-        pred = normalize_output_to_tensordict(
-            output,
-            TARGETS,
-            output_type,
-            targets=batch["targets"],
-            **resolve_output_layout(cfg),
-        )
-
-        lead = (1,) if output_type == "tensors" else ()
-        for path, prefix in (
-            ("interior", "volume"),
-            ("boundaries.surface_queries", "surface"),
+        model, batch, pred = self._split(domain)
+        for path, prefix, vector in (
+            ("interior", "volume", "velocity"),
+            ("boundaries.surface_queries", "surface", "wss"),
         ):
             points = resolve_forward_kwargs({"p": f"{path}.points"}, domain)["p"]
-            alone = model.head(points.reshape(*lead, -1, 3))
-            vector = "velocity" if prefix == "volume" else "wss"
+            alone = model.head(points)
             torch.testing.assert_close(pred[prefix, "pressure"], alone[..., 0])
             torch.testing.assert_close(pred[prefix, vector], alone[..., 1:])
         loss, _ = LossCalculator(TARGETS)(pred, batch["targets"])
         assert torch.isfinite(loss)
+
+    def test_set_sizes_from_scalar_targets_stored_n_by_1(self):
+        """A scalar target stored ``(N, 1)`` still sizes its set by points."""
+        domain = _domain()
+        for mesh in (domain.interior, domain.boundaries["surface_queries"]):
+            mesh.point_data["pressure"] = mesh.point_data["pressure"].unsqueeze(-1)
+        _, _, pred = self._split(domain)
+        assert pred["volume", "pressure"].shape == (N_VOLUME,)
+        assert pred["surface", "wss"].shape == (N_SURFACE, 3)
+
+    def test_output_sets_needs_mesh_output(self):
+        """Tensor outputs are refused."""
+        layout = resolve_output_layout(
+            OmegaConf.create({"output_sets": self.OUTPUT_SETS})
+        )
+        with pytest.raises(TypeError, match="output_type: mesh"):
+            normalize_output_to_tensordict(
+                torch.randn(1, N_VOLUME + N_SURFACE, 4), TARGETS, "tensors", **layout
+            )
+
+    def test_output_sets_keys_must_match_sources(self):
+        """Keys in the wrong order, or several sets without sources, raise."""
+        check_output_sets(self.OUTPUT_SETS, SOURCES)
+        swapped = dict(reversed(list(self.OUTPUT_SETS.items())))
+        swapped = dict(zip(self.OUTPUT_SETS, swapped.values()))
+        with pytest.raises(
+            ValueError, match="do not start with 'interior.point_data.'"
+        ):
+            check_output_sets(swapped, SOURCES)
+        with pytest.raises(ValueError, match="needs target_sources"):
+            check_output_sets(self.OUTPUT_SETS, None)
 
 
 class _AddSurfaceQueries(MeshTransform):
@@ -313,6 +346,30 @@ class TestExtraTask:
         },
     }
 
+    @staticmethod
+    def _volume_domain() -> tuple[DomainMesh, torch.Tensor, torch.Tensor]:
+        """A volume sample whose vehicle cells carry the extra set's field."""
+        torch.manual_seed(0)
+        vehicle = Mesh(
+            points=torch.randn(12, 3),
+            cells=torch.randint(0, 12, (N_SURFACE, 3)),
+            cell_data={"surface_p": torch.randn(N_SURFACE)},
+        )
+        interior = Mesh(
+            points=torch.randn(N_VOLUME, 3),
+            point_data={"pressure": torch.randn(N_VOLUME)},
+        )
+        domain = DomainMesh(interior=interior, boundaries={"vehicle": vehicle})
+        return domain, interior.point_data["pressure"], vehicle.cell_data["surface_p"]
+
+    @staticmethod
+    def _sources(ds) -> dict[str, str]:
+        """The dataset's own target defaults to the interior."""
+        return {
+            "pressure": "interior.point_data.pressure",
+            **OmegaConf.to_container(ds.target_sources),
+        }
+
     def test_extra_task_adds_set_targets_weights_and_shared_constants(self):
         """Targets, sources, weights and normalizer constants join the dataset's."""
         ds = apply_model_config(
@@ -328,30 +385,12 @@ class TestExtraTask:
         shared = OmegaConf.to_container(ds.pipeline.transforms[-1].fields)
         assert shared == {"surface_p": {"type": "scalar", "mean": 2.0, "std": 4.0}}
 
-        ### The dataset's own targets default to the interior.
-        torch.manual_seed(0)
-        vehicle = Mesh(
-            points=torch.randn(12, 3),
-            cells=torch.randint(0, 12, (N_SURFACE, 3)),
-            cell_data={"surface_p": torch.randn(N_SURFACE)},
-        )
-        domain = DomainMesh(
-            interior=Mesh(
-                points=torch.randn(N_VOLUME, 3),
-                point_data={"pressure": torch.randn(N_VOLUME)},
-            ),
-            boundaries={"vehicle": vehicle},
-        )
-        raw_p = vehicle.cell_data["surface_p"].clone()
+        domain, _, raw_sp = self._volume_domain()
         for t_cfg in ds.pipeline.transforms:
             domain = hydra.utils.instantiate(t_cfg).apply_to_domain(domain)
-        sources = {
-            "pressure": "interior.point_data.pressure",
-            **OmegaConf.to_container(ds.target_sources),
-        }
-        targets = extract_targets(domain, dict(ds.targets), sources)
+        targets = extract_targets(domain, dict(ds.targets), self._sources(ds))
         assert targets["surface_p"].shape == (N_SURFACE,)
-        torch.testing.assert_close(targets["surface_p"], (raw_p - 2.0) / (4.0 + 1e-8))
+        torch.testing.assert_close(targets["surface_p"], (raw_sp - 2.0) / (4.0 + 1e-8))
 
         weights = resolve_field_weights(OmegaConf.create(self.MODEL))
         assert weights == {"pressure": 0.5, "surface_p": 3.0}
@@ -362,6 +401,69 @@ class TestExtraTask:
         torch.testing.assert_close(
             losses["loss/surface_p"], 3.0 * targets["surface_p"].pow(2).mean()
         )
+
+    def test_extra_set_field_exported_in_physical_units(self, tmp_path):
+        """Every NormalizeMeshFields is inverted, the extra task's included."""
+        ds = apply_model_config(
+            OmegaConf.create(self.DATASET), OmegaConf.create(self.MODEL)
+        )
+        transforms = [hydra.utils.instantiate(t) for t in ds.pipeline.transforms]
+        normalizer = find_normalizer([SimpleNamespace(transforms=transforms)])
+        assert isinstance(normalizer, ChainedNormalizer)
+        assert set(normalizer.stats) == {"pressure", "surface_p"}
+        ### One normalizer stays the NormalizeMeshFields itself, as on main.
+        single = find_normalizer([SimpleNamespace(transforms=transforms[:1])])
+        assert single is transforms[0]
+
+        domain, raw_p, raw_sp = self._volume_domain()
+        raw_p, raw_sp = raw_p.clone(), raw_sp.clone()
+        for t in transforms:
+            domain = t.apply_to_domain(domain)
+        sources = self._sources(ds)
+        targets = extract_targets(domain, dict(ds.targets), sources)
+        physical = redimensionalize(
+            targets,
+            normalizer=normalizer,
+            nondim=None,
+            field_types={},
+            global_data=domain.global_data,
+        )
+        out = tmp_path / "sample.pdmsh"
+        attach_and_save(
+            domain,
+            physical,
+            physical,
+            dict(ds.targets),
+            out,
+            rescale_geometry=False,
+            target_sources=sources,
+        )
+        saved = DomainMesh.load(str(out))
+        torch.testing.assert_close(
+            saved.boundaries["surface_queries"].point_data["true_surface_p"], raw_sp
+        )
+        torch.testing.assert_close(saved.interior.point_data["pred_pressure"], raw_p)
+
+    def test_only_interior_targets_injected_into_mesh_to_domain_mesh(self, tmp_path):
+        """A target sourced from another set is not looked up on the interior."""
+        (tmp_path / "run_0").mkdir()
+        (tmp_path / "run_0" / "domain_0.pdmsh").write_bytes(b"")
+        cfg = OmegaConf.create(
+            {
+                "pipeline": {
+                    "reader": {
+                        "_target_": "${dp:DomainMeshReader}",
+                        "path": str(tmp_path),
+                        "pattern": "run_*/domain_*.pdmsh",
+                    },
+                    "transforms": [{"_target_": "${dp:MeshToDomainMesh}"}],
+                },
+                "targets": {"pressure": "scalar", "surface_p": "scalar"},
+                "target_sources": self.MODEL["extra_task"]["target_sources"],
+            }
+        )
+        dataset = build_dataset(cfg, device=None)
+        assert dataset.transforms[0]._cell_data_targets == ["pressure"]
 
     def test_unknown_shared_constants_raise(self):
         """Naming a field the dataset normalizer does not hold is refused."""
@@ -443,6 +545,24 @@ class TestForcesAndExport:
         domain.boundaries["surface_queries"] = shifted
         with pytest.raises(ValueError, match="aligned"):
             ctx.coefficients(domain, pts, pts, None, SOURCES)
+
+    def test_forces_pick_the_pair_on_one_source_mesh(self):
+        """A volume pressure next to a surface set's pair integrates the surface."""
+        field_types = {"pressure": "pressure", "surface_p": "pressure", "wss": "stress"}
+        sources = {
+            "pressure": "interior.point_data.pressure",
+            "surface_p": "boundaries.surface_queries.point_data.surface_p",
+            "wss": "boundaries.surface_queries.point_data.wss",
+        }
+        assert surface_force_fields(field_types) == ("pressure", "wss")
+        assert surface_force_fields(field_types, sources) == ("surface_p", "wss")
+        ctx = ForceContext.from_config(
+            OmegaConf.create({"enabled": True}),
+            field_types,
+            "cpu",
+            target_sources=sources,
+        )
+        assert (ctx.pressure_field, ctx.shear_field) == ("surface_p", "wss")
 
     def test_export_writes_onto_each_source_mesh(self, tmp_path):
         """``pred_*`` / ``true_*`` land on each target's source set."""

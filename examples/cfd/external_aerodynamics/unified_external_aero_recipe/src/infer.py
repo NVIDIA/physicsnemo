@@ -81,7 +81,12 @@ from typing import Any
 
 import hydra
 import torch
-from datasets import build_dataloaders, find_normalizer, load_dataset_config
+from datasets import (
+    apply_model_config,
+    build_dataloaders,
+    find_normalizer,
+    load_dataset_config,
+)
 from forces import ForceAccumulator, ForceContext
 from forward_kwargs import walk_path
 from metrics import MetricCalculator, resolve_metrics
@@ -532,7 +537,11 @@ def main(cfg: DictConfig) -> None:
     ### stay in training space; `active_*` gate the physical conversion.
     redimensionalize_on = bool(cfg.get("redimensionalize", True))
     recipe_root = Path(__file__).resolve().parent.parent
-    ds_yaml = load_dataset_config(recipe_root / "datasets" / f"{cfg.dataset}.yaml")
+    ### As the model reads it, with the transforms its config appends.
+    ds_yaml = apply_model_config(
+        load_dataset_config(recipe_root / "datasets" / f"{cfg.dataset}.yaml"), cfg
+    )
+    target_sources = dataset_info["target_sources"]
     field_types = build_redim_field_types(ds_yaml)
     nondim_helper = (
         NonDimensionalizeByMetadata(fields=field_types) if field_types else None
@@ -549,7 +558,11 @@ def main(cfg: DictConfig) -> None:
     force_cfg = OmegaConf.select(cfg, "force_coefficients", default=None)
     ### The dataset YAML declares the conventions of its stored surface.
     force_ctx = ForceContext.from_config(
-        force_cfg, field_types, device, dataset_cfg=ds_yaml
+        force_cfg,
+        field_types,
+        device,
+        dataset_cfg=ds_yaml,
+        target_sources=target_sources,
     )
     if force_ctx is not None:
         logger.info(
@@ -575,7 +588,6 @@ def main(cfg: DictConfig) -> None:
         ),
     )
     output_layout = resolve_output_layout(cfg)
-    target_sources = dataset_info["target_sources"]
 
     if is_rank0:
         log_jsonl(
