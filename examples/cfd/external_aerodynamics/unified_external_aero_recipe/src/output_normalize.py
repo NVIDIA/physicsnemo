@@ -282,11 +282,12 @@ def check_output_sets(
     """Raise unless each ``output_sets`` key is the set its targets come from.
 
     The split follows the key order, so a key must name its targets' source
-    mesh, and every ``concat_point_sets`` list in *forward_kwargs* must merge
-    the sets in that order; several sets need ``target_sources``.
+    mesh, and a ``concat_point_sets`` list in *forward_kwargs* that merges
+    exactly these sets must merge them in that order; several sets need
+    ``target_sources``.
     """
     for sets in _concat_point_set_lists(forward_kwargs):
-        if list(sets) != list(output_sets):
+        if set(sets) == set(output_sets) and list(sets) != list(output_sets):
             raise ValueError(
                 f"concat_point_sets {sets!r} must list the output_sets keys "
                 f"{list(output_sets)!r}, in that order"

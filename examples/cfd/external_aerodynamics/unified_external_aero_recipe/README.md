@@ -384,8 +384,8 @@ A single-decoder model predicts on one point-cloud `Mesh` of the sets' merged
 points and returns a `Mesh` (`output_type: mesh`). `output_sets` splits its
 `point_data` back: its keys are the sets, in merge order, each the source mesh
 of its targets, and its values map each target to the output field it reads.
-Every `concat_point_sets` list must name the `output_sets` keys in the same
-order, or training stops at startup.
+A `concat_point_sets` list of exactly the `output_sets` keys must list them in
+the same order, or training stops at startup.
 
 ```yaml
 output_type: mesh

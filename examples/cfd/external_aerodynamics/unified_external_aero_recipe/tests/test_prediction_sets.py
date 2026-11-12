@@ -312,6 +312,12 @@ class TestOutputSets:
         spec = {"prediction_points": {"concat_point_sets": MERGED[::-1]}}
         with pytest.raises(ValueError, match="in that order"):
             check_output_sets(self.OUTPUT_SETS, SOURCES, spec)
+        nested = {"k": [{"src": {"concat_point_sets": MERGED[::-1]}}]}
+        with pytest.raises(ValueError, match="in that order"):
+            check_output_sets(self.OUTPUT_SETS, SOURCES, nested)
+        ### An input-side merge of other sets is not the prediction set.
+        inputs = {"context": {"concat_point_sets": ["boundaries.vehicle", "interior"]}}
+        check_output_sets(self.OUTPUT_SETS, SOURCES, inputs)
 
 
 class _AddSurfaceQueries(MeshTransform):
