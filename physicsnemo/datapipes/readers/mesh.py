@@ -114,7 +114,7 @@ def _sample_point_sets(
                     "indices_from must reference the same source and association"
                 )
         elif count is None or count >= total:
-            ids = torch.arange(total)
+            ids = torch.arange(total, device=mesh.points.device)
         else:
             rng = np.random.default_rng(
                 np.random.SeedSequence([seed, epoch, index, stream])

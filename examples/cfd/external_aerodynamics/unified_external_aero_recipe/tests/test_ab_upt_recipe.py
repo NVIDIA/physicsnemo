@@ -243,6 +243,19 @@ def test_native_pipeline_normalization_and_export(native_case, mode, tmp_path):
         )
         forces = context.coefficients(domain, true_pts, true_pts, normalizer, sources)
         assert forces is not None and forces[0] == forces[1]
+        # Check the absolute signs against the canonical DrivAerML conventions;
+        # matching prediction/reference alone misses a shared sign inversion.
+        reference = ForceContext.from_config(
+            OmegaConf.create({"enabled": True}),
+            field_types,
+            "cpu",
+            dataset_cfg=OmegaConf.load(ROOT / "datasets" / "drivaer_ml_surface.yaml"),
+            target_sources=sources,
+        )
+        assert forces == reference.coefficients(
+            domain, true_pts, true_pts, normalizer, sources
+        )
+        assert any(value != 0 for value in forces[0].values())
     dataset.close()
 
 

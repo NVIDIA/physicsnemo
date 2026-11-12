@@ -16,6 +16,9 @@
 
 # Joint training uses both interacting surface and volume anchor streams.
 train_datadir: ${dataset_paths.drivaer_ml}
+# Stored DrivAerML normals point inward; OpenFOAM shear acts on the fluid.
+surface_normals_point: inward
+wall_shear_acts_on: fluid
 independent_validation: true
 validation_reader_overrides:
   point_sets:
