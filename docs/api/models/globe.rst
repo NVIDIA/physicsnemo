@@ -13,7 +13,7 @@ Without retraining, the model is translation-, rotation-, and
 parity-equivariant, and invariant to uniform refinement of the boundary mesh in
 the fine-mesh limit. Its predictions do not change with the units of the
 problem when ``reference_lengths`` and ``reference_area`` are given in the new
-units; ``reference_area`` is set at construction and saved in checkpoints. Its
+units. ``reference_area`` is set at construction and saved in checkpoints. Its
 kernels bake in the prior that the influence of a small boundary feature falls
 off as :math:`1/r^2` in 3D and :math:`1/r` in 2D.
 
