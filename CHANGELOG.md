@@ -60,8 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   functions over tensors (node-to-facet pair search with a Warp BVH broad
   phase and fused Warp narrow phase, crossing-aware signed gaps, edge
   features and tapers, penetration depths and rigid-wall clamp), and
-  `physicsnemo.experimental.nn.static_knn`
-  (reference geodesic or Euclidean k-nearest neighbourhoods of a mesh).
+  `physicsnemo.experimental.nn.geodesic_knn` (k-nearest neighbourhoods of a
+  mesh along its edges; Euclidean ones use `physicsnemo.nn.functional.knn`).
 - Adds `physicsnemo.experimental.models.deformer`: the DeFormer
   network (a GeoTransolver/FLARE backbone with static kNN neighbourhood-attention
   stages and a fused kernel) and its contact-aware corrector (message passing

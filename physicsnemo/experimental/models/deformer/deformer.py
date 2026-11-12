@@ -1082,7 +1082,8 @@ class DeFormer(GeoTransolver):
                 "DeFormer requires graph.knn_index, graph.knn_mask and "
                 "graph.knn_edge_attr: static neighbourhoods with local_knn_k "
                 "neighbours per node plus the node itself (see "
-                "physicsnemo.experimental.nn.static_knn)"
+                "physicsnemo.experimental.nn.geodesic_knn, or "
+                "physicsnemo.nn.functional.knn for Euclidean neighbourhoods)"
             )
         metric = getattr(graph, "knn_metric", None)
         metrics = (

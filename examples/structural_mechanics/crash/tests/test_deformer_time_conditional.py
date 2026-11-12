@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import torch
 
-from physicsnemo.experimental.nn.static_knn import geodesic_knn
+from physicsnemo.experimental.nn.geodesic_knn import geodesic_knn
 
 THIS_DIR = os.path.dirname(__file__)
 CRASH_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))

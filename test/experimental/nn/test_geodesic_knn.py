@@ -13,21 +13,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Static reference kNN: exactness against dense Dijkstra, topology, padding.
+"""Geodesic reference kNN: exactness against dense Dijkstra, topology, padding.
 
-The geodesic path is pure Python and runs everywhere; the Euclidean path and
-the dense Dijkstra reference need SciPy, so only those tests skip without it.
+The query is pure Python and runs everywhere; only the dense Dijkstra reference
+needs SciPy, so only that test skips without it.
 """
 
 import numpy as np
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.static_knn import (
-    euclidean_knn,
-    geodesic_knn,
-    static_knn,
-)
+from physicsnemo.experimental.nn.geodesic_knn import geodesic_knn
 
 
 def _has_scipy() -> bool:
@@ -40,7 +36,7 @@ def _has_scipy() -> bool:
 
 requires_scipy = pytest.mark.skipif(
     not _has_scipy(),
-    reason="SciPy is needed for Euclidean neighbourhoods and the Dijkstra reference",
+    reason="SciPy is needed for the dense Dijkstra reference",
 )
 
 
@@ -104,71 +100,17 @@ def test_geodesic_ties_prefer_smaller_node_id():
     )
 
 
-@requires_scipy
-def test_geodesic_stays_on_the_sheet_but_euclidean_crosses_the_gap():
+def test_geodesic_stays_on_the_sheet():
+    """Two sheets 1 mm apart share no edge, so no neighbor crosses the gap."""
     lower_pos, lower_edges = grid(4, 4, spacing=(10.0, 10.0), z=0.0)
     upper_pos, upper_edges = grid(4, 4, spacing=(10.0, 10.0), z=1.0, offset=16)
     pos = torch.cat((lower_pos, upper_pos))
     edge_index = torch.cat((lower_edges, upper_edges), dim=1)
-    k = 5
-    geodesic = geodesic_knn(pos, edge_index, k)
-    euclidean = euclidean_knn(pos, k)
-    assert geodesic.mask.all() and euclidean.mask.all()
+    geodesic = geodesic_knn(pos, edge_index, 5)
+    assert geodesic.mask.all()
     assert bool((geodesic.index[:16] < 16).all()) and bool(
         (geodesic.index[16:] >= 16).all()
     )
-    # Every lower node's nearest Euclidean neighbor is the node 1 mm above it.
-    torch.testing.assert_close(euclidean.index[:16, 0], torch.arange(16, 32))
-    torch.testing.assert_close(euclidean.distance[:16, 0], torch.ones(16))
-    dispatched = static_knn(pos, k, metric="geodesic", edge_index=edge_index)
-    torch.testing.assert_close(dispatched.index, geodesic.index)
-    torch.testing.assert_close(
-        static_knn(pos, k, metric="euclidean").index, euclidean.index
-    )
-
-
-@requires_scipy
-def test_euclidean_matches_a_brute_force_ranking_without_ties():
-    """Random points: the KD-tree result equals a float64 all-pairs ranking."""
-    generator = torch.Generator().manual_seed(0)
-    pos = torch.rand(300, 3, generator=generator, dtype=torch.float64).float()
-    k = 7
-    xyz = pos.double().numpy()
-    distances = np.linalg.norm(xyz[:, None] - xyz[None], axis=-1)
-    np.fill_diagonal(distances, np.inf)
-    ranked = np.sort(distances, axis=1)
-    assert (ranked[:, k] - ranked[:, k - 1] > 1e-9).all(), "the test needs no ties"
-    order = np.argsort(distances, axis=1, kind="stable")[:, :k]
-    result = euclidean_knn(pos, k)
-    assert result.mask.all()
-    assert result.index.numpy().tolist() == order.tolist()
-    np.testing.assert_allclose(
-        result.distance.numpy(),
-        np.take_along_axis(distances, order, axis=1),
-        rtol=1e-6,
-        atol=1e-6,
-    )
-
-
-@requires_scipy
-def test_euclidean_ties_at_the_k_boundary_follow_the_kd_tree():
-    """Documents the tie rule: boundary ties are the KD-tree's choice, returned
-    candidates at equal distance are ordered by node ID, and runs are
-    deterministic."""
-    pos, _ = grid(5, 5)
-    first, second = euclidean_knn(pos, 1), euclidean_knn(pos, 1)
-    torch.testing.assert_close(first.index, second.index)
-    # Corner node 0 has nodes 1 and 5 at distance 1: one of them is returned.
-    assert first.index[0].item() in (1, 5)
-    torch.testing.assert_close(first.distance[0], torch.tensor([1.0]))
-    # Centre node 12 has four nodes at distance 1, listed by node ID.
-    assert euclidean_knn(pos, 4).index[12].tolist() == [7, 11, 13, 17]
-
-
-@pytest.mark.skipif(_has_scipy(), reason="documents the error without SciPy")
-def test_euclidean_names_scipy_when_it_is_missing():
-    with pytest.raises(Exception, match="SciPy"):
-        euclidean_knn(torch.zeros(3, 3), 2)
 
 
 PADDED_POSITIONS = torch.tensor(
@@ -182,13 +124,6 @@ def test_small_components_are_padded():
     assert result.mask.sum(1).tolist() == [2, 2, 2, 1, 1]
     assert result.index[3].tolist() == [4, 3, 3, 3]  # padding repeats the query
     torch.testing.assert_close(result.distance[3], torch.tensor([1.0, 0, 0, 0]))
-
-
-@requires_scipy
-def test_small_point_sets_are_padded():
-    few = euclidean_knn(PADDED_POSITIONS[:3], 5)
-    assert few.mask.sum(1).tolist() == [2, 2, 2]
-    assert few.index[0].tolist() == [1, 2, 0, 0, 0]
 
 
 def test_self_loops_duplicates_and_zero_length_edges():
@@ -210,10 +145,6 @@ def test_determinism_and_validation():
     pos, edge_index = grid(5, 4, spacing=(0.3, 1.1))
     first, second = geodesic_knn(pos, edge_index, 6), geodesic_knn(pos, edge_index, 6)
     torch.testing.assert_close(first.index, second.index)
-    with pytest.raises(ValueError, match="metric"):
-        static_knn(pos, 3, metric="hops", edge_index=edge_index)
-    with pytest.raises(ValueError, match="edge_index"):
-        static_knn(pos, 3, metric="geodesic")
     with pytest.raises(ValueError, match="positive integer"):
         geodesic_knn(pos, edge_index, 0)
     with pytest.raises(ValueError, match="CPU float"):

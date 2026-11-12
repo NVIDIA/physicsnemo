@@ -23,7 +23,7 @@ from physicsnemo.experimental.models.deformer import (
     LocalNeighborhoodData,
 )
 from physicsnemo.experimental.models.deformer.deformer import BackboneState
-from physicsnemo.experimental.nn.static_knn import geodesic_knn
+from physicsnemo.experimental.nn.geodesic_knn import geodesic_knn
 from physicsnemo.models.geotransolver import GeoTransolver
 from physicsnemo.models.geotransolver.flare_plus_plus import (
     _FLAREPlusPlusAttention,

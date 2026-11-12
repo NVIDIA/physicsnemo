@@ -33,25 +33,88 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from physicsnemo.experimental.models.deformer import (  # noqa: F401 (re-export)
     LocalNeighborhoodData,
 )
-from physicsnemo.experimental.nn import static_knn as _static_knn_module
-from physicsnemo.experimental.nn.static_knn import (
-    StaticNeighborhood,
-    static_knn,
+from physicsnemo.experimental.nn import geodesic_knn as _geodesic_knn_module
+from physicsnemo.experimental.nn.geodesic_knn import (
+    ReferenceNeighborhood,
+    geodesic_knn,
 )
+from physicsnemo.nn.functional import knn
 
 KNN_METRICS = ("geodesic", "euclidean")
+
+
+@torch.no_grad()
+def euclidean_knn(reference_positions: torch.Tensor, k: int) -> ReferenceNeighborhood:
+    """Return the ``k`` nearest other nodes by straight-line reference distance.
+
+    The query is the library's :func:`physicsnemo.nn.functional.knn` on its SciPy
+    KD-tree backend (pinned, so cached neighborhoods do not depend on which
+    backends are installed), asked for ``k + 1`` candidates per node in float64.
+    This wrapper removes the node itself, orders the candidates by
+    ``(distance, node ID)`` and pads short rows like the geodesic query, so both
+    metrics share one contract. Coincident duplicate nodes are ordinary
+    neighbors at zero distance. Which of several candidates tied exactly at the
+    ``k`` boundary is returned is the KD-tree's choice, not the smaller node ID.
+    """
+    if (
+        not isinstance(reference_positions, torch.Tensor)
+        or reference_positions.device.type != "cpu"
+        or reference_positions.dtype not in (torch.float32, torch.float64)
+        or reference_positions.ndim != 2
+        or reference_positions.shape[1] != 3
+        or not torch.isfinite(reference_positions).all()
+    ):
+        raise ValueError("reference_positions must be finite CPU float [N,3]")
+    if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
+        raise ValueError("k must be a positive integer")
+    xyz = reference_positions.detach().to(torch.float64)
+    n = xyz.shape[0]
+    own = np.arange(n, dtype=np.int64)[:, None]
+    out_index = np.repeat(own, k, axis=1)
+    out_distance = np.zeros((n, k), dtype=np.float32)
+    out_mask = np.zeros((n, k), dtype=bool)
+    if n > 1:
+        queries = min(k + 1, n)
+        try:
+            index, distance = knn(xyz, xyz, queries, implementation="scipy")
+        except ImportError as error:
+            raise ImportError(
+                "Euclidean reference neighborhoods need SciPy (pip install scipy)"
+            ) from error
+        index = index.numpy().astype(np.int64).reshape(n, queries)
+        distance = distance.numpy().astype(np.float64).reshape(n, queries)
+        # The query itself (if returned) last, then (distance, node ID).
+        order = np.lexsort((index, distance, index == own), axis=1)
+        index = np.take_along_axis(index, order, axis=1)[:, :k]
+        distance = np.take_along_axis(distance, order, axis=1)[:, :k]
+        valid = (index != own) & (index < n) & np.isfinite(distance)
+        # Valid candidates first (stable), the padding after them.
+        compact = np.argsort(~valid, axis=1, kind="stable")
+        index = np.take_along_axis(index, compact, axis=1)
+        distance = np.take_along_axis(distance, compact, axis=1)
+        valid = np.take_along_axis(valid, compact, axis=1)
+        width = index.shape[1]
+        out_index[:, :width] = np.where(valid, index, own)
+        out_distance[:, :width] = np.where(valid, distance, 0.0).astype(np.float32)
+        out_mask[:, :width] = valid
+    return ReferenceNeighborhood(
+        torch.from_numpy(out_index),
+        torch.from_numpy(out_distance),
+        torch.from_numpy(out_mask),
+    )
 
 
 # ``LocalNeighborhoodData`` (PyG batching with per-graph offsets of ``knn_index``)
 # ships with the library model and is re-exported above for the datapipes.
 
 
-def with_self_slot(neighborhood: StaticNeighborhood):
+def with_self_slot(neighborhood: ReferenceNeighborhood):
     """Return ``[N, k+1]`` index/mask with the node itself in slot zero."""
     own = torch.arange(neighborhood.index.shape[0], dtype=torch.long)[:, None]
     index = torch.cat((own, neighborhood.index.to(torch.long)), dim=1)
@@ -83,8 +146,8 @@ class LocalNeighborhoodCache:
     """Content-addressed, atomic CPU cache for immutable reference neighborhoods.
 
     The key covers the physical initial coordinates, the structural edge list
-    (geodesic only), ``k``, the metric, the cache schema and the functional's
-    source hash. Entries are checksummed and validated on load; corrupt entries
+    (geodesic only), ``k``, the metric, the cache schema and the source hash of
+    both neighborhood queries (this module and the library's geodesic module). Entries are checksummed and validated on load; corrupt entries
     fail closed. Process-local hits return the same tensors, and distributed
     startup warms the cache once on rank zero.
     """
@@ -97,10 +160,11 @@ class LocalNeighborhoodCache:
         self.timeout_seconds = timeout_seconds
         self.memory = {}
         self.counts = dict(memory_hits=0, disk_hits=0, computed=0)
-        source = Path(inspect.getfile(_static_knn_module)).read_bytes()
+        source = Path(inspect.getfile(_geodesic_knn_module)).read_bytes()
+        source += Path(__file__).read_bytes()
         self.algorithm = hashlib.sha256(source).hexdigest()
 
-    def get(self, reference_positions, edge_index, k, metric) -> StaticNeighborhood:
+    def get(self, reference_positions, edge_index, k, metric) -> ReferenceNeighborhood:
         """Load or compute the ``k`` nearest reference neighbors per node."""
         if metric not in KNN_METRICS:
             raise ValueError(f"metric must be one of {KNN_METRICS}; got {metric!r}")
@@ -144,7 +208,10 @@ class LocalNeighborhoodCache:
                     f"Static kNN compute start key={key} metric={metric} k={k} nodes={n}"
                 )
             started = time.monotonic()
-            value = static_knn(positions, k, metric=metric, edge_index=edges)
+            if metric == "geodesic":
+                value = geodesic_knn(positions, edges, k)
+            else:
+                value = euclidean_knn(positions, k)
             self.counts["computed"] += 1
             if self.logger:
                 self.logger.info(
@@ -194,7 +261,7 @@ class LocalNeighborhoodCache:
                             raise ValueError(
                                 "metadata, checksum or tensor validation failed"
                             )
-                        value = StaticNeighborhood(
+                        value = ReferenceNeighborhood(
                             entry["index"], entry["distance"], entry["mask"]
                         )
                     except Exception as error:
