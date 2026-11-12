@@ -657,9 +657,15 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             device=self.interior.points.device,
             dtype=self._widest_points_dtype(),
         )
-        is_invertible, is_similarity = _scale_assumptions(
-            factor, self.interior.n_spatial_dims
-        )
+        # Each mesh applies M in its own points dtype: assume only what holds in
+        # all of them (for tensor factors, the dtype changes nothing)
+        is_invertible, is_similarity = True, True
+        for mesh in (self.interior, *(self.boundaries[k] for k in self.boundary_names)):
+            invertible, similarity = _scale_assumptions(
+                factor, self.interior.n_spatial_dims, mesh.points.dtype
+            )
+            is_invertible = is_invertible and invertible
+            is_similarity = is_similarity and similarity
         return self.transform(
             matrix=M,
             transform_point_data=transform_point_data,

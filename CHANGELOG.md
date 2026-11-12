@@ -643,6 +643,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device.
 - `rotate` with a Python angle rotates float64 meshes at float64 precision.
   Before, it computed the rotation in float32.
+- `rotate` rotates float64 meshes about a vector axis at float64 precision.
+  Before, it rounded the axis to float32, so points on the axis moved.
+- `rotate`, `scale`, and `transform` with a square matrix work on float16 and
+  bfloat16 meshes, and keep their dtype. Before, they raised an error.
+- Loop subdivision keeps float16 and bfloat16 points in their dtype, and no
+  longer overflows on float16 meshes far from the origin. Before, it returned
+  float32 points.
+- `sample_random_points_on_cells` with `alpha` other than 1 works on float16
+  and bfloat16 meshes on CPU. Before, it raised an error.
 - Anisotropic maps with a small overall scale are no longer taken for
   similarities. Before, transforming by one kept wrong cached point normals,
   and scaled point measures instead of raising.
