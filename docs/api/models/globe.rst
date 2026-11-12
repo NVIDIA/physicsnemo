@@ -1,23 +1,24 @@
 GLOBE
 =====
 
-GLOBE (Green's-function-Like Operator for Boundary Element PDEs) is meant for
-PDEs whose solution is driven mainly by the boundary conditions, in particular
-the geometry of the boundary. It suits elliptic problems that need global
-information propagation, with quantities of interest on or near the boundary,
-such as external aerodynamics. GLOBE represents the solution as a linear
-combination of learnable kernel functions evaluated from boundary source faces
-to arbitrary target points.
+GLOBE (Green's-function-Like Operator for Boundary Element PDEs) targets
+partial differential equations (PDEs) whose solutions depend primarily on
+boundary conditions, particularly boundary geometry. It supports elliptic
+problems that require global information propagation and have quantities of
+interest on or near the boundary. External aerodynamics is one example. GLOBE
+represents the solution as a linear combination of learnable kernel functions
+evaluated from boundary source faces to arbitrary target points.
 
-Without retraining, the model is translation-, rotation-, and
-parity-equivariant, and invariant to uniform refinement of the boundary mesh in
-the fine-mesh limit. Its predictions do not change with the units of the
-problem when ``reference_lengths`` and ``reference_area`` are given in the new
-units. ``reference_area`` is set at construction and saved in checkpoints. Its
-kernels bake in the prior that the influence of a small boundary feature falls
-off as :math:`1/r^2` in 3D and :math:`1/r` in 2D.
+Without retraining, the model is equivariant to translations, rotations, and
+parity transformations. It is invariant to uniform refinement of the boundary
+mesh in the fine-mesh limit. Predictions remain unchanged when you change the
+problem units and express ``reference_lengths`` and ``reference_area`` in the
+new units. Set ``reference_area`` during construction. GLOBE saves its value
+in checkpoints.
+The kernels incorporate the prior that the influence of a small boundary
+feature falls off as :math:`1/r^2` in 3D and :math:`1/r` in 2D.
 
-For more information on GLOBE, refer to the `GLOBE paper
+For more information about GLOBE, refer to the `GLOBE paper
 <https://arxiv.org/abs/2511.15856>`__.
 
 .. autoclass:: physicsnemo.models.globe.GLOBE
