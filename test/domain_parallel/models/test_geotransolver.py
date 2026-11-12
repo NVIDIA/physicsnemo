@@ -27,8 +27,8 @@ Placement contract:
   gathered single-GPU reference.
 
 The GALE cases exercise sharded slice attention with cross-attention
-context; GALE_FA additionally exercises the mixed-placement SDPA paths
-(op-level coverage in ``test/domain_parallel/ops/test_sdpa.py``).
+context; GALE_FA and GALE_FPP additionally exercise the mixed-placement SDPA
+paths (op-level coverage in ``test/domain_parallel/ops/test_sdpa.py``).
 """
 
 import pytest
@@ -212,6 +212,7 @@ _CASES = [
     # GALE_FA has no structured variant; it additionally exercises the
     # mixed-placement SDPA wrapper.
     _irregular_case("GALE_FA"),
+    _irregular_case("GALE_FPP"),
     _structured_2d_case(),
 ]
 
@@ -401,11 +402,11 @@ def test_context_builder_distributed(distributed_mesh):
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
 def test_gale_block_distributed(distributed_mesh, attention_type):
     r"""One GALEBlock: sharded hidden states + replicated context vs reference.
 
-    Covers both attention backends; GALE_FA routes through the
+    Covers all attention backends; GALE_FA and GALE_FPP route through the
     mixed-placement SDPA paths.
     """
     dm = DistributedManager()

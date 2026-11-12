@@ -320,8 +320,8 @@ def test_flare_plus_plus_checkpoint_roundtrip(device):
 
 
 def test_flare_plus_plus_reference_checkpoint(device):
-    """The committed v1 FLARE++ checkpoint remains loadable."""
-    checkpoint = Path(__file__).parent / "data/flare_plus_plus_v1.mdlus"
+    """The committed FLARE++ v2 checkpoint remains loadable."""
+    checkpoint = Path(__file__).parent / "data/flare_plus_plus_v2.mdlus"
     if not checkpoint.exists():
         torch.manual_seed(0)
         FLAREPlusPlus(
@@ -350,6 +350,29 @@ def test_flare_plus_plus_reference_checkpoint(device):
 
     assert isinstance(model, FLAREPlusPlus)
     torch.testing.assert_close(output, reference, atol=1e-3, rtol=1e-3)
+
+
+def test_flare_plus_plus_keeps_mixer_initialization():
+    """Backbone initialization keeps the FLARE++ near-identity projections."""
+    torch.manual_seed(5)
+    model = FLAREPlusPlus(
+        functional_dim=2,
+        out_dim=1,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        mlp_ratio=1,
+        slice_num=4,
+    )
+    for block in model.blocks:
+        attention = block.Attn
+        weight = attention.in_projection.weight.detach().view(3, 16, 16)
+        assert (weight - torch.eye(16)).abs().max().item() < 0.2
+        torch.testing.assert_close(
+            attention.gate_logit,
+            torch.full((4,), FLAREPlusPlusAttention._GATE_LOGIT_INIT),
+        )
 
 
 def test_flare_plus_plus_torch_compile_fullgraph(device):

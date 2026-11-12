@@ -19,10 +19,16 @@ For details of the method, see the `FLARE paper
 FLARE++
 -------
 
-FLARE++ replaces FLARE's fixed learned routing queries with routing queries
-synthesized from the current input. It uses one attention pass to create those
-queries and the usual FLARE gather/scatter pair to route information, preserving
-linear complexity in the number of input tokens for a fixed query count.
+FLARE++ adds input-conditioned routing to FLARE. One attention pass synthesizes
+queries from the current input, and a per-head gate adds them to a learned fixed
+reference query. The usual FLARE gather/scatter pair then routes information,
+preserving linear complexity in the number of input tokens for a fixed query
+count. Head-wise normalization of the synthesis call and near-identity input
+projections stabilize early training.
+
+Like FLARE, FLARE++ accepts token-sharded
+:class:`~physicsnemo.domain_parallel.ShardTensor` inputs. Each rank keeps its
+shard of the tokens, and only latent-sized tensors are communicated.
 
 For details, see the `FLARE++ paper
 <https://arxiv.org/abs/2608.11519>`__.

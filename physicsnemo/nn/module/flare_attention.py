@@ -260,14 +260,37 @@ class FLARE(nn.Module):
 class FLAREPlusPlus(nn.Module):
     r"""FLARE++ attention with input-conditioned routing queries.
 
-    FLARE++ first uses learned seeds to summarize the current input into a set
-    of routing queries. Those queries then gather values from the input and
-    scatter the gathered information back to the input tokens. All three steps
-    use scaled dot-product attention, so the cost is linear in the number of
-    input tokens when the number of routing queries is fixed.
+    FLARE++ uses learned seeds to synthesize routing queries from the current
+    input. The routing queries then gather values from the input tokens, and
+    the gathered latent values are scattered back to the tokens. All three
+    steps use scaled dot-product attention, so the cost is linear in the
+    number of input tokens when the number of routing queries is fixed.
 
-    For architecture details, see the `FLARE++ paper
+    One block computes, per head,
+
+    .. math::
+
+        K_0 &= \mathrm{LN}(x W_{k_0}), \quad
+        K = \mathrm{LN}_{\gamma}(x W_k), \quad V = x W_v, \\
+        Q_{\mathrm{dyn}} &= \mathrm{SDPA}(\mathrm{LN}_{\gamma}(Q_0), K_0, K_0), \\
+        Q &= \mathrm{LN}(Q_{\mathrm{fixed}}) + \sigma(g)\, Q_{\mathrm{dyn}}, \\
+        Z &= \mathrm{SDPA}(Q, K, V), \quad Y = \mathrm{SDPA}(K, Q, Z),
+
+    where :math:`\mathrm{LN}` is a head-wise layer norm without learned
+    parameters, :math:`\mathrm{LN}_{\gamma}` is a head-wise layer norm with a
+    learned scale and bias, and :math:`g` is a learned per-head gate logit.
+    The synthesis keys :math:`K_0` also serve as the synthesis values. The
+    three input projections are initialized near identity. With the gate
+    closed, the routing queries are fixed, as in FLARE.
+
+    For architecture details, see Appendix A of the `FLARE++ paper
     <https://arxiv.org/abs/2608.11519>`_.
+
+    Token-sharded :class:`~physicsnemo.domain_parallel.ShardTensor` inputs are
+    supported in the same way as :class:`FLARE`. The two encoder calls, where
+    replicated latent queries attend to sharded tokens, combine per-rank
+    partial attention with log-sum-exp statistics. The decoder call runs
+    locally on each token shard.
 
     Parameters
     ----------
@@ -275,12 +298,14 @@ class FLAREPlusPlus(nn.Module):
         Number of input and output channels.
     heads : int, optional
         Number of attention heads. Default is 8.
-    dim_head : int, optional
-        Number of channels per attention head. Default is 64.
+    dim_head : int | None, optional
+        Number of channels per attention head. ``None`` uses
+        ``dim // heads``. ``heads * dim_head`` must equal ``dim``. Default is
+        ``None``.
     dropout : float, optional
         Dropout applied after the output projection. Default is 0.0.
     n_global_queries : int, optional
-        Number of learned seeds and synthesized routing queries. Default is 64.
+        Number of learned seeds and routing queries. Default is 64.
     use_te : bool, optional
         Transformer Engine is not currently supported for FLARE++. Default is
         ``False``.
@@ -301,17 +326,21 @@ class FLAREPlusPlus(nn.Module):
     Examples
     --------
     >>> import torch
-    >>> attention = FLAREPlusPlus(dim=256, heads=8, dim_head=32)
+    >>> attention = FLAREPlusPlus(dim=256, heads=8)
     >>> output = attention(torch.randn(2, 100, 256))
     >>> output.shape
     torch.Size([2, 100, 256])
     """
 
+    _GATE_LOGIT_INIT: float = 0.25
+    _LATENT_INIT_STD: float = 0.02
+    _PROJECTION_NOISE_STD: float = 0.02
+
     def __init__(
         self,
         dim: int,
         heads: int = 8,
-        dim_head: int = 64,
+        dim_head: int | None = None,
         dropout: float = 0.0,
         n_global_queries: int = 64,
         use_te: bool = False,
@@ -326,8 +355,20 @@ class FLAREPlusPlus(nn.Module):
             raise ValueError(f"dim must be positive, got {dim}")
         if heads <= 0:
             raise ValueError(f"heads must be positive, got {heads}")
+        if dim_head is None:
+            if dim % heads != 0:
+                raise ValueError(
+                    f"dim must be divisible by heads, got dim={dim} and heads={heads}"
+                )
+            dim_head = dim // heads
         if dim_head <= 0:
             raise ValueError(f"dim_head must be positive, got {dim_head}")
+        if heads * dim_head != dim:
+            raise ValueError(
+                "FLAREPlusPlus requires heads * dim_head == dim for its "
+                f"near-identity projections, got heads={heads}, "
+                f"dim_head={dim_head}, and dim={dim}"
+            )
         if n_global_queries <= 0:
             raise ValueError(
                 f"n_global_queries must be positive, got {n_global_queries}"
@@ -345,15 +386,54 @@ class FLAREPlusPlus(nn.Module):
         self.n_global_queries = n_global_queries
         self.use_te = False
         self.scale = float(attn_scale)
-        inner_dim = heads * dim_head
 
-        self.q_seed = nn.Parameter(torch.randn(1, heads, n_global_queries, dim_head))
-        # A fused projection is mathematically identical to four independent
-        # projections and executes them in one matrix multiplication. The
-        # chunks are query-synthesis K/V followed by physical K/V.
-        self.in_projection = nn.Linear(dim, 4 * inner_dim)
-        self.out_linear = nn.Linear(inner_dim, dim)
+        # Learned seeds for query synthesis and the fixed reference queries.
+        self.latent_q0 = nn.Parameter(torch.empty(heads, n_global_queries, dim_head))
+        self.latent_q_fixed = nn.Parameter(
+            torch.empty(heads, n_global_queries, dim_head)
+        )
+        # Per-head logit of the gate on the synthesized queries.
+        self.gate_logit = nn.Parameter(torch.empty(heads))
+
+        # Head-wise norms with learned parameters. The synthesis keys and the
+        # fixed queries use a parameter-free head-wise layer norm.
+        self.q0_norm = nn.LayerNorm(dim_head)
+        self.k_norm = nn.LayerNorm(dim_head)
+
+        # Fused synthesis-key, physical-key, and physical-value projections.
+        # The synthesis keys also serve as the synthesis values.
+        self.in_projection = nn.Linear(dim, 3 * dim)
+        self.out_linear = nn.Linear(dim, dim)
         self.out_dropout = nn.Dropout(dropout)
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        """Initialize the FLARE++ mixer parameters.
+
+        The output projection keeps its own initialization.
+        """
+        nn.init.normal_(self.latent_q0, mean=0.0, std=self._LATENT_INIT_STD)
+        nn.init.normal_(self.latent_q_fixed, mean=0.0, std=self._LATENT_INIT_STD)
+        nn.init.constant_(self.gate_logit, self._GATE_LOGIT_INIT)
+        self.q0_norm.reset_parameters()
+        self.k_norm.reset_parameters()
+
+        # Each of the three projection blocks starts as identity plus noise.
+        weight = self.in_projection.weight
+        with torch.no_grad():
+            nn.init.trunc_normal_(
+                weight, mean=0.0, std=self._PROJECTION_NOISE_STD, a=-2.0, b=2.0
+            )
+            identity = torch.eye(self.dim, dtype=weight.dtype, device=weight.device)
+            weight.view(3, self.dim, self.dim).add_(identity)
+            self.in_projection.bias.zero_()
+
+    def _head_norm(
+        self, tensor: Float[torch.Tensor, "... D"]
+    ) -> Float[torch.Tensor, "... D"]:
+        """Apply a head-wise layer norm without learned parameters."""
+        return F.layer_norm(tensor, (self.dim_head,))
 
     def _compute_attention(
         self, x: Float[torch.Tensor, "B N C"]
@@ -361,19 +441,29 @@ class FLAREPlusPlus(nn.Module):
         Float[torch.Tensor, "B H N D"],
         Float[torch.Tensor, "B H N D"],
     ]:
-        """Return FLARE++ head outputs and physical keys for backend reuse."""
-        query_k, query_v, physical_k, physical_v = self.in_projection(x).chunk(
-            4, dim=-1
-        )
-        query_k, query_v, physical_k, physical_v = (
+        """Return FLARE++ head outputs and normalized physical keys."""
+        batch_size = x.shape[0]
+        synthesis_k, physical_k, physical_v = (
             rearrange(tensor, "b n (h d) -> b h n d", h=self.heads, d=self.dim_head)
-            for tensor in (query_k, query_v, physical_k, physical_v)
+            for tensor in self.in_projection(x).chunk(3, dim=-1)
+        )
+        synthesis_k = self._head_norm(synthesis_k)
+        physical_k = self.k_norm(physical_k)
+
+        # Query synthesis: the seeds read the input through shared keys/values.
+        seeds = self.q0_norm(self.latent_q0).to(dtype=x.dtype)
+        seeds = seeds.unsqueeze(0).expand(batch_size, -1, -1, -1)
+        dynamic_queries = F.scaled_dot_product_attention(
+            seeds, synthesis_k, synthesis_k, scale=self.scale
         )
 
-        seeds = self.q_seed.to(dtype=x.dtype).expand(x.shape[0], -1, -1, -1)
-        queries = F.scaled_dot_product_attention(
-            seeds, query_k, query_v, scale=self.scale
+        # Fixed reference plus gated synthesized term, mixed in fp32.
+        fixed_queries = self._head_norm(self.latent_q_fixed).unsqueeze(0)
+        gate = torch.sigmoid(self.gate_logit.float()).view(1, self.heads, 1, 1)
+        queries = (fixed_queries.float() + gate * dynamic_queries.float()).to(
+            dtype=x.dtype
         )
+
         routed_values = F.scaled_dot_product_attention(
             queries, physical_k, physical_v, scale=self.scale
         )
@@ -406,14 +496,6 @@ class FLAREPlusPlus(nn.Module):
             if x.ndim != 3:
                 raise ValueError(
                     f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
-                )
-            # Exact token-sharded FLARE++ needs globally normalized encoders.
-            # Ordinary DDP tensors do not expose ``redistribute`` and remain
-            # fully supported.
-            if hasattr(x, "redistribute"):
-                raise NotImplementedError(
-                    "FLAREPlusPlus does not yet support token-sharded inputs; "
-                    "use replicated inputs with data parallelism."
                 )
 
         output, _ = self._compute_attention(x)
