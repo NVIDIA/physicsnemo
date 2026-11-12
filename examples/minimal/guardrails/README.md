@@ -1,6 +1,6 @@
 # Geometry Guardrails Example
 
-This recipe composes optional geometry descriptors with the generic
+This recipe contains optional geometry descriptors with the generic
 `DensityScorer`, then applies an OK/WARN/REJECT policy defined by the application.
 It uses automotive STL datasets. The `geometry_validation.py` script handles
 mesh loading, directory processing, thresholds, and persistence metadata.
