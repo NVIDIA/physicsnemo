@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Neighborhood attention processors and the DeFormer ``knn_attention`` option."""
+"""Neighborhood attention processors, the fused kernel and their use in DeFormer."""
 
 import contextlib
 
@@ -161,7 +161,7 @@ def test_processor_checkpoint_segments_match_plain_execution():
 
 
 @requires_pyg
-def test_knn_mode_is_geoflare_at_zero_gates_and_trains_otherwise():
+def test_processors_are_inert_at_zero_gates_and_train_otherwise():
     torch.manual_seed(3)
     graph = _graph()
     global_embedding = torch.randn(1, 1, 2)
@@ -184,7 +184,7 @@ def test_knn_mode_is_geoflare_at_zero_gates_and_trains_otherwise():
 
 
 @requires_pyg
-def test_knn_mode_checkpoint_segments_and_state_dict_round_trip():
+def test_model_checkpoint_segments_and_state_dict_round_trip():
     torch.manual_seed(4)
     graph = _graph(num_nodes=10)
     global_embedding = torch.randn(1, 1, 2)
@@ -680,7 +680,7 @@ def test_fused_path_uses_a_fraction_of_the_reference_memory():
 
 
 @requires_pyg
-def test_knn_mode_fused_flag_matches_reference_model():
+def test_fused_flag_matches_the_gather_reference_model():
     """The fused blocks (the default) reproduce the gather-based reference model."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(6)

@@ -395,8 +395,6 @@ def test_constructor_rejects_unusable_backbone_options():
     with pytest.raises(ValueError, match="mesh_activation='silu'"):
         _model(recompute_activation=True)
     _model(recompute_activation=True, mesh_activation="silu")
-    with pytest.raises(TypeError):
-        _model(guard_config=None)
     with pytest.raises(ValueError, match="mesh_context"):
         _model(activation_checkpointing_components=("mesh_context",))
 

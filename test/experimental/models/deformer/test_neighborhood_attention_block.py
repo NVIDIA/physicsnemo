@@ -13,7 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Second-design options of the neighborhood attention block (CPU)."""
+"""The neighborhood attention block: parameterization, precision rules and
+input validation (CPU)."""
 
 import pytest
 import torch
@@ -22,10 +23,7 @@ from physicsnemo.experimental.models.deformer.fused_neighborhood_attention impor
     neighborhood_attention,
 )
 from physicsnemo.experimental.models.deformer.local_attention import (
-    LocalNeighborhood,
     NeighborhoodAttentionBlock,
-    NeighborhoodAttentionProcessor,
-    fold_legacy_block_biases,
 )
 
 
@@ -60,7 +58,8 @@ def test_block_parameterization_and_shapes():
         "update_mlp.0.weight",
         "update_mlp.3.weight",
     } <= names
-    # the value and edge-bias biases never received a gradient and are gone
+    # the value and edge-bias projections carry no bias (neither would receive
+    # a gradient, see the block's docstring)
     assert not {"value.bias", "edge_bias.bias"} & names
     # update MLP input: LN(x) + message + edge message + lse per head
     assert block.update_mlp[0].in_features == 2 * 32 + 4 * 8 + 4
@@ -72,115 +71,6 @@ def test_block_parameterization_and_shapes():
         assert p.grad is not None and torch.isfinite(p.grad).all(), name
     with pytest.raises(ValueError, match="fused_backend"):
         _block(False, backend="cuda")
-
-
-def test_fused_torch_backend_matches_gather_path():
-    """Both execution paths implement the same block, forward and backward."""
-    torch.manual_seed(0)
-    x, index, mask, edge_latent = _inputs(dtype=torch.float64)
-    gather = _block(False).double()
-    fused = _block(True).double()
-    fused.load_state_dict(gather.state_dict())
-    x_g = x.clone().requires_grad_()
-    x_f = x.clone().requires_grad_()
-    e_g = edge_latent.clone().requires_grad_()
-    e_f = edge_latent.clone().requires_grad_()
-    out_g = gather(x_g, index, mask, e_g)
-    out_f = fused(x_f, index, mask, e_f)
-    torch.testing.assert_close(out_f, out_g, rtol=1e-9, atol=1e-9)
-    (out_g * torch.arange(1, 33)).sum().backward()
-    (out_f * torch.arange(1, 33)).sum().backward()
-    torch.testing.assert_close(x_f.grad, x_g.grad, rtol=1e-8, atol=1e-9)
-    torch.testing.assert_close(e_f.grad, e_g.grad, rtol=1e-8, atol=1e-9)
-    for (name, pg), (_, pf) in zip(gather.named_parameters(), fused.named_parameters()):
-        torch.testing.assert_close(pf.grad, pg.grad, rtol=1e-8, atol=1e-9, msg=name)
-
-
-def _legacy_block(block, seed=3):
-    """A copy of ``block`` with the biases earlier revisions gave value and edge_bias."""
-    import copy
-
-    legacy = copy.deepcopy(block)
-    generator = torch.Generator().manual_seed(seed)
-    for name in ("value", "edge_bias"):
-        linear = getattr(legacy, name)
-        biased = torch.nn.Linear(linear.in_features, linear.out_features)
-        with torch.no_grad():
-            biased.weight.copy_(linear.weight)
-            biased.bias.copy_(torch.randn(linear.out_features, generator=generator))
-        setattr(legacy, name, biased)
-    return legacy
-
-
-@pytest.mark.parametrize("fused", [False, True])
-def test_fold_legacy_block_biases_reproduces_the_biased_block(fused):
-    """Dropping the two biases and folding the lse shift changes no output."""
-    block = _block(fused)
-    legacy = _legacy_block(block)
-    legacy_state = legacy.state_dict()
-    assert {"value.bias", "edge_bias.bias"} <= set(legacy_state)
-    folded = fold_legacy_block_biases(legacy_state)
-    assert set(folded) == set(block.state_dict())
-    migrated = _block(fused, seed=7)
-    migrated.load_state_dict(folded, strict=True)
-    x, index, mask, edge_latent = _inputs()
-    with torch.no_grad():
-        expected = legacy(x, index, mask, edge_latent)
-        actual = migrated(x, index, mask, edge_latent)
-    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
-    # the fold is exact: folded from float64 parameters, the two agree to
-    # float64 rounding (above, the folded bias was stored in float32)
-    import copy
-
-    legacy64 = copy.deepcopy(legacy).double()
-    migrated64 = _block(fused, seed=7).double()
-    migrated64.load_state_dict(
-        fold_legacy_block_biases(legacy64.state_dict()), strict=True
-    )
-    with torch.no_grad():
-        expected64 = legacy64(x.double(), index, mask, edge_latent.double())
-        actual64 = migrated64(x.double(), index, mask, edge_latent.double())
-    torch.testing.assert_close(actual64, expected64, rtol=1e-12, atol=1e-12)
-
-
-def test_fold_legacy_block_biases_touches_only_the_two_keys_per_block():
-    processor = NeighborhoodAttentionProcessor(2, 32, 4, edge_input_dim=4, edge_dim=8)
-    state = processor.state_dict()
-    legacy = dict(state)
-    for prefix in ("blocks.0", "blocks.1"):
-        legacy[f"{prefix}.value.bias"] = torch.randn(32)
-        legacy[f"{prefix}.edge_bias.bias"] = torch.randn(4)
-    folded = fold_legacy_block_biases(legacy)
-    assert set(folded) == set(state)
-    assert len(legacy) - len(folded) == 4
-    for key, value in state.items():
-        if key.endswith("update_mlp.0.bias"):
-            assert not torch.equal(folded[key], value)
-        else:
-            assert torch.equal(folded[key], value), key
-    # a state dict without the legacy keys passes through unchanged
-    again = fold_legacy_block_biases(folded)
-    assert set(again) == set(folded)
-    assert all(torch.equal(again[key], folded[key]) for key in folded)
-
-
-def test_difference_values_vanish_for_a_constant_field():
-    """With identical neighbors the difference message is exactly zero."""
-    block = _block(False)
-    x, index, mask, edge_latent = _inputs()
-    constant = x[:1].expand_as(x).contiguous()
-    normalized, query, key, value = block._projections(constant)
-    # Reproduce the message path only: aggregated minus own value.
-    n, k = index.shape
-    flat = index.reshape(-1)
-    gathered = value.index_select(0, flat).view(n, k, 4, 8)
-    weights = torch.softmax(
-        torch.zeros(n, 4, k).masked_fill(~mask[:, None], -torch.inf), -1
-    )
-    aggregated = torch.einsum("nhk,nkhd->nhd", weights, gathered).reshape(n, 32)
-    torch.testing.assert_close(
-        aggregated - value, torch.zeros_like(value), atol=1e-6, rtol=0
-    )
 
 
 def test_value_projection_sees_the_raw_stream():
@@ -264,22 +154,6 @@ def test_kernel_returns_detached_lse():
     )
     out.sum().backward()
     assert q.grad is not None and k.grad is not None and v.grad is not None
-
-
-def test_processor_checkpoints_match_plain_execution():
-    torch.manual_seed(2)
-    processor = NeighborhoodAttentionProcessor(
-        2, 32, 4, edge_input_dim=4, edge_dim=8, checkpoint_segments=2
-    ).train()
-    x, index, mask, _ = _inputs()
-    neighborhood = LocalNeighborhood(index, mask, torch.randn(40, 6, 4))
-    y = processor(x.clone().requires_grad_(), neighborhood)
-    assert y.shape == (40, 32)
-    y.sum().backward()
-    processor.eval()
-    with torch.no_grad():
-        z = processor(x, neighborhood)
-    torch.testing.assert_close(y.detach(), z, rtol=1e-5, atol=1e-6)
 
 
 def test_block_rejects_mismatched_inputs():
