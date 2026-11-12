@@ -324,6 +324,7 @@ def _run_epoch(
     mode: Literal["train", "val"],
     output_type: IOType,
     target_config: dict[str, FieldType],
+    output_layout: dict[str, Any] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     scaler: GradScaler | None = None,
@@ -375,7 +376,6 @@ def _run_epoch(
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
-    output_layout = resolve_output_layout(cfg)
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
@@ -577,6 +577,7 @@ def train_epoch(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
+    output_layout: dict[str, Any] | None = None,
     train_writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
@@ -593,6 +594,7 @@ def train_epoch(
         mode="train",
         output_type=output_type,
         target_config=target_config,
+        output_layout=output_layout,
         optimizer=optimizer,
         scheduler=scheduler,
         scaler=scaler,
@@ -614,6 +616,7 @@ def val_epoch(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
+    output_layout: dict[str, Any] | None = None,
     val_writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
@@ -630,6 +633,7 @@ def val_epoch(
         mode="val",
         output_type=output_type,
         target_config=target_config,
+        output_layout=output_layout,
         writer=val_writer,
         log_jsonl=log_jsonl,
     )
@@ -955,6 +959,7 @@ def main(cfg: DictConfig) -> None:
         mask_nonfinite_targets=mask_nonfinite_targets,
     )
     output_type = require_output_type(cfg)
+    output_layout = resolve_output_layout(cfg)
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
     logger.info(
@@ -1002,6 +1007,7 @@ def main(cfg: DictConfig) -> None:
                 scaler,
                 output_type=output_type,
                 target_config=target_config,
+                output_layout=output_layout,
                 train_writer=train_writer,
                 log_jsonl=log_jsonl,
             )
@@ -1017,6 +1023,7 @@ def main(cfg: DictConfig) -> None:
                 dist_manager,
                 output_type=output_type,
                 target_config=target_config,
+                output_layout=output_layout,
                 val_writer=val_writer,
                 log_jsonl=log_jsonl,
             )

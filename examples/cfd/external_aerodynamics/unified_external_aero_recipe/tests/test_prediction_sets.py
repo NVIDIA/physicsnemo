@@ -35,6 +35,7 @@ from datasets import (
     ChainedNormalizer,
     apply_model_config,
     build_dataset,
+    check_target_sources,
     find_normalizer,
 )
 from forces import ForceContext, surface_force_fields
@@ -147,6 +148,15 @@ class TestTargetSources:
                 domain, TARGETS, {"volume.pressure": SOURCES["volume.pressure"]}
             )
 
+    @pytest.mark.parametrize(
+        "path", ["boundaries.vehicle.cell_data.pressure", ".point_data.p", "interior"]
+    )
+    def test_malformed_source_paths_raise(self, path):
+        """Only ``<mesh path>.point_data.<field>`` paths are accepted."""
+        check_target_sources(SOURCES)
+        with pytest.raises(ValueError, match="<mesh path>.point_data.<field>"):
+            check_target_sources({**SOURCES, "surface.pressure": path})
+
     @pytest.mark.parametrize("input_type", ["mesh", "tensors"])
     def test_collate_batches_unequal_sets(self, input_type):
         """Tensor mode adds a root batch dim of 1; leaves keep their set sizes."""
@@ -222,6 +232,10 @@ class TestOutputSets:
         torch.testing.assert_close(
             merged.points[N_VOLUME:], domain.boundaries["surface_queries"].points
         )
+        with pytest.raises(ValueError, match="no other keys"):
+            resolve_forward_kwargs(
+                {"x": {"concat_point_sets": MERGED, "select": ["pressure"]}}, domain
+            )
 
     OUTPUT_SETS = {
         "interior": {"volume.pressure": "pressure", "volume.velocity": "vec"},
@@ -290,6 +304,14 @@ class TestOutputSets:
             check_output_sets(swapped, SOURCES)
         with pytest.raises(ValueError, match="needs target_sources"):
             check_output_sets(self.OUTPUT_SETS, None)
+
+    def test_concat_order_must_match_output_sets(self):
+        """Every ``concat_point_sets`` list must merge the sets in key order."""
+        spec = {"prediction_points": {"concat_point_sets": MERGED}}
+        check_output_sets(self.OUTPUT_SETS, SOURCES, spec)
+        spec = {"prediction_points": {"concat_point_sets": MERGED[::-1]}}
+        with pytest.raises(ValueError, match="in that order"):
+            check_output_sets(self.OUTPUT_SETS, SOURCES, spec)
 
 
 class _AddSurfaceQueries(MeshTransform):
@@ -480,6 +502,21 @@ class TestExtraTask:
         model.extra_task.transforms[1].fields = {"surface_p": "velocity"}
         with pytest.raises(ValueError, match="velocity"):
             apply_model_config(OmegaConf.create(self.DATASET), model)
+
+    def test_shared_constants_need_inline_fields(self):
+        """A dataset normalizer reading a ``stats_file`` cannot share constants."""
+        dataset = OmegaConf.create(self.DATASET)
+        normalize = dataset.pipeline.transforms[0]
+        del normalize["fields"]
+        normalize.stats_file = "norm_stats.pt"
+        with pytest.raises(ValueError, match="inline, not a stats_file"):
+            apply_model_config(dataset, OmegaConf.create(self.MODEL))
+
+    def test_chained_normalizers_refuse_a_repeated_field(self):
+        """Two normalizers of one field would share one entry of the stats."""
+        stats = {"pressure": {"type": "scalar", "mean": 0.0, "std": 1.0}}
+        with pytest.raises(ValueError, match="normalized once"):
+            ChainedNormalizer([NormalizeMeshFields(fields=stats)] * 2)
 
 
 @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])

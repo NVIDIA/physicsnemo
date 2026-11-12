@@ -201,6 +201,8 @@ def resolve_spec(spec: Any, source: Any) -> Any:
 
 def _concat_point_sets(spec: dict[str, Any], source: Any) -> Mesh:
     """Resolve a ``{concat_point_sets: [...]}`` spec (see module docstring)."""
+    if set(spec) != {"concat_point_sets"}:
+        raise ValueError(f"concat_point_sets takes no other keys, got {spec!r}")
     meshes = [walk_path(source, path) for path in spec["concat_point_sets"]]
     leaves = [set(m.point_data.keys(True, True)) for m in meshes]
     shared = sorted(set.intersection(*leaves), key=str)

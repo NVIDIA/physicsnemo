@@ -133,6 +133,17 @@ def _apply_dataset_reader_overrides(
     return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
 
 
+def check_target_sources(target_sources: dict[str, str]) -> None:
+    """Raise unless every path has the form ``<mesh path>.point_data.<field>``."""
+    for name, path in target_sources.items():
+        mesh, sep, field = str(path).partition(".point_data.")
+        if not (mesh and sep and field):
+            raise ValueError(
+                f"target_sources[{name!r}] is {path!r}, not of the form "
+                f"'<mesh path>.point_data.<field>'"
+            )
+
+
 def _share_normalizer_constants(
     t_cfg: DictConfig, dataset_cfg: DictConfig
 ) -> DictConfig:
@@ -146,14 +157,20 @@ def _share_normalizer_constants(
     if not str(t_cfg.get("_target_", "")).endswith(".NormalizeMeshFields"):
         return t_cfg
     names = {f: n for f, n in (t_cfg.get("fields") or {}).items() if isinstance(n, str)}
-    own = next(
+    own_cfg = next(
         (
-            t.get("fields") or {}
+            t
             for t in dataset_cfg.pipeline.get("transforms") or []
             if str(t.get("_target_", "")).endswith(".NormalizeMeshFields")
         ),
         {},
     )
+    if names and own_cfg.get("stats_file"):
+        raise ValueError(
+            "extra_task shares normalization constants only with a dataset "
+            "NormalizeMeshFields that lists its fields inline, not a stats_file"
+        )
+    own = own_cfg.get("fields") or {}
     missing = sorted(set(names.values()) - set(own))
     if missing:
         raise ValueError(
@@ -237,6 +254,13 @@ class ChainedNormalizer:
     """
 
     def __init__(self, normalizers: list[NormalizeMeshFields]) -> None:
+        names = [k for n in normalizers for k in n.stats]
+        repeated = sorted({k for k in names if names.count(k) > 1})
+        if repeated:
+            raise ValueError(
+                f"Several NormalizeMeshFields normalize {repeated!r}; each field "
+                f"may be normalized once"
+            )
         self.normalizers = normalizers
 
     def inverse_td(self, td: Any) -> Any:
@@ -1031,6 +1055,7 @@ def build_dataloaders(
         ### then every target gets a path, defaulting to the interior.
         ds_sources = resolve_dict(ds_yaml, "target_sources")
         if ds_sources is not None:
+            check_target_sources(ds_sources)
             ds_sources = {
                 n: ds_sources.get(n, f"interior.point_data.{n}") for n in ds_targets
             }
@@ -1167,7 +1192,9 @@ def build_dataloaders(
     )
     output_sets = resolve_dict(cfg, "output_sets")
     if output_sets:
-        check_output_sets(output_sets, first_target_sources)
+        check_output_sets(
+            output_sets, first_target_sources, resolve_dict(cfg, "forward_kwargs")
+        )
     OmegaConf.update(cfg, "out_dim", out_dim_total, force_add=True)
 
     normalizer = find_normalizer(train_datasets)

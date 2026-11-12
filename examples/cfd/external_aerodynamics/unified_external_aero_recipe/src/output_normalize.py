@@ -275,13 +275,22 @@ def _split_by_groups(
 
 
 def check_output_sets(
-    output_sets: dict[str, dict[str, str]], target_sources: dict[str, str] | None
+    output_sets: dict[str, dict[str, str]],
+    target_sources: dict[str, str] | None,
+    forward_kwargs: dict[str, Any] | None = None,
 ) -> None:
     """Raise unless each ``output_sets`` key is the set its targets come from.
 
     The split follows the key order, so a key must name its targets' source
-    mesh; several sets need ``target_sources``.
+    mesh, and every ``concat_point_sets`` list in *forward_kwargs* must merge
+    the sets in that order; several sets need ``target_sources``.
     """
+    for sets in _concat_point_set_lists(forward_kwargs):
+        if list(sets) != list(output_sets):
+            raise ValueError(
+                f"concat_point_sets {sets!r} must list the output_sets keys "
+                f"{list(output_sets)!r}, in that order"
+            )
     if target_sources is None:
         if len(output_sets) > 1:
             raise ValueError("output_sets with several sets needs target_sources")
@@ -294,6 +303,16 @@ def check_output_sets(
                 f"output_sets[{key!r}] lists targets {wrong!r} whose "
                 f"target_sources do not start with {prefix!r}"
             )
+
+
+def _concat_point_set_lists(spec: Any) -> list[list[str]]:
+    """Every ``concat_point_sets`` list in a ``forward_kwargs`` spec."""
+    if isinstance(spec, dict):
+        found = [spec["concat_point_sets"]] if "concat_point_sets" in spec else []
+        return found + [s for v in spec.values() for s in _concat_point_set_lists(v)]
+    if isinstance(spec, list):
+        return [s for v in spec for s in _concat_point_set_lists(v)]
+    return []
 
 
 def _split_output_sets(
