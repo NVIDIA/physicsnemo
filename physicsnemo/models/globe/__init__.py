@@ -14,16 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.models.globe.field_kernel import (
-    BarnesHutKernel,
-    Kernel,
-    MultiscaleKernel,
-)
-from physicsnemo.models.globe.model import GLOBE
+r"""GLOBE: Green's-function-Like Operator for Boundary Element PDEs.
 
-__all__ = [
-    "GLOBE",
-    "Kernel",
-    "BarnesHutKernel",
-    "MultiscaleKernel",
-]
+This module provides the GLOBE model, which predicts fields at arbitrary query
+points from boundary meshes as a sum of learned kernels evaluated from boundary
+faces, accelerated with a Barnes-Hut approximation.
+"""
+
+from .model import GLOBE
+
+__all__ = ["GLOBE"]

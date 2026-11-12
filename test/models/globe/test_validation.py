@@ -31,9 +31,9 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
-from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh import FieldSchema, Mesh, RankSpec
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.models.globe import GLOBE
 
 ### Test fixtures and helpers
 # `lumpy_sphere(subdivisions=1)` -> 80 triangle faces. Validation runs in
