@@ -10,11 +10,12 @@ combination of learnable kernel functions evaluated from boundary source faces
 to arbitrary target points.
 
 Without retraining, the model is translation-, rotation-, and
-parity-equivariant, invariant to the units of the problem through its
-``reference_lengths`` argument, and invariant to uniform refinement of the
-boundary mesh in the fine-mesh limit. Its kernels bake in the prior that the
-influence of a small boundary feature falls off as :math:`1/r^2` in 3D and
-:math:`1/r` in 2D.
+parity-equivariant, and invariant to uniform refinement of the boundary mesh in
+the fine-mesh limit. Its predictions do not change with the units of the
+problem when ``reference_lengths`` and ``reference_area`` are given in the new
+units; ``reference_area`` is set at construction and saved in checkpoints. Its
+kernels bake in the prior that the influence of a small boundary feature falls
+off as :math:`1/r^2` in 3D and :math:`1/r` in 2D.
 
 For more information on GLOBE, refer to the `GLOBE paper
 <https://arxiv.org/abs/2511.15856>`__.

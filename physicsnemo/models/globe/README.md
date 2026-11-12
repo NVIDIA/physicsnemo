@@ -42,7 +42,8 @@ the model*, you can do the following:
   symmetry.
 - **Units-invariant**: If you pose the same *physical* problem in a different
   scale (e.g., using different units), the predictions will be the same if you
-  use the `reference_lengths` argument appropriately.
+  give `reference_lengths` and `reference_area` in the new units.
+  `reference_area` is set at construction and saved in checkpoints.
 
 In addition:
 
