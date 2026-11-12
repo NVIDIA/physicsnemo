@@ -332,6 +332,8 @@ class GLOBE(Module):
                     f"In `boundary_source_schemas`, got {bc_name=!r};\n"
                     "BC names must not contain `.` for TensorDict compatibility."
                 )
+        if n_spatial_dims not in (2, 3):
+            raise ValueError(f"n_spatial_dims must be 2 or 3, got {n_spatial_dims=!r}")
         if smoothing_radius <= 0:
             raise ValueError(
                 f"smoothing_radius must be positive, got {smoothing_radius=!r}"
@@ -377,6 +379,10 @@ class GLOBE(Module):
         self.tree_build_device: torch.device | None = (
             torch.device(tree_build_device) if tree_build_device is not None else None
         )
+        ### ``Module`` recorded the argument as given; record a device as a
+        ### string, so that ``save`` can write the arguments as JSON.
+        if self.tree_build_device is not None:
+            self._args["__args__"]["tree_build_device"] = str(self.tree_build_device)
 
         ### Build the intermediate output schema for communication
         # hyperlayers. Only the final hyperlayer emits output_schema.
@@ -989,6 +995,16 @@ class GLOBE(Module):
         Mesh[0, "n"]
             A point-cloud Mesh (0-dimensional manifold) with predicted fields.
         """
+        if not (
+            prediction_chunk_size is None
+            or prediction_chunk_size == "auto"
+            or (isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0)
+        ):
+            raise ValueError(
+                f"Expected prediction_chunk_size to be a positive integer or 'auto' or None, "
+                f"got {prediction_chunk_size=!r}."
+            )
+
         device = prediction_points.device
 
         if global_data is None:
@@ -1134,14 +1150,6 @@ class GLOBE(Module):
             prediction_chunk_size = sum(m.n_cells for m in boundary_meshes.values())
         elif prediction_chunk_size is None:
             prediction_chunk_size = n_points
-        else:
-            if not (
-                isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0
-            ):
-                raise ValueError(
-                    f"Expected prediction_chunk_size to be a positive integer or 'auto' or None, "
-                    f"got {prediction_chunk_size=!r}."
-                )
 
         chunk_results: list[torch.Tensor] = []
         for start in range(0, n_points, prediction_chunk_size):
