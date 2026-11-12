@@ -205,8 +205,7 @@ def redimensionalize(
     using freestream scales read from the sample's ``global_data``). Each
     stage is skipped when the corresponding transform was absent from the
     dataset, so a fully un-conditioned dataset returns ``td`` unchanged.
-    With *target_sources*, both see each target under its source field name
-    (see :func:`utils.by_source_fields`).
+    *target_sources* keys each target by its source field (:func:`utils.by_source_fields`).
     """
 
     def invert(out: TensorDict) -> TensorDict:
@@ -650,8 +649,7 @@ def main(cfg: DictConfig) -> None:
         ### whole TensorDict host-side once so each .item() is a free CPU index.
         metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
         sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
-        ### With masked targets, a field with no finite target in a sample
-        ### has NaN metrics, which the means skip.
+        ### Masked targets: skip a field's NaN metrics (no finite target).
         for k, v in sample_metrics.items():
             if not (metric_calculator.mask_nonfinite_targets and math.isnan(v)):
                 totals[k] += v

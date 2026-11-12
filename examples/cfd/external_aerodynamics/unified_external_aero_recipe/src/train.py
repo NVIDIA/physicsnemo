@@ -163,9 +163,8 @@ def _reduce_and_average(
             the step count because the recipe runs ``batch_size == 1``).
         device: The rank's collective/compute device (``dist_manager.device``),
             where the ``all_reduce`` runs.
-        metric_counts: Optional rank-local count of the samples behind each
-            leaf of ``metrics_td`` (see :func:`_skip_nan`); each metric mean
-            is then over those samples, and NaN when there are none.
+        metric_counts: Optional per-leaf count of the samples behind
+            ``metrics_td`` (see :func:`_skip_nan`), to average over instead.
 
     Returns:
         A ``(avg_loss, avg_losses, avg_metrics)`` tuple of Python floats:
@@ -215,11 +214,7 @@ def _reduce_and_average(
 
 
 def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
-    """Split *metrics* into NaN-free values and per-leaf counts of non-NaN ones.
-
-    Their sums give means that skip the NaN metrics of a field with no finite
-    target (see ``mask_nonfinite_targets``).
-    """
+    """Split *metrics* into NaN-free values and per-leaf counts of non-NaN ones."""
     return (
         metrics.apply(lambda v: torch.where(v.isnan(), 0.0, v)),
         metrics.apply(lambda v: (~v.isnan()).float()),
@@ -345,7 +340,6 @@ def _run_epoch(
     mode: Literal["train", "val"],
     output_type: IOType,
     target_config: dict[str, FieldType],
-    output_layout: dict[str, Any] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     scaler: GradScaler | None = None,
@@ -398,6 +392,7 @@ def _run_epoch(
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
+    output_layout = resolve_output_layout(cfg)
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
@@ -433,8 +428,7 @@ def _run_epoch(
             ### (the joint ``is None`` check exists to satisfy the type
             ### checker, which can't see the invariant from per-variable
             ### narrowing).
-            ### With masked targets, a field with no finite target in a sample
-            ### has NaN metrics, which the means below skip.
+            ### Masked targets: skip a field's NaN metrics (no finite target).
             counts = None
             if metric_calculator.mask_nonfinite_targets:
                 metrics, counts = _skip_nan(metrics)
@@ -613,7 +607,6 @@ def train_epoch(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
-    output_layout: dict[str, Any] | None = None,
     train_writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
@@ -630,7 +623,6 @@ def train_epoch(
         mode="train",
         output_type=output_type,
         target_config=target_config,
-        output_layout=output_layout,
         optimizer=optimizer,
         scheduler=scheduler,
         scaler=scaler,
@@ -652,7 +644,6 @@ def val_epoch(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
-    output_layout: dict[str, Any] | None = None,
     val_writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
@@ -669,7 +660,6 @@ def val_epoch(
         mode="val",
         output_type=output_type,
         target_config=target_config,
-        output_layout=output_layout,
         writer=val_writer,
         log_jsonl=log_jsonl,
     )
@@ -995,7 +985,7 @@ def main(cfg: DictConfig) -> None:
         mask_nonfinite_targets=mask_nonfinite_targets,
     )
     output_type = require_output_type(cfg)
-    output_layout = resolve_output_layout(cfg)
+    resolve_output_layout(cfg)  # fail fast on a bad layout, before epoch 1
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
     logger.info(
@@ -1043,7 +1033,6 @@ def main(cfg: DictConfig) -> None:
                 scaler,
                 output_type=output_type,
                 target_config=target_config,
-                output_layout=output_layout,
                 train_writer=train_writer,
                 log_jsonl=log_jsonl,
             )
@@ -1059,7 +1048,6 @@ def main(cfg: DictConfig) -> None:
                 dist_manager,
                 output_type=output_type,
                 target_config=target_config,
-                output_layout=output_layout,
                 val_writer=val_writer,
                 log_jsonl=log_jsonl,
             )

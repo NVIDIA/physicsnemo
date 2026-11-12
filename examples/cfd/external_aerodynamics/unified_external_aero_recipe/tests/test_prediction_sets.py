@@ -51,7 +51,7 @@ from output_normalize import (
     resolve_output_layout,
 )
 from tensordict import TensorDict
-from utils import resolve_field_weights
+from utils import by_source_fields, resolve_field_weights
 
 from physicsnemo.datapipes.transforms.mesh import MeshTransform, NormalizeMeshFields
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -629,6 +629,14 @@ class TestForcesAndExport:
         domain.boundaries["surface_queries"] = shifted
         with pytest.warns(UserWarning, match="aligned"):
             assert ctx.coefficients(domain, pts, pts, None, SOURCES) is None
+
+    def test_two_targets_of_one_source_field_raise(self):
+        """Two targets on one mesh may not share a source field."""
+        sources = {**SOURCES, "surface.wss": SOURCES["surface.pressure"]}
+        with pytest.raises(ValueError):
+            by_source_fields(
+                extract_targets(_domain(), TARGETS, sources), sources, lambda t: t
+            )
 
     def test_redimensionalize_under_source_field_names(self):
         """Targets named apart from their fields are inverted with those fields' rules."""

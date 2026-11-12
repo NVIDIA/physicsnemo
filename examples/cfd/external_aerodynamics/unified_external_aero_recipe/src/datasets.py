@@ -39,6 +39,7 @@ import json
 import logging
 import math
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -254,8 +255,8 @@ class ChainedNormalizer:
     """
 
     def __init__(self, normalizers: list[NormalizeMeshFields]) -> None:
-        names = [k for n in normalizers for k in n.stats]
-        repeated = sorted({k for k in names if names.count(k) > 1})
+        counts = Counter(k for n in normalizers for k in n.stats)
+        repeated = sorted(k for k, c in counts.items() if c > 1)
         if repeated:
             raise ValueError(
                 f"Several NormalizeMeshFields normalize {repeated!r}; each field "

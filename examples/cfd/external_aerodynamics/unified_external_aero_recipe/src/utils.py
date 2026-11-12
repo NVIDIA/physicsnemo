@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from torch.amp import autocast
 
-from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.datapipes.keys import as_nested_key, rename_keys
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer, Muon
@@ -245,13 +245,8 @@ def by_source_fields(
     target_sources: dict[str, str] | None,
     fn: Callable[[TensorDict], TensorDict],
 ) -> TensorDict:
-    """Apply *fn* to the targets in *td* under their source field names.
-
-    Normalizer and non-dim rules are keyed by the stored field name
-    (``pressure``), the targets by their own (``surface.pressure``). So
-    with *target_sources*, each source mesh's targets are renamed to their
-    field names, passed through *fn* together, and renamed back. A target
-    with no entry keeps its own name.
+    """Apply *fn* to each source mesh's targets renamed to their source field
+    names (the names normalizer and non-dim rules use), then rename them back.
     """
     if target_sources is None:
         return fn(td)
@@ -262,12 +257,8 @@ def by_source_fields(
         groups.setdefault(mesh, {})[key] = as_nested_key(leaf) if leaf else key
     out = td.empty()
     for group in groups.values():
-        part = td.empty()
-        for key, leaf in group.items():
-            part.set(leaf, td.get(key))
-        part = fn(part)
-        for key, leaf in group.items():
-            out.set(key, part.get(leaf))
+        part = fn(rename_keys(td.select(*group), group, strict=True))
+        out.update(rename_keys(part, {v: k for k, v in group.items()}, strict=True))
     return out
 
 
