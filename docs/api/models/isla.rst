@@ -77,6 +77,12 @@ tokens from their cells inside the forward pass, and each prediction depends on
 its own point and the boundary alone, so a large request can be answered in
 chunks.
 
+The unified external-aerodynamics recipe
+(``examples/cfd/external_aerodynamics/unified_external_aero_recipe``) trains
+and evaluates ISLA on DrivAerML with the configurations ``isla_surface`` (a
+surface task) and ``isla_volume`` (an interior task). Its README documents
+the mapping from the dataset to the model's inputs.
+
 .. autoclass:: physicsnemo.experimental.models.isla.model.ISLA
     :show-inheritance:
     :members:

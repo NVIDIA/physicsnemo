@@ -17,6 +17,7 @@ Here, you're able to train (and run inference with) the following models:
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
+- ISLA (Invariant Slice Attention, experimental; see [ISLA](#isla))
 
 We currently support the following datasets:
 - DrivaerML
@@ -304,7 +305,7 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume}`, `domino_{surface,volume}` |
 | `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
 
 Pick one of each on the CLI:
@@ -551,8 +552,9 @@ unified_external_aero_recipe/
 ```yaml
 defaults:
   - base
-  - model: geotransolver_volume
+  - scheduler@training.scheduler: step_lr   # conf/scheduler/step_lr.yaml
   - _self_
+  - model: geotransolver_volume
 
 # Dataset selection (a string naming a file in datasets/, no `.yaml`)
 dataset: drivaer_ml_volume
@@ -577,11 +579,16 @@ training:
   num_epochs: 500
   optimizer:
     lr: 3.0e-3
-  scheduler:
-    _target_: torch.optim.lr_scheduler.StepLR
-    step_size: 100
-    gamma: 0.1
 ```
+
+The schedule is the `scheduler` config group in `conf/scheduler/`.
+`step_lr` (the default) is StepLR with `step_size: 100` and `gamma: 0.1`.
+`warmup_cosine` is a warmup to the peak learning rate over the first 5 of 500
+epochs, then a cosine decay to 1e-6 (at the ISLA learning rate of 3.75e-4).
+Pick one on the CLI (`scheduler@training.scheduler=warmup_cosine`) or in a
+model template's defaults list
+(`- override /scheduler@training.scheduler: warmup_cosine`). Its keys
+still take CLI overrides, such as `training.scheduler.gamma=0.5`.
 
 ### How the pieces compose
 
@@ -614,7 +621,10 @@ Notes on the composition:
   they are a property of the model class's forward signature, not an
   independent dimension.
 - Model templates may declare `dataset_reader_overrides`; `build_dataloaders`
-  merges those keys into each selected dataset's reader config. Volume datasets
+  merges those keys into each selected dataset's reader config. Their
+  `dataset_overrides` merge into the dataset config's top-level keys, for
+  training and inference (for example a force convention that an appended
+  transform changes). Volume datasets
   preserve in-file boundaries by default; point-based volume templates opt into
   dropping them, while GLOBE keeps the lossless default it requires.
 - The model template's `out_dim: ${out_dim}` interpolation resolves
@@ -694,6 +704,10 @@ python src/train.py model=geotransolver_surface dataset=highlift_surface \
 python src/train.py model=geotransolver_volume_highlift dataset=highlift_volume \
     compile=false training.num_epochs=200 sampling_resolution=100000
 
+# ISLA (mesh-native, experimental; see the ISLA section below)
+python src/train.py model=isla_surface dataset=drivaer_ml_surface
+python src/train.py model=isla_volume dataset=drivaer_ml_volume
+
 # DoMINO (DRAFT, doesn't run end-to-end)
 python src/train.py model=domino_surface dataset=drivaer_ml_surface \
     compile=false training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
@@ -711,6 +725,33 @@ Surface SMART uses the sampled query cells as geometry, while volume SMART retai
 the full vehicle surface and uses the standard STL-based SDF features. Each model
 samples up to 16,384 geometry points per encoder layer and decodes inference queries
 in chunks of 8,192.
+
+### ISLA
+
+ISLA is mesh-native, on GLOBE's contract (`input_type: mesh`). It reads
+the whole boundary of the flow domain: the vehicle and the tunnel's `inlet`,
+`outlet`, `slip` and `no_slip` boundaries that each DrivAerML case file
+stores. Both configs adapt the dataset's samples from the model config, so
+the dataset files and the other models' samples stay as they are.
+
+- `isla_surface` predicts pressure and wall shear stress at the vehicle's
+  cells. Its `dataset_reader_overrides: {domain_boundaries: [...]}` makes
+  the reader load the tunnel boundaries whole beside the subsampled vehicle.
+  The dataset's transforms move them with the vehicle, and its terminal
+  `SurfaceMeshToDomainMesh` keeps them.
+- `isla_volume` predicts velocity, pressure and `nut` at the interior points.
+  It reads every boundary whole (`subsample_n_cells: null`) and draws its
+  own boundary tokens. It computes its own signed distances, so it ignores
+  the dataset's `sdf` inputs.
+
+ISLA needs every boundary's normals to point into the fluid. The curated
+files wind the vehicle with its normals into the body, so both configs
+append `FlipBoundaryOrientation` for the vehicle. The surface config then
+declares `dataset_overrides: {surface_normals_point: outward}`, so the
+force coefficients keep their sign. Both use the `warmup_cosine` schedule,
+a learning rate of 3.75e-4, and `compile: false` with the model's own
+per-block compile (`model.compile_blocks: true`). Its fast paths on CUDA
+need Triton.
 
 ### Dataset config anatomy
 
