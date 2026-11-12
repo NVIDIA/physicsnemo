@@ -38,9 +38,10 @@ from tensordict import TensorDict
 
 from physicsnemo.core import Module
 from physicsnemo.core.warnings import LegacyFeatureWarning
-from physicsnemo.mesh import FieldSchema, Mesh
+from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 from physicsnemo.models.globe import GLOBE
+from test.models.globe._helpers import assert_globe_attributes
 
 DATA_DIR = Path(__file__).parent / "data"
 SEED = 42
@@ -270,12 +271,7 @@ def test_globe_from_checkpoint(device: str) -> None:
     model = Module.from_checkpoint(CHECKPOINT_PATH).to(device).eval()
 
     assert type(model) is GLOBE
-    for name, value in CHECKPOINT_KWARGS.items():
-        if name.endswith("_schema"):
-            value = FieldSchema.parse(value)
-        elif name == "boundary_source_schemas":
-            value = {bc: FieldSchema.parse(spec) for bc, spec in value.items()}
-        assert getattr(model, name) == value, name
+    assert_globe_attributes(model, CHECKPOINT_KWARGS)
 
     with torch.no_grad():
         output = model(**_make_checkpoint_inputs(torch.device(device)))
