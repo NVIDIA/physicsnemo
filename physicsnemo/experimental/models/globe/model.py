@@ -69,10 +69,12 @@ def _column_runs(layout: PackLayout) -> tuple[tuple[int, int, int], ...]:
             runs.append((offset, stop, n_dims))
     return tuple(runs)
 
+
 @dataclass
 class MetaData(ModelMetaData):
     jit: bool = False  # Refers to torch.compile compatibility - this is compatible.
-    cuda_graphs: bool = False  # Computational graph changes depending on inputs due to tree traversals
+    # The computational graph changes with the inputs, due to tree traversals.
+    cuda_graphs: bool = False
     amp: bool = True
     torch_fx: bool = False
     onnx: bool = False
@@ -160,6 +162,19 @@ class GLOBE(Module):
         Maximum number of source points per leaf node in the cluster tree.
         Larger values produce shallower trees (fewer traversal iterations) at
         the cost of more exact near-field interactions per leaf hit.
+    network_type : {"pade", "mlp"}, optional, default="pade"
+        Type of neural network in each kernel: a Pade rational network or an
+        MLP (see :class:`~physicsnemo.experimental.models.globe.field_kernel.Kernel`).
+    self_regularization_beta : float or None, optional, default=None
+        If not ``None``, bounds the output of each kernel's Pade network (see
+        :class:`~physicsnemo.nn.Pade`). Must be positive. Has no effect with
+        ``network_type="mlp"``.
+    latent_compression_scale : float or None, optional, default=None
+        If not ``None``, the outputs of each communication hyperlayer are
+        compressed logarithmically beyond this scale :math:`C`, as
+        :math:`C \operatorname{arcsinh}(x / C)` of each scalar and of each
+        vector's magnitude, which keeps the latents from growing from layer
+        to layer. Must be positive. ``None`` disables compression.
     expand_far_targets : bool, optional, default=True
         If ``True``, far-field target nodes are expanded to individual points,
         converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
@@ -196,6 +211,10 @@ class GLOBE(Module):
     global_data : TensorDict or None, optional, default=None
         Nondimensional conditioning features. Leaf keys and ranks must match
         ``global_schema``. Passed through to the output Mesh.
+    prediction_chunk_size : int or "auto" or None, optional, default="auto"
+        Maximum number of prediction points evaluated in one pass through the
+        final hyperlayer. ``"auto"`` uses the total number of boundary faces;
+        ``None`` evaluates all points in one pass.
 
     Outputs
     -------
@@ -232,18 +251,26 @@ class GLOBE(Module):
 
     Examples
     --------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.procedural import lumpy_sphere
     >>> model = GLOBE(
     ...     n_spatial_dims=3,
     ...     output_schema={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
     ...     boundary_source_schemas={"no_slip": {}, "freestream": {}},
     ...     reference_length_names=["delta_FS", "chord"],
     ...     reference_area=1.0,
+    ...     n_communication_hyperlayers=1,
+    ...     hidden_layer_sizes=[16],
     ... )
+    >>> wing_mesh = lumpy_sphere.load(subdivisions=1)  # 80 triangles
+    >>> freestream_mesh = lumpy_sphere.load(radius=10.0, subdivisions=0)
     >>> result = model(
     ...     prediction_points=torch.randn(100, 3),
     ...     boundary_meshes={"no_slip": wing_mesh, "freestream": freestream_mesh},
     ...     reference_lengths={"delta_FS": torch.tensor(0.01), "chord": torch.tensor(1.0)},
     ... )
+    >>> result.point_data["pressure"].shape, result.point_data["velocity"].shape
+    (torch.Size([100]), torch.Size([100, 3]))
     """
 
     reference_area: torch.Tensor
@@ -305,19 +332,18 @@ class GLOBE(Module):
                     f"In `boundary_source_schemas`, got {bc_name=!r};\n"
                     "BC names must not contain `.` for TensorDict compatibility."
                 )
+        if n_spatial_dims not in (2, 3):
+            raise ValueError(f"n_spatial_dims must be 2 or 3, got {n_spatial_dims=!r}")
         if smoothing_radius <= 0:
             raise ValueError(
                 f"smoothing_radius must be positive, got {smoothing_radius=!r}"
             )
         if theta < 0:
             raise ValueError(
-                f"theta must be non-negative (0 means exact summation), "
-                f"got {theta=!r}"
+                f"theta must be non-negative (0 means exact summation), got {theta=!r}"
             )
         if leaf_size < 1:
-            raise ValueError(
-                f"leaf_size must be at least 1, got {leaf_size=!r}"
-            )
+            raise ValueError(f"leaf_size must be at least 1, got {leaf_size=!r}")
         if reference_area <= 0:
             raise ValueError(
                 f"reference_area must be positive, got {reference_area=!r}"
@@ -353,6 +379,10 @@ class GLOBE(Module):
         self.tree_build_device: torch.device | None = (
             torch.device(tree_build_device) if tree_build_device is not None else None
         )
+        ### ``Module`` recorded the argument as given; record a device as a
+        ### string, so that ``save`` can write the arguments as JSON.
+        if self.tree_build_device is not None:
+            self._args["__args__"]["tree_build_device"] = str(self.tree_build_device)
 
         ### Build the intermediate output schema for communication
         # hyperlayers. Only the final hyperlayer emits output_schema.
@@ -373,9 +403,7 @@ class GLOBE(Module):
                     bc_type: MultiscaleKernel(
                         n_spatial_dims=n_spatial_dims,
                         output_schema=(
-                            output_schema
-                            if is_last_hyperlayer
-                            else intermediate_schema
+                            output_schema if is_last_hyperlayer else intermediate_schema
                         ),
                         reference_length_names=reference_length_names,
                         source_schema=self._build_source_schema(
@@ -469,7 +497,7 @@ class GLOBE(Module):
     @torch.compiler.disable
     def _build_trees_and_plans(
         self,
-        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
     ) -> tuple[
         dict[str, ClusterTree],
         dict[str, torch.Tensor],
@@ -538,13 +566,13 @@ class GLOBE(Module):
             centroids_built: dict[str, torch.Tensor] = {}
             for bc_type, mesh in zip(bc_types, meshes):
                 centroids = mesh.cell_centroids.to(build_device)
-                areas = (cell_measures(mesh) / self.reference_area).to(
-                    build_device
-                )
+                areas = (cell_measures(mesh) / self.reference_area).to(build_device)
                 centroids_built[bc_type] = centroids
                 bc_areas_built[bc_type] = areas
                 cluster_trees_built[bc_type] = ClusterTree.from_points(
-                    centroids, leaf_size=self.leaf_size, areas=areas,
+                    centroids,
+                    leaf_size=self.leaf_size,
+                    areas=areas,
                 )
 
             ### Pass 2: one dual traversal per source BC, against a forest
@@ -554,15 +582,15 @@ class GLOBE(Module):
             if len(bc_types) == 1:  # the tree itself: self-interaction
                 forest = cluster_trees_built[bc_types[0]]
             else:
-                forest = ClusterTree.merge(
-                    [cluster_trees_built[bc] for bc in bc_types]
-                )
+                forest = ClusterTree.merge([cluster_trees_built[bc] for bc in bc_types])
             comm_plans_built: dict[str, DualInteractionPlan] = {}
             comm_centroids_built: dict[str, torch.Tensor | None] = {}
             for src_bc, src_mesh in zip(bc_types, meshes):
                 plan = cluster_trees_built[src_bc].find_dual_interaction_pairs(
-                    target_tree=forest, theta=self.theta,
-                    expand_far_targets=self.expand_far_targets, validate=False,
+                    target_tree=forest,
+                    theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
+                    validate=False,
                 )
                 comm_plans_built[src_bc] = plan
                 logger.logger.debug(
@@ -570,9 +598,15 @@ class GLOBE(Module):
                     "(%.2f%% near-field, %d src x %d dst faces, "
                     "theta=%.2f, leaf_size=%d)",
                     src_bc,
-                    plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
+                    plan.n_near,
+                    plan.n_nf,
+                    plan.n_fn,
+                    plan.n_far_nodes,
                     100.0 * plan.n_near / max(src_mesh.n_cells * n_targets, 1),
-                    src_mesh.n_cells, n_targets, self.theta, self.leaf_size,
+                    src_mesh.n_cells,
+                    n_targets,
+                    self.theta,
+                    self.leaf_size,
                 )
                 ### Target-node centroids, only for plans that use them, in
                 ### the forest's node order, one block per destination tree
@@ -647,7 +681,8 @@ class GLOBE(Module):
         n_pred = prediction_points.shape[0]
         with torch.no_grad():
             pred_target_tree_built = ClusterTree.from_points(
-                prediction_points.to(build_device), leaf_size=self.leaf_size,
+                prediction_points.to(build_device),
+                leaf_size=self.leaf_size,
             )
             ### Single pass: each iteration is independent - transfer the
             ### source tree to ``build_device``, run the dual traversal
@@ -655,15 +690,23 @@ class GLOBE(Module):
             pred_plans_built: dict[str, DualInteractionPlan] = {}
             for bc_type, tree in cluster_trees.items():
                 plan = tree.to(build_device).find_dual_interaction_pairs(  # ty: ignore[unresolved-attribute]
-                    target_tree=pred_target_tree_built, theta=self.theta,
-                    expand_far_targets=self.expand_far_targets, validate=False,
+                    target_tree=pred_target_tree_built,
+                    theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
+                    validate=False,
                 )
                 pred_plans_built[bc_type] = plan
                 logger.logger.debug(
                     "pred plan [%s]: %d near + %d nf + %d fn + %d far_node "
                     "(%d sources x %d targets, theta=%.2f)",
-                    bc_type, plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
-                    tree.n_sources, n_pred, self.theta,
+                    bc_type,
+                    plan.n_near,
+                    plan.n_nf,
+                    plan.n_fn,
+                    plan.n_far_nodes,
+                    tree.n_sources,
+                    n_pred,
+                    self.theta,
                 )
 
         pred_target_tree = pred_target_tree_built.to(original_device)  # ty: ignore[unresolved-attribute]
@@ -677,7 +720,7 @@ class GLOBE(Module):
         self,
         layer_idx: int,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        source_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
@@ -817,14 +860,14 @@ class GLOBE(Module):
     def _evaluate_communication_hyperlayer(
         self,
         layer_idx: int,
-        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
         comm_plans: dict[str, DualInteractionPlan],
         comm_target_centroids: dict[str, torch.Tensor | None],
         source_areas: dict[str, torch.Tensor],
-    ) -> dict[str, Mesh["n-1", "n"]]:  # ty: ignore[unresolved-reference]
+    ) -> dict[str, Mesh["n-1", "n"]]:  # noqa: F821  # ty: ignore[unresolved-reference]
         r"""Run one boundary-to-boundary communication step.
 
         Evaluates :meth:`_evaluate_hyperlayer` once, at the cell centroids
@@ -882,7 +925,7 @@ class GLOBE(Module):
         if self.latent_compression_scale is not None:
             packed = self._compress_latents(packed)
 
-        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # ty: ignore[unresolved-reference]
+        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # noqa: F821  # ty: ignore[unresolved-reference]
         rows = torch.split(packed, [mesh.n_cells for mesh in meshes])
         for bc_type, mesh, mesh_rows in zip(bc_types, meshes, rows):
             new_cell_data = TensorDict(
@@ -902,11 +945,11 @@ class GLOBE(Module):
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
-        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, torch.Tensor],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         prediction_chunk_size: int | Literal["auto"] | None = "auto",
-    ) -> Mesh[0, "n"]:  # ty: ignore[unresolved-reference]
+    ) -> Mesh[0, "n"]:  # noqa: F821  # ty: ignore[unresolved-reference]
         r"""Evaluate GLOBE model to predict fields at target points.
 
         Runs the full GLOBE forward pass in three phases:
@@ -952,6 +995,16 @@ class GLOBE(Module):
         Mesh[0, "n"]
             A point-cloud Mesh (0-dimensional manifold) with predicted fields.
         """
+        if not (
+            prediction_chunk_size is None
+            or prediction_chunk_size == "auto"
+            or (isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0)
+        ):
+            raise ValueError(
+                f"Expected prediction_chunk_size to be a positive integer or 'auto' or None, "
+                f"got {prediction_chunk_size=!r}."
+            )
+
         device = prediction_points.device
 
         if global_data is None:
@@ -1094,17 +1147,9 @@ class GLOBE(Module):
         # hyperlayer.  Results are concatenated at the end.
         n_points = prediction_points.shape[0]
         if prediction_chunk_size == "auto":
-            prediction_chunk_size = sum(
-                m.n_cells for m in boundary_meshes.values()
-            )
+            prediction_chunk_size = sum(m.n_cells for m in boundary_meshes.values())
         elif prediction_chunk_size is None:
             prediction_chunk_size = n_points
-        else:
-            if not (isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0):
-                raise ValueError(
-                    f"Expected prediction_chunk_size to be a positive integer or 'auto' or None, "
-                    f"got {prediction_chunk_size=!r}."
-                )
 
         chunk_results: list[torch.Tensor] = []
         for start in range(0, n_points, prediction_chunk_size):
