@@ -161,6 +161,44 @@ class TestToPyvista:
         assert pv_mesh.n_cells == 0
         assert pv_mesh.cell_data["p"].shape == (0,)
 
+    @pytest.mark.parametrize("n_vertices_per_cell", [None, 2, 3, 4])
+    def test_empty_mesh_with_vector_and_tensor_data(self, n_vertices_per_cell):
+        """Empty fields of rank 2 or more, bool ones included, export,
+        flattened, and read back."""
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista
+
+        mesh = Mesh(
+            points=torch.empty((0, 3)),
+            cells=None
+            if n_vertices_per_cell is None
+            else torch.empty((0, n_vertices_per_cell), dtype=torch.long),
+            point_data={
+                "v": torch.empty((0, 2)),
+                "mask": torch.empty((0, 2), dtype=torch.bool),
+            },
+            global_data={"stress": torch.empty((0, 3, 3), dtype=torch.float64)},
+        )
+        if n_vertices_per_cell is not None:
+            mesh.cell_data["normals"] = torch.empty((0, 3))
+            mesh.cell_data["ids"] = torch.empty((0, 3, 3), dtype=torch.int32)
+            mesh.cell_data["flags"] = torch.empty((0, 3), dtype=torch.bool)
+
+        pv_mesh = to_pyvista(mesh)
+        back = from_pyvista(pv_mesh)
+
+        assert back.point_data["v"].shape == (0, 2)
+        assert back.point_data["mask"].shape == (0, 2)
+        assert back.point_data["mask"].dtype == torch.bool
+        assert back.global_data["stress"].shape == (0, 9)
+        assert back.global_data["stress"].dtype == torch.float64
+        if n_vertices_per_cell is not None:
+            assert pv_mesh.n_cells == 0
+            assert pv_mesh.cell_data["normals"].shape == (0, 3)
+            assert pv_mesh.cell_data["ids"].shape == (0, 9)
+            assert pv_mesh.cell_data["ids"].dtype == np.int32
+            assert pv_mesh.cell_data["flags"].shape == (0, 3)
+            assert pv_mesh.cell_data["flags"].dtype == np.bool_
+
     def test_data_preservation_to_pyvista(self):
         """Test that point_data, cell_data, and global_data are preserved."""
         # Create a mesh with data
