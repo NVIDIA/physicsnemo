@@ -82,11 +82,14 @@ pipeline:
     # the original triangulated surface, with non-target cell features
     # (normals) preserved on the boundary's cell_data. The dataset builder
     # auto-injects `cell_data_targets` from the `targets:` block below.
-    - _target_: ${dp:MeshToDomainMesh}
+    # SurfaceMeshToDomainMesh is MeshToDomainMesh on this Mesh, and also keeps
+    # the tunnel boundaries when a model config reads them
+    # (`dataset_reader_overrides: {domain_boundaries: [...]}`).
+    - _target_: ${dp:SurfaceMeshToDomainMesh}
       interior_points: cell_centroids
 
 # Single source of truth for prediction field names + types. Read by both the
-# dataset builder (auto-injected into MeshToDomainMesh above) and the train
+# dataset builder (auto-injected into SurfaceMeshToDomainMesh above) and the train
 # loop (used to build LossCalculator and MetricCalculator).
 targets:
   pressure: scalar

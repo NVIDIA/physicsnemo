@@ -257,6 +257,7 @@ The `forward_kwargs:` spec syntax is intentionally minimal:
 | `{a: ..., b: ...}` | Each value resolved, returned as a dict. Used for dict-valued kwargs (e.g. GLOBE's `boundary_meshes: {vehicle: boundaries.vehicle}` and `reference_lengths: {L_ref: 1.0, delta_turb: 0.015}`). |
 | `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Used by Transolver / FLARE-style models that need a per-sample feature (e.g. freestream velocity) broadcast across the per-element axis of another kwarg. |
 | `{concat_point_sets: [<mesh path>, ...]}` | One point-cloud `Mesh` of the listed point sets, merged in order: their points, and the `point_data` fields every set holds. Used by single-decoder models that predict several sets at once (see [Training on several prediction sets](#training-on-several-prediction-sets)). |
+| `{literal: <value>}` | `<value>` as it is, unresolved. Used for constant arguments of the model config (e.g. ISLA's `prediction_boundaries: {literal: [vehicle]}`, a list of names rather than paths). |
 
 For tensor-input models, scalars and 1-D vectors in `forward_kwargs`
 are padded up to ndim>=2 before the batch dim is added (so `U_inf`

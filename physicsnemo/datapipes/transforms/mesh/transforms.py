@@ -939,6 +939,99 @@ class ComputeSurfaceNormals(MeshTransform):
         return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
 
 
+@register()
+class FlipBoundaryOrientation(MeshTransform):
+    r"""Reverse the orientation of meshes: their cell winding and stored normals.
+
+    A cell's normal follows its vertex order, and datasets differ in which way
+    they wind their boundaries. This transform swaps the last two vertices of
+    every cell, which reverses each cell normal and keeps each cell and its
+    measure. It also negates the ``cell_data`` fields named in
+    ``normal_fields``, so that stored normals follow the new winding. A name
+    that a mesh lacks is skipped.
+
+    On a :class:`Mesh` it reverses that mesh. On a
+    :class:`~physicsnemo.mesh.DomainMesh` it reverses only the boundaries
+    named in ``boundaries``, which must all exist, and keeps the interior.
+
+    Parameters
+    ----------
+    boundaries : sequence of str
+        Names of the :class:`~physicsnemo.mesh.DomainMesh` boundaries to
+        reverse.
+    normal_fields : sequence of str
+        ``cell_data`` fields holding stored normals. Default: none.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> mesh = Mesh(
+    ...     points=torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+    ...     cells=torch.tensor([[0, 1, 2]]),
+    ... )
+    >>> FlipBoundaryOrientation(boundaries=["vehicle"])(mesh).cell_normals
+    tensor([[ 0.,  0., -1.]])
+    """
+
+    def __init__(
+        self, boundaries: Sequence[str], normal_fields: Sequence[str] = ()
+    ) -> None:
+        super().__init__()
+        self.boundaries = [str(name) for name in boundaries]
+        self.normal_fields = as_nested_keys(list(normal_fields))
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        if mesh.cells.shape[-1] < 2:
+            raise ValueError(
+                "FlipBoundaryOrientation needs cells of at least 2 vertices"
+            )
+        cells = torch.cat((mesh.cells[:, :-2], mesh.cells[:, -2:].flip(1)), dim=1)
+        cell_data = mesh.cell_data.clone()
+        for key in self.normal_fields:
+            if key in cell_data.keys(include_nested=True):
+                cell_data[key] = -cell_data[key]
+        ### A new Mesh, so no cached normals of the old winding survive.
+        return Mesh(
+            points=mesh.points,
+            cells=cells,
+            point_data=mesh.point_data,
+            cell_data=cell_data,
+            global_data=mesh.global_data,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Reverse the named boundaries of a :class:`DomainMesh`.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh.
+
+        Returns
+        -------
+        DomainMesh
+            The domain with the named boundaries reversed.
+        """
+        missing = [b for b in self.boundaries if b not in domain.boundary_names]
+        if missing:
+            raise KeyError(
+                f"FlipBoundaryOrientation: boundaries {missing} not found; "
+                f"available: {domain.boundary_names}"
+            )
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries={
+                name: self(b) if name in self.boundaries else b
+                for name, b in domain.boundaries.items()
+            },
+            global_data=domain.global_data,
+        )
+
+    def extra_repr(self) -> str:
+        return f"boundaries={self.boundaries}, normal_fields={self.normal_fields}"
+
+
 def _mesh_to_tensordict(mesh: Mesh) -> TensorDict:
     """Convert a single Mesh into a flat TensorDict (no cache, no tensorclass)."""
     out: dict = {

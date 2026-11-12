@@ -133,6 +133,55 @@ def test_volume_dataset_reader_boundary_policy(
         assert train_cfg.forward_kwargs.boundary_meshes.vehicle == "boundaries.vehicle"
 
 
+_MODEL_NAMES = sorted(p.stem for p in (_RECIPE_ROOT / "conf" / "model").glob("*.yaml"))
+### The schedule train.yaml held before it became the `scheduler` group.
+_STEP_LR = {
+    "_target_": "torch.optim.lr_scheduler.StepLR",
+    "step_size": 100,
+    "gamma": 0.1,
+}
+
+
+@pytest.mark.parametrize("model", [m for m in _MODEL_NAMES if not m.startswith("isla")])
+def test_scheduler_group_keeps_every_other_models_schedule(model: str) -> None:
+    """The default `step_lr` choice resolves as train.yaml's inline StepLR did,
+    with each model template's own scheduler keys and a CLI override on top."""
+    own = OmegaConf.load(_RECIPE_ROOT / "conf" / "model" / f"{model}.yaml")
+    expected = OmegaConf.merge(
+        _STEP_LR, OmegaConf.select(own, "training.scheduler", default={})
+    )
+    dataset = "drivaer_ml_surface" if "surface" in model else "drivaer_ml_volume"
+    cfg = _compose_train_cfg(model, dataset)
+    assert cfg.training.scheduler == expected
+    cfg = _compose_train_cfg(
+        model, dataset, overrides=["training.scheduler.gamma=0.25"]
+    )
+    assert cfg.training.scheduler == OmegaConf.merge(expected, {"gamma": 0.25})
+
+
+@pytest.mark.parametrize("model", [m for m in _MODEL_NAMES if m.startswith("isla")])
+def test_isla_schedule_warms_up_then_decays(model: str) -> None:
+    """`warmup_cosine` at the defaults: 0.2 of the peak at the first epoch, the
+    peak at the fifth, 1e-6 at the last, one step per epoch."""
+    dataset = "drivaer_ml_surface" if "surface" in model else "drivaer_ml_volume"
+    cfg = _compose_train_cfg(model, dataset)
+    assert cfg.training.scheduler_update_mode == "epoch"
+    peak = cfg.training.optimizer.lr
+    assert peak == 3.75e-4
+    opt = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=peak)
+    scheduler = hydra.utils.instantiate(cfg.training.scheduler, optimizer=opt)
+    lrs = []
+    for _ in range(cfg.training.num_epochs):
+        lrs.append(opt.param_groups[0]["lr"])
+        opt.step()
+        scheduler.step()
+    assert lrs[0] == pytest.approx(0.2 * peak, rel=1e-9)
+    assert max(range(len(lrs)), key=lrs.__getitem__) == 4
+    assert lrs[4] == pytest.approx(peak, rel=1e-9)
+    assert lrs[-1] == pytest.approx(1e-6, rel=1e-9)
+    assert all(a >= b for a, b in zip(lrs[4:], lrs[5:]))
+
+
 ### ---------------------------------------------------------------------------
 ### Synthetic DomainMesh builders
 ### ---------------------------------------------------------------------------
@@ -417,9 +466,13 @@ _GLOBE_SHRINK_OVERRIDES = {
 }
 
 
+_ISLA_SMALL = ["model.hidden=16", "model.n_layers=1", "model.n_slices=4"]
+
 _MESH_INPUT_RECIPES: list[tuple[str, str, str, str, list[str]]] = [
     ("globe_surface", "globe_surface", "drivaer_ml_surface", "surface", []),
     ("globe_volume", "globe_volume", "drivaer_ml_volume", "volume", []),
+    ("isla_surface", "isla_surface", "drivaer_ml_surface", "surface", _ISLA_SMALL),
+    ("isla_volume", "isla_volume", "drivaer_ml_volume", "volume", _ISLA_SMALL),
 ]
 
 
@@ -455,6 +508,19 @@ def test_mesh_input_config_synthetic_e2e(
         ds = _volume_domain_mesh(target_config)
     else:  # pragma: no cover
         raise ValueError(f"Unknown domain {domain!r}")
+    ### The other boundaries a model reads (ISLA's tunnel), as one triangle each.
+    read = OmegaConf.select(train_cfg, "forward_kwargs.boundary_meshes", default={})
+    extra = {
+        name: Mesh(points=torch.eye(3) * 8.0 + i, cells=torch.tensor([[0, 1, 2]]))
+        for i, name in enumerate(read)
+        if name not in ds.boundary_names
+    }
+    if extra:
+        ds = DomainMesh(
+            interior=ds.interior,
+            boundaries={**dict(ds.boundaries.items()), **extra},
+            global_data=ds.global_data,
+        )
 
     forward_kwargs_spec = OmegaConf.to_container(train_cfg.forward_kwargs, resolve=True)
     collate = build_collate_fn(
@@ -466,8 +532,10 @@ def test_mesh_input_config_synthetic_e2e(
 
     ### Shrink GLOBE while preserving the externally-visible
     ### `output_schema` and `boundary_source_schemas`.
-    small_model_cfg = OmegaConf.merge(
-        train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES)
+    small_model_cfg = (
+        OmegaConf.merge(train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES))
+        if model.startswith("globe")
+        else train_cfg.model
     )
     try:
         model_inst = hydra.utils.instantiate(small_model_cfg, _convert_="partial")

@@ -34,8 +34,11 @@
 ### `_self_` merges before the model template, so model templates may
 ### carry known-good per-model overrides of the schedule below (e.g.
 ### `compile`, `training.optimizer.lr`). CLI overrides still win over both.
+### The schedule is the `scheduler` group (conf/scheduler/), which a model
+### template may switch with `override /scheduler@training.scheduler: <name>`.
 defaults:
   - base
+  - scheduler@training.scheduler: step_lr
   - _self_
   - model: geotransolver_volume
 
@@ -84,7 +87,3 @@ training:
   num_epochs: 500
   optimizer:
     lr: 3.0e-3
-  scheduler:
-    _target_: torch.optim.lr_scheduler.StepLR
-    step_size: 100
-    gamma: 0.1
