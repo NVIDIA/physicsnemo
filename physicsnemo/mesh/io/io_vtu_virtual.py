@@ -248,8 +248,28 @@ def _read_payload(f, arr: _ArrayInfo) -> np.ndarray:
     return np.frombuffer(raw, dtype=arr.dtype).reshape(arr.shape)
 
 
-def _manifest_array(url: str, arr: _ArrayInfo, shape: tuple[int, ...] | None = None):
-    """One single-chunk ManifestArray over the array's payload bytes."""
+def _manifest_array(
+    url: str,
+    arr: _ArrayInfo,
+    shape: tuple[int, ...] | None = None,
+    chunk_rows: int | None = None,
+    file_size: int | None = None,
+):
+    """ManifestArray over the array's payload bytes.
+
+    The payload is row-major and contiguous, so any run of leading-dimension
+    rows is itself a contiguous byte range. With ``chunk_rows`` the array is
+    declared as that many rows per chunk, each chunk pointing at its slice of
+    the same bytes, so a row-window read fetches only the chunks it touches.
+    Without it the whole array is one chunk.
+
+    Zarr's bytes codec expects every stored chunk, including the trailing
+    partial one, to hold a full ``chunk_shape`` of bytes. The trailing chunk
+    is therefore declared over a full-size range that runs past the array
+    into whatever follows it in the file; zarr discards the rows outside the
+    array shape. If the file is too short for that, the array falls back to
+    one chunk.
+    """
     from virtualizarr.manifests import ChunkManifest, ManifestArray
     from virtualizarr.manifests.utils import create_v3_array_metadata
 
@@ -258,26 +278,43 @@ def _manifest_array(url: str, arr: _ArrayInfo, shape: tuple[int, ...] | None = N
         raise ValueError(
             f"DataArray {arr.name!r}: shape {shape} does not cover {arr.payload_nbytes} bytes."
         )
+    n_rows = shape[0]
+    rows_per_chunk = n_rows if chunk_rows is None else min(chunk_rows, n_rows)
+    row_nbytes = arr.payload_nbytes // max(n_rows, 1)
+    if (
+        rows_per_chunk < n_rows
+        and n_rows % rows_per_chunk
+        and (
+            file_size is None
+            or arr.payload_offset
+            + (-(-n_rows // rows_per_chunk)) * rows_per_chunk * row_nbytes
+            > file_size
+        )
+    ):
+        rows_per_chunk = n_rows  # Trailing chunk would overrun the file.
+    chunk_shape = (max(rows_per_chunk, 1),) + tuple(max(s, 1) for s in shape[1:])
     metadata = create_v3_array_metadata(
         shape=shape,
         data_type=arr.dtype,
         # Zarr forbids a zero-length chunk edge; an empty array keeps a
         # positive chunk shape over an empty chunk grid.
-        chunk_shape=tuple(max(s, 1) for s in shape),
+        chunk_shape=chunk_shape,
     )
     if 0 in shape:
         manifest = ChunkManifest(entries={}, shape=(0,) * len(shape))
     else:
-        key = ".".join(["0"] * len(shape))
-        manifest = ChunkManifest(
-            entries={
-                key: {
-                    "path": url,
-                    "offset": arr.payload_offset,
-                    "length": arr.payload_nbytes,
-                }
-            },
-            shape=(1,) * len(shape),
+        n_chunks = -(-n_rows // rows_per_chunk)
+        grid = (n_chunks,) + (1,) * (len(shape) - 1)
+        starts = np.arange(n_chunks, dtype=np.uint64) * np.uint64(rows_per_chunk)
+        # Every chunk, the trailing one included, is declared full-size.
+        lengths = np.full(n_chunks, rows_per_chunk * row_nbytes, dtype=np.uint64)
+        manifest = ChunkManifest.from_arrays(
+            paths=np.full(grid, url, dtype=np.dtypes.StringDType()),
+            offsets=(
+                np.uint64(arr.payload_offset) + starts * np.uint64(row_nbytes)
+            ).reshape(grid),
+            lengths=lengths.reshape(grid),
+            validate_paths=False,
         )
     return ManifestArray(metadata=metadata, chunkmanifest=manifest)
 
@@ -305,8 +342,9 @@ class VTUParser:
     (384, 4)
     """
 
-    def __init__(self, skip_arrays=None):
+    def __init__(self, skip_arrays=None, chunk_rows: int | None = None):
         self.skip_arrays = frozenset(skip_arrays or ())
+        self.chunk_rows = chunk_rows
 
     def __call__(self, url: str, registry: "ObjectStoreRegistry") -> "ManifestStore":
         from obspec_utils.readers import BlockStoreReader
@@ -315,6 +353,7 @@ class VTUParser:
         store, path_in_store = registry.resolve(url)
         reader = BlockStoreReader(store=store, path=path_in_store)
         header = _parse_vtu_header(reader)
+        file_size = reader.seek(0, 2) if self.chunk_rows else None
 
         # Cell topology: read the (small) ``types`` array to find the single
         # fixed arity, then view the connectivity blob as (n_cells, k).
@@ -353,7 +392,9 @@ class VTUParser:
         def group(infos: list[_ArrayInfo], batch: list[int]) -> ManifestGroup:
             return ManifestGroup(
                 arrays={
-                    a.name: _manifest_array(url, a)
+                    a.name: _manifest_array(
+                        url, a, chunk_rows=self.chunk_rows, file_size=file_size
+                    )
                     for a in infos
                     if a.name not in self.skip_arrays
                 },
@@ -362,8 +403,19 @@ class VTUParser:
 
         root = ManifestGroup(
             arrays={
-                "points": _manifest_array(url, header.points),
-                "cells": _manifest_array(url, connectivity, cells_shape),
+                "points": _manifest_array(
+                    url,
+                    header.points,
+                    chunk_rows=self.chunk_rows,
+                    file_size=file_size,
+                ),
+                "cells": _manifest_array(
+                    url,
+                    connectivity,
+                    cells_shape,
+                    chunk_rows=self.chunk_rows,
+                    file_size=file_size,
+                ),
             },
             groups={
                 "point_data": group(header.point_data, [header.n_points]),

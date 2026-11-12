@@ -183,3 +183,40 @@ def test_parser_protocol_with_explicit_registry(tmp_path):
     store = VTUParser()(path.as_uri(), registry)
     group = zarr.open_group(store, mode="r")
     assert group["cells"].shape == (_tet_grid().n_cells, 4)
+
+
+@pytest.mark.parametrize("chunk_rows", [7, 1000, 10**9])
+def test_row_chunking_round_trip(tmp_path, chunk_rows):
+    grid = _tet_grid()
+    path = _write_vtu(grid, tmp_path / "tet.vtu")
+    group = open_vtu_virtual(path, chunk_rows=chunk_rows)
+    expected_chunks = -(-grid.n_cells // min(chunk_rows, grid.n_cells))
+    assert group["cells"].nchunks == expected_chunks
+    _assert_same_mesh(
+        vtu_to_mesh(path, chunk_rows=chunk_rows), from_pyvista(pv.read(str(path)))
+    )
+    sub = _zarr_mesh_subsampled(
+        group, n_cells=5, n_points=None, generator=torch.Generator().manual_seed(0)
+    )
+    ref = _zarr_mesh_subsampled(
+        open_vtu_virtual(path),
+        n_cells=5,
+        n_points=None,
+        generator=torch.Generator().manual_seed(0),
+    )
+    assert torch.equal(sub.cells, ref.cells)
+    assert torch.equal(sub.points, ref.points)
+
+
+def test_row_chunking_falls_back_when_trailing_chunk_overruns_file():
+    from physicsnemo.mesh.io.io_vtu_virtual import _ArrayInfo, _manifest_array
+
+    arr = _ArrayInfo("x", np.dtype("<f8"), 10, 1, payload_offset=100, payload_nbytes=80)
+    # Room for the full trailing chunk: 2 chunks of 7 rows -> 112 bytes from 100.
+    assert _manifest_array(
+        "file:///f", arr, chunk_rows=7, file_size=212
+    ).manifest.shape_chunk_grid == (2,)
+    # One byte short: fall back to a single chunk.
+    assert _manifest_array(
+        "file:///f", arr, chunk_rows=7, file_size=211
+    ).manifest.shape_chunk_grid == (1,)
