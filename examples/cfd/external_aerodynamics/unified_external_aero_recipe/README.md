@@ -15,6 +15,7 @@ Here, you're able to train (and run inference with) the following models:
 - [DoMINO](https://arxiv.org/abs/2501.13350) coming soon
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
+- [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
 
 We currently support the following datasets:
@@ -64,7 +65,7 @@ python src/infer.py model=geotransolver_surface dataset=highlift_surface \
 ```
 
 For the canonical CLI invocations of every named recipe (FA variants,
-GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
+SMART, GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
 [Recipe Gallery](#recipe-gallery) section below.
 
 ## Pipeline architecture
@@ -299,7 +300,7 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
 | `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
 
 Pick one of each on the CLI:
@@ -391,10 +392,13 @@ ${output_dir}/${run_id}/
   physical-scale coordinates (the lost `CenterMesh` offset leaves them
   centered at the origin).
 - **Force / moment coefficients** (surface cases): integrates the
-  predicted and reference surface traction (`-Cp*n + Cf`) over the
-  `vehicle` boundary into `CD`/`CL`/`CS` (drag/lift/side) and
+  predicted and reference surface traction over
+  the `vehicle` boundary into `CD`/`CL`/`CS` (drag/lift/side) and
   `CMR`/`CMP`/`CMY` (roll/pitch/yaw), logged as a per-coefficient
-  pred / true / MAE table. Set `force_coefficients.reference_area` (and
+  pred / true / MAE table. The traction is `-Cp*n + Cf` for outward
+  normals and a wall shear stress on the body. The dataset YAML's
+  `surface_normals_point` and `wall_shear_acts_on` declare other
+  conventions. Set `force_coefficients.reference_area` (and
   optionally `reference_length` / `moment_center`) for physically
   meaningful magnitudes; the predicted-vs-reference comparison is
   independent of the reference area. Volume runs (no Cp/Cf) auto-skip.
@@ -457,6 +461,7 @@ unified_external_aero_recipe/
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
       flare_{surface,volume}.yaml
+      smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
       domino_{surface,volume}.yaml
   datasets/                    # one file per dataset (loaded at runtime
@@ -610,6 +615,10 @@ python src/train.py model=flare_surface dataset=drivaer_ml_surface \
 python src/train.py model=flare_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
+# SMART (experimental, separate surface and volume models)
+python src/train.py model=smart_surface dataset=drivaer_ml_surface
+python src/train.py model=smart_volume dataset=drivaer_ml_volume
+
 # GLOBE (mesh-native)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
 # 180 GB-class devices. First epoch includes ~90 s of torch.compile warmup.
@@ -637,6 +646,13 @@ python src/train.py model=domino_volume dataset=drivaer_ml_volume \
 Note the `+` prefix on `+model.attention_type=...` — Hydra requires `+`
 when the override key isn't already present in the model template (FA
 attention is opt-in, not the default).
+
+### SMART
+
+Surface SMART uses the sampled query cells as geometry, while volume SMART retains
+the full vehicle surface and uses the standard STL-based SDF features. Each model
+samples up to 16,384 geometry points per encoder layer and decodes inference queries
+in chunks of 8,192.
 
 ### Dataset config anatomy
 
@@ -714,6 +730,14 @@ pipeline:
 targets:
   pressure: scalar
   wss: vector
+
+# Conventions of the stored surface, read by the integrated force
+# coefficients (src/forces.py). Defaults: `outward` and `body`.
+# The surface is wound so that its normals point into the car.
+# OpenFOAM's wallShearStress is the stress the wall exerts on the fluid, so
+# the friction force on the car is its negative.
+surface_normals_point: inward
+wall_shear_acts_on: fluid
 ```
 
 Volume YAMLs use `DomainMeshReader` directly (the .pdmsh on-disk format
@@ -782,7 +806,21 @@ dataset indices and handles distributed sampling across ranks.
    datasets only; volume datasets already produce a `DomainMesh`
    natively via `DomainMeshReader`). The dataset builder will
    auto-inject `cell_data_targets` from the YAML's `targets:` block.
-8. Run `python src/train.py model=<some_model> dataset=<your_new_dataset>`.
+8. For surface data with pressure and wall shear stress, declare the
+   conventions that the integrated force coefficients need:
+   - `surface_normals_point: inward` when the surface is wound so that
+     its normals point into the body. The default is `outward`.
+   - `wall_shear_acts_on: fluid` when the wall shear stress is the stress
+     the wall exerts on the fluid, as in OpenFOAM's `wallShearStress`. The
+     default is `body`.
+
+   To find them, call `force_moment_coefficients` (`src/forces.py`) on one
+   stored case with the defaults, once with zero shear and once with zero
+   pressure. With zero shear, `CD` must be positive for a car, and `CL`
+   for a wing at a positive angle of attack. If it is negative, set
+   `inward`. With zero pressure, `CD` must be positive. If it is negative,
+   set `fluid`.
+9. Run `python src/train.py model=<some_model> dataset=<your_new_dataset>`.
 
 No Python code changes are needed.
 
@@ -816,7 +854,7 @@ TensorBoard / JSONL files; no external tracker required.
 | `src/loss.py` | `LossCalculator` — TensorDict-based loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
 | `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce; reports per-field and per-component (x/y/z) metrics for vector fields. `resolve_metrics(cfg)` reads the recipe-side `cfg.metrics`. |
 | `src/output_normalize.py` | `normalize_output_to_tensordict` (Mesh -> `point_data.select`, tensor -> per-target slicing via `split_concat_by_target`) and `require_output_type(cfg)`. Tensorboard-free so the unit tests can import it directly. |
-| `src/forces.py` | Integrated aerodynamic force/moment coefficients from surface predictions. `force_moment_coefficients` integrates the traction `-Cp*n + Cf` over the vehicle via `Mesh.integrate`, projected onto drag/lift/side + roll/pitch/yaw axes; `ForceContext` / `ForceAccumulator` wrap the per-run config + accumulation. |
+| `src/forces.py` | Integrated aerodynamic force/moment coefficients from surface predictions. `force_moment_coefficients` integrates the traction on the body over the vehicle via `Mesh.integrate` (`-Cp*n + Cf`, with the signs set by the dataset YAML's `surface_normals_point` and `wall_shear_acts_on`), projected onto drag/lift/side + roll/pitch/yaw axes; `ForceContext` / `ForceAccumulator` wrap the per-run config + accumulation. |
 | `src/utils.py` | Shared helpers: `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `field_dim`, `align_scalar_shapes`, `validate_field_coverage`, `set_seed`, plus the cross-cutting runtime helpers `get_autocast_context` (+ `Precision`), `recursive_to_device`, `resolve_dict`, and `make_jsonl_logger`. |
 | `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard + JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. (Dataloader assembly now lives in `datasets.build_dataloaders`.) |
 | `src/infer.py` | Inference companion: loads a checkpoint, runs a split, writes physical-unit predictions back as native `.pdmsh` `DomainMesh`es, reports training-space metrics, and (surface cases) integrated CD/CL/CM force coefficients. Imports nothing from `train.py`. |

@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
+
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference
@@ -456,6 +458,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
+  path. They used to raise unless `copy_existing=True` was passed, because the
+  loaded tensors are memory-mapped to the original files.
 - The container build compiles NATTEN from source with C++20 when no
   prebuilt NATTEN wheel is supplied, so it builds on PyTorch 2.15 base
   images, whose headers require C++20.
@@ -465,6 +470,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
   its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
   `cleanup()` no longer raises after a failed initialization.
+- The GLOBE DrivAerML example integrates the friction force on the car with
+  the right sign. Its drag coefficients were about 0.055 too low.
+- The unified external aero recipe integrates force coefficients with the
+  right signs for DrivAerML and HighLiftAeroML. A dataset YAML now declares
+  where its surface normals point and which side its wall shear stress acts
+  on (`surface_normals_point`, `wall_shear_acts_on`).
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.
@@ -642,6 +653,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device.
 - `rotate` with a Python angle rotates float64 meshes at float64 precision.
   Before, it computed the rotation in float32.
+- `rotate` rotates float64 meshes about a vector axis at float64 precision.
+  Before, it rounded the axis to float32, so points on the axis moved.
+- `rotate`, `scale`, and `transform` with a square matrix work on float16 and
+  bfloat16 meshes, and keep their dtype. Before, they raised an error.
+- Loop subdivision keeps float16 and bfloat16 points in their dtype, and no
+  longer overflows on float16 meshes far from the origin. Before, it returned
+  float32 points.
+- `sample_random_points_on_cells` with `alpha` other than 1 works on float16
+  and bfloat16 meshes on CPU. Before, it raised an error.
 - Anisotropic maps with a small overall scale are no longer taken for
   similarities. Before, transforming by one kept wrong cached point normals,
   and scaled point measures instead of raising.
@@ -704,6 +724,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `to_zarr` raises a `TypeError` naming any field it cannot store, such as a
   bfloat16 field, before it writes anything. Before, it left a partial store
   that loaded without those fields.
+- `to_zarr` raises a `ValueError` before it writes anything when a field key
+  or boundary name is one that zarr cannot store, such as one that is empty or
+  contains `/`. Before, such a name could come back as another key, or leave a
+  store that would not load.
+- `from_zarr` loads the stores that `to_zarr` writes for subclasses of `Mesh`
+  and `DomainMesh`, as their base class, and `to_zarr` raises a `TypeError` on
+  a subclass with fields of its own. Before, `from_zarr` refused these stores.
+- `from_zarr`, `MeshReader` and `DomainMeshReader` keep the cell shape of a
+  zarr mesh with zero cells. Before, such a mesh came back as a point cloud.
+- `to_pyvista` exports empty meshes with vector or tensor fields, where it
+  raised before, and `from_pyvista` reads complex arrays of one value with
+  shape `(1,)`, where it raised or dropped a dimension before.
+- `from_pyvista` with `point_source="cell_centroids"` joins two cells of
+  different dimensions by the same dual-graph edges whatever the order of the
+  cells. Before, these edges depended on it.
 - `from_zarr`, `MeshReader` and `DomainMeshReader` raise on a zarr store that
   `to_zarr` did not write or did not finish. Before, a store cut short by a
   full disk, for example, loaded without its missing fields.

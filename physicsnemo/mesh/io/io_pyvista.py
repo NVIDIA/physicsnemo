@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import warnings
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Literal, cast
@@ -85,6 +86,9 @@ def _vtk_data_to_tensor_dict(
     tensor_data: dict[str | tuple[str, ...], torch.Tensor] = {}
     for key, value in dict(data).items():
         array = np.asarray(value)
+        if array.ndim == 0:
+            # PyVista returns a complex array of one tuple as a 0-d array.
+            array = array.reshape(1)
         if not np.issubdtype(array.dtype, np.number) and array.dtype != np.bool_:
             continue
         if indices is not None:
@@ -1350,8 +1354,10 @@ def from_pyvista(
           ``manifold_dim=0`` the result is a point cloud; with
           ``manifold_dim=1`` the result is a dual graph whose edges connect
           cells that share a facet (an edge for surface meshes, a face for
-          volume meshes) in the original mesh. This mode avoids expensive
-          tetrahedralization and is suitable for large polyhedral meshes.
+          volume meshes, and a facet of the lower-dimensional cell for cells
+          of different dimensions) in the original mesh. This mode avoids
+          expensive tetrahedralization and is suitable for large polyhedral
+          meshes.
     warn_on_lost_data : bool
         If True, emit a ``UserWarning`` when the conversion discards non-empty
         data arrays. Cell-data values are lost when
@@ -1886,8 +1892,16 @@ def to_pyvista(
                 name = _VTK_KEY_SEPARATOR.join(k)
                 nested_names.append(name)
             arr = _tensor_to_vtk_numpy(v)
-            arr = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
-            target[name] = arr.copy() if force_copy else arr
+            if arr.ndim > 2:
+                arr = arr.reshape(arr.shape[0], math.prod(arr.shape[1:]))
+            if arr.ndim == 2 and arr.shape[0] == 0 and arr.dtype.kind in "biuf":
+                # PyVista's setter rejects empty arrays with components, so give
+                # it the array without them, then restore them. The setter also
+                # stores bool arrays, which VTK lacks.
+                target[name] = arr.reshape(0)
+                target.VTKObject.GetArray(name).SetNumberOfComponents(arr.shape[1])
+            else:
+                target[name] = arr.copy() if force_copy else arr
     if nested_names:
         pv_mesh.field_data[_NESTED_KEYS_MARKER] = np.array(sorted(set(nested_names)))
 
@@ -2328,6 +2342,14 @@ def _build_dual_graph_edges(
     the VTK ``GetCellNeighbors`` loop handles everything else (mixed cell
     types, polyhedra, degenerate cells) generically.
 
+    Two cells of the same dimension get one edge per facet they share. When
+    the dimensions differ, a facet of one cell can lie in the other without
+    the converse (a line's endpoint lies in a triangle, while no edge of the
+    triangle lies in the line), so the pair gets one edge per facet of its
+    lower-dimensional cell that lies in the other cell, whatever the order of
+    the two cells. Between overlapping or degenerate cells of the same
+    dimension, the edges can still depend on the order of the cells.
+
     Parameters
     ----------
     pyvista_mesh : pv.PolyData or pv.UnstructuredGrid
@@ -2359,9 +2381,13 @@ def _build_dual_graph_edges(
     chunks: list[np.ndarray] = []
     buf = np.empty((_CHUNK, 2), dtype=np.int64)
     idx = 0
+    # Pairs (j, i), j < i, found from the facets of a lower-dimensional cell i.
+    cell_dims = np.empty(n_cells, dtype=np.int8)
+    lower_dim_pairs: list[tuple[int, int]] = []
 
     for i in range(n_cells):
         cell = pyvista_mesh.GetCell(i)
+        cell_dims[i] = cell.GetCellDimension()
         for facet_ids in _cell_facet_point_ids(cell):
             facet_pt_ids.Reset()
             for point_id in facet_ids:
@@ -2379,13 +2405,22 @@ def _build_dual_graph_edges(
                     if idx == _CHUNK:
                         chunks.append(buf.copy())
                         idx = 0
+                elif cell_dims[j] > cell_dims[i]:
+                    lower_dim_pairs.append((j, i))
 
     if idx > 0:
         chunks.append(buf[:idx].copy())
 
-    if not chunks:
-        return torch.empty((0, 2), dtype=torch.long)
-    return torch.from_numpy(np.concatenate(chunks, axis=0))
+    edges = np.concatenate([buf[:0], *chunks], axis=0)
+    if cell_dims.min() != cell_dims.max():
+        # Count each pair of cells of different dimensions from the facets of
+        # its lower-dimensional cell, whichever of the two comes first.
+        edges = edges[cell_dims[edges[:, 0]] <= cell_dims[edges[:, 1]]]
+        edges = np.concatenate(
+            [edges, np.array(lower_dim_pairs, dtype=np.int64).reshape(-1, 2)]
+        )
+        edges = edges[np.argsort(edges[:, 0], kind="stable")]
+    return torch.from_numpy(edges)
 
 
 def _detect_native_dimensions(

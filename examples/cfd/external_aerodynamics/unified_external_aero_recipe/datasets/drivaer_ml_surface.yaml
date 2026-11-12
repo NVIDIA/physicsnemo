@@ -91,3 +91,10 @@ pipeline:
 targets:
   pressure: scalar
   wss: vector
+
+# Conventions of the stored surface, read by the integrated force coefficients
+# (src/forces.py). The surface is wound so that its normals point into the car.
+# OpenFOAM's wallShearStress is the stress the wall exerts on the fluid, so the
+# friction force on the car is its negative.
+surface_normals_point: inward
+wall_shear_acts_on: fluid

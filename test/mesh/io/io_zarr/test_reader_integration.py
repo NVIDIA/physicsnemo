@@ -121,7 +121,7 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
         assert_meshes_equal(boundaries[n], lazy.boundaries[n])
 
 
-@pytest.mark.parametrize("interior_has_cells", [False, True])
+@pytest.mark.parametrize("interior_kind", ["point cloud", "cells", "zero cells"])
 @pytest.mark.parametrize(
     "options",
     [
@@ -143,17 +143,24 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
             "subsample_n_points": 30,
             "drop_interior_cells": True,
         },
+        {"subsample_n_cells": 20, "drop_interior_cells": True},
         {"interior_n_points_range": (20, 40)},
         {"subsample_n_cells": 20, "interior_n_points_range": (20, 40)},
     ],
 )
-def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, options):
+def test_seeded_subsamples_match_between_formats(tmp_path, interior_kind, options):
     """One seed selects the same rows from a zarr store as from a memmap file."""
     interior = (
         make_mesh(n_points=80, n_cells=60, seed=5)
-        if interior_has_cells
+        if interior_kind == "cells"
         else make_point_cloud(seed=5)
     )
+    if interior_kind == "zero cells":
+        interior = Mesh(
+            points=interior.points,
+            cells=torch.empty(0, 4, dtype=torch.int32),
+            point_data=interior.point_data,
+        )
     domain = DomainMesh(
         interior=interior,
         boundaries={
@@ -175,6 +182,21 @@ def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, o
     assert sorted(from_memmap.boundary_names) == sorted(from_store.boundary_names)
     for name in from_memmap.boundary_names:
         assert_meshes_equal(from_memmap.boundaries[name], from_store.boundaries[name])
+
+
+def test_point_subsample_keeps_zero_cell_shape(tmp_path):
+    """A point subsample of a mesh with zero cells keeps its cell shape in both
+    formats."""
+    mesh = Mesh(points=torch.rand(6, 3), cells=torch.empty(0, 3, dtype=torch.long))
+    mesh.save(tmp_path / "case.pmsh")
+    to_zarr(mesh, tmp_path / "case.zarr")
+    for pattern in ("*.pmsh", "*.zarr"):
+        reader = MeshReader(
+            tmp_path, pattern=pattern, pin_memory=False, subsample_n_points=2
+        )
+        loaded = reader[0][0]
+        assert loaded.n_points == 2
+        assert loaded.cells.shape == (0, 3), pattern
 
 
 @pytest.mark.parametrize("pattern", ["*.pdmsh", "*.zarr"])

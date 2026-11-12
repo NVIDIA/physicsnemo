@@ -21,11 +21,14 @@ SMART (Experimental)
 
 SMART encodes sampled geometry into latent contexts and predicts surface or
 volume fields at independent query coordinates. This implementation is based on
-the `SMART paper <https://arxiv.org/abs/2601.18707>`_.
+the `SMART paper <https://arxiv.org/abs/2601.18707>`_. See the
+`unified external aerodynamics recipe
+<https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe#smart>`_
+for training and inference.
 
 .. autoclass:: physicsnemo.experimental.models.smart.SMART
     :show-inheritance:
-    :members: encode_geometry, decode_queries
+    :members: forward, encode_geometry, decode_queries
 
 AB-UPT (Experimental)
 ---------------------
