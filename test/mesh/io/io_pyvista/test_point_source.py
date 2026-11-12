@@ -640,8 +640,10 @@ class TestCellCentroidsDualGraph:
             *tris[::8, :1],  # vertex cells, which have no facets
         ]
 
-        ### Brute-force reference: for each pair, count the facets of the cell
-        ### with fewer vertices that lie in the other cell.
+        ### Brute-force reference: for each pair, count the facets of the
+        ### lower-dimensional cell that lie in the other cell. The cells are
+        ### simplices, so that is the cell with fewer vertices, and its facets
+        ### are its subsets of one vertex fewer.
         reference = collections.Counter()
         for a, b in itertools.combinations(range(len(cells)), 2):
             low, high = sorted((cells[a], cells[b]), key=len)

@@ -208,20 +208,18 @@ def _with_boundary_name(mesh: Mesh, name: str) -> DomainMesh:
     return DomainMesh(interior=mesh, boundaries={name: mesh})
 
 
-@pytest.mark.parametrize("sep", ["/", "\\"])
+@pytest.mark.parametrize("name", ["U [m/s]", "U [m\\s]", "", ".", "..", "zarr.json"])
 @pytest.mark.parametrize(
-    "make,name",
+    "make,parent",
     [
-        (_with_point_data_key, "U [m{sep}s]"),
-        (_with_group_key, "ref{sep}L"),
-        (_with_boundary_name, "wing{sep}upper"),
+        (_with_point_data_key, "point_data"),
+        (_with_group_key, "global_data"),
+        (_with_boundary_name, "boundaries"),
     ],
 )
-def test_slash_in_name_raises_before_writing(tmp_path, make, name, sep):
-    """A key or boundary name with "/" or "\\" (zarr group separators) raises,
-    writing nothing."""
-    name = name.format(sep=sep)
-    with pytest.raises(ValueError, match=re.escape(repr(name))):
+def test_invalid_name_raises_before_writing(tmp_path, make, parent, name):
+    """A key or boundary name that zarr cannot store raises, writing nothing."""
+    with pytest.raises(ValueError, match=re.escape(f"key {(parent, name)}")):
         to_zarr(make(make_mesh(), name), tmp_path / "x.zarr")
     assert not (tmp_path / "x.zarr").exists()
 

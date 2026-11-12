@@ -88,9 +88,10 @@ def to_zarr(
         represent (e.g. ``torch.bfloat16``). Nothing is written in that case;
         cast the field first (e.g. to ``torch.float32``).
     ValueError
-        If a field key or boundary name contains ``"/"`` or ``"\\"``, which
-        zarr reads as group separators. Nothing is written in that case;
-        rename it first.
+        If a field key or boundary name is one that zarr cannot store: ``""``,
+        ``"."``, ``".."``, ``"zarr.json"``, or a name with ``"/"`` or
+        ``"\\"``, which zarr reads as group separators. Nothing is written in
+        that case; rename it first.
 
     Notes
     -----
@@ -124,15 +125,19 @@ def to_zarr(
     # which their __post_init__ validation rejects.
     td = obj.to_tensordict()
 
-    # zarr splits names on "/" (and on "\", which it normalizes to "/") into
-    # nested groups, so such a name would not read back. Reject it before
-    # writing anything.
+    # Reject, before writing anything, the names zarr cannot store: it splits
+    # names on "/" (and on "\", which it normalizes to "/") into nested groups
+    # and drops empty ones, it rejects "." and "..", and each group keeps its
+    # metadata in "zarr.json".
     for key in td.keys(include_nested=True):
         key = (key,) if isinstance(key, str) else key
-        if "/" in key[-1] or "\\" in key[-1]:
+        name = key[-1]
+        if name in ("", ".", "..", "zarr.json") or "/" in name or "\\" in name:
             raise ValueError(
-                f"Cannot write key {key} to zarr: {key[-1]!r} contains '/' or "
-                "'\\', which zarr reads as group separators. Rename it first."
+                f"Cannot write key {key} to zarr: zarr cannot store the name "
+                f"{name!r}. Names must not be '', '.', '..' or 'zarr.json', or "
+                "contain '/' or '\\', which zarr reads as group separators. "
+                "Rename it first."
             )
 
     # tensordict writes through NumPy, so a dtype NumPy lacks would fail midway

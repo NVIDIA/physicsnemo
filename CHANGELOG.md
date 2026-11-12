@@ -717,8 +717,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bfloat16 field, before it writes anything. Before, it left a partial store
   that loaded without those fields.
 - `to_zarr` raises a `ValueError` before it writes anything when a field key
-  or boundary name contains `/` or `\`. Before, such a field came back under a
-  nested key, and such a boundary made the store unreadable.
+  or boundary name is one that zarr cannot store, such as one that is empty or
+  contains `/`. Before, such a name could come back as another key, or leave a
+  store that would not load.
 - `from_zarr` loads the stores that `to_zarr` writes for subclasses of `Mesh`
   and `DomainMesh`, as their base class, and `to_zarr` raises a `TypeError` on
   a subclass with fields of its own. Before, `from_zarr` refused these stores.

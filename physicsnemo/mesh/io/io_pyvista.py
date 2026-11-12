@@ -1894,9 +1894,12 @@ def to_pyvista(
             arr = _tensor_to_vtk_numpy(v)
             if arr.ndim > 2:
                 arr = arr.reshape(arr.shape[0], math.prod(arr.shape[1:]))
-            if arr.ndim == 2 and arr.shape[0] == 0 and arr.dtype.kind in "iuf":
-                # PyVista's setter rejects empty arrays with components.
-                target.VTKObject.AddArray(pv.convert_array(arr, name, deep=True))
+            if arr.ndim == 2 and arr.shape[0] == 0 and arr.dtype.kind in "biuf":
+                # PyVista's setter rejects empty arrays with components, so give
+                # it the array without them, then restore them. The setter also
+                # stores bool arrays, which VTK lacks.
+                target[name] = arr.reshape(0)
+                target.VTKObject.GetArray(name).SetNumberOfComponents(arr.shape[1])
             else:
                 target[name] = arr.copy() if force_copy else arr
     if nested_names:

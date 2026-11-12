@@ -121,7 +121,7 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
         assert_meshes_equal(boundaries[n], lazy.boundaries[n])
 
 
-@pytest.mark.parametrize("interior_has_cells", [False, True])
+@pytest.mark.parametrize("interior_kind", ["point cloud", "cells", "zero cells"])
 @pytest.mark.parametrize(
     "options",
     [
@@ -143,17 +143,24 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
             "subsample_n_points": 30,
             "drop_interior_cells": True,
         },
+        {"subsample_n_cells": 20, "drop_interior_cells": True},
         {"interior_n_points_range": (20, 40)},
         {"subsample_n_cells": 20, "interior_n_points_range": (20, 40)},
     ],
 )
-def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, options):
+def test_seeded_subsamples_match_between_formats(tmp_path, interior_kind, options):
     """One seed selects the same rows from a zarr store as from a memmap file."""
     interior = (
         make_mesh(n_points=80, n_cells=60, seed=5)
-        if interior_has_cells
+        if interior_kind == "cells"
         else make_point_cloud(seed=5)
     )
+    if interior_kind == "zero cells":
+        interior = Mesh(
+            points=interior.points,
+            cells=torch.empty(0, 4, dtype=torch.int32),
+            point_data=interior.point_data,
+        )
     domain = DomainMesh(
         interior=interior,
         boundaries={
