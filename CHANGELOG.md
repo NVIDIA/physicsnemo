@@ -727,6 +727,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a subclass with fields of its own. Before, `from_zarr` refused these stores.
 - `from_zarr`, `MeshReader` and `DomainMeshReader` keep the cell shape of a
   zarr mesh with zero cells. Before, such a mesh came back as a point cloud.
+- With domain-parallel reading, `MeshReader` and `DomainMeshReader` also keep
+  the cell shape and cell data of a mesh with zero cells. Before, such a mesh
+  came back as a point cloud, so computing its normals or merging it with
+  other boundaries raised.
 - `to_pyvista` exports empty meshes with vector or tensor fields, where it
   raised before, and `from_pyvista` reads complex arrays of one value with
   shape `(1,)`, where it raised or dropped a dimension before.
