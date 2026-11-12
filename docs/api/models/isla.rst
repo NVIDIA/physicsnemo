@@ -35,7 +35,7 @@ Citation
 
 The architecture and its guarantees are described in
 Peter Sharpe, *ISLA: A Coordinate-Free, Measure-Weighted Transformer for
-Boundary-Driven PDEs*, arXiv preprint, 2026. If you use ISLA, please cite:
+Boundary-Driven PDEs*, arXiv preprint, 2026. If you use or extend ISLA, please cite:
 
 .. code-block:: bibtex
 
