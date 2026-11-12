@@ -83,10 +83,16 @@ import hydra
 import torch
 from datasets import build_dataloaders, find_normalizer, load_dataset_config
 from forces import ForceAccumulator, ForceContext
+from forward_kwargs import walk_path
 from metrics import MetricCalculator, resolve_metrics
 from nondim import NonDimensionalizeByMetadata, NondimFieldType, freestream_scales
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import IOType, normalize_output_to_tensordict, require_output_type
+from output_normalize import (
+    IOType,
+    normalize_output_to_tensordict,
+    require_output_type,
+    resolve_output_layout,
+)
 from tabulate import tabulate
 from tensordict import TensorDict
 from utils import (
@@ -275,6 +281,7 @@ def attach_and_save(
     out_path: Path,
     *,
     rescale_geometry: bool,
+    target_sources: dict[str, str] | None = None,
 ) -> None:
     """Attach physical predictions/targets to the DomainMesh and save it.
 
@@ -290,10 +297,32 @@ def attach_and_save(
     in the domain is scaled by ``L_ref`` to recover physical-scale
     coordinates. ``Mesh.scale`` leaves ordinary ``point_data`` untouched;
     effective measures scale with their represented dimension.
+
+    With *target_sources*, each target's ``pred_`` / ``true_`` fields go onto
+    its source mesh instead, in place of the source field.
     """
     if rescale_geometry and "L_ref" in domain.global_data:
         L_ref = domain.global_data["L_ref"]
         domain = domain.apply_to_meshes(lambda m: m.scale(L_ref))
+
+    if target_sources is not None:
+        ### Clone only the data containers; points / topology are not modified.
+        domain = domain.apply_to_meshes(
+            lambda m: m.with_data(
+                point_data=m.point_data.clone(), cell_data=m.cell_data.clone()
+            )
+        )
+        for name, path in target_sources.items():
+            mesh_path, leaf = path.split(".point_data.", 1)
+            data = walk_path(domain, mesh_path).point_data
+            key, source_key = as_nested_key(name), as_nested_key(leaf)
+            if source_key in data:
+                del data[source_key]
+            data[with_leaf_name(source_key, lambda n: f"pred_{n}")] = pred_phys[key]
+            data[with_leaf_name(source_key, lambda n: f"true_{n}")] = true_phys[key]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        domain.to("cpu").save(str(out_path))
+        return
 
     interior = domain.interior
     ### Drop training-space targets (replaced by physical true_<name>);
@@ -539,8 +568,14 @@ def main(cfg: DictConfig) -> None:
 
     # -- Metrics ----------------------------------------------------------------
     metric_calculator = MetricCalculator(
-        target_config=target_config, metrics=resolve_metrics(cfg)
+        target_config=target_config,
+        metrics=resolve_metrics(cfg),
+        mask_nonfinite_targets=bool(
+            OmegaConf.select(cfg, "training.mask_nonfinite_targets", default=False)
+        ),
     )
+    output_layout = resolve_output_layout(cfg)
+    target_sources = dataset_info["target_sources"]
 
     if is_rank0:
         log_jsonl(
@@ -582,7 +617,13 @@ def main(cfg: DictConfig) -> None:
 
         with torch.no_grad(), get_autocast_context(cfg.precision):
             output = model(**batch["forward_kwargs"])
-        pred_td = normalize_output_to_tensordict(output, target_config, output_type)
+        pred_td = normalize_output_to_tensordict(
+            output,
+            target_config,
+            output_type,
+            targets=batch["targets"],
+            **output_layout,
+        )
 
         ### Metrics in training space (matches the validation numbers); pull the
         ### whole TensorDict host-side once so each .item() is a free CPU index.
@@ -601,7 +642,7 @@ def main(cfg: DictConfig) -> None:
         sample_forces = None
         if force_ctx is not None:
             sample_forces = force_ctx.coefficients(
-                domain, pred_pts, true_pts, normalizer
+                domain, pred_pts, true_pts, normalizer, target_sources
             )
             if sample_forces is not None:
                 force_acc.update(*sample_forces)
@@ -656,6 +697,7 @@ def main(cfg: DictConfig) -> None:
             target_config,
             pred_dir / f"{sample_id}.pdmsh",
             rescale_geometry=bool(cfg.get("rescale_geometry", False)),
+            target_sources=target_sources,
         )
 
         ### One JSONL row per sample -- the documented metrics.jsonl

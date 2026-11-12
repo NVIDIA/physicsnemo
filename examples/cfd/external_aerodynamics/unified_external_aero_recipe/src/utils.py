@@ -225,6 +225,21 @@ def align_scalar_shapes(
     return p, t
 
 
+def mask_nonfinite(
+    p: torch.Tensor, t: torch.Tensor, field_type: FieldType
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Zero *p* and *t* where the target is not finite (any component, for vectors).
+
+    Returns ``(p, t, valid_fraction)``: sums then cover the valid elements only,
+    and a mean divided by ``valid_fraction`` is their mean (0 if none is valid).
+    """
+    valid = torch.isfinite(t)
+    if field_type == "vector":
+        valid = valid.all(dim=-1, keepdim=True)
+    fraction = valid.sum().clamp_min(1) / valid.numel()
+    return torch.where(valid, p, 0.0), torch.where(valid, t, 0.0), fraction
+
+
 def validate_field_coverage(
     target_config: dict[str, FieldType],
     pred: TensorDict,
@@ -259,6 +274,15 @@ def resolve_dict(cfg: DictConfig, path: str) -> dict[str, Any] | None:
     selected = OmegaConf.select(cfg, path, default=OmegaConf.create({}))
     container = OmegaConf.to_container(selected, resolve=True)
     return container or None
+
+
+def resolve_field_weights(cfg: DictConfig) -> dict[str, float] | None:
+    """``training.field_weights``, joined by the model's ``extra_task.field_weights``."""
+    weights = {
+        **(resolve_dict(cfg, "training.field_weights") or {}),
+        **(resolve_dict(cfg, "extra_task.field_weights") or {}),
+    }
+    return weights or None
 
 
 # ---------------------------------------------------------------------------

@@ -43,7 +43,13 @@ import torch
 import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
-from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
+from utils import (
+    FieldType,
+    align_scalar_shapes,
+    field_dim,
+    mask_nonfinite,
+    validate_field_coverage,
+)
 
 from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.metrics.general.relative_error import relative_mse
@@ -160,6 +166,10 @@ class LossCalculator:
         normalize_by_channels: When ``True`` (default), divide the
             (weighted) total loss by ``sum(per_field_dims)`` so the total
             is invariant to how many channels each field contributes.
+        mask_nonfinite_targets: When ``True``, target elements that are not
+            finite (any component, for vectors) are left out of each field's
+            loss, for point sets where some points lack a field (stored as
+            NaN there). A field with no finite target contributes 0.
 
     The returned loss dict contains one entry per field
     (``"loss/[prefix/]<name>"``) plus ``"loss/total"`` (or
@@ -175,6 +185,7 @@ class LossCalculator:
         prefix: str = "",
         normalize_by_channels: bool = True,
         delta: float = DEFAULT_HUBER_DELTA,
+        mask_nonfinite_targets: bool = False,
     ) -> None:
         if loss_type not in _VALID_LOSS_TYPES:
             raise ValueError(
@@ -205,6 +216,7 @@ class LossCalculator:
         self.prefix = prefix
         self.normalize_by_channels = normalize_by_channels
         self.delta = delta
+        self.mask_nonfinite_targets = mask_nonfinite_targets
 
         ### Per-field tensors are looked up by name in the input TensorDict,
         ### so we just need a per-field dim count for total_channels.
@@ -293,9 +305,16 @@ class LossCalculator:
                 ### Caller may pass scalar fields as (..., 1) or (...);
                 ### normalize to a single shape so the loss is shape-agnostic.
                 p, t = align_scalar_shapes(p, t)
+            if self.mask_nonfinite_targets:
+                p, t, fraction = mask_nonfinite(p, t, field_type)
+            if field_type == "scalar":
                 field_loss = _scalar_loss(p, t, self.loss_type, self.delta)
             else:  # vector
                 field_loss = _vector_loss(p, t, self.loss_type, self.delta)
+            ### Masked elements add 0 to every sum; a mean also needs the
+            ### valid count, while a relative MSE (a sum ratio) does not.
+            if self.mask_nonfinite_targets and self.loss_type != "relative_mse":
+                field_loss = field_loss / fraction
 
             weighted = field_loss * self.field_weights[name]
             loss_dict[self._make_key(name)] = weighted

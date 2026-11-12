@@ -96,6 +96,30 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
     return OmegaConf.merge({"dataset_paths": paths}, cfg)
 
 
+def apply_model_config(dataset_cfg: DictConfig, recipe_cfg: DictConfig) -> DictConfig:
+    """A dataset config as the recipe config's model reads it.
+
+    Applies the model config's ``dataset_reader_overrides``, then appends its
+    ``dataset_append_transforms`` and, last, its ``extra_task.transforms`` to
+    ``pipeline.transforms`` (so steps one model needs leave the dataset files
+    and the other models' samples as they are). ``extra_task.targets`` and
+    ``extra_task.target_sources`` join the dataset's; ``train.py`` reads
+    ``extra_task.field_weights``. Without these keys the config is unchanged.
+    """
+    dataset_cfg = _apply_dataset_reader_overrides(dataset_cfg, recipe_cfg)
+    task = OmegaConf.select(recipe_cfg, "extra_task", default=None) or {}
+    appends = OmegaConf.select(recipe_cfg, "dataset_append_transforms", default=None)
+    shared = (
+        _share_normalizer_constants(t, dataset_cfg) for t in task.get("transforms", [])
+    )
+    extra = [*(appends or []), *shared]
+    updates = {k: task[k] for k in ("targets", "target_sources") if k in task}
+    if extra:
+        own = dataset_cfg.pipeline.get("transforms") or []
+        updates["pipeline"] = {"transforms": [*own, *extra]}
+    return OmegaConf.merge(dataset_cfg, updates) if updates else dataset_cfg
+
+
 def _apply_dataset_reader_overrides(
     dataset_cfg: DictConfig, recipe_cfg: DictConfig
 ) -> DictConfig:
@@ -106,6 +130,36 @@ def _apply_dataset_reader_overrides(
     if not reader_overrides:
         return dataset_cfg
     return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
+
+
+def _share_normalizer_constants(
+    t_cfg: DictConfig, dataset_cfg: DictConfig
+) -> DictConfig:
+    """Fill the named fields of an ``extra_task`` ``NormalizeMeshFields`` entry.
+
+    A field whose value is a string (``{surface_p: pressure}``) takes the
+    constants the dataset's first ``NormalizeMeshFields`` (the one
+    :func:`find_normalizer` returns) holds under that name, so an extra set's
+    field is standardized exactly like the target it is compared with.
+    """
+    if not str(t_cfg.get("_target_", "")).endswith(".NormalizeMeshFields"):
+        return t_cfg
+    names = {f: n for f, n in (t_cfg.get("fields") or {}).items() if isinstance(n, str)}
+    own = next(
+        (
+            t.get("fields") or {}
+            for t in dataset_cfg.pipeline.get("transforms") or []
+            if str(t.get("_target_", "")).endswith(".NormalizeMeshFields")
+        ),
+        {},
+    )
+    missing = sorted(set(names.values()) - set(own))
+    if missing:
+        raise ValueError(
+            f"extra_task reuses the normalization constants of {missing!r}, which "
+            f"the dataset's NormalizeMeshFields does not hold"
+        )
+    return OmegaConf.merge(t_cfg, {"fields": {f: own[n] for f, n in names.items()}})
 
 
 ### Transform-config kwargs whose values are file paths and should be
@@ -671,7 +725,9 @@ def _build_manifest_val_dataset(
 
 
 def _build_collate(
-    cfg: DictConfig, target_config: dict[str, FieldType]
+    cfg: DictConfig,
+    target_config: dict[str, FieldType],
+    target_sources: dict[str, str] | None = None,
 ) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
     """Build the per-sample collate from the model YAML's I/O contract."""
     if not target_config:
@@ -692,6 +748,7 @@ def _build_collate(
         input_type=input_type,
         forward_kwargs_spec=forward_kwargs_spec,
         target_config=target_config,
+        target_sources=target_sources,
     )
 
 
@@ -882,6 +939,7 @@ def build_dataloaders(
     train_offset = 0
     val_offset = 0
     using_manifests = False
+    first_target_sources: dict[str, str] | None = None
     first_targets: dict[str, str] | None = None
     first_metrics: list[str] | None = None
 
@@ -905,7 +963,7 @@ def build_dataloaders(
             ds_yaml = OmegaConf.merge(
                 ds_yaml, {"sampling_resolution": sampling_resolution}
             )
-        ds_yaml = _apply_dataset_reader_overrides(ds_yaml, cfg)
+        ds_yaml = apply_model_config(ds_yaml, cfg)
 
         train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
         if train_datadir and not Path(str(train_datadir)).exists():
@@ -928,9 +986,24 @@ def build_dataloaders(
             OmegaConf.select(ds_yaml, "metrics", default=OmegaConf.create([])),
             resolve=True,
         )
+        ### Targets live at interior.point_data.<name> unless the dataset (or
+        ### the model's extra_task) names other point sets in target_sources;
+        ### then every target gets a path, defaulting to the interior.
+        ds_sources = resolve_dict(ds_yaml, "target_sources")
+        if ds_sources is not None:
+            ds_sources = {
+                n: ds_sources.get(n, f"interior.point_data.{n}") for n in ds_targets
+            }
         if first_targets is None:
             first_targets, first_metrics = ds_targets, ds_metrics
+            first_target_sources = ds_sources
         else:
+            if ds_sources != first_target_sources:
+                raise ValueError(
+                    f"Dataset {ds_name!r} declares target_sources={ds_sources!r}, "
+                    f"which does not match the first dataset's "
+                    f"{first_target_sources!r}."
+                )
             validate_dataset_consistency(
                 ds_name,
                 ds_targets,
@@ -1049,13 +1122,19 @@ def build_dataloaders(
     ### resolves before `hydra.utils.instantiate(cfg.model)`.  GLOBE's
     ### model template doesn't reference `out_dim`, so the extra key is
     ### a harmless no-op for it.
+    ### A model predicting several sets at once (``output_sets``) emits one
+    ### set's channels per point.
+    out_targets = first_targets or {}
+    output_sets = resolve_dict(cfg, "output_sets")
+    if output_sets:
+        out_targets = {n: out_targets[n] for n in next(iter(output_sets.values()))}
     out_dim_total = sum(
-        field_dim(cast(FieldType, ftype)) for ftype in (first_targets or {}).values()
+        field_dim(cast(FieldType, ftype)) for ftype in out_targets.values()
     )
     OmegaConf.update(cfg, "out_dim", out_dim_total, force_add=True)
 
     normalizer = find_normalizer(train_datasets)
-    collate_fn = _build_collate(cfg, first_targets or {})
+    collate_fn = _build_collate(cfg, first_targets or {}, first_target_sources)
     train_dataset = _combine_datasets(train_datasets)
 
     if using_manifests:
@@ -1113,5 +1192,6 @@ def build_dataloaders(
     ### contract.
     dataset_info = {
         "targets": first_targets or {},
+        "target_sources": first_target_sources,
     }
     return train_loader, val_loader, normalizer, dataset_info

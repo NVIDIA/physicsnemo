@@ -116,6 +116,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import torch
+from forward_kwargs import walk_path
 from jaxtyping import Float
 from nondim import NondimFieldType
 from omegaconf import DictConfig, OmegaConf
@@ -412,6 +413,7 @@ class ForceContext:
         pred_pts: TensorDict,
         true_pts: TensorDict,
         normalizer: Any | None,
+        target_sources: dict[str, str] | None = None,
     ) -> tuple[dict[str, float], dict[str, float]] | None:
         """Integrate predicted + reference coefficients for one surface sample.
 
@@ -421,16 +423,31 @@ class ForceContext:
         independent of any physical re-dimensionalization -- before
         integration over the ``vehicle`` boundary. Returns ``None`` when
         the sample is not a surface case (no ``vehicle`` boundary, or the
-        interior points do not map 1:1 to the vehicle cells).
+        interior points do not map 1:1 to the vehicle cells). With
+        *target_sources*, the pressure and shear targets are integrated on
+        the point set that holds them both, which must then sit at the
+        vehicle cell centroids.
         """
         if "vehicle" not in domain.boundary_names:
             return None
         vehicle = domain.boundaries["vehicle"]
-        ### Surface contract: interior points are the vehicle cell
+        sources = target_sources or {}
+        paths = {
+            sources.get(n, "interior").split(".point_data.")[0]
+            for n in (self.pressure_field, self.shear_field)
+        }
+        if len(paths) != 1:
+            return None
+        surface = walk_path(domain, paths.pop())
+        ### Surface contract: the prediction points are the vehicle cell
         ### centroids, so predictions align 1:1 with cells. A mismatch
         ### means this is not a surface case (e.g. a volume interior).
-        if domain.interior.points.shape[0] != vehicle.n_cells:
+        if surface.n_points != vehicle.n_cells:
             return None
+        if target_sources is not None and not torch.allclose(
+            surface.points, vehicle.cell_centroids
+        ):
+            raise ValueError("Surface targets are not aligned with vehicle cells")
 
         unnorm = normalizer.inverse_td if normalizer is not None else (lambda td: td)
         pred_coeff = unnorm(pred_pts.float())

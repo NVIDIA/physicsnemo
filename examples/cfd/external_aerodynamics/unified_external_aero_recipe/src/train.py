@@ -47,7 +47,12 @@ from jaxtyping import Float
 from loss import LossCalculator
 from metrics import MetricCalculator, resolve_metrics
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import IOType, normalize_output_to_tensordict, require_output_type
+from output_normalize import (
+    IOType,
+    normalize_output_to_tensordict,
+    require_output_type,
+    resolve_output_layout,
+)
 from tabulate import tabulate
 from tensordict import TensorDict
 from torch.amp import GradScaler
@@ -61,7 +66,7 @@ from utils import (
     get_autocast_context,
     make_jsonl_logger,
     recursive_to_device,
-    resolve_dict,
+    resolve_field_weights,
     set_seed,
 )
 
@@ -236,6 +241,7 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
+    output_layout: dict[str, Any] | None = None,
 ) -> tuple[Float[torch.Tensor, ""], TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
@@ -256,6 +262,8 @@ def forward_pass(
             output is unpacked into a TensorDict.
         target_config: ``{name: "scalar"|"vector"}``; used to split tensor
             outputs and validate Mesh outputs.
+        output_layout: The model's ``output_groups`` or ``output_sets``
+            (:func:`output_normalize.resolve_output_layout`), if any.
 
     Returns:
         ``(loss, loss_td, metric_td)``. The two TensorDicts are kept
@@ -273,7 +281,9 @@ def forward_pass(
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
-    pred_td = normalize_output_to_tensordict(output, target_config, output_type)
+    pred_td = normalize_output_to_tensordict(
+        output, target_config, output_type, targets=targets, **(output_layout or {})
+    )
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
@@ -365,6 +375,7 @@ def _run_epoch(
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
+    output_layout = resolve_output_layout(cfg)
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
@@ -379,6 +390,7 @@ def _run_epoch(
                 metric_calculator,
                 output_type=output_type,
                 target_config=target_config,
+                output_layout=output_layout,
             )
 
             if is_train:
@@ -928,16 +940,19 @@ def main(cfg: DictConfig) -> None:
     ### source. Falls back to the recipe's default set when unset.
     metrics_list = resolve_metrics(cfg)
 
-    field_weights = resolve_dict(cfg, "training.field_weights")
+    field_weights = resolve_field_weights(cfg)
+    mask_nonfinite_targets = bool(cfg.training.get("mask_nonfinite_targets", False))
 
     metric_calculator = MetricCalculator(
         target_config=target_config,
         metrics=metrics_list,
+        mask_nonfinite_targets=mask_nonfinite_targets,
     )
     loss_calculator = LossCalculator(
         target_config=target_config,
         loss_type=cfg.training.get("loss_type", "huber"),
         field_weights=field_weights,
+        mask_nonfinite_targets=mask_nonfinite_targets,
     )
     output_type = require_output_type(cfg)
     logger.info(f"Loss: {loss_calculator}")
