@@ -1,41 +1,54 @@
 ISLA
 ====
 
-ISLA (Invariant Slice Attention) is an E(d)-equivariant (any spatial
-dimension d >= 2), measure-aware slice-attention surrogate for steady
-boundary-value problems. The boundary goes in as named
-:class:`~physicsnemo.mesh.mesh.Mesh` objects, one per boundary condition, together
-with the problem's data as *named fields of declared tensor rank*: global inputs
-(a direction, a PDE parameter) and per-cell inputs declared per boundary
-condition (an inlet's prescribed velocity, a loaded face's traction; a no-slip
-wall declares none). An interior task's prediction points are read by their
-positions alone: their distance to the boundary and its direction are computed
-inside the model. Named fields of declared rank come out: scalars, vectors and
-tensors up to rank 4, each covariant by its rank. The attention operates only
-on invariants of the per-point vector set, and the frame is re-attached at the
-heads, so the network is exactly covariant under rotations, reflections and
-translations by construction. The full model is exactly covariant, up to
-roundoff, when the boundary's canonical frame is unique and not close to a tie
-(close to one, roundoff can change the interior task's drawn cells, and the
-outputs then agree only approximately). At a tie (a symmetry that reverses a
-principal axis: a mirror plane, a two-fold axis, a centre of symmetry; or equal
-spread along two principal axes), a surface task stays exact, and an interior
-task is exact only with ``n_boundary_tokens`` at least the cell count,
-``tree_read_theta=0`` and a closed boundary, since its draw, read and
-winding-number tree are laid out in that frame; otherwise it is approximate.
+ISLA (Invariant Slice Attention) is a measure-aware slice-attention surrogate
+for steady boundary-value problems. It is :math:`E(d)`-equivariant for any
+spatial dimension :math:`d \geq 2`. Provide each boundary as a named
+:class:`~physicsnemo.mesh.mesh.Mesh` object, one for each boundary condition.
+Provide the problem data as *named fields of declared tensor rank*:
 
-ISLA lives in ``physicsnemo.experimental.models.isla`` and may change between
-releases. The class docstring below documents its inputs and outputs, and the
-module docstring of ``physicsnemo.experimental.models.isla.model`` its design.
-The field declarations follow :class:`~physicsnemo.mesh.fields.FieldSchema` and
-:class:`~physicsnemo.mesh.fields.RankSpec` of the mesh library.
+- Global inputs include a direction or a partial differential equation (PDE)
+  parameter.
+- Inputs for each cell and boundary condition include an inlet's prescribed
+  velocity or a loaded face's traction. A no-slip wall declares no inputs.
+
+For an interior task, the model reads prediction points using only their
+positions. The model internally computes each point's distance and direction
+relative to the boundary. The model outputs named fields of declared rank,
+including scalars, vectors, and tensors up to rank 4. Each field is covariant
+according to its rank. The attention uses only invariants of the vector set
+for each point. The heads reattach the frame, so the network is exactly
+covariant under rotations, reflections, and translations by construction. The
+full model is exactly covariant, up to roundoff, when the boundary's canonical
+frame is unique and not close to a tie. Near a tie, roundoff can change the
+cells drawn for an interior task. In that case, the outputs agree only
+approximately. At a tie, a surface task remains exact.
+A tie occurs for a symmetry that reverses a principal axis, such as a mirror
+plane, a twofold axis, or a center of symmetry. Equal spread along two
+principal axes also creates a tie. An interior task is exact at a tie only
+when all the following conditions hold:
+
+- ``n_boundary_tokens`` is at least the cell count.
+- ``tree_read_theta`` is set to ``0``.
+- The boundary is closed.
+
+These conditions are necessary because the model lays out the interior task's
+draw, read, and winding-number tree in the canonical frame. Without all three
+conditions, the interior task is approximate.
+
+ISLA is available in ``physicsnemo.experimental.models.isla`` and can change
+between releases. The class docstring below documents its inputs and outputs.
+The module docstring for ``physicsnemo.experimental.models.isla.model``
+documents its design.
+The field declarations use :class:`~physicsnemo.mesh.fields.FieldSchema` and
+:class:`~physicsnemo.mesh.fields.RankSpec` from the mesh library.
 
 Citation
 --------
 
-The architecture and its guarantees are described in
-Peter Sharpe, *ISLA: A Coordinate-Free, Measure-Weighted Transformer for
-Boundary-Driven PDEs*, arXiv preprint, 2026. If you use or extend ISLA, please cite:
+Peter Sharpe describes the architecture and its guarantees in *ISLA: A
+Coordinate-Free, Measure-Weighted Transformer for Boundary-Driven PDEs*, an
+arXiv preprint from 2026. If you use or extend ISLA, cite:
 
 .. code-block:: bibtex
 
@@ -47,12 +60,12 @@ Boundary-Driven PDEs*, arXiv preprint, 2026. If you use or extend ISLA, please c
       note   = {arXiv preprint}
     }
 
-Quick start
+Quick Start
 -----------
 
-A surface task predicts at the cells of named boundaries; the other boundaries
-are read as conditions only. The class defaults are ``hidden=512``,
-``n_layers=12`` and ``n_slices=128``:
+A surface task predicts at the cells of named boundaries. The model reads
+other boundaries only as conditions. The class defaults are ``hidden=512``,
+``n_layers=12``, and ``n_slices=128``:
 
 .. code-block:: python
 
@@ -69,13 +82,13 @@ are read as conditions only. The class defaults are ``hidden=512``,
     out.point_data["pressure"]                      # (N,), one per vehicle cell
     out.point_data["wss"]                           # (N, 3)
 
-An interior task is built with ``interior=True`` and called with
-``prediction_points=`` (a point-cloud ``Mesh`` or an ``(N, n_spatial_dims)``
-tensor) in place of ``prediction_boundaries``. Its ``boundary_meshes`` are the
-boundaries at full resolution: the model draws ``n_boundary_tokens`` boundary
-tokens from their cells inside the forward pass, and each prediction depends on
-its own point and the boundary alone, so a large request can be answered in
-chunks.
+To build an interior task, set ``interior=True`` and provide
+``prediction_points`` instead of ``prediction_boundaries``. Set
+``prediction_points`` to a point-cloud ``Mesh`` or an
+``(N, n_spatial_dims)`` tensor. Provide ``boundary_meshes`` at full resolution.
+During the forward pass, the model draws ``n_boundary_tokens`` boundary tokens
+from their cells. Each prediction depends only on its point and the boundary,
+so you can process a large request in chunks.
 
 .. autoclass:: physicsnemo.experimental.models.isla.model.ISLA
     :show-inheritance:
