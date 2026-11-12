@@ -450,6 +450,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
+  path. They used to raise unless `copy_existing=True` was passed, because the
+  loaded tensors are memory-mapped to the original files.
 - The container build compiles NATTEN from source with C++20 when no
   prebuilt NATTEN wheel is supplied, so it builds on PyTorch 2.15 base
   images, whose headers require C++20.
