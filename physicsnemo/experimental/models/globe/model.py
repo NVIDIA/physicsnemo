@@ -69,10 +69,12 @@ def _column_runs(layout: PackLayout) -> tuple[tuple[int, int, int], ...]:
             runs.append((offset, stop, n_dims))
     return tuple(runs)
 
+
 @dataclass
 class MetaData(ModelMetaData):
     jit: bool = False  # Refers to torch.compile compatibility - this is compatible.
-    cuda_graphs: bool = False  # Computational graph changes depending on inputs due to tree traversals
+    # The computational graph changes with the inputs, due to tree traversals.
+    cuda_graphs: bool = False
     amp: bool = True
     torch_fx: bool = False
     onnx: bool = False
@@ -311,13 +313,10 @@ class GLOBE(Module):
             )
         if theta < 0:
             raise ValueError(
-                f"theta must be non-negative (0 means exact summation), "
-                f"got {theta=!r}"
+                f"theta must be non-negative (0 means exact summation), got {theta=!r}"
             )
         if leaf_size < 1:
-            raise ValueError(
-                f"leaf_size must be at least 1, got {leaf_size=!r}"
-            )
+            raise ValueError(f"leaf_size must be at least 1, got {leaf_size=!r}")
         if reference_area <= 0:
             raise ValueError(
                 f"reference_area must be positive, got {reference_area=!r}"
@@ -373,9 +372,7 @@ class GLOBE(Module):
                     bc_type: MultiscaleKernel(
                         n_spatial_dims=n_spatial_dims,
                         output_schema=(
-                            output_schema
-                            if is_last_hyperlayer
-                            else intermediate_schema
+                            output_schema if is_last_hyperlayer else intermediate_schema
                         ),
                         reference_length_names=reference_length_names,
                         source_schema=self._build_source_schema(
@@ -538,13 +535,13 @@ class GLOBE(Module):
             centroids_built: dict[str, torch.Tensor] = {}
             for bc_type, mesh in zip(bc_types, meshes):
                 centroids = mesh.cell_centroids.to(build_device)
-                areas = (cell_measures(mesh) / self.reference_area).to(
-                    build_device
-                )
+                areas = (cell_measures(mesh) / self.reference_area).to(build_device)
                 centroids_built[bc_type] = centroids
                 bc_areas_built[bc_type] = areas
                 cluster_trees_built[bc_type] = ClusterTree.from_points(
-                    centroids, leaf_size=self.leaf_size, areas=areas,
+                    centroids,
+                    leaf_size=self.leaf_size,
+                    areas=areas,
                 )
 
             ### Pass 2: one dual traversal per source BC, against a forest
@@ -554,15 +551,15 @@ class GLOBE(Module):
             if len(bc_types) == 1:  # the tree itself: self-interaction
                 forest = cluster_trees_built[bc_types[0]]
             else:
-                forest = ClusterTree.merge(
-                    [cluster_trees_built[bc] for bc in bc_types]
-                )
+                forest = ClusterTree.merge([cluster_trees_built[bc] for bc in bc_types])
             comm_plans_built: dict[str, DualInteractionPlan] = {}
             comm_centroids_built: dict[str, torch.Tensor | None] = {}
             for src_bc, src_mesh in zip(bc_types, meshes):
                 plan = cluster_trees_built[src_bc].find_dual_interaction_pairs(
-                    target_tree=forest, theta=self.theta,
-                    expand_far_targets=self.expand_far_targets, validate=False,
+                    target_tree=forest,
+                    theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
+                    validate=False,
                 )
                 comm_plans_built[src_bc] = plan
                 logger.logger.debug(
@@ -570,9 +567,15 @@ class GLOBE(Module):
                     "(%.2f%% near-field, %d src x %d dst faces, "
                     "theta=%.2f, leaf_size=%d)",
                     src_bc,
-                    plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
+                    plan.n_near,
+                    plan.n_nf,
+                    plan.n_fn,
+                    plan.n_far_nodes,
                     100.0 * plan.n_near / max(src_mesh.n_cells * n_targets, 1),
-                    src_mesh.n_cells, n_targets, self.theta, self.leaf_size,
+                    src_mesh.n_cells,
+                    n_targets,
+                    self.theta,
+                    self.leaf_size,
                 )
                 ### Target-node centroids, only for plans that use them, in
                 ### the forest's node order, one block per destination tree
@@ -647,7 +650,8 @@ class GLOBE(Module):
         n_pred = prediction_points.shape[0]
         with torch.no_grad():
             pred_target_tree_built = ClusterTree.from_points(
-                prediction_points.to(build_device), leaf_size=self.leaf_size,
+                prediction_points.to(build_device),
+                leaf_size=self.leaf_size,
             )
             ### Single pass: each iteration is independent - transfer the
             ### source tree to ``build_device``, run the dual traversal
@@ -655,15 +659,23 @@ class GLOBE(Module):
             pred_plans_built: dict[str, DualInteractionPlan] = {}
             for bc_type, tree in cluster_trees.items():
                 plan = tree.to(build_device).find_dual_interaction_pairs(  # ty: ignore[unresolved-attribute]
-                    target_tree=pred_target_tree_built, theta=self.theta,
-                    expand_far_targets=self.expand_far_targets, validate=False,
+                    target_tree=pred_target_tree_built,
+                    theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
+                    validate=False,
                 )
                 pred_plans_built[bc_type] = plan
                 logger.logger.debug(
                     "pred plan [%s]: %d near + %d nf + %d fn + %d far_node "
                     "(%d sources x %d targets, theta=%.2f)",
-                    bc_type, plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
-                    tree.n_sources, n_pred, self.theta,
+                    bc_type,
+                    plan.n_near,
+                    plan.n_nf,
+                    plan.n_fn,
+                    plan.n_far_nodes,
+                    tree.n_sources,
+                    n_pred,
+                    self.theta,
                 )
 
         pred_target_tree = pred_target_tree_built.to(original_device)  # ty: ignore[unresolved-attribute]
@@ -1094,13 +1106,13 @@ class GLOBE(Module):
         # hyperlayer.  Results are concatenated at the end.
         n_points = prediction_points.shape[0]
         if prediction_chunk_size == "auto":
-            prediction_chunk_size = sum(
-                m.n_cells for m in boundary_meshes.values()
-            )
+            prediction_chunk_size = sum(m.n_cells for m in boundary_meshes.values())
         elif prediction_chunk_size is None:
             prediction_chunk_size = n_points
         else:
-            if not (isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0):
+            if not (
+                isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0
+            ):
                 raise ValueError(
                     f"Expected prediction_chunk_size to be a positive integer or 'auto' or None, "
                     f"got {prediction_chunk_size=!r}."
