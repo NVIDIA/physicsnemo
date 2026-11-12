@@ -37,8 +37,9 @@ defaults:
 input_type: mesh
 output_type: mesh
 
-# The reader also loads the tunnel boundaries, whole. The dataset's
-# transforms move them with the vehicle, and its terminal
+# The reader also loads the tunnel boundaries, whole up to
+# `sampling_resolution` cells each (DrivAerML's have a few thousand). The
+# dataset's transforms move them with the vehicle, and its terminal
 # SurfaceMeshToDomainMesh keeps them beside `boundaries.vehicle`.
 dataset_reader_overrides:
   domain_boundaries: [inlet, no_slip, outlet, slip]
@@ -66,7 +67,7 @@ compile: false
 forward_kwargs:
   boundary_meshes:                    # Mesh[2, 3] each
     vehicle: boundaries.vehicle       # the subsampled vehicle surface
-    inlet: boundaries.inlet           # the tunnel's boundaries, whole
+    inlet: boundaries.inlet           # the tunnel's boundaries
     no_slip: boundaries.no_slip
     outlet: boundaries.outlet
     slip: boundaries.slip

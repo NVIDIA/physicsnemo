@@ -45,7 +45,7 @@ class TestFlipBoundaryOrientation:
     def test_mesh_reversed_with_its_stored_normals(self):
         """Each normal flips; points, measures and other fields stay as they are."""
         mesh = _surface()
-        out = FlipBoundaryOrientation(boundaries=[], normal_fields=["normals"])(mesh)
+        out = FlipBoundaryOrientation(normal_fields=["normals"])(mesh)
         assert torch.equal(out.cells, mesh.cells[:, [0, 2, 1]])
         torch.testing.assert_close(out.cell_normals, -mesh.cell_normals)
         torch.testing.assert_close(out.cell_data["normals"], out.cell_normals)
@@ -58,7 +58,7 @@ class TestFlipBoundaryOrientation:
     def test_flip_twice_is_identity(self):
         """Reversing twice restores the cells and the stored normals exactly."""
         mesh = _surface()
-        flip = FlipBoundaryOrientation(boundaries=[], normal_fields=["normals"])
+        flip = FlipBoundaryOrientation(normal_fields=["normals"])
         out = flip(flip(mesh))
         assert torch.equal(out.cells, mesh.cells)
         assert torch.equal(out.cell_data["normals"], mesh.cell_data["normals"])
@@ -69,7 +69,7 @@ class TestFlipBoundaryOrientation:
             points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]),
             cells=torch.tensor([[0, 1], [1, 2]]),
         )
-        out = FlipBoundaryOrientation(boundaries=[])(mesh)
+        out = FlipBoundaryOrientation()(mesh)
         torch.testing.assert_close(out.cell_normals, -mesh.cell_normals)
 
     def test_domain_flips_only_named_boundaries(self):
@@ -106,7 +106,7 @@ class TestFlipBoundaryOrientation:
     def test_point_cloud_raises(self):
         """A mesh without oriented cells cannot be reversed."""
         with pytest.raises(ValueError, match="at least 2 vertices"):
-            FlipBoundaryOrientation(boundaries=[])(Mesh(points=torch.randn(4, 3)))
+            FlipBoundaryOrientation()(Mesh(points=torch.randn(4, 3)))
 
     def test_registered(self):
         """The transform is in the datapipe registry, for ``${dp:...}`` configs."""

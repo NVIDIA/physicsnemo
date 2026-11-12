@@ -590,6 +590,11 @@ The schedule is the `scheduler` config group in `conf/scheduler/`.
 `step_lr` (the default) is StepLR with `step_size: 100` and `gamma: 0.1`.
 `warmup_cosine` is a warmup to the peak learning rate over the first 5 of 500
 epochs, then a cosine decay to 1e-6 (at the ISLA learning rate of 3.75e-4).
+Its default `pct_start: 0.01` assumes about 500 epochs:
+`training.num_epochs=100` raises, and fewer epochs get no warmup. For another
+length, set `training.scheduler.pct_start=<5/num_epochs>`. Under
+`scheduler_update_mode: step`, also set `training.scheduler.total_steps` to
+the number of optimizer updates.
 Pick one on the CLI (`scheduler@training.scheduler=warmup_cosine`) or in a
 model template's defaults list
 (`- override /scheduler@training.scheduler: warmup_cosine`). Its keys
@@ -741,16 +746,18 @@ the dataset files and the other models' samples stay as they are.
 
 - `isla_surface` predicts pressure and wall shear stress at the vehicle's
   cells. Its `dataset_reader_overrides: {domain_boundaries: [...]}` makes
-  the reader load the tunnel boundaries whole beside the subsampled vehicle.
+  the reader load the tunnel boundaries beside the subsampled vehicle, whole
+  up to `sampling_resolution` cells each (DrivAerML's have a few thousand).
   The dataset's transforms move them with the vehicle, and its terminal
   `SurfaceMeshToDomainMesh` keeps them.
 - `isla_volume` predicts velocity, pressure and `nut` at the interior points.
   It reads every boundary whole (`subsample_n_cells: null`) and draws its
   own boundary tokens. It computes its own signed distances, so it ignores
   the dataset's `sdf` inputs.
-  At the defaults it needs a GPU of more than 80 GB. On an 80 GB GPU, lower
-  both `sampling_resolution` and `model.n_boundary_tokens`, for example
-  `sampling_resolution=50000 model.n_boundary_tokens=100000`.
+  Its defaults (200,000 interior points and 200,000 boundary tokens) needed
+  about 215 GiB of GPU memory on one GB300. For 80 GB cards, use
+  `sampling_resolution=50000 model.n_boundary_tokens=100000`, which needed
+  62 GiB at 0.5 s per step there.
 
 ISLA needs every boundary's normals to point into the fluid. The curated
 files wind the vehicle with its normals into the body, so both configs

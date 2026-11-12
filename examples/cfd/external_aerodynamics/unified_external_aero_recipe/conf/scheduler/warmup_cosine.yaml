@@ -21,10 +21,13 @@
 # the CLI. The run starts at lr / div_factor and ends at
 # lr / (div_factor * final_div_factor): 1e-6 at lr 3.75e-4.
 #
-# pct_start is the warmup's share of the run: 0.01 is 5 of the default 500
-# epochs. Set it to 5 / training.num_epochs for another length. A warmup of
-# exactly one step (pct_start * num_epochs == 1) makes OneCycleLR divide by
-# zero.
+# pct_start is the warmup's share of the run. The default 0.01 assumes about
+# 500 epochs (a 5-epoch warmup). At training.num_epochs=100 OneCycleLR raises
+# ZeroDivisionError, and below 100 epochs there is no warmup. For another
+# length set training.scheduler.pct_start=<5 / num_epochs>, e.g. 0.05 at 100.
+# Under scheduler_update_mode: step, set training.scheduler.total_steps to the
+# number of optimizer updates: it counts epochs here, and OneCycleLR raises
+# once the updates pass it.
 _target_: torch.optim.lr_scheduler.OneCycleLR
 max_lr: ${training.optimizer.lr}
 total_steps: ${training.num_epochs}

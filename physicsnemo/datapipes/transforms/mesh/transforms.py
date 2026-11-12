@@ -958,24 +958,31 @@ class FlipBoundaryOrientation(MeshTransform):
     ----------
     boundaries : sequence of str
         Names of the :class:`~physicsnemo.mesh.DomainMesh` boundaries to
-        reverse.
+        reverse. Used only on a ``DomainMesh``. Default: none.
     normal_fields : sequence of str
         ``cell_data`` fields holding stored normals. Default: none.
 
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.mesh import Mesh
-    >>> mesh = Mesh(
+    >>> from physicsnemo.mesh import DomainMesh, Mesh
+    >>> wall = Mesh(
     ...     points=torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
     ...     cells=torch.tensor([[0, 1, 2]]),
     ... )
-    >>> FlipBoundaryOrientation(boundaries=["vehicle"])(mesh).cell_normals
+    >>> FlipBoundaryOrientation()(wall).cell_normals
     tensor([[ 0.,  0., -1.]])
+    >>> domain = DomainMesh(
+    ...     interior=Mesh(points=torch.zeros(1, 3)),
+    ...     boundaries={"wall": wall, "inlet": wall},
+    ... )
+    >>> out = FlipBoundaryOrientation(boundaries=["wall"]).apply_to_domain(domain)
+    >>> out.boundaries["wall"].cell_normals, out.boundaries["inlet"].cell_normals
+    (tensor([[ 0.,  0., -1.]]), tensor([[0., 0., 1.]]))
     """
 
     def __init__(
-        self, boundaries: Sequence[str], normal_fields: Sequence[str] = ()
+        self, boundaries: Sequence[str] = (), normal_fields: Sequence[str] = ()
     ) -> None:
         super().__init__()
         self.boundaries = [str(name) for name in boundaries]

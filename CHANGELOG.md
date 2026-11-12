@@ -13,10 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
 - The unified external aerodynamics recipe adds ISLA surface and interior
   configurations on DrivAerML, which read the whole flow-domain boundary.
-  They use new generic pieces any model can select: the
-  `FlipBoundaryOrientation` mesh transform, a reader option that loads the
-  tunnel boundaries, and a `scheduler` config group with a warmup-cosine
-  choice.
+  They add generic pieces any model can use, such as the
+  `FlipBoundaryOrientation` mesh transform and a `scheduler` config group.
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference

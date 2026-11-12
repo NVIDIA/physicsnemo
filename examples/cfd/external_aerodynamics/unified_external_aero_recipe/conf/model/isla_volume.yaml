@@ -44,6 +44,7 @@ dataset_reader_overrides:
 dataset_append_transforms:
   - _target_: ${dp:FlipBoundaryOrientation}
     boundaries: [vehicle]
+    normal_fields: [normals]   # negated with the winding, if the files store it
 
 training:
   optimizer:

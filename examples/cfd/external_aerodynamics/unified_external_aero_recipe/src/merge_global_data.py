@@ -100,7 +100,8 @@ class MeshReaderWithGlobalData(MeshReader):
     domain_boundaries : sequence of str
         Names of other boundaries stored beside the matched surface
         (siblings of its directory, ``.../boundaries/<name>``), loaded
-        whole and never subsampled.  With any name, the sample is a
+        whole; the chain's ``SubsampleMesh`` then caps each at its
+        ``n_cells`` like the surface.  With any name, the sample is a
         :class:`~physicsnemo.mesh.DomainMesh` whose interior is the
         surface, whose boundaries are these meshes and whose
         ``global_data`` is the case's, so every transform of the chain
