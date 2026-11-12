@@ -127,6 +127,7 @@ def _reduce_and_average(
     n_samples: int,
     *,
     device: torch.device | str,
+    metric_counts: TensorDict | None = None,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
     """Collapse rank-local loss/metric *sums* into a global mean-of-means.
 
@@ -162,6 +163,8 @@ def _reduce_and_average(
             the step count because the recipe runs ``batch_size == 1``).
         device: The rank's collective/compute device (``dist_manager.device``),
             where the ``all_reduce`` runs.
+        metric_counts: Optional per-leaf count of the samples behind
+            ``metrics_td`` (see :func:`_skip_nan`), to average over instead.
 
     Returns:
         A ``(avg_loss, avg_losses, avg_metrics)`` tuple of Python floats:
@@ -195,13 +198,26 @@ def _reduce_and_average(
             "metrics": metrics_td / n,
         },
     )
+    if metric_counts is not None:
+        bundle["metric_counts"] = metric_counts / n
     ### Pull the reduced bundle host-side once; .item() off the CPU copy is then
     ### a free index, with no per-leaf device sync (AVG is a no-op single-process).
     reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device).cpu()
+    metrics = reduced["metrics"]
+    if metric_counts is not None:
+        metrics = metrics / reduced["metric_counts"]
     return (
         reduced["loss"].item(),
         {key: value.item() for key, value in reduced["losses"].items()},
-        {key: value.item() for key, value in reduced["metrics"].items()},
+        {key: value.item() for key, value in metrics.items()},
+    )
+
+
+def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
+    """Split *metrics* into NaN-free values and per-leaf counts of non-NaN ones."""
+    return (
+        metrics.apply(lambda v: torch.where(v.isnan(), 0.0, v)),
+        metrics.apply(lambda v: (~v.isnan()).float()),
     )
 
 
@@ -372,6 +388,7 @@ def _run_epoch(
     total_loss = torch.zeros((), dtype=torch.float64, device=dist_manager.device)
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
+    total_counts: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
@@ -411,12 +428,19 @@ def _run_epoch(
             ### (the joint ``is None`` check exists to satisfy the type
             ### checker, which can't see the invariant from per-variable
             ### narrowing).
+            ### Masked targets: skip a field's NaN metrics (no finite target).
+            counts = None
+            if metric_calculator.mask_nonfinite_targets:
+                metrics, counts = _skip_nan(metrics)
             if total_losses_td is None or total_metrics_td is None:
                 total_losses_td = losses.clone()
                 total_metrics_td = metrics.clone()
+                total_counts = counts
             else:
                 total_losses_td.add_(losses)
                 total_metrics_td.add_(metrics)
+                if counts is not None:
+                    total_counts = total_counts + counts
             n_local += 1
 
             ### Detached scalar loss: accumulate the epoch sum on-device (no
@@ -441,7 +465,12 @@ def _run_epoch(
             ### keep the per-step collective deadlock-free (see
             ### ``_reduce_and_average``).
             step_loss, step_losses, step_metrics = _reduce_and_average(
-                loss_det, losses, metrics, 1, device=dist_manager.device
+                loss_det,
+                losses,
+                metrics,
+                1,
+                device=dist_manager.device,
+                metric_counts=counts,
             )
 
             ### Train mode includes Mem in the per-step line; val drops it
@@ -536,6 +565,7 @@ def _run_epoch(
         total_metrics_td,
         n_local,
         device=dist_manager.device,
+        metric_counts=total_counts,
     )
 
     logger.info(
@@ -955,6 +985,7 @@ def main(cfg: DictConfig) -> None:
         mask_nonfinite_targets=mask_nonfinite_targets,
     )
     output_type = require_output_type(cfg)
+    resolve_output_layout(cfg)  # fail fast on a bad layout, before epoch 1
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
     logger.info(

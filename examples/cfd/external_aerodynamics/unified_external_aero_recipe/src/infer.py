@@ -75,6 +75,7 @@ Caveats:
   trained.
 """
 
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,7 @@ from tabulate import tabulate
 from tensordict import TensorDict
 from utils import (
     FieldType,
+    by_source_fields,
     get_autocast_context,
     make_jsonl_logger,
     recursive_to_device,
@@ -192,6 +194,7 @@ def redimensionalize(
     nondim: NonDimensionalizeByMetadata | None,
     field_types: dict[str, NondimFieldType],
     global_data: TensorDict,
+    target_sources: dict[str, str] | None = None,
 ) -> TensorDict:
     """Invert the pipeline's field conditioning back to physical units.
 
@@ -202,22 +205,26 @@ def redimensionalize(
     using freestream scales read from the sample's ``global_data``). Each
     stage is skipped when the corresponding transform was absent from the
     dataset, so a fully un-conditioned dataset returns ``td`` unchanged.
+    *target_sources* keys each target by its source field (:func:`utils.by_source_fields`).
     """
-    out = td.float()
-    if normalizer is not None:
-        out = normalizer.inverse_td(out)
-    if nondim is not None and field_types:
-        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(global_data)
-        out = nondim.inverse_td(
-            out,
-            field_types,
-            q_inf,
-            p_inf,
-            U_inf_mag,
-            rho_inf=rho_inf,
-            T_inf=T_inf,
-        )
-    return out
+
+    def invert(out: TensorDict) -> TensorDict:
+        if normalizer is not None:
+            out = normalizer.inverse_td(out)
+        if nondim is not None and field_types:
+            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(global_data)
+            out = nondim.inverse_td(
+                out,
+                field_types,
+                q_inf,
+                p_inf,
+                U_inf_mag,
+                rho_inf=rho_inf,
+                T_inf=T_inf,
+            )
+        return out
+
+    return by_source_fields(td.float(), target_sources, invert)
 
 
 def _norm_stats_match(a: dict[str, dict], b: dict[str, dict]) -> bool:
@@ -619,6 +626,7 @@ def main(cfg: DictConfig) -> None:
     ### when world_size exceeds the split size). ForceAccumulator does the
     ### same for the force sums.
     totals: dict[str, float] = {k: 0.0 for k in metric_calculator.expected_keys()}
+    valid = dict.fromkeys(totals, 0.0)
     count = 0
     sampling_cap = cfg.get("sampling_resolution", None)
     subsampling_warned = False
@@ -641,8 +649,11 @@ def main(cfg: DictConfig) -> None:
         ### whole TensorDict host-side once so each .item() is a free CPU index.
         metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
         sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
+        ### Masked targets: skip a field's NaN metrics (no finite target).
         for k, v in sample_metrics.items():
-            totals[k] += v
+            if not (metric_calculator.mask_nonfinite_targets and math.isnan(v)):
+                totals[k] += v
+                valid[k] += 1
         count += 1
 
         pred_pts = _to_pointwise(pred_td, output_type)
@@ -686,6 +697,7 @@ def main(cfg: DictConfig) -> None:
             nondim=active_nondim,
             field_types=field_types,
             global_data=domain.global_data,
+            target_sources=target_sources,
         )
         true_phys = redimensionalize(
             true_pts,
@@ -693,6 +705,7 @@ def main(cfg: DictConfig) -> None:
             nondim=active_nondim,
             field_types=field_types,
             global_data=domain.global_data,
+            target_sources=target_sources,
         )
 
         ### Every rank writes its own shard. Sample ids embed the dataset
@@ -736,11 +749,15 @@ def main(cfg: DictConfig) -> None:
 
     # -- Aggregate (all-reduce when distributed) --------------------------------
     totals, count = _allreduce_sums(totals, count, device)
+    valid, _ = _allreduce_sums(valid, 0, device)
     force_acc.totals, force_acc.count = _allreduce_sums(
         force_acc.totals, force_acc.count, device
     )
 
-    averages = {k: totals[k] / max(count, 1) for k in sorted(totals)}
+    averages = {
+        k: math.nan if count and not valid[k] else totals[k] / max(valid[k], 1)
+        for k in sorted(totals)
+    }
     if is_rank0:
         table = tabulate(
             [[k, f"{v:.6f}"] for k, v in averages.items()],

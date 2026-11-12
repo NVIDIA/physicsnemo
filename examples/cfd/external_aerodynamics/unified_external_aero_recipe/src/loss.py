@@ -312,9 +312,12 @@ class LossCalculator:
             else:  # vector
                 field_loss = _vector_loss(p, t, self.loss_type, self.delta)
             ### Masked elements add 0 to every sum; a mean also needs the
-            ### valid count, while a relative MSE (a sum ratio) does not.
+            ### valid count, while a relative MSE (a sum ratio) does not. A
+            ### field with no valid element has loss 0, kept by the clamp.
             if self.mask_nonfinite_targets and self.loss_type != "relative_mse":
-                field_loss = field_loss / fraction
+                field_loss = field_loss / fraction.clamp_min(
+                    torch.finfo(fraction.dtype).tiny
+                )
 
             weighted = field_loss * self.field_weights[name]
             loss_dict[self._make_key(name)] = weighted

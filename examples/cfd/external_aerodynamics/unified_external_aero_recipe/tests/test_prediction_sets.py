@@ -35,13 +35,15 @@ from datasets import (
     ChainedNormalizer,
     apply_model_config,
     build_dataset,
+    check_target_sources,
     find_normalizer,
 )
 from forces import ForceContext, surface_force_fields
 from forward_kwargs import extract_targets, resolve_forward_kwargs
-from infer import attach_and_save, redimensionalize
+from infer import attach_and_save, build_redim_field_types, redimensionalize
 from loss import LossCalculator
 from metrics import MetricCalculator
+from nondim import NonDimensionalizeByMetadata
 from omegaconf import OmegaConf
 from output_normalize import (
     check_output_sets,
@@ -49,9 +51,9 @@ from output_normalize import (
     resolve_output_layout,
 )
 from tensordict import TensorDict
-from utils import resolve_field_weights
+from utils import by_source_fields, resolve_field_weights
 
-from physicsnemo.datapipes.transforms.mesh import MeshTransform
+from physicsnemo.datapipes.transforms.mesh import MeshTransform, NormalizeMeshFields
 from physicsnemo.mesh import DomainMesh, Mesh
 
 N_VOLUME, N_SURFACE = 10, 6
@@ -146,6 +148,15 @@ class TestTargetSources:
                 domain, TARGETS, {"volume.pressure": SOURCES["volume.pressure"]}
             )
 
+    @pytest.mark.parametrize(
+        "path", ["boundaries.vehicle.cell_data.pressure", ".point_data.p", "interior"]
+    )
+    def test_malformed_source_paths_raise(self, path):
+        """Only ``<mesh path>.point_data.<field>`` paths are accepted."""
+        check_target_sources(SOURCES)
+        with pytest.raises(ValueError, match="<mesh path>.point_data.<field>"):
+            check_target_sources({**SOURCES, "surface.pressure": path})
+
     @pytest.mark.parametrize("input_type", ["mesh", "tensors"])
     def test_collate_batches_unequal_sets(self, input_type):
         """Tensor mode adds a root batch dim of 1; leaves keep their set sizes."""
@@ -221,6 +232,10 @@ class TestOutputSets:
         torch.testing.assert_close(
             merged.points[N_VOLUME:], domain.boundaries["surface_queries"].points
         )
+        with pytest.raises(ValueError, match="no other keys"):
+            resolve_forward_kwargs(
+                {"x": {"concat_point_sets": MERGED, "select": ["pressure"]}}, domain
+            )
 
     OUTPUT_SETS = {
         "interior": {"volume.pressure": "pressure", "volume.velocity": "vec"},
@@ -289,6 +304,20 @@ class TestOutputSets:
             check_output_sets(swapped, SOURCES)
         with pytest.raises(ValueError, match="needs target_sources"):
             check_output_sets(self.OUTPUT_SETS, None)
+
+    def test_concat_order_must_match_output_sets(self):
+        """Every ``concat_point_sets`` list must merge the sets in key order."""
+        spec = {"prediction_points": {"concat_point_sets": MERGED}}
+        check_output_sets(self.OUTPUT_SETS, SOURCES, spec)
+        spec = {"prediction_points": {"concat_point_sets": MERGED[::-1]}}
+        with pytest.raises(ValueError, match="in that order"):
+            check_output_sets(self.OUTPUT_SETS, SOURCES, spec)
+        nested = {"k": [{"src": {"concat_point_sets": MERGED[::-1]}}]}
+        with pytest.raises(ValueError, match="in that order"):
+            check_output_sets(self.OUTPUT_SETS, SOURCES, nested)
+        ### An input-side merge of other sets is not the prediction set.
+        inputs = {"context": {"concat_point_sets": ["boundaries.vehicle", "interior"]}}
+        check_output_sets(self.OUTPUT_SETS, SOURCES, inputs)
 
 
 class _AddSurfaceQueries(MeshTransform):
@@ -458,12 +487,20 @@ class TestExtraTask:
                     },
                     "transforms": [{"_target_": "${dp:MeshToDomainMesh}"}],
                 },
-                "targets": {"pressure": "scalar", "surface_p": "scalar"},
-                "target_sources": self.MODEL["extra_task"]["target_sources"],
+                "targets": {
+                    "volume.pressure": "scalar",
+                    "velocity": "vector",
+                    "surface.pressure": "scalar",
+                },
+                "target_sources": {
+                    "volume.pressure": SOURCES["volume.pressure"],
+                    "surface.pressure": SOURCES["surface.pressure"],
+                },
             }
         )
         dataset = build_dataset(cfg, device=None)
-        assert dataset.transforms[0]._cell_data_targets == ["pressure"]
+        ### Under the source field names, as the mesh stores them.
+        assert dataset.transforms[0]._cell_data_targets == ["pressure", "velocity"]
 
     def test_unknown_shared_constants_raise(self):
         """Naming a field the dataset normalizer does not hold is refused."""
@@ -471,6 +508,21 @@ class TestExtraTask:
         model.extra_task.transforms[1].fields = {"surface_p": "velocity"}
         with pytest.raises(ValueError, match="velocity"):
             apply_model_config(OmegaConf.create(self.DATASET), model)
+
+    def test_shared_constants_need_inline_fields(self):
+        """A dataset normalizer reading a ``stats_file`` cannot share constants."""
+        dataset = OmegaConf.create(self.DATASET)
+        normalize = dataset.pipeline.transforms[0]
+        del normalize["fields"]
+        normalize.stats_file = "norm_stats.pt"
+        with pytest.raises(ValueError, match="inline, not a stats_file"):
+            apply_model_config(dataset, OmegaConf.create(self.MODEL))
+
+    def test_chained_normalizers_refuse_a_repeated_field(self):
+        """Two normalizers of one field would share one entry of the stats."""
+        stats = {"pressure": {"type": "scalar", "mean": 0.0, "std": 1.0}}
+        with pytest.raises(ValueError, match="normalized once"):
+            ChainedNormalizer([NormalizeMeshFields(fields=stats)] * 2)
 
 
 @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
@@ -517,23 +569,52 @@ def test_masked_union_set_equals_split_sets(loss_type):
     for key in split_metrics.keys():
         torch.testing.assert_close(union_metrics[key], split_metrics[key])
 
-    ### A field with no finite target contributes 0, not NaN.
+    ### A field with no finite target adds 0 to the loss, and has NaN metrics.
     empty = union_true.clone()
     empty["a"] = torch.full_like(empty["a"], nan)
     _, empty_td = masked(union_pred, empty)
     assert empty_td["loss/a"] == 0
+    empty_metrics = MetricCalculator(target_config, mask_nonfinite_targets=True)(
+        union_pred, empty
+    )
+    assert all(empty_metrics[k].isnan() for k in empty_metrics.keys() if "a_" in k)
+    torch.testing.assert_close(empty_metrics["b_l2"], split_metrics["b_l2"])
 
 
 class TestForcesAndExport:
     """Forces and export follow each target's source set."""
 
-    FIELD_TYPES = {"surface.pressure": "pressure", "surface.wss": "stress"}
+    ### As real runs build them: keyed by the stored field names.
+    NONDIM = {"pressure": "pressure", "velocity": "velocity", "wss": "stress"}
+    FIELD_TYPES = build_redim_field_types(
+        OmegaConf.create(
+            {
+                "pipeline": {
+                    "transforms": [
+                        {"_target_": "NonDimensionalizeByMetadata", "fields": NONDIM}
+                    ]
+                }
+            }
+        )
+    )
+    STATS = {
+        "pressure": {"type": "scalar", "mean": 2.0, "std": 4.0},
+        "velocity": {"type": "vector", "mean": [1.0, 0.0, 0.0], "std": 3.0},
+        "wss": {"type": "vector", "mean": [0.0, 0.0, 0.0], "std": 0.5},
+    }
 
     def test_forces_on_surface_set_aligned_with_vehicle(self):
-        """Forces integrate the surface set's targets; a misaligned set raises."""
+        """Forces integrate the surface set's targets; a misaligned set is skipped."""
         domain = _domain()
         ctx = ForceContext.from_config(
-            OmegaConf.create({"enabled": True}), self.FIELD_TYPES, "cpu"
+            OmegaConf.create({"enabled": True}),
+            self.FIELD_TYPES,
+            "cpu",
+            target_sources=SOURCES,
+        )
+        assert (ctx.pressure_field, ctx.shear_field) == (
+            "surface.pressure",
+            "surface.wss",
         )
         pts = extract_targets(domain, TARGETS, SOURCES)
         forces = ctx.coefficients(domain, pts, pts, None, SOURCES)
@@ -541,10 +622,58 @@ class TestForcesAndExport:
         ### Without target_sources, the volume interior is no surface case.
         assert ctx.coefficients(domain, pts, pts, None) is None
 
+        ### Normalized targets are un-normalized under their source names.
+        normalizer = NormalizeMeshFields(fields=self.STATS)
+        normed = normalizer.apply_to_domain(_domain())
+        normed_pts = extract_targets(normed, TARGETS, SOURCES)
+        normed_forces = ctx.coefficients(
+            normed, normed_pts, normed_pts, normalizer, SOURCES
+        )
+        assert normed_forces[0] == pytest.approx(forces[0], rel=1e-5, abs=1e-6)
+
         shifted = domain.boundaries["surface_queries"].translate(torch.ones(3))
         domain.boundaries["surface_queries"] = shifted
-        with pytest.raises(ValueError, match="aligned"):
-            ctx.coefficients(domain, pts, pts, None, SOURCES)
+        with pytest.warns(UserWarning, match="aligned"):
+            assert ctx.coefficients(domain, pts, pts, None, SOURCES) is None
+
+    def test_two_targets_of_one_source_field_raise(self):
+        """Two targets on one mesh may not share a source field."""
+        sources = {**SOURCES, "surface.wss": SOURCES["surface.pressure"]}
+        with pytest.raises(ValueError):
+            by_source_fields(
+                extract_targets(_domain(), TARGETS, sources), sources, lambda t: t
+            )
+
+    def test_redimensionalize_under_source_field_names(self):
+        """Targets named apart from their fields are inverted with those fields' rules."""
+        global_data = TensorDict(
+            {
+                "U_inf": torch.tensor([30.0, 0.0, 0.0]),
+                "p_inf": torch.tensor(10.0),
+                "rho_inf": torch.tensor(1.2),
+            }
+        )
+        raw = _domain()
+        nondim = NonDimensionalizeByMetadata(fields=self.NONDIM)
+        normalizer = NormalizeMeshFields(fields=self.STATS)
+        domain = _domain()
+        domain = DomainMesh(
+            interior=domain.interior,
+            boundaries={n: domain.boundaries[n] for n in domain.boundary_names},
+            global_data=global_data,
+        )
+        domain = normalizer.apply_to_domain(nondim.apply_to_domain(domain))
+        physical = redimensionalize(
+            extract_targets(domain, TARGETS, SOURCES),
+            normalizer=normalizer,
+            nondim=nondim,
+            field_types=self.FIELD_TYPES,
+            global_data=global_data,
+            target_sources=SOURCES,
+        )
+        torch.testing.assert_close(
+            physical, extract_targets(raw, TARGETS, SOURCES), rtol=1e-4, atol=1e-4
+        )
 
     def test_forces_pick_the_pair_on_one_source_mesh(self):
         """A volume pressure next to a surface set's pair integrates the surface."""

@@ -347,7 +347,8 @@ targets, such as the volume interior and a surface point set. The keys:
 
 - `target_sources: {<target>: <mesh path>.point_data.<field>}` (dataset YAML)
   says where each target lives. Once any target has a source, the others
-  default to `interior.point_data.<name>`. Without it nothing changes.
+  default to `interior.point_data.<name>`. Without it nothing changes. A path
+  of another form (such as a `cell_data` one) is an error at startup.
 - `dataset_append_transforms: [...]` (model YAML) appends transforms to every
   chosen dataset's `pipeline.transforms`, for training and validation.
 - `extra_task: {transforms, targets, target_sources, field_weights}` (model
@@ -359,7 +360,9 @@ targets, such as the volume interior and a surface point set. The keys:
 - `output_groups` or `output_sets` (model YAML, not both) map the model
   output onto the sets; see the examples below.
 - `training.mask_nonfinite_targets: true` leaves non-finite target elements
-  (NaN where a point lacks a field) out of the loss and metrics.
+  (NaN where a point lacks a field) out of the loss and metrics. A field with
+  no finite target in a sample adds 0 to the loss and gets NaN metrics, which
+  the epoch and inference means skip.
 
 Each target is scored on its own set's points. Inference applies the same
 model-config hooks, inverts every `NormalizeMeshFields` of the pipeline,
@@ -383,6 +386,8 @@ A single-decoder model predicts on one point-cloud `Mesh` of the sets' merged
 points and returns a `Mesh` (`output_type: mesh`). `output_sets` splits its
 `point_data` back: its keys are the sets, in merge order, each the source mesh
 of its targets, and its values map each target to the output field it reads.
+A `concat_point_sets` list of exactly the `output_sets` keys must list them in
+the same order, or training stops at startup.
 
 ```yaml
 output_type: mesh
