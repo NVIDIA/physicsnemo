@@ -112,6 +112,7 @@ Conventions and assumptions:
   cap.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -121,6 +122,7 @@ from jaxtyping import Float
 from nondim import NondimFieldType
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
+from utils import by_source_fields
 
 from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -320,18 +322,17 @@ def surface_force_fields(
     ``"stress"`` (i.e. :math:`C_p` and :math:`C_f`), or ``None`` if the
     dataset does not declare both -- e.g. volume runs, which carry no
     surface traction, so force integration auto-skips. With
-    *target_sources*, the first pair whose fields share a source mesh.
+    *target_sources*, the first pair of target names whose source fields
+    have those recipes and share a source mesh.
     """
     if target_sources is not None:
-        mesh = {
-            n: target_sources.get(n, "interior").split(".point_data.")[0]
-            for n in field_types
-        }
+        split = {n: p.split(".point_data.", 1) for n, p in target_sources.items()}
+        kind = {n: field_types.get(leaf) for n, (_, leaf) in split.items()}
         pairs = (
             (p, s)
-            for p, tp in field_types.items()
-            for s, ts in field_types.items()
-            if tp == "pressure" and ts == "stress" and mesh[p] == mesh[s]
+            for p, (mesh_p, _) in split.items()
+            for s, (mesh_s, _) in split.items()
+            if kind[p] == "pressure" and kind[s] == "stress" and mesh_p == mesh_s
         )
         return next(pairs, None)
     pressure = next((n for n, t in field_types.items() if t == "pressure"), None)
@@ -443,7 +444,7 @@ class ForceContext:
         interior points do not map 1:1 to the vehicle cells). With
         *target_sources*, the pressure and shear targets are integrated on
         the point set that holds them both, which must then sit at the
-        vehicle cell centroids.
+        vehicle cell centroids (else this warns once and returns ``None``).
         """
         if "vehicle" not in domain.boundary_names:
             return None
@@ -464,11 +465,16 @@ class ForceContext:
         if target_sources is not None and not torch.allclose(
             surface.points, vehicle.cell_centroids
         ):
-            raise ValueError("Surface targets are not aligned with vehicle cells")
+            warnings.warn(
+                "Surface targets are not aligned with vehicle cells; "
+                "skipping force integration",
+                stacklevel=2,
+            )
+            return None
 
         unnorm = normalizer.inverse_td if normalizer is not None else (lambda td: td)
-        pred_coeff = unnorm(pred_pts.float())
-        true_coeff = unnorm(true_pts.float())
+        pred_coeff = by_source_fields(pred_pts.float(), target_sources, unnorm)
+        true_coeff = by_source_fields(true_pts.float(), target_sources, unnorm)
 
         gd = domain.global_data
         length_scale = float(gd["L_ref"].item()) if "L_ref" in gd else 1.0

@@ -102,6 +102,7 @@ from tabulate import tabulate
 from tensordict import TensorDict
 from utils import (
     FieldType,
+    by_source_fields,
     get_autocast_context,
     make_jsonl_logger,
     recursive_to_device,
@@ -192,6 +193,7 @@ def redimensionalize(
     nondim: NonDimensionalizeByMetadata | None,
     field_types: dict[str, NondimFieldType],
     global_data: TensorDict,
+    target_sources: dict[str, str] | None = None,
 ) -> TensorDict:
     """Invert the pipeline's field conditioning back to physical units.
 
@@ -202,22 +204,27 @@ def redimensionalize(
     using freestream scales read from the sample's ``global_data``). Each
     stage is skipped when the corresponding transform was absent from the
     dataset, so a fully un-conditioned dataset returns ``td`` unchanged.
+    With *target_sources*, both see each target under its source field name
+    (see :func:`utils.by_source_fields`).
     """
-    out = td.float()
-    if normalizer is not None:
-        out = normalizer.inverse_td(out)
-    if nondim is not None and field_types:
-        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(global_data)
-        out = nondim.inverse_td(
-            out,
-            field_types,
-            q_inf,
-            p_inf,
-            U_inf_mag,
-            rho_inf=rho_inf,
-            T_inf=T_inf,
-        )
-    return out
+
+    def invert(out: TensorDict) -> TensorDict:
+        if normalizer is not None:
+            out = normalizer.inverse_td(out)
+        if nondim is not None and field_types:
+            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(global_data)
+            out = nondim.inverse_td(
+                out,
+                field_types,
+                q_inf,
+                p_inf,
+                U_inf_mag,
+                rho_inf=rho_inf,
+                T_inf=T_inf,
+            )
+        return out
+
+    return by_source_fields(td.float(), target_sources, invert)
 
 
 def _norm_stats_match(a: dict[str, dict], b: dict[str, dict]) -> bool:
@@ -686,6 +693,7 @@ def main(cfg: DictConfig) -> None:
             nondim=active_nondim,
             field_types=field_types,
             global_data=domain.global_data,
+            target_sources=target_sources,
         )
         true_phys = redimensionalize(
             true_pts,
@@ -693,6 +701,7 @@ def main(cfg: DictConfig) -> None:
             nondim=active_nondim,
             field_types=field_types,
             global_data=domain.global_data,
+            target_sources=target_sources,
         )
 
         ### Every rank writes its own shard. Sample ids embed the dataset

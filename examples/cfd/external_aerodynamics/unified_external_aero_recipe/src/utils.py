@@ -240,6 +240,37 @@ def mask_nonfinite(
     return torch.where(valid, p, 0.0), torch.where(valid, t, 0.0), fraction
 
 
+def by_source_fields(
+    td: TensorDict,
+    target_sources: dict[str, str] | None,
+    fn: Callable[[TensorDict], TensorDict],
+) -> TensorDict:
+    """Apply *fn* to the targets in *td* under their source field names.
+
+    Normalizer and non-dim rules are keyed by the stored field name
+    (``pressure``), the targets by their own (``surface.pressure``). So
+    with *target_sources*, each source mesh's targets are renamed to their
+    field names, passed through *fn* together, and renamed back. A target
+    with no entry keeps its own name.
+    """
+    if target_sources is None:
+        return fn(td)
+    paths = {as_nested_key(n): p for n, p in target_sources.items()}
+    groups: dict[str, dict] = {}
+    for key in td.keys(include_nested=True, leaves_only=True):
+        mesh, _, leaf = paths.get(key, "").partition(".point_data.")
+        groups.setdefault(mesh, {})[key] = as_nested_key(leaf) if leaf else key
+    out = td.empty()
+    for group in groups.values():
+        part = td.empty()
+        for key, leaf in group.items():
+            part.set(leaf, td.get(key))
+        part = fn(part)
+        for key, leaf in group.items():
+            out.set(key, part.get(leaf))
+    return out
+
+
 def validate_field_coverage(
     target_config: dict[str, FieldType],
     pred: TensorDict,

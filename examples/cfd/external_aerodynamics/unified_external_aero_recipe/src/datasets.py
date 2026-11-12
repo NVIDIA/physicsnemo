@@ -473,12 +473,17 @@ def build_dataset(
     reader = hydra.utils.instantiate(cfg.pipeline.reader, **reader_kwargs)
     resolved = []
 
-    ### Only targets on the interior (the default) come from MeshToDomainMesh.
+    ### Only targets on the interior (the default) come from MeshToDomainMesh,
+    ### under their source field names.
     sources = resolve_dict(cfg, "target_sources") or {}
+    paths = [
+        sources.get(n, f"interior.point_data.{n}")
+        for n in resolve_dict(cfg, "targets") or {}
+    ]
     target_names = [
-        name
-        for name in resolve_dict(cfg, "targets") or {}
-        if sources.get(name, "interior.").startswith("interior.")
+        p.removeprefix("interior.point_data.")
+        for p in paths
+        if p.startswith("interior.point_data.")
     ]
 
     if "transforms" in cfg.pipeline and cfg.pipeline.transforms:

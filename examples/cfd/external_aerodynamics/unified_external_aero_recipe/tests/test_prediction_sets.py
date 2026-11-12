@@ -39,9 +39,10 @@ from datasets import (
 )
 from forces import ForceContext, surface_force_fields
 from forward_kwargs import extract_targets, resolve_forward_kwargs
-from infer import attach_and_save, redimensionalize
+from infer import attach_and_save, build_redim_field_types, redimensionalize
 from loss import LossCalculator
 from metrics import MetricCalculator
+from nondim import NonDimensionalizeByMetadata
 from omegaconf import OmegaConf
 from output_normalize import (
     check_output_sets,
@@ -51,7 +52,7 @@ from output_normalize import (
 from tensordict import TensorDict
 from utils import resolve_field_weights
 
-from physicsnemo.datapipes.transforms.mesh import MeshTransform
+from physicsnemo.datapipes.transforms.mesh import MeshTransform, NormalizeMeshFields
 from physicsnemo.mesh import DomainMesh, Mesh
 
 N_VOLUME, N_SURFACE = 10, 6
@@ -458,12 +459,20 @@ class TestExtraTask:
                     },
                     "transforms": [{"_target_": "${dp:MeshToDomainMesh}"}],
                 },
-                "targets": {"pressure": "scalar", "surface_p": "scalar"},
-                "target_sources": self.MODEL["extra_task"]["target_sources"],
+                "targets": {
+                    "volume.pressure": "scalar",
+                    "velocity": "vector",
+                    "surface.pressure": "scalar",
+                },
+                "target_sources": {
+                    "volume.pressure": SOURCES["volume.pressure"],
+                    "surface.pressure": SOURCES["surface.pressure"],
+                },
             }
         )
         dataset = build_dataset(cfg, device=None)
-        assert dataset.transforms[0]._cell_data_targets == ["pressure"]
+        ### Under the source field names, as the mesh stores them.
+        assert dataset.transforms[0]._cell_data_targets == ["pressure", "velocity"]
 
     def test_unknown_shared_constants_raise(self):
         """Naming a field the dataset normalizer does not hold is refused."""
@@ -527,13 +536,37 @@ def test_masked_union_set_equals_split_sets(loss_type):
 class TestForcesAndExport:
     """Forces and export follow each target's source set."""
 
-    FIELD_TYPES = {"surface.pressure": "pressure", "surface.wss": "stress"}
+    ### As real runs build them: keyed by the stored field names.
+    NONDIM = {"pressure": "pressure", "velocity": "velocity", "wss": "stress"}
+    FIELD_TYPES = build_redim_field_types(
+        OmegaConf.create(
+            {
+                "pipeline": {
+                    "transforms": [
+                        {"_target_": "NonDimensionalizeByMetadata", "fields": NONDIM}
+                    ]
+                }
+            }
+        )
+    )
+    STATS = {
+        "pressure": {"type": "scalar", "mean": 2.0, "std": 4.0},
+        "velocity": {"type": "vector", "mean": [1.0, 0.0, 0.0], "std": 3.0},
+        "wss": {"type": "vector", "mean": [0.0, 0.0, 0.0], "std": 0.5},
+    }
 
     def test_forces_on_surface_set_aligned_with_vehicle(self):
-        """Forces integrate the surface set's targets; a misaligned set raises."""
+        """Forces integrate the surface set's targets; a misaligned set is skipped."""
         domain = _domain()
         ctx = ForceContext.from_config(
-            OmegaConf.create({"enabled": True}), self.FIELD_TYPES, "cpu"
+            OmegaConf.create({"enabled": True}),
+            self.FIELD_TYPES,
+            "cpu",
+            target_sources=SOURCES,
+        )
+        assert (ctx.pressure_field, ctx.shear_field) == (
+            "surface.pressure",
+            "surface.wss",
         )
         pts = extract_targets(domain, TARGETS, SOURCES)
         forces = ctx.coefficients(domain, pts, pts, None, SOURCES)
@@ -541,10 +574,50 @@ class TestForcesAndExport:
         ### Without target_sources, the volume interior is no surface case.
         assert ctx.coefficients(domain, pts, pts, None) is None
 
+        ### Normalized targets are un-normalized under their source names.
+        normalizer = NormalizeMeshFields(fields=self.STATS)
+        normed = normalizer.apply_to_domain(_domain())
+        normed_pts = extract_targets(normed, TARGETS, SOURCES)
+        normed_forces = ctx.coefficients(
+            normed, normed_pts, normed_pts, normalizer, SOURCES
+        )
+        assert normed_forces[0] == pytest.approx(forces[0], rel=1e-5, abs=1e-6)
+
         shifted = domain.boundaries["surface_queries"].translate(torch.ones(3))
         domain.boundaries["surface_queries"] = shifted
-        with pytest.raises(ValueError, match="aligned"):
-            ctx.coefficients(domain, pts, pts, None, SOURCES)
+        with pytest.warns(UserWarning, match="aligned"):
+            assert ctx.coefficients(domain, pts, pts, None, SOURCES) is None
+
+    def test_redimensionalize_under_source_field_names(self):
+        """Targets named apart from their fields are inverted with those fields' rules."""
+        global_data = TensorDict(
+            {
+                "U_inf": torch.tensor([30.0, 0.0, 0.0]),
+                "p_inf": torch.tensor(10.0),
+                "rho_inf": torch.tensor(1.2),
+            }
+        )
+        raw = _domain()
+        nondim = NonDimensionalizeByMetadata(fields=self.NONDIM)
+        normalizer = NormalizeMeshFields(fields=self.STATS)
+        domain = _domain()
+        domain = DomainMesh(
+            interior=domain.interior,
+            boundaries={n: domain.boundaries[n] for n in domain.boundary_names},
+            global_data=global_data,
+        )
+        domain = normalizer.apply_to_domain(nondim.apply_to_domain(domain))
+        physical = redimensionalize(
+            extract_targets(domain, TARGETS, SOURCES),
+            normalizer=normalizer,
+            nondim=nondim,
+            field_types=self.FIELD_TYPES,
+            global_data=global_data,
+            target_sources=SOURCES,
+        )
+        torch.testing.assert_close(
+            physical, extract_targets(raw, TARGETS, SOURCES), rtol=1e-4, atol=1e-4
+        )
 
     def test_forces_pick_the_pair_on_one_source_mesh(self):
         """A volume pressure next to a surface set's pair integrates the surface."""
