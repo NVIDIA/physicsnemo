@@ -139,9 +139,9 @@ def _share_normalizer_constants(
     """Fill the named fields of an ``extra_task`` ``NormalizeMeshFields`` entry.
 
     A field whose value is a string (``{surface_p: pressure}``) takes the
-    constants the dataset's first ``NormalizeMeshFields`` (the one
-    :func:`find_normalizer` returns) holds under that name, so an extra set's
-    field is standardized exactly like the target it is compared with.
+    constants the dataset's own first ``NormalizeMeshFields`` holds under that
+    name, so an extra set's field is standardized exactly like the target it is
+    compared with.
     """
     if not str(t_cfg.get("_target_", "")).endswith(".NormalizeMeshFields"):
         return t_cfg
