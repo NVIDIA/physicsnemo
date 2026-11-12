@@ -252,7 +252,7 @@ detached geometry tokens. Direct calls bypass model-level forward hooks;
 ordinary `model(...)` calls preserve those hooks and return predictions only.
 Other rollout classes can adopt the separate method.
 
-These are the same geometry tokens previously captured by the guard's hook;
+These are the same geometry tokens previously captured by the guard's hook.
 pooling is visible in the recipe. Prediction and scoring share one forward pass.
 Reference features can also be retained from existing evaluation forwards.
 `reference_scores()` excludes each reference row from its own neighbors, so this
