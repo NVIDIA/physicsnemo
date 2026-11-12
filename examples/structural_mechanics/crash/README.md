@@ -259,7 +259,7 @@ Reference features can also be retained from existing evaluation forwards.
 example retains the old leave-one-out threshold and sensitivity multiplier
 without reserving more training samples. Alternatively, select a threshold from
 independent validation scores. Neither empirical rule guarantees a false-positive
-rate; evaluate the chosen policy on held-out cases.
+rate.  Evaluate the chosen policy on held-out cases.
 
 Global parameter bounds remain ordinary input checks. For example, compare each
 velocity/thickness parameter with minima and maxima from the reference inputs,
