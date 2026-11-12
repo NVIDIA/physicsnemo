@@ -429,7 +429,13 @@ class DeFormer(GeoTransolver):
     num_layers_node_decoder : int, optional
         Hidden layers of the post-processor node decoder. Default is 2.
     norm_type : {"LayerNorm", "TELayerNorm"}, optional
-        Normalization of the mesh MLPs. Default is ``"LayerNorm"``.
+        Normalization of the mesh MLPs. Default is ``"LayerNorm"``. As in
+        :class:`~physicsnemo.models.meshgraphnet.MeshGraphNet`, the LayerNorm
+        implementation itself comes from
+        :func:`physicsnemo.nn.module.layer_norm.get_layer_norm_class`:
+        Transformer Engine's when it is installed and a GPU is present, PyTorch's
+        otherwise, with the ``PHYSICSNEMO_FORCE_TE`` environment variable as the
+        override (``False`` for a model that runs on the CPU).
     num_pre_processor_checkpoint_segments, num_post_processor_checkpoint_segments : int, optional
         Activation-checkpoint segments of the pre- and post-processor; 0
         disables checkpointing. Default is 0.
