@@ -466,7 +466,7 @@ class GLOBE(Module):
     @torch.compiler.disable
     def _build_trees_and_plans(
         self,
-        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
     ) -> tuple[
         dict[str, ClusterTree],
         dict[str, torch.Tensor],
@@ -689,7 +689,7 @@ class GLOBE(Module):
         self,
         layer_idx: int,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        source_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
@@ -829,14 +829,14 @@ class GLOBE(Module):
     def _evaluate_communication_hyperlayer(
         self,
         layer_idx: int,
-        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
         comm_plans: dict[str, DualInteractionPlan],
         comm_target_centroids: dict[str, torch.Tensor | None],
         source_areas: dict[str, torch.Tensor],
-    ) -> dict[str, Mesh["n-1", "n"]]:  # ty: ignore[unresolved-reference]
+    ) -> dict[str, Mesh["n-1", "n"]]:  # noqa: F821  # ty: ignore[unresolved-reference]
         r"""Run one boundary-to-boundary communication step.
 
         Evaluates :meth:`_evaluate_hyperlayer` once, at the cell centroids
@@ -894,7 +894,7 @@ class GLOBE(Module):
         if self.latent_compression_scale is not None:
             packed = self._compress_latents(packed)
 
-        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # ty: ignore[unresolved-reference]
+        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # noqa: F821  # ty: ignore[unresolved-reference]
         rows = torch.split(packed, [mesh.n_cells for mesh in meshes])
         for bc_type, mesh, mesh_rows in zip(bc_types, meshes, rows):
             new_cell_data = TensorDict(
@@ -914,11 +914,11 @@ class GLOBE(Module):
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
-        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # noqa: F821  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, torch.Tensor],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         prediction_chunk_size: int | Literal["auto"] | None = "auto",
-    ) -> Mesh[0, "n"]:  # ty: ignore[unresolved-reference]
+    ) -> Mesh[0, "n"]:  # noqa: F821  # ty: ignore[unresolved-reference]
         r"""Evaluate GLOBE model to predict fields at target points.
 
         Runs the full GLOBE forward pass in three phases:
