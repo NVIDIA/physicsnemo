@@ -26,17 +26,17 @@ from torch.profiler import record_function
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.field_kernel import (
-    MultiscaleKernel,
-    _output_layout,
-    _require_supported,
-    _target_node_centroids,
-)
 from physicsnemo.mesh import FieldSchema, FieldSchemaLike, Mesh
 from physicsnemo.mesh.calculus.measure import cell_measures
 from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
     DualInteractionPlan,
+)
+from physicsnemo.models.globe.field_kernel import (
+    MultiscaleKernel,
+    _output_layout,
+    _require_supported,
+    _target_node_centroids,
 )
 from physicsnemo.utils.logging import PythonLogger
 
@@ -164,7 +164,7 @@ class GLOBE(Module):
         the cost of more exact near-field interactions per leaf hit.
     network_type : {"pade", "mlp"}, optional, default="pade"
         Type of neural network in each kernel: a Pade rational network or an
-        MLP (see :class:`~physicsnemo.experimental.models.globe.field_kernel.Kernel`).
+        MLP (see :class:`~physicsnemo.models.globe.field_kernel.Kernel`).
     self_regularization_beta : float or None, optional, default=None
         If not ``None``, bounds the output of each kernel's Pade network (see
         :class:`~physicsnemo.nn.Pade`). Must be positive. Has no effect with
@@ -184,7 +184,7 @@ class GLOBE(Module):
     use_gradient_checkpointing : bool, optional, default=True
         If ``True``, applies ``torch.utils.checkpoint.checkpoint`` to each
         kernel evaluation during training, trading compute for memory. See
-        :class:`~physicsnemo.experimental.models.globe.field_kernel.Kernel` for
+        :class:`~physicsnemo.models.globe.field_kernel.Kernel` for
         details.
     tree_build_device : torch.device or str or None, optional, default=None
         Device on which to build cluster trees and run the dual-tree Barnes-Hut
@@ -231,7 +231,7 @@ class GLOBE(Module):
     - ``kernel_layers`` is a :class:`~torch.nn.ModuleList` of communication
       hyperlayers, each containing a :class:`~torch.nn.ModuleDict` mapping BC
       type names to
-      :class:`~physicsnemo.experimental.models.globe.field_kernel.MultiscaleKernel`
+      :class:`~physicsnemo.models.globe.field_kernel.MultiscaleKernel`
       instances.
     - ``final_field_transforms`` is a :class:`~torch.nn.ModuleList` of per-field
       linear calibration layers, ordered alphabetically by field name.

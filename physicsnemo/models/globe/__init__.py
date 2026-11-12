@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.experimental.models.globe.field_kernel import (
+from physicsnemo.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
     MultiscaleKernel,
 )
-from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.models.globe.model import GLOBE
 
 __all__ = [
     "GLOBE",

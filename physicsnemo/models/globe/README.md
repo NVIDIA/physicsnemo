@@ -2,7 +2,7 @@
 
 ## Overview
 
-This code contains an experimental architecture called GLOBE:
+This code contains an architecture called GLOBE:
 Green's-function-Like Operator for Boundary Element PDEs.
 
 Paper: <https://arxiv.org/abs/2511.15856>

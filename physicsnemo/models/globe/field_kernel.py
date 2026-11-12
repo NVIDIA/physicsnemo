@@ -2338,7 +2338,7 @@ class MultiscaleKernel(Module):
         The columns are those of :attr:`output_layout`, so
         ``self.output_layout.unpack(self.forward_packed(...))`` equals
         ``self(...)``. Callers that add up several kernels' outputs, as
-        :class:`~physicsnemo.experimental.models.globe.GLOBE` does over its
+        :class:`~physicsnemo.models.globe.GLOBE` does over its
         boundary-condition types, add one tensor per kernel instead of one
         per field.
 
