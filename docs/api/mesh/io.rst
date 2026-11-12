@@ -56,6 +56,15 @@ The module has the following functions:
 
       A ``Mesh`` or ``DomainMesh`` with all of its data, in a Zarr store.
 
+   .. grid-item-card:: vtu_to_mesh (prototype)
+      :link: physicsnemo.mesh.io.vtu_to_mesh
+      :link-type: any
+      :shadow: md
+      :class-card: sd-card-hover
+
+      A ``Mesh`` read from an uncompressed ``.vtu`` through a virtual Zarr
+      view, without VTK.
+
 :func:`from_pyvista` keeps the point data and cell data, and it detects the
 manifold dimension, or you set it with ``manifold_dim``. Polygons and
 polyhedra become triangles and tetrahedra. With
@@ -112,6 +121,9 @@ Summary
    to_pyvista
    from_zarr
    to_zarr
+   vtu_to_mesh
+   open_vtu_virtual
+   VTUParser
 
 Related Topics
 --------------
@@ -132,3 +144,17 @@ API Reference
 .. autofunction:: from_zarr
 
 .. autofunction:: to_zarr
+
+Virtual Zarr view of ``.vtu`` files (prototype)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Requires ``virtualizarr`` and ``obstore``. Reads uncompressed appended-raw
+``.vtu`` files of one simplex cell type; see
+:mod:`physicsnemo.mesh.io.io_vtu_virtual` for the limits.
+
+.. autofunction:: vtu_to_mesh
+
+.. autofunction:: open_vtu_virtual
+
+.. autoclass:: VTUParser
+   :members: __call__
