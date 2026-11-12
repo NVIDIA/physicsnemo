@@ -205,6 +205,22 @@ class TestRoundTrip:
         assert "U [m/s]" in mesh.point_data
         assert set(mesh.cell_data.keys(True, True)) == {"p", "p/grad"}
 
+    def test_round_trip_complex_data_with_one_tuple(self):
+        """Complex arrays of one value read back with shape (1,), as real ones do."""
+        z = torch.tensor([1.0 + 2.0j], dtype=torch.complex64)
+        triangle = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            cell_data={"z": z},
+            global_data={"phase": z},
+        )
+        point = Mesh(points=torch.zeros(1, 3), point_data={"z": z})
+
+        back = from_pyvista(to_pyvista(triangle))
+        assert torch.equal(back.cell_data["z"], z)
+        assert torch.equal(back.global_data["phase"], z)
+        assert torch.equal(from_pyvista(to_pyvista(point)).point_data["z"], z)
+
 
 ### Parametrized Tests for Device Handling ###
 

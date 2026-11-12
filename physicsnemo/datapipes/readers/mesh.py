@@ -170,13 +170,14 @@ def _zarr_mesh_subsampled(
     vertex compaction, Horvitz-Thompson measure corrections) while reading only
     the selected rows from the store instead of materializing the full mesh.
     The generator advances as in :func:`_subsample_mesh`, so a seed selects the
-    same rows as on the memmap path. ``drop_cells`` reads the mesh as a point
-    cloud, as ``DomainMeshReader(drop_interior_cells=True)`` does.
+    same rows as on the memmap path. ``drop_cells`` reads a mesh with cells as
+    a point cloud, as ``DomainMeshReader(drop_interior_cells=True)`` does; a
+    mesh with zero cells keeps its cell shape.
     """
     _ioz = io_zarr
 
-    total_cells = group["cells"].shape[0] if "cells" in group and not drop_cells else 0
-    total_points = group["points"].shape[0]
+    drop_cells = drop_cells and _mesh_counts(group)[1] > 0
+    total_points, total_cells = _mesh_counts(group, drop_cells)
 
     if total_cells > 0 and n_cells is not None and total_cells > n_cells:
         indices = _cyclic_block_indices(total_cells, n_cells, generator=generator)
@@ -208,6 +209,9 @@ def _zarr_mesh_subsampled(
         runs = _indices_to_runs(indices)
         mesh = Mesh(
             points=_ioz._read_rows(group["points"], runs),
+            cells=None
+            if drop_cells or "cells" not in group
+            else _ioz._read_full(group["cells"]),
             point_data=_ioz._read_tree(
                 group, "point_data", leaf_reader=lambda a: _ioz._read_rows(a, runs)
             ),
