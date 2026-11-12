@@ -38,9 +38,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import zarr
-from validation_suite import (
-    atomic_json,  # noqa: F401 (re-exported for px_yaris_prepare)
-)
 
 
 def file_sha256(path):

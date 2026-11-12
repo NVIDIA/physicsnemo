@@ -60,13 +60,13 @@ from px_yaris_trainer import (
     SPLITS,
     build_split_dataset,
     evaluate_split,
-    log_summary,
     write_outputs,
 )
 from validation_suite import (
     amp_settings,
     data_stats_of,
     load_evaluation_weights,
+    log_summary,
     require_output_run_dir,
 )
 

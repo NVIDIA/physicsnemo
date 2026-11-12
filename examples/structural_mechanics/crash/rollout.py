@@ -667,7 +667,7 @@ def correct_shape(
     with torch.autocast(device_type=prediction.device.type, enabled=False):
         std = data_stats["node"]["pos_std"].reshape(-1)[clamp.axis].to(prediction)
         mean = data_stats["node"]["pos_mean"].reshape(-1)[clamp.axis].to(prediction)
-        limit = (wall_position(sample) - mean) / (std + 1e-12)
+        limit = (wall_position(sample) - mean) / (std + EPS)
         return clamp_to_wall(prediction, limit, axis=clamp.axis, sign=clamp.sign)
 
 
