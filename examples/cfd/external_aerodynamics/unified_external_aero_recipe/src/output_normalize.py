@@ -26,6 +26,11 @@ Different model output conventions need different unpacking:
   tensor whose channels are concatenated in ``target_config`` order; we
   slice by per-field dim count and squeeze the trailing 1 for scalars.
 
+Several prediction point sets (``target_sources``) map onto outputs by the
+model YAML's ``output_groups`` (one tensor per group of targets, for branch
+models) or ``output_sets`` (one Mesh output on the sets' merged points, split
+back by set size, for single-decoder models).
+
 Kept in its own module (separate from ``train.py``) so tests can exercise
 the slicing logic without paying the cost of importing tensorboard.
 """
@@ -36,7 +41,7 @@ from typing import Any, Literal, TypeAlias
 
 import torch
 from jaxtyping import Float
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from utils import FieldType, field_dim
 
@@ -64,6 +69,34 @@ def require_output_type(cfg: DictConfig) -> IOType:
             f"'tensors'; got {output_type!r}."
         )
     return output_type
+
+
+def resolve_output_layout(cfg: DictConfig) -> dict[str, Any]:
+    """The model YAML's ``output_groups`` or ``output_sets``, as plain containers.
+
+    Returns keyword arguments for :func:`normalize_output_to_tensordict`;
+    empty when the model declares neither.
+    """
+    layout = {
+        key: OmegaConf.to_container(cfg[key], resolve=True)
+        for key in ("output_groups", "output_sets")
+        if cfg.get(key) is not None
+    }
+    if len(layout) > 1:
+        raise ValueError("output_groups and output_sets are mutually exclusive")
+    return layout
+
+
+def _check_partition(groups: list[list[str]], target_config: dict, key: str) -> None:
+    """Raise unless *groups* name every target exactly once."""
+    names = [name for group in groups for name in group]
+    if (
+        not groups
+        or any(not group for group in groups)
+        or len(names) != len(set(names))
+        or set(names) != set(target_config)
+    ):
+        raise ValueError(f"{key} must partition the targets exactly once")
 
 
 def split_concat_by_target(
@@ -122,6 +155,10 @@ def normalize_output_to_tensordict(
     target_config: dict[str, FieldType],
     output_type: IOType,
     n_spatial_dims: int = 3,
+    *,
+    output_groups: list[list[str]] | None = None,
+    output_sets: dict[str, dict[str, str]] | None = None,
+    targets: TensorDict | None = None,
 ) -> TensorDict:
     """Adapt a model output into a `TensorDict` keyed by target name.
 
@@ -135,7 +172,8 @@ def normalize_output_to_tensordict(
     ``target_config`` order (e.g. GeoTransolver, Transolver, FLARE,
     DoMINO); we slice it via :func:`split_concat_by_target`. DoMINO
     returns a ``(vol, surf)`` tuple; we take the non-None element
-    automatically.
+    automatically. ``output_groups`` and ``output_sets`` map outputs onto
+    several prediction sets (see the module docstring).
 
     Args:
         output: Raw model output. ``Mesh`` for ``output_type='mesh'``;
@@ -144,10 +182,19 @@ def normalize_output_to_tensordict(
         target_config: Ordered ``{name: "scalar" | "vector"}`` mapping.
         output_type: ``"mesh"`` or ``"tensors"``.
         n_spatial_dims: Vector-field dimensionality. Default 3.
+        output_groups: Ordered target-name lists, one per output tensor.
+        output_sets: Ordered ``{set: {target: output field}}`` of a merged
+            Mesh output (``output_type='mesh'`` only).
+        targets: The batch targets; ``output_sets`` reads each set's size
+            from them.
 
     Returns:
         Per-field TensorDict ready to feed into the loss / metric calculators.
     """
+    if output_sets is not None:
+        return _split_output_sets(
+            output, target_config, output_type, output_sets, targets
+        )
     if output_type == "mesh":
         if not isinstance(output, Mesh):
             raise TypeError(
@@ -167,6 +214,15 @@ def normalize_output_to_tensordict(
         return output.point_data.select(*keys)
 
     if output_type == "tensors":
+        if output_groups is not None:
+            _check_partition(output_groups, target_config, "output_groups")
+            if not isinstance(output, tuple) or len(output) != len(output_groups):
+                raise ValueError("output_groups requires one output tensor per group")
+            if any(not isinstance(t, torch.Tensor) or t.ndim != 3 for t in output):
+                raise ValueError("Each output group requires a (B, N, C) tensor")
+            return _split_by_groups(
+                output, output_groups, target_config, n_spatial_dims
+            )
         if isinstance(output, tuple):
             ### DoMINO returns ``(vol, surf)`` with the unused branch as
             ### ``None``; pick the first non-None entry. A tuple of all
@@ -181,6 +237,8 @@ def normalize_output_to_tensordict(
                     f"expected at least one non-None tensor in the tuple. "
                     f"Got {output!r}."
                 )
+            if len(non_none) != 1:
+                raise ValueError("Multiple output tensors require output_groups")
             output = non_none[0]
         if not isinstance(output, torch.Tensor):
             raise TypeError(
@@ -201,3 +259,85 @@ def normalize_output_to_tensordict(
         return split_concat_by_target(output, target_config, n_spatial_dims)
 
     raise ValueError(f"Unknown output_type {output_type!r}")
+
+
+def _split_by_groups(
+    tensors: Any, groups: list[list[str]], target_config: dict, n_spatial_dims: int
+) -> TensorDict:
+    """Split each ``(B, N_i, C_i)`` tensor by its group's targets, in order."""
+    result = TensorDict({}, batch_size=tensors[0].shape[:1], device=tensors[0].device)
+    for tensor, names in zip(tensors, groups):
+        group = {n: target_config[n] for n in names}
+        fields = split_concat_by_target(tensor, group, n_spatial_dims)
+        for name in names:
+            result.set(as_nested_key(name), fields[as_nested_key(name)])
+    return result
+
+
+def check_output_sets(
+    output_sets: dict[str, dict[str, str]],
+    target_sources: dict[str, str] | None,
+    forward_kwargs: dict[str, Any] | None = None,
+) -> None:
+    """Raise unless each ``output_sets`` key is the set its targets come from.
+
+    The split follows the key order, so a key must name its targets' source
+    mesh, and a ``concat_point_sets`` list in *forward_kwargs* that merges
+    exactly these sets must merge them in that order; several sets need
+    ``target_sources``.
+    """
+    for sets in _concat_point_set_lists(forward_kwargs):
+        if set(sets) == set(output_sets) and list(sets) != list(output_sets):
+            raise ValueError(
+                f"concat_point_sets {sets!r} must list the output_sets keys "
+                f"{list(output_sets)!r}, in that order"
+            )
+    if target_sources is None:
+        if len(output_sets) > 1:
+            raise ValueError("output_sets with several sets needs target_sources")
+        return
+    for key, mapping in output_sets.items():
+        prefix = f"{key}.point_data."
+        wrong = [n for n in mapping if not target_sources.get(n, "").startswith(prefix)]
+        if wrong:
+            raise ValueError(
+                f"output_sets[{key!r}] lists targets {wrong!r} whose "
+                f"target_sources do not start with {prefix!r}"
+            )
+
+
+def _concat_point_set_lists(spec: Any) -> list[list[str]]:
+    """Every ``concat_point_sets`` list in a ``forward_kwargs`` spec."""
+    if isinstance(spec, dict):
+        found = [spec["concat_point_sets"]] if "concat_point_sets" in spec else []
+        return found + [s for v in spec.values() for s in _concat_point_set_lists(v)]
+    if isinstance(spec, list):
+        return [s for v in spec for s in _concat_point_set_lists(v)]
+    return []
+
+
+def _split_output_sets(
+    output: Any,
+    target_config: dict[str, FieldType],
+    output_type: IOType,
+    output_sets: dict[str, dict[str, str]],
+    targets: TensorDict | None,
+) -> TensorDict:
+    """Split one merged Mesh output back into the prediction sets of ``output_sets``."""
+    groups = [list(mapping) for mapping in output_sets.values()]
+    _check_partition(groups, target_config, "output_sets")
+    if output_type != "mesh" or not isinstance(output, Mesh):
+        raise TypeError("output_sets requires output_type: mesh and a Mesh output")
+    ### One set covers every output row. Several sets have target_sources,
+    ### whose targets' root batch excludes the point axis (see extract_targets).
+    sizes = [output.point_data.batch_size[0]]
+    if len(groups) > 1:
+        if targets is None:
+            raise ValueError("output_sets needs the batch targets to size each set")
+        axis = targets.batch_dims
+        sizes = [targets[as_nested_key(g[0])].shape[axis] for g in groups]
+    result = TensorDict({}, device=output.points.device)
+    for part, mapping in zip(output.point_data.split(sizes, 0), output_sets.values()):
+        for name, field in mapping.items():
+            result.set(as_nested_key(name), part[as_nested_key(field)])
+    return result

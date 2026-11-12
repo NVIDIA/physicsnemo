@@ -112,14 +112,17 @@ Conventions and assumptions:
   cap.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import torch
+from forward_kwargs import walk_path
 from jaxtyping import Float
 from nondim import NondimFieldType
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
+from utils import by_source_fields
 
 from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -311,14 +314,27 @@ def force_moment_coefficients(
 
 def surface_force_fields(
     field_types: dict[str, NondimFieldType],
+    target_sources: dict[str, str] | None = None,
 ) -> tuple[str, str] | None:
     """Identify the (pressure, shear) field names for force integration.
 
     Returns the field names whose non-dim recipes are ``"pressure"`` and
     ``"stress"`` (i.e. :math:`C_p` and :math:`C_f`), or ``None`` if the
     dataset does not declare both -- e.g. volume runs, which carry no
-    surface traction, so force integration auto-skips.
+    surface traction, so force integration auto-skips. With
+    *target_sources*, the first pair of target names whose source fields
+    have those recipes and share a source mesh.
     """
+    if target_sources is not None:
+        split = {n: p.split(".point_data.", 1) for n, p in target_sources.items()}
+        kind = {n: field_types.get(leaf) for n, (_, leaf) in split.items()}
+        pairs = (
+            (p, s)
+            for p, (mesh_p, _) in split.items()
+            for s, (mesh_s, _) in split.items()
+            if kind[p] == "pressure" and kind[s] == "stress" and mesh_p == mesh_s
+        )
+        return next(pairs, None)
     pressure = next((n for n, t in field_types.items() if t == "pressure"), None)
     shear = next((n for n, t in field_types.items() if t == "stress"), None)
     if pressure is None or shear is None:
@@ -357,6 +373,7 @@ class ForceContext:
         field_types: dict[str, NondimFieldType],
         device: torch.device | str,
         dataset_cfg: DictConfig | None = None,
+        target_sources: dict[str, str] | None = None,
     ) -> "ForceContext | None":
         """Build a context from the ``force_coefficients`` config block.
 
@@ -364,6 +381,8 @@ class ForceContext:
         ``surface_normals_point`` and ``wall_shear_acts_on`` declare the
         conventions of the stored surface (see the module docstring). A
         missing key, or no dataset config, means ``outward`` and ``body``.
+        ``target_sources`` picks fields on one mesh (see
+        :func:`surface_force_fields`).
 
         Returns ``None`` when the block is absent, disabled, or the
         dataset declares no pressure + shear surface fields (so callers
@@ -371,7 +390,7 @@ class ForceContext:
         """
         if force_cfg is None or not force_cfg.get("enabled", False):
             return None
-        fields = surface_force_fields(field_types)
+        fields = surface_force_fields(field_types, target_sources)
         if fields is None:
             return None
         pressure_field, shear_field = fields
@@ -412,6 +431,7 @@ class ForceContext:
         pred_pts: TensorDict,
         true_pts: TensorDict,
         normalizer: Any | None,
+        target_sources: dict[str, str] | None = None,
     ) -> tuple[dict[str, float], dict[str, float]] | None:
         """Integrate predicted + reference coefficients for one surface sample.
 
@@ -421,20 +441,40 @@ class ForceContext:
         independent of any physical re-dimensionalization -- before
         integration over the ``vehicle`` boundary. Returns ``None`` when
         the sample is not a surface case (no ``vehicle`` boundary, or the
-        interior points do not map 1:1 to the vehicle cells).
+        interior points do not map 1:1 to the vehicle cells). With
+        *target_sources*, the pressure and shear targets are integrated on
+        the point set that holds them both, which must then sit at the
+        vehicle cell centroids (else this warns once and returns ``None``).
         """
         if "vehicle" not in domain.boundary_names:
             return None
         vehicle = domain.boundaries["vehicle"]
-        ### Surface contract: interior points are the vehicle cell
+        sources = target_sources or {}
+        paths = {
+            sources.get(n, "interior").split(".point_data.")[0]
+            for n in (self.pressure_field, self.shear_field)
+        }
+        if len(paths) != 1:
+            return None
+        surface = walk_path(domain, paths.pop())
+        ### Surface contract: the prediction points are the vehicle cell
         ### centroids, so predictions align 1:1 with cells. A mismatch
         ### means this is not a surface case (e.g. a volume interior).
-        if domain.interior.points.shape[0] != vehicle.n_cells:
+        if surface.n_points != vehicle.n_cells:
+            return None
+        if target_sources is not None and not torch.allclose(
+            surface.points, vehicle.cell_centroids
+        ):
+            warnings.warn(
+                "Surface targets are not aligned with vehicle cells; "
+                "skipping force integration",
+                stacklevel=2,
+            )
             return None
 
         unnorm = normalizer.inverse_td if normalizer is not None else (lambda td: td)
-        pred_coeff = unnorm(pred_pts.float())
-        true_coeff = unnorm(true_pts.float())
+        pred_coeff = by_source_fields(pred_pts.float(), target_sources, unnorm)
+        true_coeff = by_source_fields(true_pts.float(), target_sources, unnorm)
 
         gd = domain.global_data
         length_scale = float(gd["L_ref"].item()) if "L_ref" in gd else 1.0
