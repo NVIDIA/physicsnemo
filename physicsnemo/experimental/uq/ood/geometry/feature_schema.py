@@ -35,7 +35,7 @@ class FeatureSchema:
     names : list[str]
         Ordered list of feature names as defined in :data:`FEATURE_NAMES`.
     version : str
-        Feature schema version identifier (e.g., ``"v1.0"``).
+        Feature schema version identifier (e.g., ``"v1.1"``).
     hash : str
         SHA-256 hash of the feature names for compatibility checking.
     dim : int
