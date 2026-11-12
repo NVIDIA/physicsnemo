@@ -38,6 +38,7 @@ from .model import GLOBE
 warnings.warn(
     "Importing from 'physicsnemo.experimental.models.globe' is deprecated. "
     "Use 'from physicsnemo.models.globe import GLOBE' instead. "
+    "The kernel classes are in 'physicsnemo.models.globe.field_kernel'. "
     "This backward-compatibility shim will be removed in a future release.",
     LegacyFeatureWarning,
     stacklevel=2,
