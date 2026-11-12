@@ -221,20 +221,22 @@ CHECKPOINT_KWARGS = {
 
 
 def _make_checkpoint_inputs(device: torch.device) -> dict:
-    """Forward-pass keyword arguments for the checkpointed model."""
-    mesh_vehicle = lumpy_sphere.load(subdivisions=1, device=device)
+    """Forward-pass keyword arguments for the checkpointed model.
+
+    Built on CPU and then moved, since ``lumpy_sphere`` draws its noise from
+    a generator on the requested device, which would change the geometry.
+    """
+    mesh_vehicle = lumpy_sphere.load(subdivisions=1)
     mesh_vehicle.cell_data["alpha"] = mesh_vehicle.cell_centroids[:, 0]
     generator = torch.Generator(device="cpu").manual_seed(SEED)
     return {
         "prediction_points": torch.randn(20, 3, generator=generator).to(device),
         "boundary_meshes": {
-            "vehicle": mesh_vehicle,
-            "floor": lumpy_sphere.load(radius=3.0, subdivisions=0, device=device),
+            "vehicle": mesh_vehicle.to(device),
+            "floor": lumpy_sphere.load(radius=3.0, subdivisions=0).to(device),
         },
-        "reference_lengths": {"L_ref": torch.tensor(1.0, device=device)},
-        "global_data": TensorDict(
-            {"U_inf": torch.tensor([1.0, 0.0, 0.0], device=device)}, device=device
-        ),
+        "reference_lengths": {"L_ref": torch.tensor(1.0).to(device)},
+        "global_data": TensorDict({"U_inf": torch.tensor([1.0, 0.0, 0.0])}).to(device),
     }
 
 
