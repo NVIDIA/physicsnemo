@@ -255,6 +255,7 @@ The `forward_kwargs:` spec syntax is intentionally minimal:
 | `[a, b, c]` | Each element resolved, then `torch.cat` along the last dim. Used for tensor-input models that want concatenated feature vectors (e.g. `[interior.points, boundaries.vehicle.cell_data.normals]`). |
 | `{a: ..., b: ...}` | Each value resolved, returned as a dict. Used for dict-valued kwargs (e.g. GLOBE's `boundary_meshes: {vehicle: boundaries.vehicle}` and `reference_lengths: {L_ref: 1.0, delta_turb: 0.015}`). |
 | `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Used by Transolver / FLARE-style models that need a per-sample feature (e.g. freestream velocity) broadcast across the per-element axis of another kwarg. |
+| `{concat_point_sets: [<mesh path>, ...]}` | One point-cloud `Mesh` of the listed point sets, merged in order: their points, and the `point_data` fields every set holds. With `select: <path>` (e.g. `select: points`), that path of each set concatenated along dim 0 instead. Used by single-decoder models that predict several sets at once (see [Training on several prediction sets](#training-on-several-prediction-sets)). |
 
 For tensor-input models, scalars and 1-D vectors in `forward_kwargs`
 are padded up to ndim>=2 before the batch dim is added (so `U_inf`
@@ -262,10 +263,12 @@ shape `(3,)` becomes `(1, 1, 3)` and lines up with per-element features
 shaped `(1, N, C)`). For mesh-input models, no batch dim is added at
 all.
 
-**Targets always live at `interior.point_data.<name>` by contract.**
+**Targets live at `interior.point_data.<name>` by default.**
 The dataset YAML's `targets:` block declares the names + types; the
 recipe's dataset builder also auto-injects those names into the
 `MeshToDomainMesh` transform so you don't have to list them twice.
+Targets on other point sets are declared with `target_sources` (see
+[Training on several prediction sets](#training-on-several-prediction-sets)).
 
 Example (GeoTransolver surface):
 
@@ -333,6 +336,61 @@ per-field loss before summation (note: the logged `loss/<field>` values
 include the weight). Leave it unset by default: the surface dataset YAMLs
 already bring every target to unit scale via `NormalizeMeshFields`, so
 per-field losses are directly comparable without weighting.
+
+### Training on several prediction sets
+
+One sample may carry several prediction point sets, each with its own
+targets, such as the volume interior and a surface point set. The keys:
+
+- `target_sources: {<target>: <mesh path>.point_data.<field>}` (dataset YAML)
+  says where each target lives. Once any target has a source, the others
+  default to `interior.point_data.<name>`. Without it nothing changes.
+- `dataset_append_transforms: [...]` (model YAML) appends transforms to every
+  chosen dataset's `pipeline.transforms`, for training and validation.
+- `extra_task: {transforms, targets, target_sources, field_weights}` (model
+  YAML) adds a prediction set to every chosen dataset: its transforms run
+  last, and its targets, sources and loss weights join the dataset's. In its
+  transforms, a `NormalizeMeshFields` field may name the dataset normalizer
+  field whose constants it reuses (`fields: {surface_p: pressure}`); give the
+  new field its own name, since `NormalizeMeshFields` applies to every mesh.
+- `output_groups` or `output_sets` (model YAML, not both) map the model
+  output onto the sets; see the examples below.
+- `training.mask_nonfinite_targets: true` leaves non-finite target elements
+  (NaN where a point lacks a field) out of the loss and metrics.
+
+Each target is scored on its own set's points. Inference integrates forces on
+the set holding the pressure and shear targets when it sits at the
+`boundaries.vehicle` cell centroids, and writes `pred_*` / `true_*` onto each
+target's source mesh.
+
+A branch model returns one `(B, N_i, C_i)` tensor per group of targets:
+
+```yaml
+output_type: tensors
+forward_kwargs:
+  surface_points: boundaries.surface_queries.points
+  volume_points: interior.points
+output_groups:
+  - [surface.pressure, surface.wss]
+  - [volume.pressure, volume.velocity]
+```
+
+A single-decoder model predicts on the merged points of the sets, and
+`output_sets` (keys: the sets, in merge order) splits its output back. A
+`mesh` output's fields are read by the names given; a `tensors` output's
+channels follow each set's targets in order, and `out_dim` is one set's
+channel count.
+
+```yaml
+output_type: mesh
+forward_kwargs:
+  prediction_points:
+    concat_point_sets: [interior, boundaries.surface_queries]
+    select: points
+output_sets:
+  interior: {volume.pressure: pressure, volume.velocity: velocity}
+  boundaries.surface_queries: {surface.pressure: pressure, surface.wss: wss}
+```
 
 **`batch_size > 1`** is not supported by any model in the recipe today;
 the YAML field is reserved for future use, and the recipe raises

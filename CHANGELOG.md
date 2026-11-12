@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_effective_measure` point-data key, so
   integrals and weighted losses over the query points remain possible after
   the cells are gone.
+- Unified external aero recipe: a sample can carry several prediction point
+  sets with their own targets (`target_sources`), so branch models
+  (`output_groups`) and single-decoder models (`output_sets`) can train on
+  volume and surface points jointly; model configs can add such a set to any
+  dataset with `extra_task`.
 - Unified external aero recipe: `NonDimensionalizeByMetadata` gains
   `scale_geometry` so chained instances scale the geometry once; inference
   re-dimensionalizes with the field maps of every instance.
