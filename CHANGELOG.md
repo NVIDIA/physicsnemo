@@ -397,6 +397,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
+- Promotes GLOBE out of `experimental` to `physicsnemo.models.globe.GLOBE`; the
+  package exports only `GLOBE`. Legacy import shims keep the old
+  `physicsnemo.experimental.models.globe` paths and saved checkpoints working
+  and emit a `LegacyFeatureWarning`.
 
 ### Deprecated
 
@@ -412,6 +416,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computed (target-normalized relative MSE, no square root) and delegates
   to `physicsnemo.metrics.general.relative_error`. `rmse` still works and
   warns.
+- The `physicsnemo.experimental.models.globe` import path is deprecated.
+  Import GLOBE from `physicsnemo.models.globe` instead.
 
 ### Removed
 

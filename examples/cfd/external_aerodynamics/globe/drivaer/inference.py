@@ -28,9 +28,9 @@ from pathlib import Path
 import torch
 import yaml
 from dataset import DrivAerMLDataSet, postprocess, visualize_comparison
-from physicsnemo.experimental.utils import disable_autotune_printing
 
-from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.experimental.utils import disable_autotune_printing
+from physicsnemo.models.globe import GLOBE
 from physicsnemo.utils.logging import PythonLogger
 
 disable_autotune_printing()
