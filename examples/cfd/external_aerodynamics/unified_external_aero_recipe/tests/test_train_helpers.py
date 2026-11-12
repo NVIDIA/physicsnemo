@@ -41,6 +41,8 @@ this module's tensorboard skip guard.)
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from tensordict import TensorDict
@@ -53,9 +55,13 @@ from tensordict import TensorDict
 ### directly (no skip).
 pytest.importorskip("tensorboard")
 
+from loss import LossCalculator  # noqa: E402
+from metrics import MetricCalculator  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
     _reduce_and_average,
+    _run_epoch,
     _skip_nan,
     _walk_batch_for_logging,
 )
@@ -269,3 +275,30 @@ class TestReduceAndAverage:
         )
         assert loss == pytest.approx(7.0)
         assert losses == {} and metrics == {}
+
+    def test_val_epoch_skips_a_field_without_finite_targets(self):
+        """A batch whose field is all NaN leaves that field's epoch metric alone."""
+        targets = {"a": "scalar", "b": "scalar"}
+
+        def batch(b: float) -> dict:
+            values = {"a": torch.ones(1, 4), "b": torch.full((1, 4), b)}
+            return {
+                "forward_kwargs": {"input": torch.zeros(1, 4, 2)},
+                "targets": TensorDict(values, batch_size=[1, 4]),
+            }
+
+        _, averages = _run_epoch(
+            [batch(2.0), batch(float("nan"))],
+            torch.nn.Identity(),
+            LossCalculator(targets, mask_nonfinite_targets=True),
+            MetricCalculator(targets, metrics=["mae"], mask_nonfinite_targets=True),
+            SimpleNamespace(info=lambda *_: None),
+            0,
+            OmegaConf.create({"precision": "float32", "profile": False}),
+            SimpleNamespace(rank=0, device="cpu"),
+            mode="val",
+            output_type="tensors",
+            target_config=targets,
+        )
+        assert averages["b_mae"] == pytest.approx(2.0)
+        assert averages["a_mae"] == pytest.approx(1.0)
