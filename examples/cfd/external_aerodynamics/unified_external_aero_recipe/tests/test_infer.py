@@ -43,6 +43,24 @@ _RECIPE = Path(__file__).resolve().parent.parent
 _DATASETS = _RECIPE / "datasets"
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda:0", "cuda:1"])
+def test_norm_stats_match_across_devices(device):
+    """Checkpoint statistics compare by value regardless of their saved device."""
+    if device.startswith("cuda") and torch.cuda.device_count() <= int(device[-1]):
+        pytest.skip(f"{device} is unavailable")
+    saved = {"pressure": {"type": "scalar", "mean": [1.0], "std": [2.0]}}
+    live = {
+        "pressure": {
+            "type": "scalar",
+            "mean": torch.tensor([1.0], device=device),
+            "std": torch.tensor([2.0], device=device),
+        }
+    }
+    assert infer._norm_stats_match(live, saved)
+    live["pressure"]["std"].add_(1.0)
+    assert not infer._norm_stats_match(live, saved)
+
+
 ### ---------------------------------------------------------------------------
 ### build_redim_field_types
 ### ---------------------------------------------------------------------------
