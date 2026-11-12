@@ -462,6 +462,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
   its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
   `cleanup()` no longer raises after a failed initialization.
+- The GLOBE DrivAerML example integrates the friction force on the car with
+  the right sign. Its drag coefficients were about 0.055 too low.
+- The unified external aero recipe integrates force coefficients with the
+  right signs for DrivAerML and HighLiftAeroML. A dataset YAML now declares
+  where its surface normals point and which side its wall shear stress acts
+  on (`surface_normals_point`, `wall_shear_acts_on`).
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.

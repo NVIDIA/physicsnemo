@@ -518,12 +518,17 @@ def main(cfg: DictConfig) -> None:
 
     # -- Force / moment coefficient setup (surface cases) -----------------------
     force_cfg = OmegaConf.select(cfg, "force_coefficients", default=None)
-    force_ctx = ForceContext.from_config(force_cfg, field_types, device)
+    ### The dataset YAML declares the conventions of its stored surface.
+    force_ctx = ForceContext.from_config(
+        force_cfg, field_types, device, dataset_cfg=ds_yaml
+    )
     if force_ctx is not None:
         logger.info(
             f"Force coefficients: integrating Cp='{force_ctx.pressure_field}', "
             f"Cf='{force_ctx.shear_field}' "
-            f"(reference_area={force_ctx.reference_area}, reference_length="
+            f"(surface normals point {force_ctx.surface_normals_point}, "
+            f"wall shear acts on the {force_ctx.wall_shear_acts_on}, "
+            f"reference_area={force_ctx.reference_area}, reference_length="
             f"{force_ctx.reference_length if force_ctx.reference_length is not None else 'L_ref'})"
         )
     elif force_cfg is not None and force_cfg.get("enabled", False):

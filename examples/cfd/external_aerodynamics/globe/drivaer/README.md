@@ -152,7 +152,8 @@ reference lengths.
 
 1. Load VTP car body surface (~8.8M quad-dominant cells) and triangulate
 2. Compute nondimensional fields: C_p (already nondimensional),
-   C_f = wallShearStress / q_inf
+   C_f = wallShearStress / q_inf (the stress the wall exerts on the fluid, so
+   the friction force on the car is -C_f)
 3. Interpolate cell-centered data to mesh vertices
 4. Parse reference lengths and force coefficients from CSV files
 5. Create the two floor patches at the height of the tire contact
