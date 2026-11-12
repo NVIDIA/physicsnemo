@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Prototype `physicsnemo.mesh.io.io_vtu_virtual`: a VirtualiZarr parser that
+  maps an uncompressed appended-raw `.vtu` file of one simplex cell type onto
+  the zarr layout `to_zarr` writes, so the zarr mesh readers load it without
+  conversion or VTK at read time. `vtu_to_mesh` and `open_vtu_virtual` wrap it
+  for local files. Requires `virtualizarr` and `obstore`.
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference

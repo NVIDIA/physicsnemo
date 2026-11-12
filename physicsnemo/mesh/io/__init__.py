@@ -27,10 +27,23 @@ attribute is actually accessed.
 
 from typing import TYPE_CHECKING
 
-__all__ = ["from_pyvista", "to_pyvista", "from_zarr", "to_zarr"]
+__all__ = [
+    "from_pyvista",
+    "to_pyvista",
+    "from_zarr",
+    "to_zarr",
+    "VTUParser",
+    "open_vtu_virtual",
+    "vtu_to_mesh",
+]
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+    from physicsnemo.mesh.io.io_vtu_virtual import (
+        VTUParser,
+        open_vtu_virtual,
+        vtu_to_mesh,
+    )
     from physicsnemo.mesh.io.io_zarr import from_zarr, to_zarr
 
 
@@ -43,4 +56,8 @@ def __getattr__(name: str):  # PEP 562
         from physicsnemo.mesh.io import io_zarr
 
         return getattr(io_zarr, name)
+    if name in {"VTUParser", "open_vtu_virtual", "vtu_to_mesh"}:
+        from physicsnemo.mesh.io import io_vtu_virtual
+
+        return getattr(io_vtu_virtual, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
