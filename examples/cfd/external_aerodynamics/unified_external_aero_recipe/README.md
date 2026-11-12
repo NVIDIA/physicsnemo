@@ -748,6 +748,9 @@ the dataset files and the other models' samples stay as they are.
   It reads every boundary whole (`subsample_n_cells: null`) and draws its
   own boundary tokens. It computes its own signed distances, so it ignores
   the dataset's `sdf` inputs.
+  At the defaults it needs a GPU of more than 80 GB. On an 80 GB GPU, lower
+  both `sampling_resolution` and `model.n_boundary_tokens`, for example
+  `sampling_resolution=50000 model.n_boundary_tokens=100000`.
 
 ISLA needs every boundary's normals to point into the fluid. The curated
 files wind the vehicle with its normals into the body, so both configs
