@@ -15,8 +15,9 @@ containers=
    physicsnemo
 layers = 
    experimental
-   deploy | active_learning | diffusion | sym
-   models : datapipes : metrics : domain_parallel : optim
+   metrics
+   active_learning | diffusion | sym
+   models : datapipes : domain_parallel : optim
    mesh
    nn
    utils

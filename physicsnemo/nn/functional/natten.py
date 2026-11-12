@@ -25,7 +25,12 @@ from physicsnemo.core.version_check import OptionalImport
 
 _natten = OptionalImport("natten")
 
+# ``allow_in_graph``: dynamo skips the body (where it would fold
+# ``has_torch_function`` to False for ShardTensor); AOT then runs it on the real
+# subclass, so ``__torch_function__`` dispatch and NATTEN's autograd both apply.
 
+
+@torch.compiler.allow_in_graph
 def na1d(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -76,6 +81,7 @@ def na1d(
     return _natten.functional.na1d(q, k, v, kernel_size, dilation=dilation, **kwargs)
 
 
+@torch.compiler.allow_in_graph
 def na2d(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -126,6 +132,7 @@ def na2d(
     return _natten.functional.na2d(q, k, v, kernel_size, dilation=dilation, **kwargs)
 
 
+@torch.compiler.allow_in_graph
 def na3d(
     q: torch.Tensor,
     k: torch.Tensor,

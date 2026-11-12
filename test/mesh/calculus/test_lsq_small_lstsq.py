@@ -235,8 +235,6 @@ def test_assembled_intrinsic_lsq_gradients_match_grouped(
     device: str, mesh_name: str, dtype: torch.dtype
 ):
     """The same for the tangent-space systems of surfaces and curves."""
-    if mesh_name == "helix" and dtype == torch.bfloat16:
-        pytest.skip("the tangents of curves in 3D need eigh, with no 16-bit kernel")
     mesh = _PARITY_MESHES[mesh_name](device)
     mesh = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
     fields = _parity_fields(mesh.points, dtype)
@@ -254,18 +252,34 @@ def test_assembled_intrinsic_lsq_gradients_match_grouped(
         assert (assembled[unsolved] == 0).all()
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_intrinsic_lsq_gradient_of_point_cloud_is_zero(device: str, dtype: torch.dtype):
+    """A point cloud, a 0-manifold, has no tangent directions: its intrinsic
+    gradients are zero, by either path."""
+    generator = torch.Generator().manual_seed(0)
+    points = torch.rand(10, 3, generator=generator, dtype=dtype).to(device)
+    cloud = Mesh(points=points)
+
+    for grouped in (False, True):
+        gradient = _lsq_intrinsic._compute_point_gradients_lsq_intrinsic(
+            cloud, [points[:, 0]], grouped=grouped
+        )[0]
+        assert torch.equal(gradient, torch.zeros_like(points))
+
+
 def _backward_of_both_paths(
     mesh: Mesh, gradient_type: str, seed: int = 0
 ) -> list[tuple[torch.Tensor, torch.Tensor]]:
     """First and second derivatives, with respect to the points and the
     values, of the assembled and the grouped LSQ gradients of one vector field.
 
-    Both paths differentiate one ``Mesh``, so they share its point normals and
-    tangent bases. Recomputed, those differ by rounding on CUDA, whose sums
-    use atomics. Where the face normals around a point nearly cancel, as at a
-    fold of a coarse boundary surface, that rounding turns the tangent plane
-    there, which changes the intrinsic gradient and its derivatives by far
-    more than the solves do.
+    A mesh whose points require gradients does not cache its point normals,
+    so each path recomputes them. On CUDA their sums use atomics, which round
+    differently from run to run. Where the face normals around a point nearly
+    cancel, as at a fold of a coarse boundary surface, that rounding turns the
+    tangent plane there, which changes the intrinsic gradient and its
+    derivatives by far more than the solves do. Deterministic algorithms make
+    the two recomputations agree bit for bit.
     """
     generator = torch.Generator().manual_seed(seed)
     values = _parity_fields(mesh.points, torch.float32)[1]
@@ -289,13 +303,18 @@ def _backward_of_both_paths(
         first = torch.autograd.grad(
             (weights * gradient).sum(), (points, field), create_graph=True
         )
-        # The graph of the shared normals serves the other path too
         second = torch.autograd.grad(
-            sum(d.square().sum() for d in first), (points, field), retain_graph=True
+            sum(d.square().sum() for d in first), (points, field)
         )
         return [*first, *second]
 
-    return list(zip(derivatives(False), derivatives(True)))
+    enabled = torch.are_deterministic_algorithms_enabled()
+    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(True)
+    try:
+        return list(zip(derivatives(False), derivatives(True)))
+    finally:
+        torch.use_deterministic_algorithms(enabled, warn_only=warn_only)
 
 
 @pytest.mark.parametrize("mesh_name", ["unstructured_ball", "ball_surface"])

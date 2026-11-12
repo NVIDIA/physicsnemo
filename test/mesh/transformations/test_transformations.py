@@ -438,6 +438,29 @@ class TestRotation:
         expected = torch.tensor([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
         assert torch.allclose(rotated.point_data["vec"], expected, atol=1e-5)
 
+    @pytest.mark.parametrize("as_tensor", [False, True])
+    def test_rotate_float64_axis_precision(self, as_tensor):
+        """Regression: a float64 mesh rotates about its axis at float64 precision
+        (the axis was rounded to float32), so points on the axis stay put."""
+        axis = [0.2, -0.5, 0.9]
+        u = np.array(axis) / np.linalg.norm(axis)
+        points = torch.from_numpy(np.array([u * 1000.0, u * -3.0, [1.0, 2.0, 3.0]]))
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+        angle = 1.1
+
+        rotated = rotate(
+            mesh,
+            angle,
+            torch.tensor(axis, dtype=torch.float64) if as_tensor else axis,
+        )
+
+        # Float64 Rodrigues reference
+        K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
+        R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * K @ K
+        expected = torch.from_numpy(points.numpy() @ R.T)
+        torch.testing.assert_close(rotated.points, expected, rtol=0, atol=1e-12)
+        torch.testing.assert_close(rotated.points[:2], points[:2], rtol=0, atol=1e-12)
+
 
 class TestScale:
     """Tests for scale() function."""
@@ -594,6 +617,19 @@ class TestScale:
         # Area scales by product = 6
         expected_area = original_area * 6.0
         assert torch.allclose(scaled.cell_areas, expected_area, atol=1e-5)
+
+    def test_scale_factor_that_rounds_to_zero(self):
+        """Regression: 1e-8 rounds to zero in float16, so the scale is singular,
+        and the cached areas and normals are recomputed instead of turning NaN."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]])
+        mesh = Mesh(points=points.half(), cells=torch.tensor([[0, 1, 2]]))
+        _ = mesh.cell_areas, mesh.cell_normals
+
+        scaled = scale(mesh, [1e-8, 3000.0, 3000.0])
+
+        fresh = Mesh(points=scaled.points, cells=scaled.cells)
+        torch.testing.assert_close(scaled.cell_areas, fresh.cell_areas)
+        torch.testing.assert_close(scaled.cell_normals, fresh.cell_normals)
 
 
 class TestNonIsotropicAreaScaling:
@@ -813,6 +849,54 @@ class TestTransform:
         assert embedded.points.shape == (2, 3)
         expected = torch.tensor([[1.0, 2.0, 0.0], [3.0, 4.0, 0.0]])
         assert torch.allclose(embedded.points, expected)
+
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("n_spatial_dims", [2, 3])
+    @pytest.mark.parametrize("op", ["rotate", "scale", "large_scale", "shear"])
+    def test_square_transforms_reduced_precision(self, dtype, n_spatial_dims, op):
+        """Regression: square maps of float16/bfloat16 meshes (whose determinant
+        and inverse have no reduced-precision kernels) keep the mesh dtype, and
+        their transformed caches match a recomputation, also when the
+        determinant overflows float16."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.5], [0.0, 1.0, 1.0]])[
+            :, :n_spatial_dims
+        ]
+        if op == "large_scale":  # small cells, whose area stays finite at 300x
+            points = points * 0.01
+        mesh = Mesh(points=points.to(dtype), cells=torch.tensor([[0, 1, 2]]))
+        _ = mesh.cell_areas
+        if n_spatial_dims == 3:  # codimension 1: per-cell area scaling
+            _ = mesh.cell_normals
+
+        if op == "rotate":
+            out = rotate(mesh, 0.5, None if n_spatial_dims == 2 else "z")
+        elif op == "scale":
+            out = scale(mesh, [2.0, 3.0, 0.5][:n_spatial_dims])
+        elif op == "large_scale":  # det 9e4 (2D) or 2.7e7 (3D)
+            out = scale(mesh, 300.0)
+        else:
+            shear = torch.eye(n_spatial_dims, dtype=dtype)
+            shear[0, 1] = 0.5
+            out = transform(mesh, shear)
+
+        assert out.points.dtype == dtype
+        recomputed = Mesh(points=out.points.double(), cells=mesh.cells)
+        for key, value in out._cache["cell"].items():
+            assert value.dtype == dtype, key
+        assert ("cell", "areas") in out._cache
+        torch.testing.assert_close(
+            out._cache["cell", "areas"].double(),
+            recomputed.cell_areas,
+            rtol=2e-2,
+            atol=0,
+        )
+        if n_spatial_dims == 3:
+            torch.testing.assert_close(
+                out._cache["cell", "normals"].double(),
+                recomputed.cell_normals,
+                rtol=0,
+                atol=2e-2,
+            )
 
 
 ###############################################################################

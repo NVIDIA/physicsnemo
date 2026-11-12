@@ -238,3 +238,30 @@ def test_record_consumer_stream_unwraps_without_autograd(distributed_mesh, monke
     (tensor,) = recorded
     assert tensor is st._local_tensor
     assert tensor.grad_fn is None
+
+
+# ---------------------------------------------------------------------------
+# Symbolic shapes (torch.compile dynamic=True)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_compile_dynamic_non_leaf(distributed_mesh):
+    r"""A non-leaf ShardTensor compiled with symbolic shapes, fwd + bwd.
+
+    Fakeifying it routes through DTensor sharding propagation, which hashes
+    the spec, and the fallback's alignment check keys a dict on the shape:
+    both see ``SymInt`` dims and must not require them to be hashable.
+    """
+    st = shard_tensor_factory(distributed_mesh, requires_grad=True, uneven=True)
+    y = st * 1.0  # non-leaf, created eagerly
+
+    torch._dynamo.reset()
+    out = torch.compile(lambda t: t.sin(), backend="aot_eager", dynamic=True)(y)
+    out.sum().backward()
+
+    torch.testing.assert_close(out.to_local(), y.to_local().sin())
+    torch.testing.assert_close(
+        st.grad.to_local(), st.to_local().detach().cos(), check_device=False
+    )
