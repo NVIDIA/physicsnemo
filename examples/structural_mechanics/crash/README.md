@@ -271,7 +271,7 @@ Before reuse, check checkpoint identity, pooling (`mean` over heads and slices),
 normalization, units, and preprocessing. A matching feature dimension does not
 establish a matching representation. See
 [`examples/minimal/uq`](../../minimal/uq/README.md) for runnable scoring and
-persistence examples. A novelty score is an input to an application decision;
+persistence examples. A novelty score is an input to an application decision.
 it does not certify prediction accuracy.
 
 ## Experiments
