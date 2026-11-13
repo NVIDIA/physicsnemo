@@ -56,6 +56,15 @@ The module has the following functions:
 
       A ``Mesh`` or ``DomainMesh`` with all of its data, in a Zarr store.
 
+   .. grid-item-card:: from_vtu
+      :link: physicsnemo.mesh.io.from_vtu
+      :link-type: any
+      :shadow: md
+      :class-card: sd-card-hover
+
+      A lazily memory-mapped ``Mesh`` from an uncompressed ``.vtu`` file,
+      without VTK.
+
 :func:`from_pyvista` keeps the point data and cell data, and it detects the
 manifold dimension, or you set it with ``manifold_dim``. Polygons and
 polyhedra become triangles and tetrahedra. With
@@ -64,6 +73,13 @@ a dual graph, which avoids tetrahedralization of a large polyhedral mesh.
 :func:`to_pyvista` returns a ``pyvista.PolyData`` for curves and surfaces, a
 ``pyvista.UnstructuredGrid`` for volumes, and a ``pyvista.PointSet`` for a
 point cloud without cells.
+
+:func:`from_vtu` memory-maps an uncompressed, appended-raw ``.vtu`` file of
+one simplex cell type, so a ``Mesh`` opens without reading the data and
+without VTK, as :meth:`Mesh.load <physicsnemo.mesh.mesh.Mesh.load>` does for
+the native format. ``MeshReader`` loads such files when its ``pattern``
+matches them. Compressed files, the default from PyVista's ``save()``, and
+non-simplex cells go through :func:`from_pyvista`.
 
 Example
 -------
@@ -112,6 +128,7 @@ Summary
    to_pyvista
    from_zarr
    to_zarr
+   from_vtu
 
 Related Topics
 --------------
@@ -132,3 +149,5 @@ API Reference
 .. autofunction:: from_zarr
 
 .. autofunction:: to_zarr
+
+.. autofunction:: from_vtu
