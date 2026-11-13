@@ -84,8 +84,6 @@ logger = logging.getLogger("mesh.spatial.cluster_tree")
 
 #: Minimum child size, as a divisor of the parent size, for ``split="morton"``.
 _MORTON_BALANCE = 4
-
-# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 #: Warp refuses arrays of this many elements or more, and its thread ids are int32.
 _WARP_MAX_ELEMENTS = 2**31
 
