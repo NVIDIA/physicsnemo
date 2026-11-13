@@ -208,9 +208,10 @@ def _transfer_cell_measures(
 ) -> None:
     """Transfer explicit cell measures through geometric changes/subdivision.
 
-    Result rows marked by the boolean mask ``unchanged`` are their source rows
-    with vertices reordered: they keep the source's measure and cached area
-    bitwise, so later transfers see the same pair.
+    Result row ``i`` comes from source row ``parents[i]``, or from row ``i``
+    without ``parents``. ``unchanged`` is a boolean mask over result rows: a
+    marked row only reorders its source row's vertices, so it keeps that row's
+    measure bitwise and, outside tracing and autograd, its cached area.
     """
     if EFFECTIVE_MEASURE_KEY not in source.cell_data:
         return
@@ -223,6 +224,8 @@ def _transfer_cell_measures(
     if unchanged is not None:
         new_areas = torch.where(unchanged, old_areas, new_areas)
         degenerate = degenerate & ~unchanged
+        # Later transfers divide by the cached area, so cache the bits paired
+        # with the measure rather than a recompute in the new vertex order.
         if not (is_tracing() or result.points.requires_grad):
             result._cache["cell", "areas"] = new_areas
     if not is_tracing() and bool(degenerate.any()):

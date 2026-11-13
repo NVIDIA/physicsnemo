@@ -2098,12 +2098,11 @@ class Mesh(
         This operation is for connectivity changes that preserve cell indexing
         and simplex type, such as reversing the winding of selected triangles.
         The replacement must have exactly the same shape as the current cells.
-        User data is preserved, while all caches are cleared by default because
+        User data is preserved, while caches are cleared by default because
         changing connectivity can invalidate cell, point, and topology caches.
         A row that only reorders its own vertices is the same simplex, so it
-        keeps its effective measure bitwise. Outside tracing and autograd it
-        also keeps its cached centroid and, when the mesh has effective
-        measures, its cached area.
+        keeps its effective measure bitwise and, as the Notes describe, its
+        cached centroid and area.
 
         Parameters
         ----------
@@ -2117,7 +2116,8 @@ class Mesh(
         -------
         Mesh
             New mesh with replacement connectivity, preserved points and data,
-            and only the selected caches.
+            and the selected caches. It may also cache cell centroids and
+            areas; see Notes.
 
         Raises
         ------
@@ -2131,6 +2131,12 @@ class Mesh(
         tensor leaves are shared. Retaining any cache through ``keep`` is an
         expert operation: the caller is responsible for ensuring every retained
         value remains valid for the replacement connectivity.
+
+        The result also caches cell centroids when this mesh has them cached,
+        and cell areas when it has effective measures, unless ``keep`` retains
+        them. Neither is cached while tracing or when ``points`` requires
+        gradients. Both are computed eagerly for all cells, then each row that
+        only reorders its vertices takes this mesh's values bitwise.
 
         Examples
         --------
