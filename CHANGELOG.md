@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- Indexing a mesh `Adjacency` with indices, a mask, or a slice returns the
+  neighbor lists of those sources, so
+  `mesh.get_point_to_points_adjacency()[points]` gives the neighbors of sampled
+  points. Passing `indices=points` to the `get_*_adjacency` methods gives the
+  same lists without building them for the whole mesh, and Mesh Tutorial 6
+  shows how to sample points with their neighbors.
 - `KNNScorer` and `DensityScorer` provide reusable out-of-distribution (OOD)
   scoring under `experimental.uq.ood`, with optional geometry descriptors.
   The examples keep scoring decisions in the application. Both scorers support
@@ -896,6 +902,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Small angles from `stable_angle_between_vectors`, volumes of thin
   tetrahedra in 4D or more, and FEM cotangent weights of thin cells keep their
   accuracy in float32. The first two used to come out as 0.
+- Mesh dual volumes of thin triangles, and the DEC operators and curvatures
+  that use them, are accurate in float32. Before, the dual volumes of a mesh of
+  thin triangles could sum to 2.4 times its area.
 - FEM cotangent weights of long, thin but well-shaped cells are accurate in
   any vertex order. A tetrahedron with one edge 5,000 times longer than the
   others used to get the weights of a degenerate cell.
