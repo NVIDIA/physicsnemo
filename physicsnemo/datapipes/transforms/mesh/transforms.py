@@ -947,20 +947,27 @@ class FlipBoundaryOrientation(MeshTransform):
     they wind their boundaries. This transform swaps the last two vertices of
     every cell, which reverses each cell normal and keeps each cell and its
     measure. It also negates the ``cell_data`` fields named in
-    ``normal_fields``, so that stored normals follow the new winding. A name
-    that a mesh lacks is skipped.
+    ``normal_fields``, so that stored normals follow the new winding.
 
     On a :class:`Mesh` it reverses that mesh. On a
     :class:`~physicsnemo.mesh.DomainMesh` it reverses only the boundaries
-    named in ``boundaries``, which must all exist, and keeps the interior.
+    named in ``boundaries`` and keeps the interior.
 
     Parameters
     ----------
-    boundaries : sequence of str
+    boundaries : sequence of str, default ()
         Names of the :class:`~physicsnemo.mesh.DomainMesh` boundaries to
-        reverse. Used only on a ``DomainMesh``. Default: none.
-    normal_fields : sequence of str
-        ``cell_data`` fields holding stored normals. Default: none.
+        reverse. Used only on a ``DomainMesh``. Every name must exist.
+    normal_fields : sequence of str, default ()
+        ``cell_data`` fields holding stored normals. A mesh that lacks a
+        field skips it.
+
+    Raises
+    ------
+    ValueError
+        If the cells have fewer than 2 vertices.
+    KeyError
+        If a name in ``boundaries`` is not a boundary of the ``DomainMesh``.
 
     Examples
     --------
