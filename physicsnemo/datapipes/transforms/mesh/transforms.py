@@ -1048,11 +1048,12 @@ class FlipBoundaryOrientation(MeshTransform):
 
 @register()
 class BoundaryCellsToPoints(MeshTransform):
-    r"""Add a point-cloud boundary at a draw of another boundary's cell centroids.
+    r"""Add a point-cloud boundary at drawn cells of another boundary.
 
     Draws ``n_cells`` cells of the :class:`~physicsnemo.mesh.DomainMesh`
-    boundary ``source`` uniformly without replacement, as
-    :class:`SubsampleMesh` does, and adds a point-cloud boundary ``name``
+    boundary ``source`` without replacement, as :class:`SubsampleMesh` does:
+    uniformly up to :math:`2^{24}` cells, and above that with its ordered,
+    near-uniform ``poisson_gap`` draw. It adds a point-cloud boundary ``name``
     with one point per drawn cell. The ``cell_data`` fields named in
     ``fields`` become its ``point_data`` fields and are removed from
     ``source``, so that no model reads them through it, as in
@@ -1062,7 +1063,8 @@ class BoundaryCellsToPoints(MeshTransform):
     unit normal, on the side the normal points to. Each point records its
     cell's measure times N / n, for n cells drawn of N, under
     :data:`~physicsnemo.mesh.calculus.measure.EFFECTIVE_MEASURE_KEY`, so sums
-    over the points estimate integrals over ``source`` without bias.
+    over the points estimate integrals over ``source``: without bias for a
+    uniform draw, and only close to unbiased above :math:`2^{24}` cells.
 
     Parameters
     ----------
@@ -1072,17 +1074,21 @@ class BoundaryCellsToPoints(MeshTransform):
         Name of the new point-cloud boundary.
     fields : Mapping[str, str]
         ``{source cell_data field: new point_data field}``.
-    n_cells : int or None
-        Cells drawn per sample; ``None`` takes every cell. Default: ``None``.
-    offset : float
+    n_cells : int or None, default None
+        Cells drawn per sample; ``None`` takes every cell.
+    offset : float, default 0.0
         Distance off the cell along its unit normal, in the coordinates'
-        units. Default: 0, the centroids.
+        units; 0 puts the points at the centroids.
 
     Raises
     ------
     TypeError
         When called on a bare :class:`Mesh`: the transform needs a
         ``DomainMesh``.
+    KeyError
+        If ``source``, or a field of ``fields`` on it, is missing.
+    ValueError
+        If the domain already has a boundary ``name``.
 
     Examples
     --------
