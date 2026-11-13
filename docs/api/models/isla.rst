@@ -57,16 +57,21 @@ Citation
 
 The architecture and its guarantees are described in Peter Sharpe, *ISLA: A
 Coordinate-Free, Measure-Weighted Transformer for Boundary-Driven PDEs*, arXiv
-preprint, 2026. If you use or extend ISLA, please cite:
+preprint `arXiv:2611.17141 <https://arxiv.org/abs/2611.17141>`__, 2026. If you
+use or extend ISLA, please cite:
 
 .. code-block:: bibtex
 
     @misc{sharpe2026isla,
-      author = {Sharpe, Peter},
-      title  = {{ISLA}: A Coordinate-Free, Measure-Weighted Transformer
-                for Boundary-Driven {PDE}s},
-      year   = {2026},
-      note   = {arXiv preprint}
+      author        = {Sharpe, Peter},
+      title         = {{ISLA}: A Coordinate-Free, Measure-Weighted Transformer
+                       for Boundary-Driven {PDE}s},
+      year          = {2026},
+      howpublished  = {arXiv preprint arXiv:2611.17141},
+      eprint        = {2611.17141},
+      archivePrefix = {arXiv},
+      primaryClass  = {cs.LG},
+      url           = {https://arxiv.org/abs/2611.17141}
     }
 
 Quick Start

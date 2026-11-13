@@ -673,8 +673,8 @@ class ISLA(Module):
     keyword-only.
 
     For more details, see the paper: Peter Sharpe, *ISLA: A Coordinate-Free,
-    Measure-Weighted Transformer for Boundary-Driven PDEs*, arXiv preprint,
-    2026.
+    Measure-Weighted Transformer for Boundary-Driven PDEs*, arXiv preprint
+    `arXiv:2611.17141 <https://arxiv.org/abs/2611.17141>`__, 2026.
 
     **Setting up a new problem.** ISLA learns the map from a boundary-value
     problem's boundary data to its solution, so its inputs must pose that problem
