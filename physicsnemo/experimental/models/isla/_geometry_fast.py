@@ -18,22 +18,22 @@ r"""Triton kernels of the fast boundary-geometry search (``kernel="fast"`` of
 :func:`~physicsnemo.experimental.models.isla._geometry.exact_boundary_geometry`).
 
 The mesh-only steps before the search compute integers from comparisons of the
-vertex coordinates: the representative of each welded vertex and each cell's
+vertex coordinates: the representative of each welded vertex, and each cell's
 vertices in the lexicographic order of their positions with the parity of that
 permutation. The kernels here compute the same integers as the reference's torch
-code in one pass each, where the torch code launches tens of kernels (the
-canonical order) or a slow scan (the weld's running maximum).
+code in one pass each. The torch code launches tens of kernels (the canonical order)
+or a slow scan (the weld's running maximum).
 
-The closest points' weights on triangles (Ericson's, the edge points recomputed on
-their edges, the thin-cell guard and, on the guarded pairs, the accurate point and
-the switch to it, the zero-area cells' segments) run as two kernels
-(:func:`closest_weights`), where the torch code launches about two hundred small
-ones: the first over the pairs, which lists the guarded ones, and the second over
-that list alone. Their float64 arithmetic is the torch code's operation by
-operation, in the order torch's CUDA kernels evaluate the sums, norms and cross
-products, without contraction, so the weights are the reference's bitwise.
+Two kernels (:func:`closest_weights`) compute the closest points' weights on
+triangles: Ericson's, the edge points recomputed on their edges, the thin-cell guard,
+the accurate point and the switch to it on the guarded pairs, and the zero-area
+cells' segments. The first runs over the pairs and lists the guarded ones; the second
+runs over that list alone. The torch code launches about two hundred small kernels
+for the same work. The float64 arithmetic is the torch code's operation by operation,
+in the order torch's CUDA kernels evaluate the sums, norms and cross products, without
+contraction, so the weights are the reference's bitwise.
 
-Each function falls back to the reference's torch code off CUDA or without Triton,
+Off CUDA or without Triton, each function falls back to the reference's torch code,
 so its result never depends on the path taken.
 """
 
@@ -117,10 +117,10 @@ if HAS_TRITON:
             tl.store(vert_out + K * c + 2, v2, mask=m)
         tl.store(parity_out + c, 1 - 2 * (inv % 2), mask=m)
     ### The float64 arithmetic of the closest weights, each operation as torch's CUDA
-    ### kernels evaluate it, launched without contraction (enable_fp_fusion=False): a
-    ### sum over the last axis of three is ((x0 + x2) + x1) + 0 and one over the vertex
+    ### kernels evaluate it, launched without contraction (enable_fp_fusion=False). A
+    ### sum over the last axis of three is ((x0 + x2) + x1) + 0, one over the vertex
     ### axis ((x0 + x1) + x2) + 0 (identity 0: never -0), a norm the root of ((x0^2 +
-    ### x2^2) + x1^2), a cross product's component an fma; 3-vectors are tuples.
+    ### x2^2) + x1^2), and a cross product's component an fma. 3-vectors are tuples.
     _TINY = tl.constexpr(torch.finfo(torch.float64).tiny)
     _U64 = tl.constexpr(2.0**-53)
     _INF = tl.constexpr(float("inf"))
@@ -280,9 +280,9 @@ if HAS_TRITON:
     ):
         """The closest weights of each row, as
         :func:`~physicsnemo.experimental.models.isla._geometry._closest_weights` in three
-        dimensions (``KAPPA`` is ``_ERICSON_K u64``), but Ericson's on the guarded rows,
-        which it appends to ``guarded`` (``count`` of them) for :func:`_accurate_kernel`;
-        a block with no zero-area row skips the segments."""
+        dimensions (``KAPPA`` is ``_ERICSON_K u64``), except Ericson's on the guarded
+        rows. It appends those to ``guarded`` (``count`` of them) for
+        :func:`_accurate_kernel`. A block with no zero-area row skips the segments."""
         r = (tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)).to(tl.int64)
         m = r < n
         q, s = _load_rows(q_ptr, s_ptr, r, m)
@@ -312,7 +312,7 @@ if HAS_TRITON:
         longest = tl.sqrt(longest2)
         rho_low = (tl.sqrt(cross2) - tl.sqrt(bound2)) / longest2
         kappa = tl.where(rho_low > 0, (1.0 / (rho_low * rho_low * longest)) * KAPPA, _INF)
-        ### the guard: _ericson_error not below one unit, but a zero-area row
+        ### the guard: _ericson_error not below one unit, except on a zero-area row
         dist = _distance(q, w, s)
         y = (_sub(q, s[0]), _sub(q, s[1]), _sub(q, s[2]))
         l2 = _amax(_amax(_dot(y[0], y[0]), _dot(y[1], y[1])), _dot(y[2], y[2]))
@@ -433,10 +433,11 @@ def closest_weights(q, simplex, flat, reference, ericson_k, switch_units, orient
     :func:`~physicsnemo.experimental.models.isla._geometry._closest_weights` of
     triangles: Ericson's weights, the edge points recomputed, the thin-cell guard and
     the accurate point of each guarded pair, the zero-area cells' segments) by two
-    Triton kernels on CUDA, the second on the guarded pairs alone, from the
-    reference's constants ``_ERICSON_K``, ``_SWITCH_UNITS`` and ``_ORIENT_ERRBOUND``;
-    by the reference itself where an input is not contiguous (its sums over a strided
-    axis may take another order)."""
+    Triton kernels on CUDA, the second on the guarded pairs alone. ``ericson_k``,
+    ``switch_units`` and ``orient_errbound`` are the reference's constants
+    ``_ERICSON_K``, ``_SWITCH_UNITS`` and ``_ORIENT_ERRBOUND``. The reference itself
+    runs where an input is not contiguous, since its sums over a strided axis may take
+    another order."""
     n = q.shape[0]
     contiguous = q.is_contiguous() and simplex.is_contiguous() and (flat is None or flat.is_contiguous())
     if not _usable(q) or n == 0 or not contiguous:
@@ -448,7 +449,7 @@ def closest_weights(q, simplex, flat, reference, ericson_k, switch_units, orient
         q, simplex, q if flat is None else flat, out, guarded, count, n, HAS_FLAT=flat is not None,
         KAPPA=ericson_k * 2.0**-53, ERRBOUND=orient_errbound, BLOCK=_CELL_BLOCK, enable_fp_fusion=False,
     )
-    ### (a program per block of rows that may be guarded; those past the count return)
+    ### One program per block of rows that may be guarded; those past the count return.
     _accurate_kernel[(triton.cdiv(n, _ACCURATE_BLOCK),)](
         q, simplex, out, guarded, count, SWITCH=switch_units, BLOCK=_ACCURATE_BLOCK, num_warps=2, enable_fp_fusion=False
     )

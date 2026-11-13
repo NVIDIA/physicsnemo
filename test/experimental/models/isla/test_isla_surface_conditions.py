@@ -20,8 +20,9 @@ Every given boundary's cells are tokens; the outputs are returned at the cells o
 boundaries named in ``prediction_boundaries`` only (a vehicle, with a tunnel's floor
 and inlet read as conditions). The outputs are the rows of those cells, so naming more
 boundaries returns more rows of the same prediction; a condition-only boundary is read
-(moving it, or changing its field, changes the prediction); the symmetry contract holds
-with every boundary moved alike; every condition's parameters receive a gradient.
+(moving it, or changing its field, changes the prediction); and every condition's
+parameters receive a gradient. The symmetry contracts of several conditions are
+test_isla_conditions.py's.
 """
 
 import pytest
@@ -31,8 +32,6 @@ from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.mesh import Mesh
 from test.experimental.models.isla._meshes import (
     cloud,
-    law,
-    orthogonal,
     outputs,
     soup,
     transform,
@@ -89,23 +88,12 @@ def _run(m, meshes, names=("vehicle",), gd=GD):
         )
 
 
-def test_the_outputs_are_at_the_prediction_boundary_cells_only():
-    """The output points are the prediction boundary's cell centroids, in its cell order,
-    one row per cell; every given boundary's cells are tokens."""
-    m, meshes = _model(), _meshes()
-    out = _run(m, meshes)
-    torch.testing.assert_close(out.points, meshes["vehicle"].cell_centroids)
-    y = outputs(out)
-    n = SIZES["vehicle"]
-    assert y["p"].shape == (n,) and y["v"].shape == (n, 3) and y["s"].shape == (n, 3, 3)
-
-
 def test_naming_more_boundaries_returns_more_rows_of_the_same_prediction():
-    """The head reads the same tokens whichever boundaries carry the outputs: the
-    vehicle's rows are the same when the floor's rows are also returned, the boundaries
-    come in sorted name order (floor, inlet, vehicle) whatever order they are named in,
-    and naming every boundary returns every token (the surface task over all its
-    boundaries)."""
+    """The outputs are at the prediction boundaries' cell centroids, one row per cell,
+    and the head reads the same tokens whichever boundaries carry the outputs: the
+    vehicle's rows are the same when the floor's rows are also returned, the
+    boundaries come in sorted name order (floor, inlet, vehicle) whatever order they
+    are named in, and naming every boundary returns every token."""
     m, meshes = _model(), _meshes()
     every = outputs(_run(m, meshes, ("vehicle", "inlet", "floor")))
     nf, ni = SIZES["floor"], SIZES["inlet"]
@@ -122,7 +110,10 @@ def test_naming_more_boundaries_returns_more_rows_of_the_same_prediction():
             torch.testing.assert_close(
                 y[k], torch.cat([every[k][:nf], every[k][nf + ni :]])
             )
-    vehicle = outputs(_run(m, meshes))
+    out = _run(m, meshes)
+    torch.testing.assert_close(out.points, meshes["vehicle"].cell_centroids)
+    vehicle, n = outputs(out), SIZES["vehicle"]
+    assert vehicle["v"].shape == (n, 3) and vehicle["s"].shape == (n, 3, 3)
     for k in vehicle:
         torch.testing.assert_close(vehicle[k], every[k][nf + ni :])
 
@@ -154,27 +145,6 @@ def test_a_condition_only_boundary_is_read():
         y = outputs(_run(m, ms))
         assert y["p"].shape == base["p"].shape
         assert not torch.allclose(y["p"], base["p"], atol=1e-8), label
-
-
-@pytest.mark.parametrize("improper", [False, True])
-def test_pose_covariance_with_the_domain_moved_alike(improper):
-    """Rotating (or reflecting) and translating the vehicle, the floor and the inlet
-    together, the inlet's velocity with them, maps every output by its rank."""
-    m, meshes = _model(), _meshes()
-    R = orthogonal(3, seed=3, improper=improper)
-    shift = torch.tensor([2.0, -1.0, 0.5], dtype=D)
-    moved = {
-        k: transform(v, R, shift, specs=m.boundary_schemas[k])
-        for k, v in meshes.items()
-    }
-    a = _run(m, meshes)
-    b = _run(m, moved, gd={"g": GD["g"] @ R.T})
-    torch.testing.assert_close(b.points, a.points @ R.T + shift)
-    ya, yb = outputs(a), outputs(b)
-    for name, spec in OUT.items():
-        torch.testing.assert_close(
-            yb[name], law(ya[name], R, spec["rank"]), atol=1e-9, rtol=0.0
-        )
 
 
 def test_every_condition_parameter_gets_a_gradient():

@@ -16,95 +16,100 @@
 
 r"""The interior task's boundary read: passive prediction points read every boundary cell.
 
-In the interior task every passive prediction point :math:`q`
-gets one more residual update after every slice block: a read of every boundary cell
-:math:`j`, a softmax over the cells of
+In the interior task, every passive prediction point :math:`q` gets one more residual
+update after every slice block: a read of every boundary cell :math:`j`. A softmax over
+the cells of
 
 .. math::
 
     z_{qjh} = K_h(\iota_{qj}) + \langle q_{qh}, k_{jh} \rangle / \sqrt{c} + \log \omega_j
 
-weighting the cells' values :math:`v_{jh}`, with :math:`\omega_j` the cell's share of
-the boundary measure, so the read is a measure-weighted mean over the boundary (a
+weights the cells' values :math:`v_{jh}`. With :math:`\omega_j` the cell's share of the
+boundary measure, the read is a measure-weighted mean over the boundary (a
 quadrature). The kernel inputs :math:`\iota_{qj}` are invariants of the pair's relative
-geometry (:func:`tree_pair_invariants`); one MLP maps them to a basis of
-``KERNEL_READ_BASIS`` functions per pair once per forward pass (:class:`_KernelBasis`),
-and each block's kernel :math:`K_h` is a learned linear combination of that basis per
-head. The values, keys and queries are linear maps of invariant token states (the
-cell's and the point's own), so the read is invariant and the equivariant heads
-assemble every output. Read pair by pair, its cost is the number of (point, cell)
-pairs, :math:`Q N` per block: 1e8 on an airfoil of a thousand cells, 4e10 on a car of
-200,000.
+geometry (:func:`tree_pair_invariants`). Once per forward pass, one MLP maps them to
+``KERNEL_READ_BASIS`` basis functions per pair (:class:`_KernelBasis`), and each
+block's kernel :math:`K_h` is a learned linear combination of that basis per head. The
+values, keys and queries are linear maps of invariant token states (the cell's and the
+point's own), so the read is invariant and the equivariant heads assemble every
+output. Read pair by pair, it costs one term per (point, cell) pair, :math:`Q N` per
+block: 1e8 on an airfoil of a thousand cells, 4e10 on a car of 200,000.
 
-The read is evaluated through GLOBE's cluster tree
-(:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree`), walked once per
-prediction point
-(:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`)
+The read runs through GLOBE's cluster tree
+(:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree`), which each prediction
+point walks once
+(:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`),
 as an N-body code walks its tree once per body. A point reads the cells of nearby
 leaves one by one, and a distant cluster :math:`C` through one *virtual cell*: the
 cluster's measure-weighted centroid, its measure-weighted mean normal (renormalized),
 its total measure :math:`\Omega_C = \sum_{j \in C} \omega_j`, and the measure-weighted
 means of its cells' keys and values at the block's depth. Because the read is a
-quadrature, the virtual cell is the cluster's monopole: were the pair logit constant
+quadrature, the virtual cell is the cluster's monopole: if the pair logit were constant
 over the cluster, :math:`\sum_{j \in C} \omega_j e^{z_{qj}} v_j` would equal
 :math:`\Omega_C e^{z_{qC}} v_C` exactly.
 
-The kernel reads a cell's normal through three cosines, so a cluster is a usable
-virtual cell only when its normals agree: the mean normal of a cluster spanning both
-faces of a thin body is a random direction. The boundary is therefore held as a
-*forest*: the cells are split by the cube face of their normal (the orientation split:
-the axis of its largest component and that component's sign; opposite normals never
-share a tree) and one cluster tree is built per face (:class:`BoundaryForest`); with
-the cells' declared boundary conditions, one set of face trees per condition, so a
-node summarises one condition and its quadrature is that condition's own. A point walks every tree. A cluster is admitted when its
-box diagonal is below :math:`\theta` times its distance to the point (the tree's
-criterion) and its normals are coherent: the measure-weighted RMS chord of the
-normals about their mean, :math:`\sqrt{2 (1 - |\bar n|)}`, is below :math:`\theta`
-(the tree's ``source_admissible`` mask). The orientation split already holds
-:math:`|\bar n| \ge 1/\sqrt{d}`, so the coherence test refuses no cluster at
+The kernel reads a cell's normal only through cosines, so a cluster is a usable virtual
+cell only when its normals agree. The mean normal of a cluster spanning both faces of a
+thin body is a random direction. The boundary is therefore held as a *forest*
+(:class:`BoundaryForest`). The orientation split groups the cells by the cube face of
+their normal: the axis of its largest component and that component's sign, so opposite
+normals never share a tree. One cluster tree is built per face. When the cells declare
+boundary conditions, each condition gets its own face trees, so a node summarises one
+condition and its quadrature is that condition's own.
+
+A point walks every tree. A cluster is admitted when its box diagonal is below
+:math:`\theta` times its distance to the point (the tree's criterion) and its normals
+are coherent: the measure-weighted RMS chord of the normals about their mean,
+:math:`\sqrt{2 (1 - |\bar n|)}`, is below :math:`\theta` (the tree's
+``source_admissible`` mask). The orientation split already gives
+:math:`|\bar n| \ge 1/\sqrt{d}`, so the coherence test rejects no cluster at
 :math:`\theta > \sqrt{2 (1 - 1/\sqrt{d})}` (0.92 in three dimensions, 0.77 in two),
-the default included; it acts at smaller angles. A leaf that is not admitted contributes its
-cells; any other node hands the point to its two children. At :math:`\theta = 0` no
-cluster is admitted and the read is exact, pair for pair. The model reads at its
-``tree_read_theta`` (default ``TREE_READ_THETA``).
+the default included; it acts only at smaller angles. A leaf that is not admitted
+contributes its cells; any other node hands the point to its two children. At
+:math:`\theta = 0` no cluster is admitted and the read is exact, pair for pair. The
+model reads at its ``tree_read_theta`` (default ``TREE_READ_THETA``).
 
 Symmetries. A point's list depends on the forest and the point alone, so the read is
-exactly query independent at every :math:`\theta` (a point's prediction depends on
-the boundary and the point, never on the other prediction points). At
-:math:`\theta = 0` every contract of the exact read holds exactly: Euclidean
-equivariance, the similarity gauge, boundary-refinement and measure-scale invariance.
-At finite :math:`\theta` the forest is built in a frame the boundary carries with it
+exactly query independent at every :math:`\theta`: a point's prediction depends on the
+boundary and the point, never on the other prediction points. At :math:`\theta = 0`
+every contract of the exact read holds exactly: Euclidean equivariance, the similarity
+gauge, boundary-refinement and measure-scale invariance. At finite :math:`\theta` the
+forest is built in a frame that moves with the boundary
 (:func:`~physicsnemo.mesh.spatial._frame.canonical_frame`: the principal axes of the
-cells' measure-weighted covariance, signed by their third moments), so a rotation, reflection, translation
-or rescale of the case gives the same clusters and the same far-field list for every
-point, up to ties of that frame (equal variances, a symmetric axis); the read is then
-the same approximation in every pose. At :math:`\theta > 0` the read is piecewise
-smooth: the output jumps where a cluster's admission changes, in the point and in the
-boundary's vertices, so take derivatives of the output in space or in shape at
-:math:`\theta = 0`.
+cells' measure-weighted covariance, signed by their third moments). A rotation,
+reflection, translation or rescale of the case then gives the same clusters and the
+same far-field list for every point, up to ties of that frame (equal variances, a
+symmetric axis), so the read is the same approximation in every pose. At
+:math:`\theta > 0` the read is piecewise smooth: the output jumps where a cluster's
+admission changes, as the point or the boundary's vertices move. At every
+:math:`\theta`, no gradient reaches the pair invariants (:func:`_chunked_basis_from_plan`),
+so the kernel basis takes no input gradient. Derivatives of the output with respect to
+the prediction points or the boundary's vertices are therefore partial: they leave out
+the read's pair geometry.
 
-No discrete choice of the forest is left to rounding where an error bound can decide
-it, and none to the caller's precision. The forest is built and walked outside
-autocast, in the inputs' precision, with its coordinates in the boundary's frame about
-its centroid computed in float64 and rounded once, so a bf16-autocast forward builds
-bitwise the float32 forward's forest. A normal's face is tied when its two largest
-components are within the bound on their rounding (:func:`normal_error_bound`, and the
-frame's own rotation, :func:`frame_rotation_bound`), and a tied normal takes the lowest
-tied axis; the box test compares the distance with a diameter widened by the
-coordinates' error bound and by the frame's rotation, which moves the points and the
-cells together and so widens each node in proportion to its own size, never past a
-frame-free bound (:func:`separation_diameter_sq`), so an exact tie of the criterion is
-opened in every pose and a nearly tied frame costs a bounded factor of pairs. The bounds are measured in the boundary's own frame,
-so they are functions of the boundary alone and their edges do not move with the pose.
-What rounding still decides is generic: cells within rounding of a face boundary, a
-Morton grid line or the criterion, whose posed inputs differ by the rounding of the
-pose itself.
+Rounding. Rounding makes no discrete choice of the forest that an error bound can
+settle, and the caller's precision makes none. The forest is built and
+walked outside autocast, in the inputs' precision. Its coordinates, in the boundary's
+frame about its centroid, are computed in float64 and rounded once, so a bf16-autocast
+forward builds bitwise the float32 forward's forest. A normal's face is tied when its
+two largest components lie within the bound on their rounding
+(:func:`normal_error_bound`) plus the frame's rotation (:func:`frame_rotation_bound`);
+a tied normal takes the lowest tied axis. The box test compares the distance with a
+diameter widened by the coordinates' error bound and by the frame's rotation
+(:func:`separation_diameter_sq`). The rotation moves the points and the cells
+together, so it widens each node in proportion to its own size, never past a
+frame-free bound. An exact tie of the criterion is thus opened in every pose, and a
+nearly tied frame costs a bounded factor of pairs. The bounds are measured in the
+boundary's own frame: they are functions of the boundary alone, and their edges do not
+move with the pose. Rounding still decides the generic cases: cells within rounding of
+a face boundary, a Morton grid line or the criterion, whose posed inputs differ by the
+rounding of the pose itself.
 
-Constants. The leaf size (cells per leaf: the model's ``tree_read_leaf_size``, default
-``TREE_READ_LEAF_SIZE``), the orientation split into the :math:`2 d` cube faces and
-``TREE_READ_PAIR_CHUNK`` (pairs per chunk of the basis evaluation) change, at a fixed
-:math:`\theta`, the cost and the grouping of the exact pairs, and at :math:`\theta = 0`
-nothing at all.
+Constants. At a fixed :math:`\theta`, three choices change the cost and the grouping
+of the exact pairs, and at :math:`\theta = 0` they change nothing: the leaf size (cells
+per leaf: the model's ``tree_read_leaf_size``, default ``TREE_READ_LEAF_SIZE``), the
+orientation split into the :math:`2 d` cube faces, and ``TREE_READ_PAIR_CHUNK`` (pairs
+per chunk of the basis evaluation).
 """
 
 import dataclasses
@@ -116,6 +121,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
 
@@ -150,8 +156,8 @@ KERNEL_READ_HIDDEN = 64
 #: kernel is a learned linear combination of them per head.
 KERNEL_READ_BASIS = 16
 #: The default Barnes-Hut opening angle of the model's read (ISLA's
-#: ``tree_read_theta``). A model is read at the angle it was trained at (a cluster's
-#: aggregate is what the kernel learns to read).
+#: ``tree_read_theta``). Read a model at the angle it was trained at: the kernel learns
+#: to read the clusters' aggregates.
 TREE_READ_THETA = 1.0
 
 #: The default boundary cells per tree leaf (ISLA's ``tree_read_leaf_size``): at a fixed
@@ -161,6 +167,20 @@ TREE_READ_LEAF_SIZE = 4
 #: Pairs per chunk of the kernel-basis evaluation (memory only; each chunk's
 #: invariants are built once, its MLP activations are rebuilt in backward).
 TREE_READ_PAIR_CHUNK = 1 << 22
+
+#: Inductor options of the read's compiled projections (``compile_blocks``): mix-order
+#: reduction off, as for the slice blocks (``model._BLOCK_COMPILE_OPTIONS``).
+_READ_COMPILE_OPTIONS = {"triton.mix_order_reduction": False}
+_COMPILED: dict = {}
+
+
+def _compiled(fn):
+    """``fn`` through :func:`torch.compile` with dynamic shapes, built once per function.
+    Parameters enter as arguments, so one graph serves every block and every point count
+    (sizes 0 and 1 aside, which torch.compile specializes)."""
+    if fn not in _COMPILED:
+        _COMPILED[fn] = torch.compile(fn, dynamic=True, options=_READ_COMPILE_OPTIONS)
+    return _COMPILED[fn]
 
 
 def normal_faces(normals: torch.Tensor, tol: torch.Tensor) -> torch.Tensor:
@@ -179,18 +199,20 @@ def normal_faces(normals: torch.Tensor, tol: torch.Tensor) -> torch.Tensor:
 
 
 def normal_error_bound(simplex: torch.Tensor, centre: torch.Tensor) -> torch.Tensor:
-    r"""A bound on the error of each cell's unit normal ``(C,)`` (on every component),
-    from its vertices ``simplex`` ``(C, d, d)`` as given and the boundary's centroid
-    ``centre`` ``(d,)`` (or each cell's own, ``(C, d)``: its condition's): with :math:`u` the unit roundoff of the vertices' precision,
-    :math:`V` the largest distance of a vertex from the centroid and :math:`e_j` the
-    edges from the first vertex, the normal :math:`c / |c|` of the edges' generalized
-    cross product :math:`c` moves by at most :math:`u (6 V \sum_k \prod_{j \ne k} |e_j|
-    + 2 (d - 1) \prod_j |e_j|) / |c| + (d + 2) u`: each vertex rounded (:math:`u V`), the
-    edges and the product computed and normalized in that precision. :math:`V` is
-    measured from the centroid, so the bound is a function of the boundary alone, the
-    same in every pose (a pose far from the origin adds its own rounding, which no
-    function of the boundary can follow). In float64; a zero-measure cell gets an
-    infinite bound."""
+    r"""A bound ``(C,)`` on the error of every component of each cell's unit normal,
+    from its vertices ``simplex`` ``(C, d, d)`` as given and the centroid ``centre``:
+    the boundary's ``(d,)``, or each cell's own condition's ``(C, d)``.
+
+    Let :math:`u` be the unit roundoff of the vertices' precision, :math:`V` the
+    largest distance of a vertex from the centroid and :math:`e_j` the edges from the
+    first vertex. The normal :math:`c / |c|` of the edges' generalized cross product
+    :math:`c` then moves by at most :math:`u (6 V \sum_k \prod_{j \ne k} |e_j| + 2 (d -
+    1) \prod_j |e_j|) / |c| + (d + 2) u`. The terms are each vertex's rounding
+    (:math:`u V`), and the edges and the product computed and normalized in that
+    precision. :math:`V` is measured from the centroid, so the bound is a function of
+    the boundary alone, the same in every pose; a pose far from the origin adds its own
+    rounding, which no function of the boundary can follow. Computed in float64; a
+    zero-measure cell gets an infinite bound."""
     v = simplex.double()
     d = v.shape[-1]
     u = torch.finfo(simplex.dtype).eps / 2
@@ -205,7 +227,7 @@ def normal_error_bound(simplex: torch.Tensor, centre: torch.Tensor) -> torch.Ten
         c = torch.linalg.cross(edges[:, 0], edges[:, 1], dim=-1).norm(dim=-1) if d == 3 else (
             torch.linalg.det(edges @ edges.transpose(1, 2)).clamp_min(0).sqrt()
         )
-        ### (slices, not an index list, which would be copied from the host)
+        ### Slices: an index list would be copied from the host.
         rest = torch.stack([torch.cat([e[:, :k], e[:, k + 1 :]], 1).prod(dim=1) for k in range(d - 1)], 1).sum(1)
     full = e.prod(dim=1)
     bound = u * (6 * big * rest + 2 * (d - 1) * full) / c + (d + 2) * u
@@ -453,19 +475,20 @@ class BoundaryForest:
     ) -> "BoundaryForest":
         """The forest over cells at ``points`` ``(N, d)`` with ``measure`` ``(N,)``,
         unit ``normals`` ``(N, d)`` and rank-1 inputs ``vecs`` ``(N, P, d)`` or
-        ``None``; ``normal_tol`` ``(N,)`` bounds the error of each normal's components
-        (:func:`normal_error_bound`; ``None``: the normals are exact as given, up to
-        their own rounding). ``groups`` ``(N,)`` int64 is each cell's declared condition
-        (``None``: one group): every group gets its own face trees, in coordinates about
-        its own measure-weighted centroid, the frame and its rotation bound staying the
-        whole boundary's; trees go group by group in ascending order, then face by face,
-        and one group is the ungrouped forest. No gradient flows into it (a numerical
-        device), and it is
-        built outside autocast, in the inputs' precision with its frame arithmetic in
-        float64, so a forward under autocast builds the same forest. ``build`` picks how
-        it is built, not what it is (:func:`~._tree_build.resolve_tree_build`): the
-        per-face cluster trees below, or the same forest from one pass over all
-        faces (:func:`~._tree_build.forest_tables`)."""
+        ``None``.
+
+        ``normal_tol`` ``(N,)`` bounds the error of each normal's components
+        (:func:`normal_error_bound`); ``None`` takes the normals as exact, up to their
+        own rounding. ``groups`` ``(N,)`` int64 is each cell's declared condition
+        (``None``: one group). Each group gets its own face trees, in coordinates about
+        its own measure-weighted centroid; the frame and its rotation bound stay the
+        whole boundary's. Trees go group by group in ascending order, then face by face,
+        and one group gives the ungrouped forest. No gradient flows into the forest (a
+        numerical device), and a forward under autocast builds the same forest (the
+        module docstring's *Rounding*). ``build`` picks how the forest is built, never what it is
+        (:func:`~._tree_build.resolve_tree_build`): the per-face cluster trees below, or
+        the same forest from one pass over all faces
+        (:func:`~._tree_build.forest_tables`)."""
         with torch.autocast(points.device.type, enabled=False):
             return cls._build(points, measure, normals, vecs, theta, leaf_size, eps, normal_tol, groups, build)
 
@@ -478,10 +501,9 @@ class BoundaryForest:
         n, d = points.shape
         device = points.device
         coherent_length = 1.0 - 0.5 * float(theta) ** 2
-        ### The trees and the faces live in the boundary's own frame about its centroid,
-        ### computed in float64 and rounded once, so the forest is the same in every pose
-        ### of the case (up to the frame's ties); the virtual cells (centroids, normals,
-        ### rank-1 means) stay in the frame the read works in.
+        ### The trees and the faces live in the boundary's own frame about its centroid
+        ### (the module docstring's Symmetries and Rounding); the virtual cells
+        ### (centroids, normals, rank-1 means) stay in the frame the read works in.
         u = torch.finfo(points.dtype).eps / 2
         tiny = torch.finfo(torch.float64).tiny
         w_raw = measure.double().clamp_min(0)
@@ -501,11 +523,11 @@ class BoundaryForest:
         else:
             tol = normal_tol.double()
         ### One set of face trees per group (declared condition), each about its group's
-        ### own centroid; one group is the whole boundary. ``face`` is each cell's tree,
-        ### 2 d g + its normal's face. The groups present and their sizes cost one sort and
-        ### one readback. Each group's total measure and centroid are sums over its own
-        ### cells in their order (a slice of the cells sorted by group, so each sum is
-        ### what it is on the group alone); the rest is elementwise over all the cells.
+        ### own centroid; one group is the whole boundary. ``face`` is each cell's tree:
+        ### 2 d g plus its normal's face. Finding the groups and their sizes costs one sort
+        ### and one readback. Each group's total measure and centroid sum its own cells in
+        ### their order (a slice of the cells sorted by group), so each equals the sum on
+        ### the group alone; the rest is elementwise over all the cells.
         sizes = None
         if groups is not None:
             by_group = torch.argsort(groups, stable=True)
@@ -554,15 +576,15 @@ class BoundaryForest:
         return self.cells[pos], which
 
     def point_pairs(self, points: torch.Tensor, walk: str = "auto") -> tuple[torch.Tensor, torch.Tensor, int]:
-        """Every point's list: ``(qi, si, n_node)`` sorted by point, where ``si`` below
-        ``n_cells`` names a cell and ``n_cells + m`` names node ``m``; ``n_node`` is the
-        number of node entries. Each tree is walked once per point at the forest's
-        ``theta``, for which its diameters and coherence are made; a node is admitted only when its box is well
-        separated from the point and its normals are coherent, so each point's list
-        holds every cell exactly once, as itself or inside one node. ``walk`` names
-        how, not what (:func:`resolve_walk`): the fast walk gives the same lists in
-        the same order. Lists past Warp's array limit are walked by the reference
-        under ``"auto"`` and refused under ``"fast"``."""
+        """Every point's list ``(qi, si, n_node)``, sorted by point. ``si`` below
+        ``n_cells`` names a cell and ``n_cells + m`` names node ``m``; ``n_node`` counts
+        the node entries. Each tree is walked once per point at the forest's ``theta``,
+        for which its diameters and coherence were made. A node is admitted only when
+        its box is well separated from the point and its normals are coherent, so each
+        point's list holds every cell exactly once, as itself or inside one node.
+        ``walk`` picks how, never what (:func:`resolve_walk`): the fast walk gives the
+        same lists in the same order. Under ``"auto"`` the reference walks lists past
+        Warp's array limit; ``"fast"`` raises on them."""
         return self.frame_pairs(self.frame_points(points), walk)
 
     def frame_points(self, points: torch.Tensor) -> torch.Tensor:
@@ -633,14 +655,14 @@ class BoundaryForest:
 
 def resolve_walk(walk: str, points: torch.Tensor, theta: float, forest: BoundaryForest) -> str:
     """The walk :meth:`BoundaryForest.point_pairs` runs: ``"reference"`` (GLOBE's
-    cluster-tree traversal, tree by tree) or ``"fast"`` (:mod:`tree_walk`'s Warp
-    kernels, the same pairs in the same order). ``"auto"`` picks the fast walk for
-    CUDA points when the forest's depth fits its stack, else the reference, logged
-    once per device type and choice; a forced name is kept (``"fast"`` runs on CPU
-    too). At ``theta = 0`` there is no walk (the plan is every pair) and the
-    reference's construction runs either way. Both walks run outside autocast, in
-    the forest's precision, and the fast walk rounds as the reference's torch
-    kernels do."""
+    cluster-tree traversal, tree by tree) or ``"fast"`` (the Warp kernels of
+    :mod:`~._tree_walk`, the same pairs in the same order). ``"auto"`` picks the fast
+    walk for CUDA points when the forest's depth fits its stack, else the reference,
+    and logs each choice once per device type. A forced name is kept (``"fast"`` runs
+    on CPU too). At ``theta = 0`` there is no walk (the plan is every pair), and the
+    reference's construction runs either way. Both walks run outside autocast, in the
+    forest's precision, and the fast walk rounds as the reference's torch kernels
+    do."""
     if walk not in ("auto", "reference", "fast"):
         raise ValueError(f"walk must be 'auto', 'reference' or 'fast', got {walk!r}")
     if theta == 0:
@@ -699,12 +721,12 @@ class TreeReadPairs:
 
 
 def node_means(x: torch.Tensor, forest: BoundaryForest, omega: torch.Tensor) -> torch.Tensor:
-    """The measure-weighted mean of the cells' rows ``x`` ``(N, ...)`` over every node
-    of the forest, ``(M, ...)``, differentiable in ``x``: the leaves' sums by one
-    scatter over the forest order, then every internal node as the sum of its two
+    """The measure-weighted mean ``(M, ...)`` of the cells' rows ``x`` ``(N, ...)`` over
+    every node of the forest, differentiable in ``x``. One scatter over the forest
+    order gives the leaves' sums; each internal node is then the sum of its two
     children, depth by depth up to the roots (a tree of pairwise sums, no
-    cancellation), in float64 for float64 rows and in float32 otherwise (float32,
-    bfloat16 and float16 rows alike)."""
+    cancellation). The sums run in float64 for float64 rows and in float32 for
+    float32, bfloat16 and float16 rows."""
     work = torch.float64 if x.dtype == torch.float64 else torch.float32
     cells = forest.cells
     flat = x.reshape(x.shape[0], -1).to(work)[cells]
@@ -815,13 +837,13 @@ def _chunked_basis_from_plan(
     geometry: dict,
     weights: tuple | None = None,
 ) -> torch.Tensor:
-    """The kernel basis of one case's pairs ``(P, KERNEL_READ_BASIS)``, the plan's rows
+    """The kernel basis ``(P, KERNEL_READ_BASIS)`` of one case's pairs, the plan's rows
     ``a:b``, in chunks of ``TREE_READ_PAIR_CHUNK`` pairs. The pair invariants are
-    geometry of the inputs (no gradient reaches them); under gradient each chunk's
+    geometry of the inputs, and no gradient reaches them. Under gradient each chunk's
     invariants and basis MLP are checkpointed: backward rebuilds them from the plan's
-    indices (``q_off`` and ``s_off`` the case's first point and source), so nothing per
-    pair but the basis is kept. With ``weights`` (:func:`fused_basis.mlp_weights`) each chunk is one
-    fused kernel of the invariants and the MLP (:mod:`fused_basis`)."""
+    indices (``q_off`` and ``s_off`` the case's first point and source), so the basis is
+    all that is kept per pair. With ``weights`` (:func:`fused_basis.mlp_weights`) each
+    chunk is one fused kernel of the invariants and the MLP (:mod:`fused_basis`)."""
     grad = torch.is_grad_enabled() and any(p.requires_grad for p in basis.parameters())
     ### Without gradient the fused kernel takes every pair in one launch (a pair's basis is its own tile row's,
     ### whatever the chunk): no chunks to concatenate. Under gradient the chunks stay: each one's weight
@@ -847,14 +869,14 @@ class TreeReadWalk:
     """Every case's forest and point lists (:func:`tree_read_walk`), before the kernel
     basis: per case the pairs ``(qi, si, n_node)`` sorted by point, the inputs of their
     invariants (:func:`tree_pair_invariants`) and the sources' log measures.
-    :func:`walk_range_pairs` assembles the pairs from it;
-    ``kernel`` is the read's implementation (:func:`tree_read_walk`). A walk made
-    with ``walk_points=False`` has no lists (``None`` per case) and keeps what
-    :func:`walk_points_range` walks a range of points with: per case the points in
-    the forest's frame, and the walk's implementation. With ``conditions`` given to
-    :func:`tree_read_walk`, ``node_condition`` holds per case each node's condition
-    (its tree's, which every cell of the node has), for :func:`walk_range_pairs`'s per-condition shift of
-    the nodes' log measures."""
+    :func:`walk_range_pairs` assembles the pairs from it; ``kernel`` is the read's
+    implementation (:func:`tree_read_walk`). A walk made with ``walk_points=False`` has
+    no lists (``None`` per case). It keeps what :func:`walk_points_range` needs to walk
+    a range of points: per case the points in the forest's frame, and the walk's
+    implementation. With ``conditions`` given to :func:`tree_read_walk`,
+    ``node_condition`` holds per case each node's condition (its tree's, shared by every
+    cell of the node), for the per-condition shift of the nodes' log measures in
+    :func:`walk_range_pairs`."""
 
     forests: list[BoundaryForest]
     lists: list[tuple[torch.Tensor, torch.Tensor, int] | None]
@@ -902,32 +924,29 @@ def tree_read_walk(
     ``query_r``, ``query_n`` ``(B, Q, d)`` (frame units; the point's built-in
     direction), ``query_wall`` ``(B, Q)`` the point's built-in wall distance (both
     ``None`` for a walk made without its lists: :func:`walk_points_range` takes a
-    range's); ``boundary_r``, ``boundary_n``
-    ``(B, N, d)``, ``boundary_vecs`` ``(B, N, P_b, d)`` or ``None``; ``log_frac``
-    ``(B, N)`` the cells' log measure fractions; ``g_unit`` ``(B, K, d)``;
-    ``normal_tol`` ``(B, N)`` or ``None`` the bound on each cell's normal
-    (:meth:`BoundaryForest.build`); ``leaf_size`` the forest's cells per leaf.
+    range's); ``boundary_r``, ``boundary_n`` ``(B, N, d)``, ``boundary_vecs``
+    ``(B, N, P_b, d)`` or ``None``; ``log_frac`` ``(B, N)`` the cells' log measure
+    fractions; ``g_unit`` ``(B, K, d)``; ``normal_tol`` ``(B, N)`` or ``None`` the
+    bound on each cell's normal (:meth:`BoundaryForest.build`); ``leaf_size`` the
+    forest's cells per leaf.
 
-    Per case: the forest over the cells (:class:`BoundaryForest`, with the measure
-    fractions as the measure), each point's walk of it at ``theta``
-    (:meth:`BoundaryForest.point_pairs`), so each point's list is a set of cells and
-    a set of nodes that together cover every cell exactly once; the nodes' virtual
-    cells (centroid, renormalized mean normal, mean rank-1 inputs, total measure)
-    come with the forest. The forest and the walk run without gradient (a numerical
-    device); the invariants and the basis (:func:`walk_range_pairs`) carry gradients
-    to the kernel MLP. ``walk`` names the walk's implementation
-    (:func:`resolve_walk`); ``build`` is the forest's build
-    (:meth:`BoundaryForest.build`); ``kernel`` is the read's, recorded for
-    :func:`walk_range_pairs`, which builds the basis after the plan from its indices,
-    the invariants rebuilt in backward (:func:`_chunked_basis_from_plan`); with
-    ``"fused"`` the blocks read through :mod:`fused_read`, and the basis of each chunk
-    is one fused kernel where :func:`fused_basis.unsupported_reason` finds no reason
-    against it. With ``walk_points=False`` no point is
-    walked here: :func:`walk_points_range` walks any range of them later.
-    ``conditions`` ``(B, N)`` (or ``None``: one) is each cell's declared condition:
-    the forest builds one set of face trees per condition (:meth:`BoundaryForest.build`'s
-    ``groups``), so each node holds cells of one condition, and the walk keeps each
-    node's.
+    Per case, the forest over the cells (:class:`BoundaryForest`, with the measure
+    fractions as the measure) holds the nodes' virtual cells, and each point walks it
+    at ``theta`` (:meth:`BoundaryForest.point_pairs`). The forest and the walk run
+    without gradient (a numerical device), and so do the pair invariants; the basis
+    (:func:`walk_range_pairs`) carries gradients to the kernel MLP's weights.
+
+    ``walk`` names the walk's implementation (:func:`resolve_walk`) and ``build`` the
+    forest's (:meth:`BoundaryForest.build`). ``kernel`` names the read's, recorded for
+    :func:`walk_range_pairs`: that builds the basis after the plan, from its indices,
+    and rebuilds the invariants in backward (:func:`_chunked_basis_from_plan`). With
+    ``"fused"`` the blocks read through :mod:`fused_read`, and each chunk's basis is one
+    fused kernel unless :func:`fused_basis.unsupported_reason` gives a reason against
+    it. With ``walk_points=False`` no point is walked here: :func:`walk_points_range`
+    walks any range of them later. ``conditions`` ``(B, N)`` (or ``None``: one) is each
+    cell's declared condition. The forest then builds one set of face trees per
+    condition (the ``groups`` of :meth:`BoundaryForest.build`), so each node holds
+    cells of one condition, and the walk keeps each node's.
     """
     b, nq, d = query_r.shape
     n = boundary_r.shape[1]
@@ -998,15 +1017,14 @@ def walk_points_range(
     query_n: torch.Tensor | None = None,
     query_wall: torch.Tensor | None = None,
 ) -> TreeReadWalk:
-    """The walk of the points ``start`` to ``stop`` of a walk made without its lists
-    (``tree_read_walk(walk_points=False)``), numbered from ``start``, with those
-    points' geometry: each forest walked for those points alone, from the same
-    coordinates in its frame, so each point's list is
-    the one the walk of every point gives it, in the same order, and
-    :func:`walk_range_pairs` of the result is the pairs of that range. The points'
-    built-in direction and wall distance are the walk's rows, or ``query_n`` ``(B,
-    stop - start, d)`` and ``query_wall`` ``(B, stop - start)`` when given (a walk
-    made without them)."""
+    """The walk of the points ``start`` to ``stop``, numbered from ``start``, of a walk
+    made without its lists (``tree_read_walk(walk_points=False)``), with those points'
+    geometry. Each forest is walked for those points alone, from the same coordinates
+    in its frame. Each point's list is thus the one the walk of every point gives it,
+    in the same order, and :func:`walk_range_pairs` of the result gives the pairs of
+    that range. The points' built-in direction and wall distance are the walk's rows,
+    or ``query_n`` ``(B, stop - start, d)`` and ``query_wall`` ``(B, stop - start)``
+    when given (for a walk made without them)."""
     ### The count pass of every point, when walk_pair_counts has run it: this range's rows.
     counts = walk.counts or [None] * len(walk.forests)
     with torch.no_grad():
@@ -1053,11 +1071,12 @@ def walk_range_pairs(
     every pair in chunks (a range of points: :func:`walk_points_range`).
     ``log_shift`` ``(B, N)`` and ``condition_shift`` ``(B, C)`` (both or neither; the
     walk made with ``conditions``) are the per-condition quadrature's shifts
-    :math:`s_k = -\log A_k + \beta_k`, per cell and per condition, which may carry a
-    gradient: a cell's log measure takes its own, and a node, whose cells are of one
-    condition (:func:`tree_read_walk`), takes that condition's, by a one-hot mask of
-    its condition times the shifts, summed (exactly :math:`s_k`; its backward a product
-    and a sum, no scatter). The forest's measures never take them."""
+    :math:`s_k = -\log A_k + \beta_k`, per cell and per condition, and may carry a
+    gradient. A cell's log measure takes its own shift. A node's cells share one
+    condition (:func:`tree_read_walk`), and the node takes that condition's shift as
+    the sum of a one-hot mask of its condition times the shifts: exactly :math:`s_k`,
+    with a product and a sum as its backward, no scatter. The forest's measures never
+    take the shifts."""
     n, nq = walk.n_cells, walk.n_queries
     qis, sis, bases = [], [], []
     deferred = []
@@ -1087,8 +1106,8 @@ def walk_range_pairs(
         _joined(qis), _joined(sis), n_points, src_off, narrow=max(pair_off, n_points, src_off) < 2**31
     )
     if torch.is_grad_enabled():
-        ### The by-source half now, not inside the first backward read (the step's memory peak); without
-        ### gradient no read takes it, and it is never built.
+        ### Build the by-source half here, not inside the first backward read (the step's memory peak).
+        ### Without gradient no read needs it, and it is never built.
         plan_all.by_source
     ### The fused read's basis: one cast of the MLP's weights for every case and chunk, as autocast's weight cache
     ### gives the reference.
@@ -1120,19 +1139,20 @@ class _TreeKernelRead(nn.Module):
     """One block's read for the passive prediction points, through the forest.
 
     A softmax over each point's cells and nodes (:class:`TreeReadPairs`) with the
-    logits ``K_h(iota_qj) + <q_h, k_jh> / sqrt(c) + log omega_j`` (ISLA's quadrature
-    form: the log measure as bias, so it is a measure-weighted mean over the
-    boundary), with ``K_h`` a linear combination of the shared kernel basis. Logits
-    linear in ``log r`` or ``log(r / |d_q|)`` are power laws, so the read can learn any
-    locality; there is no radius, falloff or neighbour count. The cells' keys and
-    values are linear maps of their states; a node's are the measure-weighted means of
-    its cells' at this depth
-    (:func:`~physicsnemo.experimental.models.isla._fused_read.fused_kernel_read`, which
+    logits ``K_h(iota_qj) + <q_h, k_jh> / sqrt(c) + log omega_j`` of the module
+    docstring's quadrature, where ``K_h`` is a linear combination of the shared kernel
+    basis. Logits linear in ``log r`` or ``log(r / |d_q|)`` are power laws, so the
+    read can learn any locality; there is no radius, falloff or neighbour count. The
+    cells' keys and values are linear maps of their states; a node's are the
+    measure-weighted means of its cells' at this depth. The read runs through
+    :func:`~physicsnemo.experimental.models.isla._fused_read.fused_kernel_read`, which
     keeps nothing per pair between forward and backward, or the reference
-    :func:`~physicsnemo.experimental.models.isla._segment_softmax.segment_softmax_read`). ``forward(h_b, h_q,
-    pairs)`` with the boundary and point states flattened over the batch returns the
-    points' residual update; the output projection starts at zero, so the read starts
-    as no update.
+    :func:`~physicsnemo.experimental.models.isla._segment_softmax.segment_softmax_read`.
+
+    ``forward(h_b, h_q, pairs)``, with the boundary and point states flattened over
+    the batch, returns the points' residual update. The output projection starts at
+    zero, so the read starts as no update. ``compiled`` (``compile_blocks``) runs the
+    LayerNorms with the key, value and query maps through :func:`torch.compile`.
     """
 
     def __init__(self, hidden: int) -> None:
@@ -1148,21 +1168,27 @@ class _TreeKernelRead(nn.Module):
         self.out = nn.Linear(w, hidden, bias=False)
         nn.init.zeros_(self.out.weight)
 
-    def forward(self, h_b, h_q, pairs: TreeReadPairs):
-        return self.read(self.sources(h_b, pairs), h_q, pairs)
+    def forward(self, h_b, h_q, pairs: TreeReadPairs, compiled: bool = False):
+        return self.read(self.sources(h_b, pairs, compiled), h_q, pairs, compiled)
 
-    def sources(self, h_b, pairs: TreeReadPairs | TreeReadWalk):
+    def sources(self, h_b, pairs: TreeReadPairs | TreeReadWalk, compiled: bool = False):
         """The virtual sources' keys and values at this depth, ``(sources, H KC + W)``,
         from the boundary states ``h_b``."""
-        hb = self.norm_b(h_b)
-        v_c, k_c = self.value(hb), self.key(hb)
+        if compiled:
+            nb = self.norm_b
+            kv = _compiled(_source_states)(
+                h_b, nb.weight, nb.bias, nb.eps, self.key.weight, self.value.weight, self.value.bias
+            )
+        else:
+            hb = self.norm_b(h_b)
+            v_c, k_c = self.value(hb), self.key(hb)
         ### The virtual sources, case by case: the cells, then the forest's node means
         ### of the keys and values together (one scatter and one sweep per case).
         n = pairs.n_cells
         kv_parts = []
         for i, forest in enumerate(pairs.forests):
             sl = slice(i * n, (i + 1) * n)
-            kv_c = torch.cat([k_c[sl], v_c[sl]], dim=-1)
+            kv_c = kv[sl] if compiled else torch.cat([k_c[sl], v_c[sl]], dim=-1)
             means = (
                 fused_read.fused_node_means
                 if pairs.kernel == "fused" and fused_read.node_means_supported(kv_c)
@@ -1171,10 +1197,14 @@ class _TreeKernelRead(nn.Module):
             kv_parts += [kv_c, means(kv_c, forest, pairs.omega[sl])]
         return torch.cat(kv_parts)
 
-    def read(self, kv_src, h_q, pairs: TreeReadPairs):
+    def read(self, kv_src, h_q, pairs: TreeReadPairs, compiled: bool = False):
         """The points' residual update from the sources' keys and values (:meth:`sources`)."""
         nh, c, kc = KERNEL_READ_HEADS, KERNEL_READ_WIDTH // KERNEL_READ_HEADS, KERNEL_READ_KEY
-        q = self.query(self.norm_q(h_q)).view(-1, nh, kc)
+        if compiled:
+            nq = self.norm_q
+            q = _compiled(_query_states)(h_q, nq.weight, nq.bias, nq.eps, self.query.weight).view(-1, nh, kc)
+        else:
+            q = self.query(self.norm_q(h_q)).view(-1, nh, kc)
         k_src = kv_src[:, : nh * kc].reshape(-1, nh, kc)
         v_src = kv_src[:, nh * kc :].reshape(-1, nh, c)
         ### The pairs' kernel terms at this block: the shared basis through the block's
@@ -1209,3 +1239,14 @@ class _TreeKernelRead(nn.Module):
                 ker, pairs.log_m, q, k_src, v_src, pairs.plan, scale=1.0 / math.sqrt(kc)
             )
         return self.out(read.reshape(-1, nh * c).to(h_q.dtype))
+
+
+def _source_states(h_b, ln_w, ln_b, ln_eps: float, w_key, w_value, b_value):
+    """The cells' keys and values ``[k | v]`` from their states (:class:`_TreeKernelRead`)."""
+    hb = F.layer_norm(h_b, (h_b.shape[-1],), ln_w, ln_b, ln_eps)
+    return torch.cat([F.linear(hb, w_key), F.linear(hb, w_value, b_value)], dim=-1)
+
+
+def _query_states(h_q, ln_w, ln_b, ln_eps: float, w_query):
+    return F.linear(F.layer_norm(h_q, (h_q.shape[-1],), ln_w, ln_b, ln_eps), w_query)
+

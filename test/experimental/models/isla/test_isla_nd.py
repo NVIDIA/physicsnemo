@@ -87,6 +87,9 @@ OUT2 = {
 
 
 def test_levi_civita_symbol_and_pseudovector_counts():
+    """The Levi-Civita symbol in two and three dimensions has its signs, the
+    pseudovectors of an orthonormal basis are its perpendiculars (two in 2-D, three
+    in 3-D, none in 4-D), and a 2-D model's output layouts are two-dimensional."""
     e2 = _levi_civita(2)
     assert torch.equal(e2, torch.tensor([[0.0, 1.0], [-1.0, 0.0]], dtype=torch.float64))
     e3 = _levi_civita(3)
@@ -106,11 +109,7 @@ def test_levi_civita_symbol_and_pseudovector_counts():
         torch.tensor([[0.0, 0.0, 1.0]]),
     ]
     assert len(_pseudovectors(v3, 3)) == 3 and _pseudovectors(v3, 4) == []
-    m2 = _model(2, {"p": {"rank": 0}})
-    m3 = _model(3, {"p": {"rank": 0}})
-    assert (m2._n_true_basis, m2._n_pseudo_basis) == (5, 3)
-    assert (m3._n_true_basis, m3._n_pseudo_basis) == (5, 3)
-    assert m2._output_layouts["p"].dim == 2
+    assert _model(2, {"p": {"rank": 0}})._output_layouts["p"].dim == 2
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64], ids=["fp32", "fp64"])
@@ -162,6 +161,9 @@ def test_two_dimensional_contracts_rotation_translation_magnitude_and_reflection
 
 
 def test_two_dimensional_gradients_and_interior_task():
+    """In two dimensions the interior task gives every parameter a gradient, and a
+    rotation of the boundary, the global direction and the prediction points keeps p
+    and rotates v, to the float32 bound of the distance channel."""
     d = 2
     mesh, drv = _problem(d)
     ### prediction-point tokens with the internal nearest-boundary geometry in 2-D
@@ -215,6 +217,9 @@ def test_two_dimensional_rank_inputs_keep_the_contracts():
 
 
 def test_four_dimensional_even_parity_smoke_and_odd_refused():
+    """In four dimensions a model of even outputs runs and is rotation covariant
+    (float32), with no pseudovector basis. An odd output is refused there, and so is
+    one spatial dimension."""
     d = 4
     mesh, drv = _problem(d, n=120)
     assert mesh.n_manifold_dims == 3
@@ -238,6 +243,9 @@ def test_four_dimensional_even_parity_smoke_and_odd_refused():
 
 
 def test_dimension_mismatch_is_refused_and_two_d_is_not_embedded_three_d():
+    """A 3-D mesh into a 2-D model is refused, and the surface and interior models
+    have the parameter counts derived below, the same in 2-D and 3-D for one global
+    direction."""
     mesh3, drv3 = _problem(3)
     m2 = _model(2, {"p": {"rank": 0}})
     with pytest.raises(
@@ -254,7 +262,7 @@ def test_dimension_mismatch_is_refused_and_two_d_is_not_embedded_three_d():
     ### 41362 backbone-and-head parameters (the wall's input layer 2 x 32 over the
     ### constant and n.g, the shared embedding layer 32 x 32 + 32, ...) plus 2 x 32^2
     ### + 1 = 2049 for each of its three prototype synthesizers (two blocks and the
-    ### head frame: the key and value maps and the gain); the interior model (ISLA-DTT)
+    ### head frame: the key and value maps and the gain); the interior model
     ### adds 128 for the prediction-point side (qt.seed 3 x 32 + 32 over n.g and the
     ### built-in distance pair) and 18688 for the boundary read: the kernel basis
     ### 8 x 64 + 64, 64 x 64 + 64, 64 x 16 = 5760 over the 6 + 2K = 8 pair

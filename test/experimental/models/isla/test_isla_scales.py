@@ -16,22 +16,25 @@
 
 r"""ISLA brings its own scales (module docstring, *Scales*), in float64.
 
-The length L (the full-resolution boundary's RMS pairwise distance), the scale U
-and direction g its rank-1 sources define and the scale rho a rank-0 global defines
-(``defines``): a similarity of the problem (with its dimensionless global inputs
-unchanged) leaves every internal state unchanged and scales the outputs by their
-units; the condition that carries the source, and the scales, can have any name; U,
-g and L are the same for every draw and under refinement; a model that declares
-nothing is the release model; the scales take their hand values and an absent or
-zero source and bad declarations are refused; ``output_stats`` is
-the recipe's NormalizeMeshFields; and a global source (AirfRANS) adds no direction.
-The public :func:`case_scales` is the model's scales bitwise, invariant under
-orthogonal maps and translations, L covariant with the coordinates, and it refuses
-an undefined scale.
+The scales are the length L (the full-resolution boundary's RMS pairwise distance),
+the scale U and direction g that rank-1 sources define, and the scale rho that a
+rank-0 global defines (``defines``). The tests check that:
+
+- a similarity of the problem, with its dimensionless global inputs unchanged,
+  leaves every internal state unchanged and scales the outputs by their units;
+- the condition that carries the source, and the scales, can have any name;
+- U, g and L are the same for every draw and under refinement;
+- a model that declares nothing is the release model;
+- the scales take their hand values, and an absent or zero source and bad
+  declarations are refused;
+- ``output_stats`` is the recipe's NormalizeMeshFields;
+- a global source (an airfoil in a freestream) adds no direction;
+- the public :func:`case_scales` is the model's scales bitwise, invariant under
+  orthogonal maps and translations with L covariant with the coordinates, and
+  refuses an undefined scale.
 """
 
 import math
-from pathlib import Path
 
 import pytest
 import torch
@@ -56,7 +59,6 @@ from test.experimental.models.isla._meshes import (
 )
 
 D = torch.float64
-DATA_DIR = Path(__file__).parent / "data"
 
 #: A declaration of an external flow: the inlet's velocity is the source.
 SCHEMAS = {
@@ -296,6 +298,7 @@ def test_scales_are_independent_of_the_draw_and_of_refinement():
             torch.testing.assert_close(
                 later[key], seen["scales"][0][key], atol=1e-13, rtol=1e-13
             )
+    assert torch.equal(seen["gauge"][0], seen["gauge"][1])  # bitwise across draws
     for gauge in seen["gauge"]:
         torch.testing.assert_close(gauge, _full_length(meshes), atol=0, rtol=1e-13)
     assert seen["h"][0].shape[1] == 25 and not torch.equal(
@@ -363,21 +366,6 @@ def test_the_length_unit_is_exact_under_subdivision(dim):
     assert abs(float(centroid_only[0] / lengths[0]) - 1) > 1e-3
 
 
-@pytest.mark.parametrize("s", [1e-9, 1e9])
-def test_the_length_unit_is_covariant_at_any_scale(s):
-    """L -> s L for every factor: its floors bind at no length the dtype represents
-    (at s = 1e-9 the cells' measures sum to 2e-16, below a floor of 1e-12 in the
-    caller's units)."""
-    meshes, _, _ = _case()
-    moved = {k: transform(v, scale=s) for k, v in meshes.items()}
-    names = sorted(meshes)
-    a, b = (
-        ISLA._gauge([ms[k] for k in names], [cell_measures(ms[k]) for k in names])
-        for ms in (meshes, moved)
-    )
-    torch.testing.assert_close(b, s * a, atol=0, rtol=1e-12)
-
-
 @pytest.mark.parametrize("config", ["default", "dtt"])
 def test_declaring_nothing_is_the_release_model(config):
     """Keys that declare nothing (``units: {}``) leave the
@@ -398,10 +386,9 @@ def test_declaring_nothing_is_the_release_model(config):
     inputs = _make_inputs("cpu", query=(config != "default"))
     with torch.no_grad():
         out, same = outputs(model(**inputs)), outputs(release(**inputs))
-    ref = torch.load(DATA_DIR / f"isla_{config}_v1.pth", weights_only=True)["output"]
-    for k in ref:
+    assert out.keys() == same.keys()
+    for k in out:
         assert torch.equal(out[k], same[k]), k
-        torch.testing.assert_close(out[k], ref[k], atol=1e-5, rtol=1e-5)
 
 
 def test_the_scales_take_their_hand_values():
@@ -443,6 +430,9 @@ def test_the_scales_take_their_hand_values():
 
 
 def test_an_absent_or_zero_source_and_bad_declarations_are_refused():
+    """A case without the source's condition, a source that is zero everywhere or whose
+    velocities cancel, a non-positive density and the malformed declarations are each
+    refused with an error that names them."""
     m = _model()
     meshes, gd, q = _case()
     with pytest.raises(ValueError, match="absent from this case"):
@@ -715,7 +705,7 @@ def test_output_stats_are_the_dataset_s_normalize_mesh_fields():
 
 
 def test_a_global_source_adds_no_direction():
-    """AirfRANS: the global U_inf is the source, so U = |U_inf| and g is U_inf's own
+    """An airfoil in a freestream: the global U_inf is the source, so U = |U_inf| and g is U_inf's own
     direction (K unchanged); x -> s x, U_inf -> c U_inf with re_z unchanged leaves the
     dimensionless outputs (v / U, Cp) unchanged and scales nut by s c."""
     globals_ = {

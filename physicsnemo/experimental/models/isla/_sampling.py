@@ -16,60 +16,61 @@
 
 r"""ISLA's boundary-token sample: systematic sampling proportional to size.
 
-An interior model reads its boundary as a fixed budget of tokens drawn inside
+An interior model reads its boundary as a fixed budget of tokens, drawn inside
 the forward pass from the full-resolution surfaces (:func:`sample_boundary_cells`):
 
-- **Budget.** The total ``budget`` is split over the named conditions by water
-  filling (:func:`water_fill`): equal shares, a condition with fewer cells
+- **Budget.** Water filling (:func:`water_fill`) splits the total ``budget``
+  over the named conditions: equal shares, with a condition that has fewer cells
   than its share kept whole and its unused share given equally to the others,
-  until stable. The shares are real numbers summing to the budget.
-- **Inclusion probabilities.** Within a condition of share :math:`b` the cell
+  until stable. The shares are real numbers that sum to the budget.
+- **Inclusion probabilities.** Within a condition of share :math:`b`, the cell
   :math:`i` of measure :math:`a_i` is drawn with probability
   :math:`\pi_i = \min(1, c\,a_i)`, :math:`c` the one constant with
-  :math:`\sum_i \pi_i = b` (the capped fixed point of the iterative adjustment,
-  found exactly from the sorted measures: the library's
+  :math:`\sum_i \pi_i = b`. This is the capped fixed point of the iterative
+  adjustment, found exactly from the sorted measures (the library's
   ``_pps_inclusion_probabilities`` in
-  :mod:`physicsnemo.mesh.sampling.systematic_sampling`); a
-  condition kept whole has every :math:`\pi_i = 1`. A share past the count of
-  positive measures keeps every positive cell, and the cells of zero measure fill
-  the rest of the share equally, at Horvitz-Thompson weight 0 (the library's
-  ``_cell_lines``, per condition bit for bit the ``_cell_line`` that
+  :mod:`physicsnemo.mesh.sampling.systematic_sampling`). A condition kept whole
+  has every :math:`\pi_i = 1`. A share past the count of positive measures keeps
+  every positive cell, and the cells of zero measure fill the rest of the share
+  equally, at Horvitz-Thompson weight 0 (the library's ``_cell_lines``, per
+  condition bit for bit the ``_cell_line`` that
   :func:`~physicsnemo.mesh.sampling.sample_cells_systematic` uses).
 - **Draw.** Systematic sampling
-  (:func:`~physicsnemo.mesh.sampling.systematic_sampling._systematic_sample`): the
-  cells are laid along a line, each condition's cells in the Morton (Z-order) order
-  of their centroids in the boundary's canonical frame
+  (:func:`~physicsnemo.mesh.sampling.systematic_sampling._systematic_sample`)
+  lays the cells along a line, each an interval of length :math:`\pi_i`, and
+  keeps the cells hit by the points :math:`u + m`, :math:`m = 0, \dots, k - 1`.
+  Each condition's cells lie in the Morton (Z-order) order of their centroids in
+  the boundary's canonical frame
   (:func:`~physicsnemo.mesh.spatial._frame.canonical_frame` over every cell), on a
-  grid spanning the condition's cells of positive measure (``_cell_lines``), each
-  cell an interval of length :math:`\pi_i`, and the cells hit by the points
-  :math:`u + m`, :math:`m = 0, \dots, k - 1`, are kept. The intervals are
-  half-open, so a hit exactly on a boundary takes the later cell. The count is exactly
-  :math:`k = \min(\sum_c N_c, \text{budget})`, a function of the cell counts
-  only (static shapes); every cell is kept with probability
-  :math:`\pi_i` over a uniform start :math:`u \in [0, 1)` (up to the line's
-  grid, below), a cell with :math:`\pi_i = 1` exactly once; and the kept cells
-  are spread along the space-filling curve, a spatially stratified sample.
+  grid spanning the condition's cells of positive measure (``_cell_lines``). The
+  intervals are half-open, so a hit exactly on a boundary takes the later cell.
+  The count is exactly :math:`k = \min(\sum_c N_c, \text{budget})`, a function of
+  the cell counts only (static shapes). Over a uniform start
+  :math:`u \in [0, 1)`, every cell is kept with probability :math:`\pi_i` (up to
+  the line's grid, below), and a cell with :math:`\pi_i = 1` exactly once. The
+  kept cells are spread along the space-filling curve, a spatially stratified
+  sample.
 - **Weights.** A kept cell stands for :math:`a_i / \pi_i` of the boundary (the
-  Horvitz-Thompson weight), so every measure-weighted sum over the tokens is
+  Horvitz-Thompson weight). So every measure-weighted sum over the tokens is
   unbiased for the sum over the full surface, and exact on a condition kept
   whole.
-- **Precision.** The measures and centroids the draw reads are computed in
-  float64 from the mesh's coordinates as given (the library's ``_draw_inputs``),
-  whatever the model's precision, so the draw is a function of the input mesh only: a
-  float32 and a float64 run on the same inputs keep the same cells. The tail
-  sums of the measures are a fixed-order float64 scan (the library's
+- **Precision.** The draw reads measures and centroids computed in float64 from
+  the mesh's coordinates as given (the library's ``_draw_inputs``), whatever the
+  model's precision. So the draw is a function of the input mesh only: a float32
+  and a float64 run on the same inputs keep the same cells. The tail sums of the
+  measures are a fixed-order float64 scan (the library's
   ``physicsnemo::mesh_cumsum``), the same bits on every device. The line is exact
   int64 arithmetic in units of :math:`2^{-Q}`, :math:`Q = 62 - b`, :math:`b` the
-  bit length of the budget (a Python int), each cell an interval of
-  :math:`\operatorname{round}(\pi_i 2^Q)` units; a cell with :math:`\pi_i = 1` is
+  bit length of the budget (a Python int), and each cell is an interval of
+  :math:`\operatorname{round}(\pi_i 2^Q)` units. A cell with :math:`\pi_i = 1` is
   exactly :math:`2^Q` units, and the start is clamped by the line's rounding
   residual, so such a cell holds exactly one hit. The drawn inclusion probability
   is within :math:`(\lvert D \rvert + 1/2)\,2^{-Q}` of :math:`\pi_i`, for the line's
   residual :math:`D` in units (2.6e-11 measured for a million cells and 200,000
   samples). So the draw is bitwise the same run to run, and on CPU and CUDA given
-  the same float64 inputs. (The Morton order reads
-  the canonical frame, which devices compute to roundoff, so a centroid on a grid
-  line could still order differently.)
+  the same float64 inputs. The Morton order reads the canonical frame, which
+  devices compute to roundoff, so a centroid on a grid line could still order
+  differently.
 
 Everything is tensor arithmetic without a data-dependent shape, so the draw
 traces into one graph under ``torch.compile(fullgraph=True, dynamic=True)``.
@@ -129,18 +130,17 @@ def sample_boundary_cells(
 ) -> tuple[Int[torch.Tensor, " tokens"], Float[torch.Tensor, " tokens"]]:
     r"""The boundary token sample of one case: kept cells and their weights.
 
-    ``measures`` and ``centroids`` hold each named condition's cells, in the
-    order their tokens are concatenated, in float64 (the library's ``_draw_inputs``);
-    ``budget`` is the total token budget, a Python int (it fixes the line's grid), and
-    ``start`` the systematic draw's start :math:`u \in [0, 1)` (a float64 scalar).
+    ``measures`` and ``centroids`` hold each named condition's cells in float64
+    (the library's ``_draw_inputs``), in the order their tokens are concatenated.
+    ``budget`` is the total token budget, a Python int (it fixes the line's grid),
+    and ``start`` the systematic draw's start :math:`u \in [0, 1)` (a float64 scalar).
+
     Returns the indices of the kept cells into the concatenation of the
     conditions' cells, in increasing order, ``(k,)`` with :math:`k = \min(\sum_c N_c,` ``budget``
     :math:`)`, and their Horvitz-Thompson measure weights :math:`a_i / \pi_i`
-    ``(k,)``, in the dtype of the measures, with the float64 :math:`\pi_i`. The tail
-    sums are a fixed-order float64 scan and the line and its hits exact int64 fixed
-    point (:func:`~physicsnemo.mesh.sampling.systematic_sampling._systematic_sample`),
-    so the draw is bitwise the same run to run and on every device for the same order.
-    See the module docstring.
+    ``(k,)``, in the dtype of the measures, with the float64 :math:`\pi_i`. The draw
+    is bitwise the same run to run and on every device for the same order (module
+    docstring, **Precision**).
     """
     with torch.no_grad():
         if torch.compiler.is_compiling():
@@ -169,9 +169,9 @@ def sample_boundary_cells(
         )
         total = sum(m.shape[0] for m in measures)
         ### k = min(total, budget) in integer division: 1 // (total // budget + 1)
-        ### is 1 when every cell is kept, else 0. A symbolic Min would be fixed to
-        ### one side of the budget when Inductor's FX-graph cache replays the guards
-        ### that hold it (evaluated with the builtin min), a recompile on the other.
+        ### is 1 when every cell is kept, else 0. Inductor's FX-graph cache replays
+        ### a symbolic Min's guards with the builtin min, which fixes it to one side
+        ### of the budget: the other side recompiles.
         k = budget + (total - budget) * (1 // (total // budget + 1))
         ### In the cells' own order, so a condition kept whole is its mesh as given.
         kept = _systematic_sample(pi, k, start, order=order, max_n_samples=budget)

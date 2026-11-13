@@ -14,37 +14,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""The kernel basis with its pair invariants fused in (Triton): nothing per pair is
-kept between forward and backward but the basis the fused read consumes.
+r"""The kernel basis with its pair invariants fused in (Triton). Between forward and
+backward it keeps nothing per pair but the basis that the fused read consumes.
 
 The reference (:func:`~physicsnemo.experimental.models.isla._tree_read._chunked_basis_from_plan`)
 builds each chunk's pair invariants (:func:`~physicsnemo.experimental.models.isla._tree_read.tree_pair_invariants`)
 and runs the basis MLP (:class:`~physicsnemo.experimental.models.isla._tree_read._KernelBasis`)
-on them under a checkpoint, a dozen tensor ops per chunk and per layer, each a pass
-over every pair. Here one kernel computes, per tile of pairs, the invariants from the
-plan's indices and the points' and sources' geometry, the three layers and the basis;
-the backward kernel rebuilds them per tile and sums the MLP's weight and bias
+on them under a checkpoint: a dozen tensor ops per chunk and per layer, each a pass
+over every pair. Here one kernel computes, per tile of pairs, the invariants (from the
+plan's indices and the points' and sources' geometry), the three layers, and the
+basis. The backward kernel rebuilds them per tile and sums the MLP's weight and bias
 gradients.
 
-The arithmetic is the reference's but for summation order. The invariants are float32
-with IEEE division and square root and libdevice's logarithm, each sum of two or three
-products in the order of PyTorch's reductions. Each linear layer is a dot product of
-operands in the MLP's dtype accumulated in float32, plus its bias, rounded to that
-dtype: under autocast the invariants, weights and biases are rounded to bfloat16 (or
-float16) and every layer's output too, as autocast's GEMMs do; in float32 the dots are
-IEEE (``input_precision="ieee"``, no TF32). GELU (the erf form) is PyTorch's own
-under autocast: its 16-bit input indexes a table of PyTorch's float32 GELU and of its
-gradient factor at every 16-bit value (:func:`_gelu_tables`), which is bitwise what
-PyTorch's bfloat16 and float16 kernels compute (they run the float32 kernel on the
-upcast input and round; Triton's libdevice ``erf`` differs from CUDA's ``erff`` in the
-last bit at a few hundred inputs). The backward computes the same values instead, with
-CUDA 13's ``erff`` ported to Triton (:func:`_erf`), wherever a check on every 16-bit
-value finds them bitwise the tables' (:func:`_computed_gelu_is_pytorchs`). In float32
-GELU is computed from the erf form, to float32 roundoff of PyTorch's. Backward rounds
-every layer's input gradient to the MLP's dtype, as the reference GEMMs' outputs are;
-each chunk's weight and bias gradients are float32 sums over its pairs rounded once to
-that dtype, and autograd sums the chunks' through one cast of the weights per forward
-pass (:func:`mlp_weights`), as it sums the reference's through autocast's cached cast.
+The arithmetic is the reference's but for summation order:
+
+- The invariants are float32, with IEEE division and square root and libdevice's
+  logarithm, and each sum of two or three products in the order of PyTorch's
+  reductions.
+- Each linear layer is a dot product of operands in the MLP's dtype, accumulated in
+  float32, plus its bias, rounded to that dtype. Under autocast the invariants, the
+  weights and biases, and every layer's output are rounded to bfloat16 (or float16),
+  as autocast's GEMMs do. In float32 the dots are IEEE (``input_precision="ieee"``,
+  no TF32).
+- Under autocast, GELU (the erf form) is PyTorch's own. Its 16-bit input indexes a
+  table of PyTorch's float32 GELU and of its gradient factor at every 16-bit value
+  (:func:`_gelu_tables`). That is bitwise what PyTorch's bfloat16 and float16 kernels
+  compute: they run the float32 kernel on the upcast input and round. (Triton's
+  libdevice ``erf`` differs from CUDA's ``erff`` in the last bit at a few hundred
+  inputs.) The backward computes the same values instead, with CUDA 13's ``erff``
+  ported to Triton (:func:`_erf`), wherever a check of every 16-bit value finds them
+  bitwise the tables' (:func:`_computed_gelu_is_pytorchs`).
+- In float32, GELU is computed from the erf form, to float32 roundoff of PyTorch's.
+- The backward rounds every layer's input gradient to the MLP's dtype, as the
+  reference GEMMs' outputs are. Each chunk's weight and bias gradients are float32
+  sums over its pairs, rounded once to that dtype. Autograd sums the chunks' through
+  one cast of the weights per forward pass (:func:`mlp_weights`), as it sums the
+  reference's through autocast's cached cast.
 """
 
 from __future__ import annotations
@@ -60,12 +65,12 @@ logger = logging.getLogger(__name__)
 
 #: Pairs per tile and warps per program of the forward and backward basis kernels, and
 #: the backward's programs per multiprocessor (each sums the weight gradients of its
-#: tiles): launch constants tuned on Blackwell-class GPUs; re-tune them when the kernels
-#: or Triton change. The backward's program count follows the GPU's multiprocessor
-#: count, so its float32 weight gradient sums group by GPU model: deterministic on one
-#: model, not bitwise across models. 12 programs per multiprocessor is a multiple of the
-#: 2 or 3 that one holds at once (by the kernel's registers), so no last wave runs
-#: part-empty. The outputs depend on the tile sizes at most through summation order.
+#: tiles). Launch constants tuned on Blackwell-class GPUs; re-tune them when the kernels
+#: or Triton change. The outputs depend on the tile sizes at most through summation
+#: order. The backward's program count follows the GPU's multiprocessor count, so its
+#: float32 weight-gradient sums group by GPU model: deterministic on one model, not
+#: bitwise across models. 12 programs per multiprocessor is a multiple of the 2 or 3
+#: that one holds at once (by the kernel's registers), so no last wave runs part-empty.
 BASIS_BLOCK = 128
 BASIS_WARPS = 8
 #: Warps per program of the forward kernel in float32 (its dots run on the CUDA cores),
@@ -82,9 +87,9 @@ def _pow2_at_least_16(n: int) -> bool:
 
 def unsupported_reason(basis: torch.nn.Module, geometry: dict) -> str | None:
     """Why the fused basis does not apply to ``basis`` (a ``_KernelBasis``) on one case's
-    ``geometry`` (the keyword arguments of ``tree_pair_invariants``), or None when it
-    does: Triton importable, CUDA float32 geometry and parameters, two or three
-    dimensions, power-of-two hidden and basis widths of at least 16, and either no
+    ``geometry`` (the keyword arguments of ``tree_pair_invariants``), or ``None`` when
+    it does. It needs Triton importable, CUDA float32 geometry and parameters, two or
+    three dimensions, power-of-two hidden and basis widths of at least 16, and either no
     autocast or a bfloat16 or float16 autocast with its weight cache on (the reference
     then casts the weights once per forward pass)."""
     if not HAS_TRITON:
@@ -109,9 +114,10 @@ def unsupported_reason(basis: torch.nn.Module, geometry: dict) -> str | None:
 
 def mlp_weights(basis: torch.nn.Module) -> tuple[torch.Tensor, ...]:
     """The basis MLP's weights and biases ``(W1, b1, W2, b2, W3, b3)`` as its layers
-    read them: under autocast on their device cast to its dtype, once per forward pass
-    (autocast caches one cast of each for every chunk), else the parameters themselves.
-    A layer without a bias (the last one, ``_KernelBasis``) gets exact zeros."""
+    read them. Under autocast on their device, each is cast to the autocast dtype once
+    per forward pass, as autocast caches one cast of each for every chunk; otherwise they
+    are the parameters themselves. A layer without a bias (the last one of
+    ``_KernelBasis``) gets exact zeros."""
     params = [
         t if t is not None else m.weight.new_zeros(m.out_features)
         for m in (basis.net[0], basis.net[2], basis.net[4])
@@ -260,9 +266,10 @@ if HAS_TRITON:
     @triton.jit
     def _gelu_and_grad(x, fgtab_ptr, NARROW: tl.constexpr, COMPUTED: tl.constexpr):
         """GELU of ``x`` (in the MLP's dtype) and its gradient factor, both float32. For
-        a 16-bit ``x`` PyTorch's: computed with :func:`_erf` where ``COMPUTED``
-        (:func:`_computed_gelu_is_pytorchs`), else from one 64-bit table entry (the GELU
-        in the low half); else computed in float32 as :func:`_gelu`."""
+        a 16-bit ``x`` they are PyTorch's: computed with :func:`_erf` where ``COMPUTED``
+        (:func:`_computed_gelu_is_pytorchs`), else read from one 64-bit table entry (the
+        GELU in the low half). For a float32 ``x``, computed in float32 as in
+        :func:`_gelu`."""
         if NARROW and not COMPUTED:
             v = tl.load(fgtab_ptr + _bits(x))
             a = (v & 0xFFFFFFFF).to(tl.int32).to(tl.float32, bitcast=True)
@@ -334,8 +341,8 @@ if HAS_TRITON:
         HID: tl.constexpr, F: tl.constexpr, BLOCK: tl.constexpr, NARROW: tl.constexpr, COMPUTED: tl.constexpr,
     ):  # fmt: skip
         """Tiles ``pid, pid + programs, ...``: the MLP rebuilt, its backward from the
-        basis gradient, and the program's float32 sums of the weight and bias gradients
-        to ``part_ptr[pid]`` (W1 ``(HID, GP)``, b1, W2, b2, W3 ``(F, HID)``, b3). The
+        basis gradient, and the program's float32 sums of the weight and bias gradients,
+        written to ``part_ptr[pid]`` (W1 ``(HID, GP)``, b1, W2, b2, W3 ``(F, HID)``, b3). The
         weights are loaded once per program; each bias gradient is summed per row of the
         tile over the program's tiles, then over the rows once."""
         pid = tl.program_id(0).to(tl.int64)
@@ -409,11 +416,11 @@ _GELU_COMPUTED: dict = {}
 
 
 def _gelu_tables(device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
-    """PyTorch's GELU at every value of the 16-bit ``dtype``, indexed by bit pattern:
-    ``gelu(x)`` rounded to ``dtype`` (the forward's table), and that value as float32
-    beside the float32 factor ``gelu_backward(1, x)`` in one 64-bit entry (the
-    backward's), both from PyTorch's float32 kernels on the upcast values (built once
-    per device and dtype)."""
+    """PyTorch's GELU at every value of the 16-bit ``dtype``, indexed by bit pattern.
+    The forward's table holds ``gelu(x)`` rounded to ``dtype``. The backward's holds that
+    value as float32 beside the float32 factor ``gelu_backward(1, x)``, in one 64-bit
+    entry. Both come from PyTorch's float32 kernels on the upcast values, built once per
+    device and dtype."""
     key = (device, dtype)
     if key not in _GELU_TABLES:
         with torch.no_grad(), torch.autocast(device.type, enabled=False):
@@ -425,11 +432,11 @@ def _gelu_tables(device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor
 
 
 def _computed_gelu_is_pytorchs(device: torch.device, dtype: torch.dtype) -> bool:
-    """Whether the backward's computed GELU and its factor (:func:`_erf`) are the
+    """Whether the backward's computed GELU and its factor (:func:`_erf`) equal the
     backward table's bitwise at every value of the 16-bit ``dtype`` (NaN where it holds
-    NaN), as where PyTorch's CUDA kernels use CUDA 13's ``erff``: the backward then
-    computes them, else it reads the table (logged once). Checked once per device and
-    dtype."""
+    NaN), as they do where PyTorch's CUDA kernels use CUDA 13's ``erff``. If so, the
+    backward computes them; else it reads the table and logs that once.
+    Checked once per device and dtype."""
     key = (device, dtype)
     if key not in _GELU_COMPUTED:
         _, fg = _gelu_tables(device, dtype)
@@ -466,9 +473,9 @@ def _meta(qr, gu, pb, w1, w3) -> dict:
 def _geometry_args(geometry: dict) -> tuple[tuple[torch.Tensor, ...], int]:
     """The case's geometry tensors in the kernels' order, contiguous and detached, and the
     number of rank-1 inputs per source (``src_vecs`` a placeholder when there are none).
-    Detached: the rank-1 inputs come from learned maps, and an autograd edge into their
-    graph would run (and free) it in every backward through the basis, such as each
-    chunk's of :meth:`ISLA.query_chunks`."""
+    Detached because the rank-1 inputs come from learned maps: an autograd edge into
+    their graph would run (and free) it in every backward through the basis, such as
+    each chunk's in :meth:`ISLA.query_chunks`."""
     sv = geometry["src_vecs"]
     pb = 0 if sv is None else int(sv.shape[1])
     keys = ("query_r", "query_n", "query_wall", "src_r", "src_n")
@@ -523,12 +530,13 @@ class _FusedBasis(torch.autograd.Function):
 def fused_kernel_basis(
     weights: tuple[torch.Tensor, ...], qi: torch.Tensor, si: torch.Tensor, q_off: int, s_off: int, geometry: dict
 ) -> torch.Tensor:
-    """``_KernelBasis`` of ``tree_pair_invariants(qi - q_off, si - s_off, **geometry)``
-    ``(P, F)`` in the MLP's dtype, the invariants and MLP in one kernel: ``weights`` from
-    :func:`mlp_weights`, ``qi`` and ``si`` the pairs' points and sources in the plan's
-    numbering (int32 or int64), ``q_off`` and ``s_off`` the case's first point and
-    source. Differentiable in ``weights`` (the geometry gets no gradient, as in the
-    reference); requires :func:`supported`."""
+    """``_KernelBasis`` of ``tree_pair_invariants(qi - q_off, si - s_off, **geometry)``,
+    ``(P, F)`` in the MLP's dtype, with the invariants and the MLP in one kernel.
+    ``weights`` come from :func:`mlp_weights`; ``qi`` and ``si`` are the pairs' points and
+    sources in the plan's numbering (int32 or int64); ``q_off`` and ``s_off`` are the
+    case's first point and source. Differentiable in ``weights`` (the geometry gets no
+    gradient, as in the reference); requires :func:`unsupported_reason` to return
+    ``None``."""
     geo, pb = _geometry_args(geometry)
     return _FusedBasis.apply(qi, si, int(q_off), int(s_off), float(geometry["eps"]), pb, *geo, *weights)
 

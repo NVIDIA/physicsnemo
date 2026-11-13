@@ -16,9 +16,9 @@
 
 """ISLA's output side: the rank-r equivariant expansion.
 
-:class:`_OutputLayout` does the coefficient bookkeeping of one declared output field
+:class:`_OutputLayout` does the coefficient bookkeeping of one declared output field,
 and :func:`_assemble_output` contracts those coefficients with tensor products of the
-token's basis vectors; :func:`_pseudovectors` and :func:`_isotropic_tensors` build the
+token's basis vectors. :func:`_pseudovectors` and :func:`_isotropic_tensors` build the
 odd-parity and constant parts of that basis. Private to
 :mod:`physicsnemo.experimental.models.isla`."""
 
@@ -33,9 +33,9 @@ from physicsnemo.nn.functional.equivariant_ops import vector_project
 
 def _levi_civita(dim: int) -> torch.Tensor:
     """The Levi-Civita symbol of ``dim`` dimensions, shape ``(dim,)*dim``: the sign
-    of the permutation at each permuted multi-index, zero elsewhere. An isotropic
-    pseudotensor of rank ``dim`` in every dimension (``J`` at ``dim = 2``, the
-    familiar rank-3 symbol at ``dim = 3``)."""
+    of the permutation at each permuted multi-index, zero elsewhere. It is an
+    isotropic pseudotensor of rank ``dim`` in every dimension (``J`` at ``dim = 2``,
+    the usual rank-3 symbol at ``dim = 3``)."""
     eps = torch.zeros((dim,) * dim, dtype=torch.float64)
     for perm in itertools.permutations(range(dim)):
         inversions = sum(1 for i in range(dim) for j in range(i + 1, dim) if perm[i] > perm[j])
@@ -185,8 +185,8 @@ def _pseudovectors(primaries: list[torch.Tensor], dim: int) -> list[torch.Tensor
     Levi-Civita construction: in three dimensions the pairwise cross products
     (in list order, ``i < j``), in two the perpendiculars ``J v = (-v_y, v_x)`` of
     each vector. A pseudovector in ``dim`` dimensions is the contraction of the
-    Levi-Civita symbol with ``dim - 1`` vectors; other dimensions return no
-    pseudovectors (odd-parity outputs are refused there at construction)."""
+    Levi-Civita symbol with ``dim - 1`` vectors. Other dimensions return no
+    pseudovectors; the constructor refuses odd-parity outputs there."""
     if dim == 3:
         return [
             torch.cross(primaries[i], primaries[j], dim=-1)

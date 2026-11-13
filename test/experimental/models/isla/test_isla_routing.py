@@ -32,6 +32,8 @@ from test.experimental.models.isla._meshes import outputs, soup
 
 
 def test_routing_logits_are_bounded_and_bias_free():
+    """The routing has no bias parameter, and its cosine logits stay within the
+    temperature however large the seeds, the maps, the gain and the state grow."""
     torch.manual_seed(0)
     r = _RoutingLogits(64, 32)
     assert r.weight.shape == (32, 64)

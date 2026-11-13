@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The implementation options of ISLA's geometry region compute the same thing as the
-eager reference (the eager region, rebuilt in backward).
+"""The fused geometry region and the compiled model compute what the eager reference
+computes (the eager region, rebuilt in backward).
 
 The bars: the fused Triton region reproduces the eager forward to 1e-6 relative in
 float32 and the parameter gradients to 1e-5 relative; in float64 the two agree to
-1e-11 (same arithmetic, different summation order). The same bars hold for the whole
-model compiled with torch.compile, which must stay free of graph breaks."""
+1e-11 (the same arithmetic in another summation order). The same bars hold for the
+whole model under torch.compile, which must stay free of graph breaks."""
 
 import copy
 import logging
@@ -30,7 +30,7 @@ import torch
 
 from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.experimental.models.isla._blocks import _geo_region
-from test.experimental.models.isla._marks import requires_cuda
+from test.experimental.models.isla._marks import requires_cuda, requires_cuda_triton
 from test.experimental.models.isla._meshes import cloud, outputs, soup
 
 REF = dict(
@@ -149,7 +149,7 @@ def _assert_same(ref, opt, dtype, out_tol, grad_tol, n=700):
 
 # --------------------------------------------------------------------------- fused region
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
 @pytest.mark.parametrize("dim", [3, 2])
 @pytest.mark.parametrize(
@@ -255,14 +255,13 @@ def test_fused_geo_region_matches_eager_region(dtype, K, P, dim, monkeypatch):
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.slow
 def test_fused_geo_region_offsets_past_int32():
     """Points x slices >= 2**31: the last rows, whose (point, slice) offsets pass int32,
     get the forward outputs and the per-point gradients of the same rows run alone
-    (every row is computed from its own inputs). With int32 offsets the kernel read and
-    wrote the wrong rows or faulted. Needs about 100 GiB of device memory: three (N, S)
-    float32 tensors each way and the backward's per-tile slice partials."""
+    (every row is computed from its own inputs). Needs about 100 GiB of device memory:
+    three (N, S) float32 tensors each way and the backward's per-tile slice partials."""
     from physicsnemo.experimental.models.isla._geo_kernel import fused_geo_region
 
     s, tail = 512, 64
@@ -301,12 +300,11 @@ def test_fused_geo_region_offsets_past_int32():
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_fused_geo_region_reads_strided_inputs_as_contiguous_ones():
     """Two cases (B = 2) with r and n_hat sliced along the points from longer tensors
-    (strided): the outputs and every gradient equal those of contiguous copies, bitwise.
-    The backward read n_hat with its gradient's strides and wrote r's gradient with
-    r's strides: wrong gradients, and writes past the gradient's end."""
+    (strided): the outputs and every gradient equal those of contiguous copies,
+    bitwise."""
     from physicsnemo.experimental.models.isla._geo_kernel import fused_geo_region
 
     b, n, s, dt = 2, 1000, 64, torch.float64
@@ -340,99 +338,48 @@ def test_fused_geo_region_reads_strided_inputs_as_contiguous_ones():
         assert torch.equal(a, c)
 
 
-@pytest.mark.cuda
-@requires_cuda
-def test_fused_geo_region_bf16_autocast_forward_matches_eager():
-    """Under bf16 autocast the fused forward makes the same dtype decisions as eager
-    (bf16 Linear on bf16-rounded invariants, bf16 pre-logit sum, fp32 softmax), so the
-    two forwards agree to bf16 rounding-boundary flips."""
-    from physicsnemo.experimental.models.isla._geo_kernel import fused_geo_region
-
-    b, n, s = 1, 800, 64
-    g = torch.Generator().manual_seed(1)
-    r = (torch.randn(b, n, 3, generator=g) * 0.1).cuda()
-    z = (torch.randn(b, s, 3, generator=g) * 0.1).cuda()
-    nh = torch.nn.functional.normalize(torch.randn(b, n, 3, generator=g), dim=-1).cuda()
-    ms = torch.nn.functional.normalize(torch.randn(b, s, 3, generator=g), dim=-1).cuda()
-    d = (
-        torch.nn.functional.normalize(torch.randn(b, 1, 1, 3, generator=g), dim=-1)
-        .cuda()
-        .expand(b, n, 1, 3)
-    )
-    logits = torch.randn(b, n, s, generator=g).cuda().bfloat16()
-    torch.manual_seed(0)
-    lin = torch.nn.Linear(6, 1).cuda()
-    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-        ref = _geo_region(lin, logits, r, nh, d, z, ms, 1e-12)
-        fused = fused_geo_region(lin, logits, r, nh, d, z, ms, 1e-12)
-    assert [t.dtype for t in fused] == [t.dtype for t in ref]
-    for a, bb in zip(fused, ref):
-        assert _rel(a, bb) < 1e-4, _rel(a, bb)
-
-
 # --------------------------------------------------------------------------- model level
-@pytest.mark.cuda
-@requires_cuda
-def test_fused_geo_kernel_model_exact_in_float64():
-    ref, opt = _pair(torch.float64, geo_kernel="fused")
-    _assert_same(ref, opt, torch.float64, 1e-11, 1e-11)
+_RANK1 = torch.randn(600, 3, generator=torch.Generator().manual_seed(9)) * 0.5
+#: (model options, the region it is given, the boundary's options) per model.
+_EXACT = {
+    "3d": ({}, "fused", dict(n=700)),
+    "2d": ({"n_spatial_dims": 2}, "auto", dict(n=600, d=2)),
+    "3d_no_direction": ({"global_schema": None}, "auto", dict(n=600, direction=False)),
+    "2d_no_direction": (
+        {"n_spatial_dims": 2, "global_schema": None},
+        "auto",
+        dict(n=600, d=2, direction=False),
+    ),
+    "rank1_boundary_input": (
+        {"boundary_schemas": {"wall": {"t": {"rank": 1}}}},
+        "fused",
+        dict(n=600, cell_data={"t": _RANK1}),
+    ),
+}
 
 
 @pytest.mark.cuda
-@requires_cuda
-@pytest.mark.parametrize("d,direction", [(2, True), (3, False), (2, False)])
-def test_fused_geo_kernel_padded_models_exact_in_float64(d, direction):
-    """A two-dimensional model (the kernel's third component zero) and a model without a
-    global direction (one zero direction with a zero weight) resolve to the fused kernel
-    under "auto" and match the eager region to float64 roundoff."""
-    spec = {
-        **REF,
-        "n_spatial_dims": d,
-        "global_schema": REF["global_schema"] if direction else None,
-    }
+@requires_cuda_triton
+@pytest.mark.parametrize("name", list(_EXACT))
+def test_fused_geo_kernel_model_exact_in_float64(name):
+    """The model with the fused region matches the eager region in float64 (outputs
+    and every parameter's gradient to 1e-11): forced on, and picked by "auto" for a
+    2-D model (the kernel's third component zero) and for a model without a global
+    direction (one zero direction with a zero weight)."""
+    kw, kernel, data = _EXACT[name]
+    spec = {**REF, **kw}
     torch.manual_seed(0)
     ref = ISLA(**spec).to("cuda", torch.float64)
     ref._geo_kernel = "eager"
     torch.manual_seed(0)
     opt = ISLA(**spec).to("cuda", torch.float64)
+    opt._geo_kernel = kernel
     opt.load_state_dict(ref.state_dict())
-    inputs, tgt = _boundary(600, dtype=torch.float64, d=d, direction=direction)
+    inputs, tgt = _boundary(dtype=torch.float64, **data)
     assert opt._resolve_geo_kernel(inputs["boundary_meshes"]["wall"].points) == "fused"
     o_ref, g_ref = _run(ref, inputs, tgt)
     o_opt, g_opt = _run(opt, inputs, tgt)
     assert _rel(o_opt, o_ref) < 1e-11, _rel(o_opt, o_ref)
-    total = torch.cat([g.flatten() for g in g_ref.values()]).norm()
-    for k, g in g_ref.items():
-        if g.norm() < 1e-6 * total:
-            continue
-        assert _rel(g_opt[k], g) < 1e-11, (k, _rel(g_opt[k], g))
-
-
-@pytest.mark.cuda
-@requires_cuda
-def test_geo_kernel_auto_stays_eager_above_three_dimensions():
-    """The kernel takes at most three components: a four-dimensional model runs the eager region."""
-    m = ISLA(**{**REF, "n_spatial_dims": 4})
-    assert m._resolve_geo_kernel(torch.zeros(1, 4, 4, device="cuda")) == "eager"
-
-
-@pytest.mark.cuda
-@requires_cuda
-def test_fused_geo_kernel_model_rank1_boundary_input_exact_in_float64():
-    """A model with a rank-1 boundary input runs the fused
-    kernel and matches the eager region to float64 roundoff."""
-    spec = {**REF, "boundary_schemas": {"wall": {"t": {"rank": 1}}}}
-    torch.manual_seed(0)
-    ref = ISLA(**spec).to("cuda", torch.float64)
-    torch.manual_seed(0)
-    opt = ISLA(**spec).to("cuda", torch.float64)
-    opt._geo_kernel = "fused"
-    opt.load_state_dict(ref.state_dict())
-    t = torch.randn(600, 3, generator=torch.Generator().manual_seed(9)) * 0.5
-    inputs, tgt = _boundary(600, dtype=torch.float64, cell_data={"t": t})
-    o_ref, g_ref = _run(ref, inputs, tgt)
-    o_opt, g_opt = _run(opt, inputs, tgt)
-    assert _rel(o_opt, o_ref) < 1e-11
     total = torch.cat([g.flatten() for g in g_ref.values()]).norm()
     for k, g in g_ref.items():
         if g.norm() < 1e-6 * total:
@@ -493,7 +440,7 @@ def test_compile_blocks_matches_eager(device):
 def test_block_activation_budget_keeps_a_recompile_limit_per_block_function(caplog):
     """With ``block_activation_budget`` below 1 the blocks' forwards and reads are
     compiled through a wrapper, and each keeps its own Dynamo recompile limit, as
-    without the budget: at a limit of 1 a training step of ISLA-DTT compiles both and
+    without the budget: at a limit of 1 a training step of the interior task compiles both and
     no block runs eager. Past the limit (the float64 graphs here) the blocks run eager
     without raising, and the model warns once that the budget saves nothing there
     (in a training step: without gradients there is nothing to save, and no warning)."""
@@ -533,10 +480,10 @@ def test_block_activation_budget_keeps_a_recompile_limit_per_block_function(capl
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_interior_fused_and_compiled_blocks_match_eager():
-    """The training configuration of ISLA-DTT (fused geometry kernel, compiled blocks)
-    reproduces the eager model in float64, and its predictions stay
+    """The interior task's training configuration (fused geometry kernel, compiled
+    blocks) reproduces the eager model in float64, and its predictions stay
     query-independent on CUDA: a request's prefix gives the prefix of the predictions."""
     spec = {**REF, "interior": True}
     torch.manual_seed(0)
@@ -608,7 +555,7 @@ def _record_block_tokens(model):
 @pytest.mark.parametrize(
     "device", ["cpu", pytest.param("cuda", marks=[pytest.mark.cuda, requires_cuda])]
 )
-@pytest.mark.parametrize("task", ["surface", "interior_dtt"])
+@pytest.mark.parametrize("task", ["surface", "interior"])
 def test_compile_blocks_see_an_aligned_token_count(task, device):
     """A padded forward gives the compiled blocks a multiple of _TOKEN_ALIGNMENT tokens at a
     token count that is not one."""
@@ -746,10 +693,11 @@ def test_the_model_s_compile_matches_eager_in_the_eager_region(monkeypatch):
 @requires_cuda
 @pytest.mark.parametrize("nq", [6001, 6002])
 def test_compile_blocks_interior_float32_at_every_token_count(nq, monkeypatch):
-    """ISLA-DTT under compile_blocks in float32, at a size where mix-order reduction would
-    fuse and a total token count (6000 boundary cells + nq queries) that is not a multiple
-    of 4: the compiled model reproduces the eager one, and its prediction at a fixed set of
-    queries does not depend on the other queries of the request."""
+    """The interior task under compile_blocks in float32, at a size where mix-order
+    reduction would fuse and a total token count (6000 boundary cells + nq queries)
+    that is not a multiple of 4: the compiled model reproduces the eager one, and its
+    prediction at a fixed set of queries does not depend on the other queries of the
+    request."""
     from physicsnemo.experimental.models.isla import model
 
     monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)

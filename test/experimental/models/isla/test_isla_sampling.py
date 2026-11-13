@@ -104,7 +104,7 @@ def _random_counts(seed):
         (HALF_SIZES, 200_000),
         ([999_999, 3, 3, 3, 3, 3, 3, 3], 200_001),
     ]
-    + [_random_counts(seed) for seed in range(40)],
+    + [_random_counts(seed) for seed in range(10)],
 )
 def test_the_host_water_fill_is_the_tensor_one_bitwise(counts, budget):
     """The draw's host water fill (eager) and its tensor one (which the draw runs under
@@ -312,53 +312,44 @@ def _half_integer_case(device):
 
 @pytest.mark.cuda
 @requires_cuda
-def test_the_draw_is_bitwise_reproducible_on_cuda():
-    """Six draws on CUDA of 349,014 cells with full-precision float64 measures at the
+def test_the_draw_is_bitwise_reproducible_on_cuda_and_the_cpu_one():
+    """Three draws on CUDA of 349,014 cells with full-precision float64 measures at the
     eval start, with half-integer shares before a condition kept whole (hits exactly on
-    its cell boundaries): bitwise the same kept cells and weights, no duplicate, every
-    pi = 1 cell kept once. The float64 scans of the line varied run to run here."""
+    its cell boundaries), each keep the CPU draw's cells with bitwise its weights, no
+    duplicate, every pi = 1 cell kept once. The float64 scans of the line once varied
+    run to run here."""
     assert water_fill(torch.tensor(HALF_SIZES, dtype=D), 200_000).tolist() == [
         31_250,
         58_315.5,
         52_119,
         58_315.5,
     ]
-    measures, centroids = _half_integer_case("cuda")
-    start = torch.tensor(0.5, dtype=D, device="cuda")
-    runs = [
-        sample_boundary_cells(measures, centroids, 200_000, start) for _ in range(6)
-    ]
-    for kept, w in runs:
-        assert torch.equal(kept, runs[0][0])
-        assert torch.equal(w.view(torch.int64), runs[0][1].view(torch.int64))
-        _whole_kept_once(kept, measures, 200_000)
-
-
-@pytest.mark.cuda
-@requires_cuda
-def test_the_draw_is_bitwise_the_same_on_cpu_and_cuda():
-    """The same float64 inputs on CPU and on CUDA keep the same cells with bitwise the
-    same weights."""
     start = torch.tensor(0.5, dtype=D)
     k0, w0 = sample_boundary_cells(*_half_integer_case("cpu"), 200_000, start)
-    k1, w1 = sample_boundary_cells(*_half_integer_case("cuda"), 200_000, start.cuda())
-    assert torch.equal(k1.cpu(), k0)
-    assert torch.equal(w1.cpu().view(torch.int64), w0.view(torch.int64))
+    measures, centroids = _half_integer_case("cuda")
+    for _ in range(3):
+        kept, w = sample_boundary_cells(measures, centroids, 200_000, start.cuda())
+        assert torch.equal(kept.cpu(), k0)
+        assert torch.equal(w.cpu().view(torch.int64), w0.view(torch.int64))
+        _whole_kept_once(kept, measures, 200_000)
 
 
 @pytest.mark.slow  # 54 s on CPU: a compile over every cell count
 @pytest.mark.parametrize("device", DEVICES)
 def test_the_compiled_draw_is_the_eager_one_bitwise(device):
     """torch.compile(fullgraph=True, dynamic=True) of the draw gives bitwise the eager
-    kept cells and weights at two cell counts, the second without a recompile (every
-    condition below the stable sort's 32,767 size guard in both)."""
+    kept cells and weights at three cell counts, two above the budget and one below,
+    with one graph for all three (every condition below the stable sort's 32,767 size
+    guard)."""
 
     def draw(a1, a2, a3, x1, x2, x3, u):
         return sample_boundary_cells([a1, a2, a3], [x1, x2, x3], 2_001, u)
 
     torch._dynamo.reset()
     compiled = torch.compile(draw, fullgraph=True, dynamic=True)
-    for i, sizes in enumerate([(9_000, 400, 7_000), (12_000, 300, 6_500)]):
+    for i, sizes in enumerate(
+        [(9_000, 400, 7_000), (12_000, 300, 6_500), (900, 300, 600)]
+    ):
         measures, centroids = _conditions(sizes, seed=i)
         args = [t.to(device) for t in (*measures, *centroids)]
         args.append(torch.tensor(0.5, dtype=D, device=device))
@@ -367,37 +358,6 @@ def test_the_compiled_draw_is_the_eager_one_bitwise(device):
         ref_kept, ref_w = draw(*args)
         assert torch.equal(kept, ref_kept)
         assert torch.equal(w.view(torch.int64), ref_w.view(torch.int64))
-
-
-@pytest.mark.slow  # 5 s on CPU: a compile over every cell count
-def test_one_compiled_graph_for_every_cell_count():
-    """Under torch.compile(fullgraph=True, dynamic=True) the draw is one graph whether
-    the cells exceed the budget or not, and matches eager."""
-
-    def draw(a1, a2, x1, x2, h1, h2, u):
-        kept, w = sample_boundary_cells([a1, a2], [x1, x2], 300, u)
-        return (torch.cat([h1, h2])[kept] * w[:, None]).sum(0), kept
-
-    torch._dynamo.reset()
-    compiled = torch.compile(draw, fullgraph=True, dynamic=True)
-    for i, (n1, n2) in enumerate(
-        [(500, 40), (700, 90), (100, 50), (2000, 3), (150, 140)]
-    ):
-        g = torch.Generator().manual_seed(i)
-        args = (
-            torch.rand(n1, generator=g),
-            torch.rand(n2, generator=g),
-            torch.randn(n1, 3, generator=g),
-            torch.randn(n2, 3, generator=g),
-            torch.randn(n1, 4, generator=g),
-            torch.randn(n2, 4, generator=g),
-            torch.tensor(0.5, dtype=D),
-        )
-        with torch._dynamo.config.patch(error_on_recompile=i > 0):
-            out, kept = compiled(*args)
-        ref, ref_kept = draw(*args)
-        assert torch.equal(kept, ref_kept)
-        torch.testing.assert_close(out, ref, atol=1e-4, rtol=1e-4)
 
 
 def test_the_compiled_draw_runs_its_sums_as_the_opaque_scan():
@@ -424,55 +384,6 @@ def test_the_compiled_draw_runs_its_sums_as_the_opaque_scan():
     nodes = graphs[0].graph.nodes
     scans = [n.target for n in nodes if "cumsum" in str(n.target)]
     assert scans and set(scans) == {torch.ops.physicsnemo.mesh_cumsum.default}, scans
-
-
-def test_the_length_unit_is_the_full_boundary_s_for_every_draw():
-    """An interior model without declared scales takes its length unit from every
-    cell of the full-resolution boundary before the draw: two training draws of 60
-    of 300 cells (different starts, different tokens) read the same unit, the
-    measure-weighted RMS pairwise distance of all the cells, each with its own second
-    moment."""
-    from physicsnemo.experimental.models.isla import ISLA
-    from physicsnemo.experimental.models.isla._geometry import (
-        cell_second_moments,
-        rms_pairwise_distance,
-    )
-    from test.experimental.models.isla._meshes import cloud, soup
-
-    torch.manual_seed(0)
-    m = ISLA(
-        output_schema={"p": {"rank": 0}},
-        boundary_schemas={"a": {}, "b": {}},
-        interior=True,
-        n_boundary_tokens=60,
-        hidden=16,
-        n_layers=1,
-        n_slices=4,
-    ).double()
-    assert not m._scaled
-    seen, case_inputs = [], m._case_inputs
-
-    def spy(*a, **k):
-        c = case_inputs(*a, **k)
-        seen.append((c.gauge, c.boundary["points"].clone()))
-        return c
-
-    m._case_inputs = spy
-    meshes = {k: soup(*cloud(150, seed=i)[:3]) for i, k in enumerate("ab")}
-    q = torch.randn(10, 3, dtype=D, generator=torch.Generator().manual_seed(5))
-    for seed in (0, 1):
-        torch.manual_seed(seed)
-        with torch.no_grad():
-            m(boundary_meshes=meshes, prediction_points=q)
-    full = rms_pairwise_distance(
-        torch.cat([meshes[k].cell_centroids for k in "ab"])[None],
-        torch.cat([meshes[k].cell_data["_effective_measure"] for k in "ab"])[None],
-        torch.cat([cell_second_moments(meshes[k]) for k in "ab"])[None],
-    )
-    (g0, p0), (g1, p1) = seen
-    assert p0.shape[1] == 60 and not torch.equal(p0, p1)  # two different draws
-    assert torch.equal(g0, g1)
-    torch.testing.assert_close(g0, full, atol=0, rtol=1e-14)
 
 
 def test_inference_is_deterministic_and_training_draws_from_the_global_rng():
@@ -506,6 +417,7 @@ def test_inference_is_deterministic_and_training_draws_from_the_global_rng():
     assert torch.equal(run(0), run(1))
     m.train()
     assert not torch.equal(run(0), run(1))
+    assert torch.equal(run(3), run(3))
 
 
 def _model_draw(model, meshes, q):

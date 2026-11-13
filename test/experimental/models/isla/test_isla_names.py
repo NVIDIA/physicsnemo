@@ -81,6 +81,8 @@ def _model(**kw):
 
 
 def test_outputs_are_nested_point_data():
+    """Dotted output names come back as a nested TensorDict of point data, whose flat
+    view has the declared names."""
     m = _model()
     pts, nrm, w, drv = _boundary()
     n = pts.shape[0]
@@ -171,6 +173,7 @@ def test_dotted_and_nested_data_are_the_same_call():
 
 
 def test_mixed_flat_and_nested_names_and_the_interior_task():
+    """Flat and dotted output names mix, in the interior task too."""
     pts, nrm, w, drv = _boundary()
     q = torch.randn(12, 3, dtype=D) * 2.0
     m = _model(
@@ -191,6 +194,8 @@ def test_mixed_flat_and_nested_names_and_the_interior_task():
 
 
 def test_covariance_holds_on_the_nested_values():
+    """With nested inputs and outputs, a rotation with a translation maps every nested
+    output by its rank."""
     m = _model()
     pts, nrm, w, drv = _boundary()
     n = pts.shape[0]
@@ -230,6 +235,9 @@ def test_covariance_holds_on_the_nested_values():
 
 
 def test_name_grammar_is_validated():
+    """A name that is also a group, an empty path component and a name declared twice
+    are refused at construction; at forward time a field must come by its declared
+    dotted name."""
     base = dict(hidden=32, n_layers=1, n_slices=8, boundary_schemas={"wall": {}})
     with pytest.raises(ValueError, match="is a group of"):
         ISLA(

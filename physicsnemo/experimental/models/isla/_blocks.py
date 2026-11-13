@@ -17,9 +17,9 @@
 """ISLA's backbone: the slice block and the pieces it is made of.
 
 :class:`_SliceBlock` is one pre-LN layer of measure-weighted soft-slice attention and
-MLP; :class:`_RoutingLogits` produces its point-to-slice logits, :class:`_QueryTokens`
-the prediction-point tokens' own parameters, and :func:`_relational_invariants` /
-:func:`_geo_region` the per-layer geometry region that the fused Triton kernel of
+MLP. :class:`_RoutingLogits` produces its point-to-slice logits, and :class:`_QueryTokens`
+holds the prediction-point tokens' own parameters. :func:`_relational_invariants` and
+:func:`_geo_region` form the per-layer geometry region, which the fused Triton kernel of
 :mod:`physicsnemo.experimental.models.isla._geo_kernel` replaces exactly. Private to
 :mod:`physicsnemo.experimental.models.isla`."""
 
@@ -48,13 +48,13 @@ MLP_RATIO = 4
 def _softmax_over_points(x: Float[torch.Tensor, "batch tokens slices"]):
     """Softmax over the point dimension (dim 1) of a (B, N, S) tensor.
 
-    Reduces along a contiguous last dimension after a transpose, which uses
-    PyTorch's row-parallel softmax kernel: a softmax over a *middle* dimension
-    is served by the "spatial" kernel, which parallelizes over the B*S columns
-    only and walks the N points serially, so its time grows superlinearly in
-    the token count. Same arithmetic as ``torch.softmax(x, dim=1)`` up to summation
-    order; against a float64 reference the row-parallel kernel carries a
-    ~1e-7 float32 floor where the middle-dimension kernel carries ~1e-4.
+    A transpose makes the softmax reduce over a contiguous last dimension, which
+    PyTorch serves with its row-parallel kernel. A softmax over a *middle* dimension
+    goes to the "spatial" kernel instead, which parallelizes over the B*S columns
+    only and walks the N points serially, so its time grows superlinearly in the
+    token count. The arithmetic is that of ``torch.softmax(x, dim=1)`` up to
+    summation order. In float32, the row-parallel kernel's error against a float64
+    reference is ~1e-7, the middle-dimension kernel's ~1e-4.
     """
     return torch.softmax(x.transpose(1, 2), dim=-1).transpose(1, 2)
 
@@ -75,8 +75,8 @@ def _relational_invariants(
     then the unit relative vector dotted with each of the token's extra vectors
     (its rank-1 inputs and the vectors derived from its rank-2 inputs) and the
     quadratic form of each rank-2 input in the unit relative vector. Width
-    ``5 + K + P' + Q`` (:func:`_geo_width`). Every term depends on the anchors' positions
-    relative to the point only, so no frame origin is referred to."""
+    ``5 + K + P' + Q`` (:func:`_geo_width`). Every term depends only on the anchors'
+    positions relative to the point, so no frame origin enters."""
     z = z_pos[:, None, :, :]
     m = m_s[:, None, :, :]
     rel = r[:, :, None, :] - z  # (B, N, S, d)
@@ -94,13 +94,13 @@ def _relational_invariants(
         (n_exp * m).sum(-1, keepdim=True),
     ]
     if vecs is not None and vecs.shape[2]:
-        ### The token's vector inputs, contracted with the anchor direction exactly
-        ### as the global directions are above.
+        ### The token's vector inputs, contracted with the anchor direction like the
+        ### global directions above.
         feats.append((rel_hat[..., None, :] * vecs[:, :, None, :, :]).sum(-1))
     if tens is not None and tens.shape[2]:
-        ### rho^T T rho per rank-2 input. einsum (autocast disabled, so the geometry
-        ### stays in the input precision) rather than a broadcast product, which
-        ### would materialize a (B, N, S, Q, d, d) intermediate.
+        ### rho^T T rho per rank-2 input, by einsum with autocast disabled (the geometry
+        ### stays in the input precision). A broadcast product would materialize a
+        ### (B, N, S, Q, d, d) intermediate.
         with torch.autocast(rel_hat.device.type, enabled=False):
             t_rho = torch.einsum("bnqij,bnsj->bnsqi", tens, rel_hat)  # (B, N, S, Q, d)
             feats.append(torch.einsum("bnsqi,bnsi->bnsq", t_rho, rel_hat))
@@ -155,33 +155,34 @@ def _geo_width(n_global_vectors: int, n_vecs: int = 0, n_tens: int = 0) -> int:
 class _RoutingLogits(nn.Module):
     """Point-to-slice routing logits, ``(B, N, hidden) -> (B, N, S)``.
 
-    ``temperature`` ``T`` (default :data:`ROUTING_TEMPERATURE`) times the cosine
-    between the token state and a prototype per slice, so every logit lies in
-    ``[-T, T]`` and no block can
-    route every point to one slice however its weights grow.
+    Each logit is ``temperature`` ``T`` (default :data:`ROUTING_TEMPERATURE`) times
+    the cosine between the token state and a per-slice prototype. Every logit thus
+    lies in ``[-T, T]``, and no block can route every point to one slice however its
+    weights grow.
 
     The prototypes are synthesized per sample from learned seeds (the rows of
-    ``weight``) and the sample's own token states. Each seed attends over the
-    token states with a measure-weighted softmax (``log_w`` enters as a
-    log-space bias, so the summary is a quadrature of the tokens and invariant
-    to a uniform rescale of the weights); the attended value term is centered
-    across the slices and scale-bounded before it is added to the seeds:
-    ``P = seeds + Delta_c * b / (rms(Delta_c) + b)`` with ``b = g rms(seeds)``,
+    ``weight``) and the sample's own token states. Each seed attends over the token
+    states with a measure-weighted softmax: ``log_w`` enters as a log-space bias, so
+    the summary is a quadrature of the tokens and invariant to a uniform rescale of
+    the weights. The attended value term is centered across the slices and bounded
+    in scale before it is added to the seeds:
+    ``P = seeds + Delta_c * b / (rms(Delta_c) + b)``, with ``b = g rms(seeds)``,
     ``Delta_c = Delta - mean_S(Delta)``, ``rms`` over all entries (per sample for
-    ``Delta_c``) and ``g`` one learned scalar (init 0.1). The seed-independent
-    component of the value term is common to every prototype, carries no routing
-    information under cosine logits and, when it dominates, collapses the
-    prototypes onto one direction; centering removes it exactly. For ``g > 0`` the
-    bound is a smooth saturation: a small centered term (near-uniform attention,
-    roundoff) passes through unchanged and a large one is held to an rms of at most
-    ``g rms(seeds)``, so the sample-dependent part never exceeds a fraction
-    ``g`` of the seeds' spread and is never amplified to it. The gain is not
-    constrained: a negative one has a pole where ``rms(Delta_c) = -g rms(seeds)``.
-    Token states are
-    invariant features, so the prototypes are invariant and the contracts hold.
-    A token cloud whose attention is the same for every seed leaves the
-    prototypes equal to the seeds. Costs ``2 hidden^2 + 1`` parameters per
-    block beyond the seeds (the key and value maps and the gain).
+    ``Delta_c``) and ``g`` one learned scalar (init 0.1).
+
+    The seed-independent component of the value term is common to every prototype.
+    It carries no routing information under cosine logits and, when it dominates,
+    collapses the prototypes onto one direction; centering removes it exactly. For
+    ``g > 0`` the bound saturates smoothly. A small centered term (near-uniform
+    attention, roundoff) passes through unchanged, and a large one is held to an rms
+    of at most ``g rms(seeds)``. The sample-dependent part thus never exceeds a
+    fraction ``g`` of the seeds' spread, and is never amplified to it. The gain is
+    not constrained: a negative one has a pole where ``rms(Delta_c) = -g rms(seeds)``.
+
+    Token states are invariant features, so the prototypes are invariant and the
+    contracts hold. A token cloud whose attention is the same for every seed leaves
+    the prototypes equal to the seeds. Each block costs ``2 hidden^2 + 1``
+    parameters beyond the seeds (the key and value maps and the gain).
     """
 
     def __init__(self, hidden: int, n_slices: int, temperature: float = ROUTING_TEMPERATURE) -> None:
@@ -205,11 +206,11 @@ class _RoutingLogits(nn.Module):
         delta = torch.einsum("bsn,bnh->bsh", att, self.v_proj(x))  # (B, S, H)
         delta = delta - delta.mean(dim=1, keepdim=True)
         bound = self.gain.to(x.dtype) * seeds.square().mean().sqrt()  # g rms(seeds), scalar
-        ### The mean square is floored before the root: when every token state is
-        ### identical (a two-cell planar probe whose only block-0 feature, n.g, is the
-        ### same for both) the centered term is exactly zero and sqrt'(0) is infinite;
-        ### the floor makes that point's gradient zero instead of NaN and is 1e-15
-        ### below any float32 value the term takes otherwise.
+        ### Floor the mean square before the root. When every token state is identical
+        ### (a two-cell planar probe whose only block-0 feature, n.g, is the same for
+        ### both), the centered term is exactly zero and sqrt'(0) is infinite. The floor
+        ### makes the gradient there zero instead of NaN, and is 1e-15 below any
+        ### float32 value the term takes otherwise.
         rms_delta = delta.square().mean(dim=(1, 2), keepdim=True).clamp_min(1e-30).sqrt()  # (B, 1, 1)
         return seeds[None] + delta * (bound / (rms_delta + bound))
 
@@ -218,14 +219,15 @@ class _RoutingLogits(nn.Module):
 
         def unit(t):
             ### float16 cannot hold F.normalize's eps (1e-12 underflows to 0, so a padding
-            ### token's zero state gives 0/0): normalize in float32, as CUDA autocast does,
-            ### and hand the einsum the float16 rows it had.
+            ### token's zero state gives 0/0). Normalize in float32, as CUDA autocast does,
+            ### and return float16 rows to the einsum.
             if t.dtype == torch.float16:
                 return F.normalize(t.float(), dim=-1).to(t.dtype)
             return F.normalize(t, dim=-1)
 
-        ### The cosine upcast to at least float32 before T, so the logits, their bias sum
-        ### and their gradient accumulation are float32, as on the compiled path.
+        ### Upcast the cosine to at least float32 before the product with T, so the
+        ### logits, their bias sum and their gradient accumulation are float32, as on
+        ### the compiled path.
         cos = torch.einsum("bnh,bsh->bns", unit(x), unit(protos))
         return self.temperature * cos.to(torch.promote_types(cos.dtype, torch.float32))
 
@@ -234,12 +236,15 @@ class _RoutingLogits(nn.Module):
 
 
 class _QueryTokens(nn.Module):
-    """The query tokens' own parameters (the interior mode): their input layer
-    ``seed``, which maps their seed (the K terms n_q.g_k, the global scalars, the
-    built-in signed distance to the boundary surface as ``[s, asinh(s / 1e-6)]``,
-    ``s = d / L``) to the token width, followed, as a boundary condition's input layer is, by the model's
-    shared GELU and linear layer. The tokens are passive (the query-independent form): they carry no
-    routing weight, so they own no routing parameter."""
+    """The query tokens' own parameters, in the interior task.
+
+    Their input layer ``seed`` maps their seed to the token width: the K terms
+    ``n_q.g_k``, the global scalars, and the built-in signed distance to the
+    boundary surface as ``[s, asinh(s / 1e-6)]``, ``s = d / L``. As with a boundary
+    condition's input layer, the model's shared GELU and linear layer follow. The
+    tokens are passive (the query-independent form): they carry no routing weight,
+    so they own no routing parameter.
+    """
 
     def __init__(self, hidden: int, n_seed: int) -> None:
         super().__init__()
@@ -261,17 +266,11 @@ class _SliceBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.n_geo = _geo_width(n_global_vectors, n_block_vecs, n_block_tens)
-        ### Activation recompute: the per-slice geometry tensors -- rel (B,N,S,d),
-        ### rel_hat, dist and two bf16 copies of the (B,N,S,geo) invariants -- dominate
-        ### the saved activations. The eager region is
-        ### checkpointed: the invariants are rebuilt from (r, n_hat, g_hat, z_pos,
-        ### m_s) inside backward instead of stored; the forward is bitwise the
-        ### stored-activation forward (same ops, same order).
         self.norm_assign = nn.LayerNorm(hidden)
         self.assign = _RoutingLogits(hidden, n_slices, routing_temperature)
         ### Relational geometry: per-slice equivariant anchors and point-anchor
-        ### invariants -- many local, data-adaptive reference points instead of
-        ### any global frame (smooth by construction).
+        ### invariants. The anchors are many local, data-adaptive reference points
+        ### in place of a global frame, smooth by construction.
         self.geo_width = hidden // 2
         ### No bias: a constant added to every slice's logit cancels in both the
         ### softmax over slices and the one over points, so it would get no gradient.
@@ -312,19 +311,18 @@ class _SliceBlock(nn.Module):
         protos = self.assign.prototypes(h_n, log_w)
         logits = self.assign.logits(h_n, protos)  # (B, N, S)
         a = _softmax_over_points(logits + log_w)  # normalized over points
-        ### Equivariant anchors: weighted mean position AND mean normal
-        ### direction per slice -- anchors gain orientation.
+        ### Equivariant anchors: each slice's weighted mean position and mean normal
+        ### direction, so an anchor has an orientation.
         z_pos = torch.einsum("bns,bnc->bsc", a, r)  # (B, S, d)
         ### The mean normal of a near-uniform slice on a closed boundary nearly cancels,
         ### so its direction must not be bf16 noise: autocast off (a, n_hat at least float32).
         with torch.autocast(a.device.type, enabled=False):
             m_s = torch.einsum("bns,bnc->bsc", a, n_hat)
             m_s = m_s / m_s.norm(dim=-1, keepdim=True).clamp_min(eps)
-        ### Geometry refines the routing and the readback. Pool the invariants
-        ### over slices FIRST, then project: exactly equal to projecting then
-        ### pooling (the projection is affine and point_mix sums to one over
-        ### slices), but the saved activation is (B, N, geo) instead of
-        ### (B, N, S, hidden/2).
+        ### Geometry refines the routing and the readback. Pooling the invariants over
+        ### slices before the projection equals projecting then pooling (the
+        ### projection is affine and point_mix sums to one over slices), and saves a
+        ### (B, N, geo) activation instead of (B, N, S, hidden/2).
         bias, point_mix, pooled = self._geo(logits, r, n_hat, g_hat, z_pos, m_s, eps, vecs, tens, geo_kernel)
         logits = logits + bias
         a = _softmax_over_points(logits + log_w)
@@ -337,10 +335,10 @@ class _SliceBlock(nn.Module):
         return (h, (protos, z_pos, m_s, z)) if slices else h
 
     def read(self, h, slices, r, n_hat, g_hat, eps: float, vecs=None, tens=None, geo_kernel: GeoKernel = "eager"):
-        """The block over passive tokens (log weight -inf) given the ``slices`` the
-        other tokens formed (``forward(..., slices=True)``): the arithmetic
-        :meth:`forward` gives them, which they enter only through their own routing
-        and readback."""
+        """The block over passive tokens (log weight -inf), given the ``slices`` the
+        other tokens formed (``forward(..., slices=True)``). Passive tokens enter a
+        block only through their own routing and readback, so this is the arithmetic
+        :meth:`forward` gives them."""
         protos, z_pos, m_s, z = slices
         h_n = self.norm_assign(h)
         logits = self.assign.logits(h_n, protos)
@@ -348,11 +346,11 @@ class _SliceBlock(nn.Module):
         return self._update(h, h_n, point_mix, pooled, z)
 
     def _geo(self, logits, r, n_hat, g_hat, z_pos, m_s, eps, vecs, tens, geo_kernel):
-        """The geometry region: ``(bias, point_mix, pooled)``. ``geo_kernel`` names its
-        implementation: ``"fused"`` evaluates the dense geometry region (invariants ->
-        routing bias -> point->slice mix -> pooled invariants) in one Triton kernel per
-        direction that never materializes a (B,N,S,.) tensor (see _geo_kernel.py), the
-        same arithmetic as :func:`_geo_region` with the recompute built in."""
+        """The geometry region, ``(bias, point_mix, pooled)``. ``geo_kernel`` names its
+        implementation. ``"eager"`` checkpoints :func:`_geo_region`. ``"fused"`` does
+        the same arithmetic (invariants -> routing bias -> point->slice mix -> pooled
+        invariants) in one Triton kernel per direction, with the recompute built in,
+        and never materializes a (B,N,S,.) tensor (``_geo_kernel.py``)."""
         if geo_kernel == "fused":
             ### The fused kernel takes the global directions and the token's rank-1
             ### vectors as one per-point vector set (at most four in all, no rank-2
@@ -369,6 +367,11 @@ class _SliceBlock(nn.Module):
                 n_global=g_hat.shape[2],
             )
         else:
+            ### Activation recompute: the per-slice geometry tensors (rel (B,N,S,d),
+            ### rel_hat, dist and two bf16 copies of the (B,N,S,geo) invariants)
+            ### dominate the saved activations. Backward rebuilds them from (r, n_hat,
+            ### g_hat, z_pos, m_s) instead of storing them; the forward is bitwise the
+            ### stored-activation forward (same ops, same order).
             bias, point_mix, pooled = checkpoint(
                 _geo_region,
                 self.geo_logit,

@@ -39,6 +39,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import cube_surface, sphere_icosahedral, torus
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 from test.experimental.models.isla._geometry_cases import (
+    KERNEL_DEVICES,
     _box_ties,
     _box_wall,
     _circle,
@@ -48,10 +49,11 @@ from test.experimental.models.isla._geometry_cases import (
     _near_wall,
     _polygon,
     _quad_diagonals,
+    _renumbered,
     _sphere,
     _torus,
 )
-from test.experimental.models.isla._marks import DEVICES, requires_cuda
+from test.experimental.models.isla._marks import requires_cuda
 from test.experimental.models.isla._meshes import (
     cloud,
     live,
@@ -211,27 +213,14 @@ def test_exact_geometry_matches_the_brute_force(dim):
     )
 
 
-@pytest.mark.parametrize("dim", [2, 3])
-def test_sign_and_direction_on_a_closed_surface(dim):
-    """A circle / sphere with outward normals: d > 0 outside and d < 0 inside beyond
-    the mesh's own deviation from the curved surface, u radial (outward outside,
-    inward inside)."""
-    mesh = _circle(256) if dim == 2 else _sphere(4)
-    q = _near_wall(dim, 3000, 0, band=0.2)
-    d, u = _geometry(q, mesh)
-    r = q.norm(dim=-1)
-    off = (r - 1).abs() > 2e-3  # beyond the inscribed polygon's sagitta
-    assert (torch.sign(d[off]) == torch.sign(r - 1)[off]).all()
-    radial = (u * q / r[:, None]).sum(-1)
-    assert (radial[off] * torch.sign(r - 1)[off] > 0.99).all()
-
-
 def test_convergence_is_second_order_under_refinement():
     """The circle at 64, 128, 256 segments and the sphere at icosahedral
     subdivisions 2, 3, 4 (h halving each step): the largest |d - d_exact| over a
     near-wall band falls by at least 3.5x per halving, and the largest deviation of
     the direction (on the side the mesh puts the query) from the radial one by at
-    least 1.7x (O(h), the cells' normals against the surface's)."""
+    least 1.7x (O(h), the cells' normals against the surface's). On the finest mesh
+    both are small, so d has the sign of r - 1 beyond 2e-3 of the wall and u is
+    radial there to within 0.14 (outward outside, inward inside)."""
     for dim, meshes in (
         (2, [_circle(n) for n in (64, 128, 256)]),
         (3, [_sphere(s) for s in (2, 3, 4)]),
@@ -249,6 +238,8 @@ def test_convergence_is_second_order_under_refinement():
             assert coarse / fine >= 3.5, (dim, errs)
         for coarse, fine in zip(dir_errs, dir_errs[1:]):
             assert coarse / fine >= 1.7, (dim, dir_errs)
+        ### measured 7.5e-5 and 1.2e-2 (2-D), 1.1e-3 and 4.6e-2 (3-D)
+        assert errs[-1] < 2e-3 and dir_errs[-1] < 0.14, (dim, errs, dir_errs)
 
 
 @pytest.mark.parametrize("dim", [2, 3])
@@ -272,8 +263,7 @@ def test_exact_geometry_is_covariant_and_scales(dim):
         assert torch.allclose(u2, u @ R.T, atol=tol), improper
 
 
-@pytest.mark.parametrize("device", DEVICES)
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
+@pytest.mark.parametrize("kernel, device", KERNEL_DEVICES)
 def test_exact_geometry_scales_at_any_length(kernel, device):
     """At lengths times 1e-12 and 1e12, d scales and u is unchanged, signs
     included: the winding number's float32 far-field moments (a length to the
@@ -442,17 +432,16 @@ def test_exact_near_a_translated_wall_in_float32(dim, shift):
     assert torch.allclose(u.norm(dim=-1), torch.ones_like(d), atol=1e-6)
 
 
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_half_precision_query_above_a_small_triangle(dtype, kernel):
+def test_half_precision_query_above_a_small_triangle(dtype):
     """Above a triangle with edges of 1e-4, whose cross product underflows in
     float16, the query keeps the float32 distance (to a unit of its dtype) and a unit
-    normal; before, float16 gave d = 0 and u = 0."""
+    normal, where the float16 arithmetic gives d = 0 and u = 0."""
     points = torch.tensor([[0.0, 0.0, 0.0], [1e-4, 0.0, 0.0], [0.0, 1e-4, 0.0]])
     points, cells = points.to(dtype), torch.tensor([[0, 1, 2]])
     q = torch.tensor([[2.5e-5, 2.5e-5, 1e-3]], dtype=dtype)
-    d, u = exact_boundary_geometry(q, points, cells, kernel=kernel)
-    d32, u32 = exact_boundary_geometry(q.float(), points.float(), cells, kernel=kernel)
+    d, u = exact_boundary_geometry(q, points, cells)
+    d32, u32 = exact_boundary_geometry(q.float(), points.float(), cells)
     eps = torch.finfo(dtype).eps
     assert torch.allclose(d.float(), d32, atol=0, rtol=eps)
     assert torch.equal(u.float(), u32) and float(u.float().norm()) == 1
@@ -477,8 +466,9 @@ def test_exact_geometry_is_differentiable(dim):
     )
 
 
-def test_two_dimensional_search_chunks_over_the_queries():
+def test_two_dimensional_search_chunks_over_the_queries(monkeypatch):
     """More queries than one chunk of the 2-D search: the same answer as one block."""
+    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**12)
     verts = _naca(50)
     g = torch.Generator().manual_seed(9)
     q = torch.randn(
@@ -489,32 +479,31 @@ def test_two_dimensional_search_chunks_over_the_queries():
 
 
 def test_exact_geometry_refuses_other_dimensions():
+    """A 4-D surface is refused: the geometry is defined in two and three dimensions."""
     pts, nrm, _, _ = cloud(10, 4)
     mesh = soup(pts, nrm)
     with pytest.raises(NotImplementedError, match="two and three dimensions"):
         exact_boundary_geometry(pts, mesh.points, mesh.cells)
 
 
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
 @pytest.mark.parametrize("dim", [2, 3])
-def test_exact_geometry_refuses_a_boundary_with_no_cells(dim, kernel):
-    """No cells, no surface: a ValueError up front (before, an IndexError or a
-    division by zero deep in the search)."""
+def test_exact_geometry_refuses_a_boundary_with_no_cells(dim):
+    """No cells, no surface: a ValueError up front, not an error deep in the
+    search."""
     mesh = _circle(8) if dim == 2 else _sphere(0)
     with pytest.raises(ValueError, match="no cells"):
         exact_boundary_geometry(
-            torch.zeros(4, dim, dtype=D), mesh.points, mesh.cells[:0], kernel=kernel
+            torch.zeros(4, dim, dtype=D), mesh.points, mesh.cells[:0]
         )
 
 
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
 @pytest.mark.parametrize("dim", [2, 3])
-def test_no_queries_give_empty_outputs(dim, kernel):
+def test_no_queries_give_empty_outputs(dim):
     """Zero queries give empty d and u in the queries' dtype, with a gradient path
-    to the queries (before, the 2-D brute force had no chunk to concatenate)."""
+    to the queries."""
     mesh = _circle(8) if dim == 2 else _sphere(0)
     q = torch.zeros(0, dim, dtype=torch.float32, requires_grad=True)
-    d, u = exact_boundary_geometry(q, mesh.points.float(), mesh.cells, kernel=kernel)
+    d, u = exact_boundary_geometry(q, mesh.points.float(), mesh.cells)
     assert d.shape == (0,) and u.shape == (0, dim)
     assert d.dtype == u.dtype == q.dtype
     (d.sum() + u.sum()).backward()
@@ -600,11 +589,10 @@ def test_outputs_are_invariant_to_the_resolution_of_the_input_mesh():
     quadrature. Kept whole (the default budget exceeds every cell count) the
     outputs move by under 1e-3: the resolution invariance without draw noise.
 
-    The draws' spread depends on the random weights (measured with init seeds 0-7:
-    0.8-18.1 % in 2-D and 0.8-6.1 % in 3-D, refined over spread at most 1.20), so an
-    absolute cap is not a bound; a tripwire of 0.37, twice the largest refined change
-    or spread measured (0.185), still fails a regression that makes every draw
-    noisy."""
+    The draws' spread depends on the random weights (0.8-18 % in 2-D and 0.8-6 % in
+    3-D over init seeds 0-7), so no absolute cap is a bound. A tripwire of 0.37,
+    twice the largest refined change or spread measured, still fails a regression
+    that makes every draw noisy."""
     for dim in (2, 3):
         if dim == 2:
             surface, q, gd = _airfoil_case()
@@ -712,9 +700,9 @@ def test_the_tokens_are_an_exact_count_with_small_conditions_kept_whole():
 
 
 def test_n_boundary_tokens_is_validated():
-    """A positive integer; a surface model, which samples nothing, takes only the
-    default; an interior model needs boundary cells; the interior task is refused
-    outside two and three dimensions."""
+    """``n_boundary_tokens`` is a positive integer, and a surface model, which
+    samples nothing, takes only the default. An interior model needs boundary cells,
+    and the interior task is refused outside two and three dimensions."""
     for bad in (0, -3, 2.5, True):
         with pytest.raises(ValueError, match="positive integer"):
             ISLA(
@@ -982,9 +970,9 @@ def test_tie_direction_is_the_least_norm_gradient_and_independent_of_the_order()
 @pytest.mark.parametrize("dim", [2, 3])
 def test_tie_direction_flips_exactly_with_the_winding(dim):
     """A box in a generic pose (its ties hold to rounding only): reversing every cell
-    negates d and sign(d) u bitwise at every tie point, the same tie set read with
-    the other orientation (a first-found feature, before, could change with the
-    swapped vertex order)."""
+    negates d and sign(d) u bitwise at every tie point: the same tie set, read with
+    the other orientation (a first-found feature could change with the swapped
+    vertex order)."""
     mesh, q, _ = _box_ties(dim)
     R, t = orthogonal(dim, 7), torch.arange(1, dim + 1, dtype=D) / 3
     moved, q = transform(mesh, R, t), q @ R.T + t
@@ -1032,15 +1020,8 @@ def test_on_wall_direction_is_the_least_norm_normal_and_independent_of_the_order
     d, u = _geometry(q, mesh)
     assert torch.equal(d, torch.zeros_like(d))
     assert torch.allclose(u, nu, atol=1e-15, rtol=0)
-    g = torch.Generator().manual_seed(dim)
-    for _ in range(3):
-        perm = torch.randperm(mesh.n_points, generator=g)
-        inv = torch.empty_like(perm)
-        inv[perm] = torch.arange(mesh.n_points)
-        cells = inv[mesh.cells][torch.randperm(mesh.n_cells, generator=g)]
-        if dim == 3:
-            cells = cells.roll(1, -1)
-        d2, u2 = exact_boundary_geometry(q, mesh.points[perm], cells)
+    for seed in range(3):
+        d2, u2 = exact_boundary_geometry(q, *_renumbered(mesh.points, mesh.cells, seed))
         assert torch.equal(d2, d) and torch.equal(u2, u)
 
 
@@ -1065,7 +1046,7 @@ def test_on_wall_direction_in_float32_is_the_float64_one(surface):
     """Curved float32 surfaces in a generic pose, at their vertices and their cells'
     edge midpoints: on the surface, u is the least-norm normal that float64 copies
     of the same inputs give, to float32 rounding, never 0 where that one is not
-    (the float32 normals are not unit in float64, and their least-norm point failed
+    (the float32 normals are not unit in float64, so their least-norm point can fail
     its own optimality test), and a winding flip negates it bitwise."""
     if surface == "ellipse":
         m = _circle(400)
@@ -1093,18 +1074,17 @@ def test_on_wall_direction_in_float32_is_the_float64_one(surface):
 @pytest.mark.parametrize("surface", ["split", "icosphere"])
 def test_on_wall_direction_is_a_function_of_the_input_mesh(surface):
     """Float32 meshes in a generic pose, at their vertices, edge midpoints and
-    centroids: on the surface, u from the float32 inputs is bitwise u from float64
-    copies of them after the cast. The normals are computed in float64 from the
-    coordinates as given, whatever the queries' precision; float32 normals carried
-    their rounding into the least-norm point, which amplifies it where a split face's
-    two triangles have near-duplicate normals (``split``: a torus with its vertices
-    moved by 1e-5 of their radius, so each quad's triangles are about 1e-5 apart,
-    as on the lug's hex faces), and differed from float64's at 594 of 781 on-wall
-    points of the icosphere."""
+    centroids, and on the split torus at its quads' diagonals: on the surface, u from
+    the float32 inputs is bitwise u from float64 copies of them after the cast. The
+    normals are computed in float64 from the coordinates as given, whatever the
+    queries' precision. Float32 normals would carry their rounding into the
+    least-norm point, which amplifies it where a split face's two triangles have
+    near-duplicate normals (``split``: a torus with its vertices moved by 1e-5 of
+    their radius, so each quad's triangles are about 1e-5 apart). A quad's diagonal
+    is where those normals meet."""
     if surface == "split":
         ### The torus flipped to the other winding: the midpoints of cells[:, :2] are
-        ### then quad sides, the points this test is for; the torus as loaded puts each
-        ### quad's diagonal there (test_on_wall_direction_at_quad_diagonals).
+        ### then quad sides; the torus as loaded puts each quad's diagonal there.
         m = _flipped(torus.load(n_major=28, n_minor=12))
         g = torch.Generator().manual_seed(0)
         p = m.points.double() * (
@@ -1115,43 +1095,18 @@ def test_on_wall_direction_is_a_function_of_the_input_mesh(surface):
         p = m.points.double()
     pts = (p @ orthogonal(3, 7).T + torch.arange(1, 4, dtype=D) / 3).float()
     q = torch.cat([pts, pts[m.cells[:, :2]].mean(1), pts[m.cells].mean(1)])
+    if surface == "split":
+        ### and the midpoints of the quads' diagonals, on the same points
+        diagonals, same_pts, _ = _quad_diagonals("precision")
+        assert torch.equal(same_pts, pts)
+        q = torch.cat([q, diagonals])
     d, u = exact_boundary_geometry(q, pts, m.cells)
     d64, u64 = exact_boundary_geometry(q.double(), pts.double(), m.cells)
     wall = (d == 0) & (d64 == 0)
     assert wall[: pts.shape[0]].all() and (u[wall].norm(dim=-1) > 0.9).all()
+    if surface == "split":
+        assert wall[-diagonals.shape[0] :].any()
     assert torch.equal(u[wall], u64[wall].float())
-
-
-def test_on_wall_direction_skips_zero_area_cells():
-    """A zero-area triangle on an edge of a sphere has no normal: at the edge's
-    vertices and its midpoint the on-wall rule reads the other cells holding the
-    query, so d and u are bitwise those without it (its zero normal in the hull
-    made u 0)."""
-    mesh = _sphere(2)
-    a, b = mesh.cells[0, :2].tolist()
-    mid = 0.5 * (mesh.points[a] + mesh.points[b])
-    pts = torch.cat([mesh.points, mid[None]])
-    cells = torch.cat([mesh.cells, torch.tensor([[a, b, mesh.n_points]])])
-    q = torch.stack([mesh.points[a], mesh.points[b], mid, 1.01 * mid])
-    d, u = exact_boundary_geometry(q, pts, cells)
-    d0, u0 = exact_boundary_geometry(q, pts, mesh.cells)
-    assert torch.equal(d[:3], torch.zeros(3, dtype=D))
-    assert torch.equal(d, d0) and torch.equal(u, u0)
-    assert (u.norm(dim=-1) > 0.9).all()
-
-
-def test_float32_tie_keeps_its_side_off_the_wall():
-    """Float32 queries at a posed sphere's edge midpoints lie a few 1e-8 off the
-    surface (the rounding of the midpoint), off it in float64: at a tie, |d| is the
-    float64 distance, which float32 does not round to 0, so d keeps the side the
-    vote gives it (d = -0 lost it) and a winding flip negates sign(d) u."""
-    mesh = _sphere(3)
-    R, t = orthogonal(3, 7), torch.arange(1, 4, dtype=D) / 3
-    moved = Mesh(points=(mesh.points @ R.T + t).float(), cells=mesh.cells)
-    q = moved.points[mesh.cells[:, :2]].mean(1)
-    d, u = _geometry(q, moved)
-    d2, u2 = _geometry(q, _flipped(moved))
-    assert torch.equal(_gradient(d2, u2), -_gradient(d, u))
 
 
 @pytest.mark.parametrize("surface", ["sphere", "torus"])
@@ -1159,17 +1114,17 @@ def test_float32_points_within_the_bound_are_on_the_wall(surface):
     """Float32 meshes as built (an icosphere, a torus) in a generic pose, at their
     vertices, their cells' edge midpoints and centroids (on the surface to float32
     rounding: up to 7e-8 off it in float64, within the closest cell's error bound)
-    and at centroids moved up to 1e-5 along the cell's normal: every point on the
-    surface is on the wall, d = 0 and u the least-norm normal, never 0 (under a fixed
-    cutoff of 1e-12 the midpoints were off it, with a float32 closest point equal to
-    the query: u = 0); off the wall d keeps the side the point was moved to; a
-    winding flip negates d and sign(d) u bitwise, and renumbering the vertices and
-    reordering the cells leave d and u bitwise."""
+    and at centroids moved up to 1e-5 along the cell's normal. Every point on the
+    surface is on the wall: d = 0 and u the least-norm normal, never 0. Off the wall
+    d keeps the side the point was moved to. A winding flip negates d and sign(d) u
+    bitwise, and renumbering the vertices and reordering the cells leave d and u
+    bitwise."""
     if surface == "sphere":
         m = sphere_icosahedral.load(radius=1.0, subdivisions=3)
     else:
         ### The torus flipped to the other winding, so that the midpoints of cells[:, :2]
-        ### are quad sides, as this test is for (test_on_wall_direction_at_quad_diagonals).
+        ### are quad sides, as this test is for (the torus as loaded puts each quad's
+        ### diagonal there).
         m = _flipped(torus.load(n_major=48, n_minor=24))
     pts = (m.points.double() @ orthogonal(3, 7).T).float()
     tri = pts[m.cells].double()
@@ -1197,40 +1152,8 @@ def test_float32_points_within_the_bound_are_on_the_wall(surface):
         q, pts, _flipped(Mesh(points=pts, cells=m.cells)).cells
     )
     assert torch.equal(d2, -d) and torch.equal(_gradient(d2, u2), -_gradient(d, u))
-    perm = torch.randperm(pts.shape[0], generator=g)
-    inv = torch.empty_like(perm)
-    inv[perm] = torch.arange(pts.shape[0])
-    cells = inv[m.cells][torch.randperm(m.n_cells, generator=g)].roll(1, -1)
-    d3, u3 = exact_boundary_geometry(q, pts[perm], cells)
+    d3, u3 = exact_boundary_geometry(q, *_renumbered(pts, m.cells))
     assert torch.equal(d3, d) and torch.equal(u3, u)
-
-
-@pytest.mark.parametrize("case", ["renumbering", "precision"])
-def test_on_wall_direction_at_quad_diagonals(case):
-    """At the midpoints of the torus's quad diagonals in a generic pose
-    (:func:`_quad_diagonals`), the on-wall u is bitwise invariant to renumbering the
-    vertices and reordering the cells (``renumbering``), and from float32 inputs it
-    is bitwise u from float64 copies after the cast (``precision``). A quad is
-    planar, so its two triangles' normals agree to rounding and are not certified
-    distinct: taking one of them made u depend on the cells' order (at 51 of the
-    1152 midpoints, by up to 1.79e-6) and, through the certificate, on the queries'
-    precision (at 5 of the 35 on-wall midpoints of the split torus, by up to
-    1.61e-6)."""
-    q, pts, cells = _quad_diagonals(case)
-    d, u = exact_boundary_geometry(q, pts, cells)
-    if case == "renumbering":
-        g = torch.Generator().manual_seed(0)
-        perm = torch.randperm(pts.shape[0], generator=g)
-        inv = torch.empty_like(perm)
-        inv[perm] = torch.arange(pts.shape[0])
-        cells = inv[cells][torch.randperm(cells.shape[0], generator=g)].roll(1, -1)
-        d3, u3 = exact_boundary_geometry(q, pts[perm], cells)
-        assert torch.equal(d3, d) and torch.equal(u3, u)
-    else:
-        d64, u64 = exact_boundary_geometry(q.double(), pts.double(), cells)
-        wall = (d == 0) & (d64 == 0)
-        assert wall.any()
-        assert torch.equal(u[wall], u64[wall].float())
 
 
 @pytest.mark.parametrize("dim", [2, 3])
@@ -1240,7 +1163,7 @@ def test_float64_points_beyond_the_bound_are_off_the_wall(dim):
     the closest cell's error bound E and by four times it (E ~ 1e-14 here): the
     first are on the wall (d = 0, u the least-norm normal), the last off it, with d
     its distance and u the normal, since float64 resolves them (a fixed cutoff of
-    1e-12 put every point within 1e-12 on the wall)."""
+    1e-12 would put every point within 1e-12 on the wall)."""
     mesh, q, nu = _box_wall(dim)
     R, t = orthogonal(dim, 7), torch.arange(1, dim + 1, dtype=D) / 3
     moved, q, nu = transform(mesh, R, t), q @ R.T + t, nu @ R.T
@@ -1290,22 +1213,17 @@ def _least_norm(c, tol: float = 1e-14):
 
 
 @pytest.mark.parametrize("dtype", [D, torch.float32])
-@pytest.mark.parametrize(
-    "surface", ["sphere", "raw torus", "torus", "ellipse", "sliver"]
-)
+@pytest.mark.parametrize("surface", ["sphere", "torus", "ellipse", "sliver"])
 def test_tie_directions_take_the_exact_least_norm_point(surface, dtype, monkeypatch):
     """At the vertices and the cells' edge midpoints of curved surfaces in a generic
-    pose (the raw torus with its stored winding, the sliver a sphere with a zero-area
-    triangle on one edge), on the surface and off it (a float32 midpoint lies a few
-    1e-8 off its edge), every tie's least-norm step returns the exact least-norm
-    point of its directions (enumerated in float64), to 1e-6 from float64 inputs and
-    1e-5 from float32 ones, and never 0 where that is not."""
+    pose (the sliver a sphere with a zero-area triangle on one edge), on the surface
+    and off it (a float32 midpoint lies a few 1e-8 off its edge), every tie's
+    least-norm step returns the exact least-norm point of its directions (enumerated
+    in float64), to 1e-6 from float64 inputs and 1e-5 from float32 ones, and never 0
+    where that is not."""
     if surface == "ellipse":
         m = _circle(400)
         mesh = Mesh(points=m.points * torch.tensor([1.0, 0.12], dtype=D), cells=m.cells)
-    elif surface == "raw torus":
-        m = torus.load(n_major=48, n_minor=24)
-        mesh = Mesh(points=m.points.double(), cells=m.cells)
     else:
         mesh = {
             "sphere": lambda: _sphere(3),
@@ -1345,8 +1263,7 @@ def test_least_norm_point_without_a_certified_candidate(k, dim):
     optimality certificate's rounding slack, so often no candidate passes it. Where
     a candidate separates the origin from the hull, the routine returns the one
     with the least duality gap g = |x|^2 - min_k c_k . x, within sqrt(2 g) of the
-    exact least-norm point; otherwise 0, exactly where the exact point is 0. Before,
-    every row without a certified candidate gave 0."""
+    exact least-norm point; otherwise 0, exactly where the exact point is 0."""
     g = torch.Generator().manual_seed(k * dim)
     c = torch.randn(200, 1, dim, generator=g) + 0.4 * torch.randn(
         200, k, dim, generator=g

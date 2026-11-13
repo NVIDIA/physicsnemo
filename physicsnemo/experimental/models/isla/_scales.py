@@ -14,22 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ISLA's own scales: the field declarations' ISLA-local keys and the per-case scales.
+"""ISLA's own scales: the ISLA-local keys of the field declarations, and the per-case scales.
 
-A field of a boundary condition's schema, of ``global_schema`` or of
-``output_schema`` may carry, next to its rank spec, the keys of :data:`SCALE_KEYS`:
-``units`` (exponents of named scales: the built-in length ``L`` and any scale a
-field defines), ``defines: <name>`` (the field defines the scale ``name``: a rank-1
-field its measure-weighted RMS magnitude and, on the boundary, the direction ``g``;
-a rank-0 global its value, consumed rather than read as an input) and, for an
-output, a boundary field or a rank-0 global input, ``scale`` (a positive constant
-``c``, the typical size of the field made dimensionless by its units: an input enters
-as ``x / (c prod scale^exp)``, and the head predicts ``y / (c prod scale^exp)``, both
-of order one). :func:`split_scale_keys` pops them before
+Next to its rank spec, a field of a boundary condition's schema, of ``global_schema``
+or of ``output_schema`` may carry the keys of :data:`SCALE_KEYS`: ``units``,
+``defines: <name>`` and ``scale``. The ISLA module docstring, *Scales*, says what
+each does. A rank-0 global that defines a scale is consumed and does not enter as an
+input. :func:`split_scale_keys` pops these keys before
 :meth:`~physicsnemo.mesh.fields.FieldSchema.parse`, so the shared
 :class:`~physicsnemo.mesh.fields.RankSpec` grammar is untouched. Private to
-:mod:`physicsnemo.experimental.models.isla`, except :func:`case_scales`, a case's
-scales as ISLA computes them, which the package exports."""
+:mod:`physicsnemo.experimental.models.isla`, except :func:`case_scales`, which the
+package exports."""
 
 import math
 from collections.abc import Mapping, Sequence
@@ -56,9 +51,9 @@ SCALE_KEYS = ("units", DEFINES, "scale")
 
 
 def _check_local(kind: str, name: str, local: Mapping) -> dict:
-    """One field's ISLA-local keys, checked and in a JSON-safe form. Whether the
-    scales its ``units`` name are defined is checked against every field
-    (:func:`parse_scales`)."""
+    """One field's ISLA-local keys, checked and made JSON-safe.
+    :func:`parse_scales` checks, against every field, that its ``units`` name
+    defined scales."""
     where = f"{kind}[{name!r}]"
     out = {}
     if "units" in local:
@@ -110,8 +105,8 @@ def split_scale_keys(kind: str, specs):
     """``specs`` without the ISLA-local keys, and those keys by dotted field name.
 
     A field is a :class:`~physicsnemo.mesh.fields.RankSpec` or a mapping with a
-    non-mapping ``rank``; any other mapping is a group, walked with its name as the
-    prefix (the grammar's nested and dotted forms give the same dotted names).
+    non-mapping ``rank``. Any other mapping is a group, whose fields take its name as
+    a prefix (the grammar's nested and dotted forms give the same dotted names).
     Everything else is left for :meth:`~physicsnemo.mesh.fields.FieldSchema.parse`
     to accept or refuse."""
     extras: dict[str, dict] = {}
@@ -147,8 +142,8 @@ def merged(schema, extras: Mapping):
 def check_output_stats(stats, output_schema) -> dict | None:
     """``output_stats`` (``{name: {"mean", "std"}}``, the format of
     ``NormalizeMeshFields.stats``; a ``type`` key is ignored) as JSON-safe floats.
-    Each name is a declared output, each std positive, and the mean of a field of
-    rank 1 or more zero (a nonzero vector mean would break rotation covariance)."""
+    Each name must be a declared output and each std positive. The mean of a field
+    of rank 1 or more must be zero, since a nonzero mean breaks rotation covariance."""
     if stats is None:
         return None
     if not isinstance(stats, Mapping):
@@ -186,12 +181,12 @@ def check_output_stats(stats, output_schema) -> dict | None:
 
 @dataclass(frozen=True)
 class DeclaredScales:
-    """The scales the declarations define (:func:`parse_scales`), as the model reads
-    them: per field the units and the constant ``scale`` of the outputs, the rank-0
-    globals and each condition's fields; the rank-1 sources of the one RMS scale (the
-    boundary's ``(condition, field)`` pairs or one global) and its name; the rank-0
-    globals whose values are scales (scale -> field); the checked ``output_stats``;
-    whether any scale is declared (``scaled``) and whether the head runs in the
+    """The scales the declarations define (:func:`parse_scales`), as the model uses
+    them. Per field, the units and the constant ``scale`` of the outputs, the rank-0
+    globals and each condition's fields. The rank-1 sources of the one RMS scale (the
+    boundary's ``(condition, field)`` pairs or one global) and its name. The rank-0
+    globals whose values are scales (scale -> field). The checked ``output_stats``.
+    Whether any scale is declared (``scaled``), and whether the head runs in the
     parameters' precision under autocast (``fp32_head``)."""
 
     output_units: dict
@@ -219,11 +214,11 @@ def parse_scales(
     global_schema,
 ) -> DeclaredScales:
     """The opt-in scales (the ISLA module docstring, *Scales*) from the declarations'
-    ISLA-local keys (:func:`split_scale_keys`: ``out_extras``, ``g_extras`` and
-    ``b_extras`` by condition), checked against the parsed schemas: which ranks may
-    define a scale or carry units and a constant, one RMS scale at most, from boundary
-    fields or one global, and every unit a defined scale; with ``output_stats``
-    checked (:func:`check_output_stats`)."""
+    ISLA-local keys (``out_extras``, ``g_extras`` and ``b_extras`` by condition, from
+    :func:`split_scale_keys`). Checks them against the parsed schemas: which ranks
+    may define a scale or carry units and a constant, at most one RMS scale (from
+    boundary fields or one global), and every unit a defined scale.
+    :func:`check_output_stats` checks ``output_stats``."""
     decl = {"output_schema": out_extras, "global_schema": g_extras}
     decl.update({f"boundary_schemas[{n!r}]": e for n, e in b_extras.items()})
     schemas = {"output_schema": output_schema, "global_schema": global_schema}
@@ -324,15 +319,13 @@ def parse_scales(
         )
     has_source = bool(boundary_sources or global_sources)
     output_stats = check_output_stats(output_stats, output_schema)
-    ### The scales are declared when any field has units or an input scale or
-    ### defines a scale.
     has_input_scale = bool(global_scale or any(boundary_scale.values()))
     scaled = bool(used or has_source or defined_values or has_input_scale)
-    ### The head and the redimensionalization run in the parameters' precision
-    ### under autocast whenever a physical output is assembled or standardized. The
-    ### outputs' precision is bounded by the bf16 trunk either way; the fp32 head keeps
-    ### bf16's rounding of the head's own product and of a nonzero output mean (a
-    ### mean / std of 0.3, for one) out of the outputs.
+    ### Under autocast, the head and the redimensionalization run in the parameters'
+    ### precision whenever a physical output is assembled or standardized. The bf16
+    ### trunk bounds the outputs' precision either way. The fp32 head keeps bf16's
+    ### rounding of the head's own product and of a nonzero output mean (such as
+    ### mean / std = 0.3) out of the outputs.
     fp32_head = scaled or output_stats is not None or bool(output_scale)
     return DeclaredScales(
         output_units=output_units,
@@ -375,11 +368,11 @@ def rms_moments(sources):
 
 
 def length_unit(meshes: Sequence[Mesh], measures: Sequence[torch.Tensor]) -> torch.Tensor:
-    """The length unit ``(1, 1, 1)`` of ``meshes``, in their dtype: the RMS pairwise
-    distance of their piecewise-flat cells, each cell with its centroid, its measure
-    (``measures``, one ``(n_cells,)`` per mesh) and its own second moment
-    (:func:`~physicsnemo.experimental.models.isla._geometry.rms_pairwise_distance`),
-    the meshes in the order given."""
+    """The length unit of ``meshes``, shape ``(1, 1, 1)`` in their dtype: the RMS
+    pairwise distance of their piecewise-flat cells
+    (:func:`~physicsnemo.experimental.models.isla._geometry.rms_pairwise_distance`).
+    Each cell enters with its centroid, its measure (``measures``, one ``(n_cells,)``
+    per mesh) and its own second moment, the meshes in the order given."""
     return rms_pairwise_distance(
         torch.cat([m.cell_centroids for m in meshes])[None],
         torch.cat(list(measures))[None],
@@ -396,10 +389,10 @@ def case_scales(
     r"""A case's scales, as :class:`~physicsnemo.experimental.models.isla.model.ISLA`
     computes them from its boundary and its global inputs.
 
-    The scales are what a model needs to make a case's fields dimensionless, and
-    they depend only on the posed problem: the boundary and the fields that
-    define a scale. Another model, or a preprocessing step that builds a
-    dimensionless input from them, gets the same numbers as ISLA.
+    A model needs these scales to make a case's fields dimensionless. They depend
+    only on the posed problem: the boundary and the fields that define a scale.
+    Another model, or a preprocessing step that makes its inputs dimensionless,
+    gets from this function the numbers ISLA uses.
 
     Parameters
     ----------
@@ -407,15 +400,15 @@ def case_scales(
         The case's boundaries by name, at full resolution, as ISLA's ``forward``
         takes them.
     defines : Mapping[str, Sequence[tuple[str, str]] | str], optional, default=None
-        The scales to compute besides ``"L"``, by unit name (the user's names:
-        ``"U"``, ``"rho"``, ...). A sequence of ``(boundary, field)`` string pairs
-        names rank-1 cell fields ``(n_cells, d)`` of ``boundary_meshes``: the scale
-        is their measure-weighted RMS magnitude
+        The scales to compute besides ``"L"``, by unit name (any name, such as
+        ``"U"`` or ``"rho"``). These are ISLA's ``defines`` keys (a field declared
+        with ``defines: <unit>``). A sequence of ``(boundary, field)`` string pairs
+        names rank-1 cell fields ``(n_cells, d)`` of ``boundary_meshes``. The scale
+        is then their measure-weighted RMS magnitude
         :math:`\sqrt{\sum_i a_i |v_i|^2 / \sum_i a_i}`, pooled over the cells of
-        every pair whose boundary is given (a pair of an absent boundary is
-        skipped, as ISLA skips it). A string names a field of ``global_data``: the scale is the
-        norm of a rank-1 field, or the value of a rank-0 one. These are ISLA's
-        ``defines`` keys (a field declared with ``defines: <unit>``).
+        every pair whose boundary is given. As in ISLA, a pair whose boundary is
+        absent is skipped. A string names a field of ``global_data``. The scale is
+        then the norm of a rank-1 field, or the value of a rank-0 one.
     global_data : TensorDict or Mapping[str, torch.Tensor], optional, default=None
         The case's global fields, by dotted name or nested, for the units that
         name one. A rank-1 field holds ``n_spatial_dims`` values, a rank-0 one a
@@ -424,30 +417,31 @@ def case_scales(
     Returns
     -------
     dict[str, torch.Tensor]
-        Float64 scalars by unit name: ``"L"``, the length unit (the
-        measure-weighted RMS pairwise distance of every given boundary's cells,
-        each cell with its own second moment, so exact for the piecewise-flat
-        boundary), and each unit of ``defines``. They are bitwise the scales that
-        an ISLA declaring the same boundaries and ``defines`` computes on any case
-        it accepts: the boundaries are taken in sorted order, the pairs of a unit by
-        boundary in that order and then as listed, the length in the meshes'
-        dtype, and a global field rounded to the meshes' dtype first. Every scale
-        is invariant under rotations, reflections and translations of the case,
-        and ``"L"`` scales with its coordinates.
+        Float64 scalars by unit name: ``"L"`` and each unit of ``defines``.
+        ``"L"`` is the length unit, the measure-weighted RMS pairwise distance of
+        every given boundary's cells. Each cell enters with its own second moment,
+        so ``"L"`` is exact for the piecewise-flat boundary. The scales are bitwise
+        those that an ISLA declaring the same boundaries and ``defines`` computes
+        on any case it accepts. As in ISLA, the boundaries are taken in sorted
+        order, the pairs of a unit by boundary in that order and then as listed,
+        the length in the meshes' dtype, and a global field rounded to the meshes'
+        dtype first. Every scale is invariant under rotations, reflections and
+        translations of the case, and ``"L"`` scales with its coordinates.
 
     Raises
     ------
     TypeError
         When a value of ``boundary_meshes`` is not a ``Mesh``.
     ValueError
-        When ``boundary_meshes`` is not a non-empty mapping, when a mesh is not a
-        boundary (``Mesh[d - 1, d]``), when the meshes differ in ``d`` or in dtype,
-        or when their points are not floating (each message names the mesh); and
-        when a scale is undefined: no cell, no given boundary among a unit's pairs,
-        a missing cell field or global field, a field of the wrong shape, sources
-        that are zero everywhere, or a non-positive global value; and when a unit's
+        When ``boundary_meshes`` is not a non-empty mapping. When a mesh is not a
+        boundary (``Mesh[d - 1, d]``), the meshes differ in ``d`` or in dtype, or
+        their points are not floating; the message names the mesh. When a unit's
         source is neither a string nor a sequence of ``(boundary, field)`` string
-        pairs. The message names the unit and the input. These checks read the values on the host.
+        pairs, or when a scale is undefined: no cell, no given boundary among a
+        unit's pairs, a missing cell field or global field, a field of the wrong
+        shape, sources that are zero everywhere, or a non-positive global value;
+        the message names the unit and the input. These checks read the values on
+        the host.
 
     Examples
     --------
@@ -540,7 +534,7 @@ def _rms_scale(unit: str, source, present: Mapping) -> torch.Tensor:
     pairs = sorted(((b, f) for b, f in source), key=lambda p: p[0])
     if not pairs:
         raise ValueError(f"defines[{unit!r}] names no (boundary, field) pair")
-    ### As ISLA pools them: the pairs of the given boundaries, refused only when none is.
+    ### ISLA pools the pairs of the given boundaries and refuses only when none is given.
     given = [(b, f) for b, f in pairs if b in present]
     if not given:
         raise ValueError(

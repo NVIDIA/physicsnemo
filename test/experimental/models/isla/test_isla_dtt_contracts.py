@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Model-level contracts of ISLA's interior task (ISLA-DTT, ``interior=True``), with
-the boundary read live.
+"""Model-level contracts of ISLA's interior task (``interior=True``), with the
+boundary read live.
 
 Every model here goes through ``live`` (``_meshes.py``), which seeds the boundary
 read's zero-initialized output projection, so each contract holds for a read that
@@ -25,10 +25,6 @@ frame at the opening angle ``TREE_READ_THETA``; the tests set the model's
 draw keeps ``n_boundary_tokens`` of the cells when the boundary has more. Each test
 states its property and the reason for its tolerance; every tolerance is absolute
 (``rtol=0``) unless a relative term is the point.
-
-Owners of what these tests reach (one place, for the library moves): the draw is
-``isla._sampling.sample_boundary_cells`` as ``isla.model`` imports it, the forest and
-the walk are ``isla._tree_read``'s, reached through ``ISLA._tree_read_walk``.
 """
 
 import logging
@@ -76,7 +72,7 @@ THETAS = pytest.mark.parametrize(
 
 
 def _model(dim=3, theta=TREE_READ_THETA, output_schema=PV, seed=0, **kw):
-    """A float64 ISLA-DTT model in eval mode, its read live at ``theta``."""
+    """A float64 interior model in eval mode, its read live at ``theta``."""
     torch.manual_seed(seed)
     kw = {
         "hidden": 32,
@@ -249,6 +245,66 @@ def test_query_chunks_with_the_draw_active_equal_the_forward_pass(theta, monkeyp
         assert torch.allclose(p.grad, ref[name], rtol=1e-9, atol=1e-12 * scale), name
 
 
+def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data():
+    """With the boundary points and the global direction requiring gradients, three
+    chunks' backward passes and QueryChunks.backward give both inputs the gradients of
+    one forward pass, to 1e-12 of the largest (float64, another summation order): every
+    tensor the chunks share is a leaf, so no chunk's backward frees another's graph."""
+    m = _model()
+    mesh, drv, q = _case()
+
+    def grads(chunked):
+        pts = mesh.points.detach().clone().requires_grad_()
+        g = drv.detach().clone().requires_grad_()
+        kw = {
+            "boundary_meshes": {
+                "wall": Mesh(points=pts, cells=mesh.cells, cell_data=mesh.cell_data)
+            },
+            "prediction_points": points_mesh(q),
+            "global_data": {"g": g},
+        }
+        if chunked:
+            chunks = m.query_chunks(**kw)
+            for a, b in ((0, 40), (40, 80), (80, chunks.n_points)):
+                out = outputs(chunks(a, b))
+                sum(v.square().sum() for v in out.values()).backward()
+            chunks.backward()
+        else:
+            out = outputs(m(**kw))
+            sum(v.square().sum() for v in out.values()).backward()
+        return pts.grad, g.grad
+
+    for got, ref in zip(grads(chunked=True), grads(chunked=False)):
+        assert got is not None and float(ref.abs().max()) > 0
+        assert torch.allclose(got, ref, rtol=0, atol=1e-12 * float(ref.abs().max()))
+
+
+def test_query_chunks_outputs_differentiate_in_space():
+    """A chunk's outputs stay in the graph of the caller's prediction points: their
+    derivative in the points (as a PDE-residual loss takes it) is that of one forward
+    pass at the same rows, to 1e-12 of the largest (float64), for every chunk."""
+    m = _model()
+    mesh, drv, q = _case()
+    kw = {"boundary_meshes": {"wall": mesh}, "global_data": {"g": drv}}
+
+    def space_grad(out, pts):
+        s = sum(v.square().sum() for v in outputs(out).values())
+        return torch.autograd.grad(s, pts)[0]
+
+    pts = q.detach().clone().requires_grad_()
+    ref = space_grad(m(prediction_points=points_mesh(pts), **kw), pts)
+    pts = q.detach().clone().requires_grad_()
+    chunks = m.query_chunks(prediction_points=points_mesh(pts), **kw)
+    for a, b in ((0, 40), (40, chunks.n_points)):
+        got = space_grad(chunks(a, b), pts)
+        assert (
+            float(got[a:b].abs().max()) > 0 and not got[:a].any() and not got[b:].any()
+        )
+        assert torch.allclose(
+            got[a:b], ref[a:b], rtol=0, atol=1e-12 * float(ref.abs().max())
+        )
+
+
 def test_forward_runs_its_points_in_chunks_of_at_most_query_chunk_pairs(
     monkeypatch, caplog
 ):
@@ -331,26 +387,6 @@ def test_every_rank_and_parity_is_covariant_in_the_interior_task(dim, improper, 
     assert all(base[name].abs().max() > 1e-3 for name in EVERY_RANK)
 
 
-@pytest.mark.parametrize("improper", [False, True], ids=["rotation", "reflection"])
-def test_the_drawn_boundary_moves_with_the_case(improper, monkeypatch):
-    """With the draw subsampling (200 tokens of 600 cells, eval mode, the default
-    theta), rotating or reflecting and translating the case together with its
-    prediction points keeps the same cells drawn (the draw's Morton grid lies in the
-    boundary's canonical frame) and the same predictions, mapped by their ranks, to
-    1e-12 (float64 roundoff of outputs of order one)."""
-    m = _model(n_boundary_tokens=200)
-    seen = _spy(m, monkeypatch)
-    mesh, drv, q = _case(n=600)
-    base = _run(m, mesh, drv, q)
-    R = orthogonal(3, 2, improper)
-    t = torch.tensor([3.0, -7.0, 11.0], dtype=D)
-    out = _run(m, transform(mesh, R, t), drv @ R.T, q @ R.T + t)
-    assert seen["kept"][0].shape[0] == 200
-    assert torch.equal(seen["kept"][1], seen["kept"][0])
-    assert torch.allclose(out["p"], base["p"], atol=1e-12, rtol=0.0)
-    assert torch.allclose(out["v"], base["v"] @ R.T, atol=1e-12, rtol=0.0)
-
-
 def _ellipsoid(perturb=0.0, axes=(2.0, 1.0, 0.5)):
     """An icosphere of 320 cells scaled to the semi-axes ``axes``. At (2, 1, 0.5):
     distinct principal spreads and three mirror planes, so every axis of the
@@ -370,21 +406,16 @@ def _ellipsoid(perturb=0.0, axes=(2.0, 1.0, 0.5)):
 
 @pytest.mark.parametrize("case", ["mirror_planes", "sphere", "perturbed"])
 def test_a_boundary_with_mirror_planes_is_covariant_where_documented(case, monkeypatch):
-    """On an ellipsoid with distinct semi-axes and three mirror planes, and on a
-    sphere, whose spreads are equal too (:func:`_ellipsoid`), the float64 interior
-    model's outputs map by their ranks to 1e-12 (float64 roundoff of outputs of
-    order one) under three random proper
-    rotations and a reflection, each with a translation: (i) with every cell a token
-    and the exact read (``tree_read_theta=0``), where the frame's tie cannot matter;
-    (ii) with the vertices perturbed by up to 5%, so the frame is unique, with 100
-    tokens of the 320 cells and the default theta, the same cells drawn in every
-    pose.
+    """Under three random rotations and a reflection, each with a translation, the
+    float64 interior model's outputs map by their ranks to 1e-12 (roundoff of outputs
+    of order one) on a boundary whose canonical frame ties (an ellipsoid with three
+    mirror planes, or a sphere) when every cell is a token and the read is exact,
+    and on a perturbed ellipsoid, whose frame is unique, with 100 of its 320 cells
+    drawn at the default theta (the same cells in every pose).
 
-    The documented exceptions (module docstring, *Where the covariance is exact*)
-    are the tie with fewer tokens than cells, a finite theta or an open boundary:
-    the drawn cells, the read's clusters and the exact geometry's winding-number
-    tree then follow the lab axes, so the outputs (near a hole, the distance's
-    sign) agree only approximately, and those cases are not asserted."""
+    A tied frame with fewer tokens than cells or a finite theta, and an open
+    boundary, are the documented exceptions (module docstring, *Where the covariance
+    is exact*): there the outputs agree only approximately, and are not asserted."""
     tied = case != "perturbed"
     if case == "mirror_planes":
         m, mesh = _model(theta=0.0), _ellipsoid()
@@ -409,7 +440,7 @@ def test_a_boundary_with_mirror_planes_is_covariant_where_documented(case, monke
 
 
 def _float32_interior_case(device):
-    """A float32 ISLA-DTT model on ``device`` (its read live) and a case of 500 cells
+    """A float32 interior model on ``device`` (its read live) and a case of 500 cells
     with 150 prediction points, as float32 tensors on ``device``."""
     m = _model().float().to(device)
     mesh, drv, q = _case(n=500, nq=150)
@@ -419,46 +450,6 @@ def _float32_interior_case(device):
         cell_data=mesh.cell_data.apply(lambda t: t.float()),
     )
     return m, mesh.to(device), drv.float().to(device), q.float().to(device)
-
-
-@pytest.mark.cuda
-@requires_cuda_triton
-def test_the_interior_model_repeats_bitwise_on_cuda_with_every_cell_kept():
-    """One training step of the interior model on CUDA in float32, every kernel at
-    ``auto`` (the fused geometry region and the fused tree read), from the same seed,
-    three times, with every cell kept (500 cells under the default budget): the
-    outputs and every parameter gradient are bitwise the same. With the draw
-    subsampling, test_isla_determinism.py's
-    test_the_model_repeats_bitwise_on_cuda_with_kernels_auto covers it.
-
-    This pins the run-to-run behaviour on CUDA of the draw's line,
-    which runs over the inclusion probabilities even when every cell is kept."""
-    m, mesh, drv, q = _float32_interior_case("cuda")
-    m.train()
-    assert m._resolve_geo_kernel(q) == "fused"
-    assert m._resolve_tree_read_kernel(q) == "fused"
-    runs = []
-    for _ in range(3):
-        m.zero_grad(set_to_none=True)
-        torch.manual_seed(3)
-        out = outputs(
-            m(
-                boundary_meshes={"wall": mesh},
-                prediction_points=q,
-                global_data={"g": drv},
-            )
-        )
-        sum(o.double().square().mean() for o in out.values()).backward()
-        runs.append(
-            {
-                **{k: v.detach() for k, v in out.items()},
-                **{n: p.grad for n, p in m.named_parameters()},
-            }
-        )
-    for run in runs[1:]:
-        assert run.keys() == runs[0].keys()
-        bad = [k for k in run if not torch.equal(run[k], runs[0][k])]
-        assert not bad, bad
 
 
 @pytest.mark.parametrize(

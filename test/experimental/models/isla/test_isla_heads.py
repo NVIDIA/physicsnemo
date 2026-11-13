@@ -164,14 +164,9 @@ def test_the_true_basis_has_rank_two_without_a_global_direction(monkeypatch):
             assert (dots <= 1e-12 * out["v"].norm(dim=-1) * w.norm(dim=-1)).all()
 
 
-def test_minimal_head_width():
-    """One scalar and one true vector over K = 1: a head of width 1 + 5."""
-    m = _model(1, output_schema={"p": {"rank": 0}, "v": {"rank": 1}})
-    assert m.head.out_features == 6
-
-
 @pytest.mark.parametrize("K", [0, 1, 2])
 def test_output_shapes(K):
+    """Every declared output has its rank's shape and is finite, for K = 0, 1, 2."""
     m = _model(K)
     mesh, drv = _boundary()
     out = _forward(m, mesh, drv, K)
@@ -204,16 +199,9 @@ def test_covariance_of_every_rank_and_parity(K, improper):
             ), (name, K, improper)
 
 
-def test_translation_invariance_alone():
-    m = _model(1)
-    mesh, drv = _boundary()
-    base = _forward(m, mesh, drv, 1)
-    tr = _forward(m, mesh, drv, 1, shift=torch.tensor([3.0, -7.0, 11.0], dtype=D))
-    for k in base:
-        assert torch.allclose(tr[k], base[k], atol=1e-11, rtol=0.0), k
-
-
 def test_symmetric_outputs_are_symmetric():
+    """Symmetric outputs of rank 2, 3 and 4 are invariant under every index
+    permutation tried; the general rank-2 output is not symmetric."""
     m = _model(1)
     mesh, drv = _boundary()
     out = _forward(m, mesh, drv, 1)
@@ -274,6 +262,12 @@ def test_rank_spec_grammar_is_validated():
         ISLA(output_schema={"x": {"rank": 0}}, **{**base, "global_schema": {"g": 1}})
     with pytest.raises(ValueError, match="parity must be"):
         ISLA(output_schema={"x": {"rank": 1, "parity": "mixed"}}, **base)
+    with pytest.raises(
+        NotImplementedError, match="\\['so'\\]: pseudoscalar outputs are not"
+    ):
+        ISLA(
+            output_schema={"s": {"rank": 0}, "so": {"rank": 0, "parity": "odd"}}, **base
+        )
     with pytest.raises(ValueError, match="unknown keys \\['channels'\\]"):
         ISLA(output_schema={"x": {"rank": 0, "channels": 2}}, **base)
     with pytest.raises(
@@ -307,31 +301,9 @@ def test_rank_spec_grammar_is_validated():
     assert m.output_schema["sig"] == RankSpec(rank=2, symmetric=True, parity="even")
 
 
-def test_rank_two_output_in_the_interior_task():
-    """The heads sit on the shared readout, so the interior task carries a rank-2
-    output with the same covariance (rotation and reflection)."""
-    mesh, drv = _boundary(200)
-    q_pts, _, _, _ = cloud(50, seed=1)
-    outputs_ = {
-        "p": {"rank": 0},
-        "v": {"rank": 1},
-        "sig": {"rank": 2, "symmetric": True},
-        "t": {"rank": 2},
-    }
-    m = _model(1, output_schema=outputs_, interior=True)
-    q = points_mesh(q_pts)
-    base = _forward(m, mesh, drv, 1, q=q)
-    assert base["sig"].shape == (50, 3, 3)
-    for improper in (False, True):
-        R = orthogonal(3, 3, improper)
-        out = _forward(m, mesh, drv, 1, R=R, q=q)
-        for name, spec in m.output_schema.items():
-            assert torch.allclose(
-                out[name], _transform(base[name], R, spec), atol=1e-11, rtol=0.0
-            ), (name, improper)
-
-
 def test_all_parameters_receive_gradients():
+    """In the interior task with outputs of every rank, every parameter receives a
+    finite gradient (DDP)."""
     m = _model(1, interior=True).train()
     mesh, drv = _boundary(100)
     out = outputs(

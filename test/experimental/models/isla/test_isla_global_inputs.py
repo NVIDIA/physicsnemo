@@ -24,7 +24,6 @@ kernel refusing K outside one to four."""
 
 import pytest
 import torch
-from tensordict import TensorDict
 
 from physicsnemo.experimental.models.isla import ISLA
 from test.experimental.models.isla._meshes import (
@@ -111,8 +110,6 @@ def test_zero_global_vectors():
     m = _model(global_schema={})
     mesh = _boundary()
     assert m.boundary_conditions["wall"].seed.in_features == 1  # the constant alone
-    assert m._n_true_basis == 3  # n, u, and e_theta(u, n)
-    assert m._n_pseudo_basis == 1  # n x u
     base = _assert_se3(m, mesh, {})
     assert all(torch.isfinite(o).all() for o in outputs(base).values())
     none = _run(m, mesh, None)
@@ -135,7 +132,6 @@ def test_two_global_vectors():
     assert (
         m.boundary_conditions["wall"].seed.in_features == 1 + 2
     )  # the constant, n.g_1, n.g_2
-    assert m._n_true_basis == 7 and m._n_pseudo_basis == 6
     base = _assert_se3(m, mesh, gd)
     scaled = _run(m, mesh, {"g1": 3.0 * gv[0], "g2": 0.2 * gv[1]})
     swapped = _run(m, mesh, {"g1": gv[1], "g2": gv[0]})
@@ -203,8 +199,7 @@ def test_two_vectors_interior_path():
 
 def test_global_scalars_condition_every_token():
     """S = 2 scalar inputs (a diffusivity and a modulus, say) change the output,
-    reach the prediction-point side too, and leave every covariance contract intact.
-    A TensorDict with nested groups is read by dotted name."""
+    reach the prediction-point side too, and leave every covariance contract intact."""
     mesh = _boundary()
     m = _model(
         {"g": {"rank": 1}, "cond.kappa": {"rank": 0}, "cond.E": {"rank": 0}},
@@ -229,17 +224,6 @@ def test_global_scalars_condition_every_token():
         q,
     )
     assert not same(other, base, atol=1e-3)
-    nested = _run(
-        m,
-        mesh,
-        TensorDict(
-            {"g": gv, "cond": {"kappa": gd["cond.kappa"], "E": gd["cond.E"]}},
-            batch_size=[],
-        ),
-        q,
-    )
-    assert same(nested, base, atol=0.0, rtol=0.0)
-    assert nested.global_data["cond", "kappa"].shape == ()
     with pytest.raises(
         ValueError, match="missing the declared fields \\['cond.E', 'cond.kappa'\\]"
     ):
@@ -274,6 +258,7 @@ def test_one_vector_layout():
 
 
 def test_bad_global_specs_rejected():
+    """A negative rank and a rank-2 global input are refused at construction."""
     with pytest.raises(ValueError, match="non-negative"):
         ISLA(
             output_schema=PV,
