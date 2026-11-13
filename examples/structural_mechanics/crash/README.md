@@ -9,7 +9,19 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 
 In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, and FIGConvUNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
-For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201). DeFormer, documented in [its own section](#deformer-recipes-data-preparation-training-and-evaluation), adds local neighbourhood stages around a geometry-aware FLARE backbone and a contact-aware corrector, and predicts every frame of a full-vehicle crash independently from the initial mesh.
+
+### DeFormer: deformation transformer with a contact-aware corrector
+
+DeFormer is one model family of this pipeline: a time-conditional deformation
+transformer with static kNN attention around a GeoTransolver/FLARE
+backbone, followed by a decoupled, contact-aware MeshGraphNet corrector. Its model
+wrappers live in `models/rollout.py` beside the other models, its evaluation metrics in
+`metrics/penetration_metrics.py`, and the full-vehicle Yaris datapipe in `readers/px_yaris_reader.py`,
+`datapipes/px_yaris_dataset.py` and `trainers/px_yaris_trainer.py`; its recipes are `px_yaris_deformer`,
+`px_yaris_deformer_corrector`, `px_yaris_geotransolver` and `biw_yaris_deformer`
+(see [Provided experiments](#provided-experiments)). The [DeFormer section](#deformer-recipes-data-preparation-training-and-evaluation)
+covers the model, data preparation, training, the corrector and evaluation.
 
 ### Body-in-White Crash Modeling
 
@@ -50,6 +62,26 @@ pip install "nvidia-physicsnemo[gnns]"
 # or with uv:
 uv sync --extra gnns
 ```
+
+The Yaris recipes read Zarr stores (`zarr` >= 3, in the `datapipes-extras`
+extra) and build their graphs with `torch_geometric` (the `gnns` extra):
+
+```bash
+pip install "nvidia-physicsnemo[gnns,datapipes-extras]"
+```
+
+The Euclidean kNN neighbourhoods and the one-ring contact exclusions, which the
+Yaris recipes use, also require SciPy (a k-d tree query and a sparse adjacency),
+declared in the existing `nn-extras` optional dependency group; the geodesic
+neighbourhoods are a pure-Python Dijkstra and need no extra. Install that
+extra, or install SciPy directly in an existing graph-model environment:
+
+```bash
+pip install scipy
+```
+
+SciPy is loaded only when those neighbourhoods or exclusions are built; unrelated
+models and contact geometry remain importable without it.
 
 ## Data Preprocessing
 
@@ -146,35 +178,67 @@ This format is directly compatible with the Zarr reader in this recipe.
 Training is managed via Hydra configurations located in `conf/`.
 The main script is `train.py`.
 
+### Code layout
+
+The entry points stay at the top of the example; every other module lives in a
+folder named by its role:
+
+```
+train.py, inference.py           # training and VTP inference of every recipe
+px_yaris_prepare.py              # DeFormer: Yaris statistics and neighbourhood cache
+evaluate_px_yaris.py             # DeFormer: score a Yaris checkpoint
+evaluate_biw.py                  # DeFormer: score a body-in-white checkpoint
+readers/     vtp_reader.py, zarr_reader.py, px_yaris_reader.py
+datapipes/   datapipe.py (SimSample, graph and point-cloud datasets),
+             px_yaris_dataset.py, local_neighborhoods.py (static kNN cache),
+             surface_topology.py (contact facets and exclusions)
+models/      rollout.py: every model wrapper, DeFormer's network and corrector included
+trainers/    px_yaris_trainer.py: the exact held-out validation of the Yaris recipes
+metrics/     losses.py, penetration_metrics.py, validation_suite.py
+utils/       global_features, optimizers, warm_start, distributed, random_state
+conf/        Hydra configs (next section); post_processing/, tests/
+```
+
+Scripts run from this directory (`cd examples/structural_mechanics/crash`), which
+puts the folders on the import path; Hydra targets name modules by dotted path
+(`models.rollout.GeoTransolverOneShot`, `readers.vtp_reader.Reader`).
+
 ### Config Structure
 
 ```
 conf/
 ├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
 ├── bumper_geotransolver_time_conditional.yaml
-├── crash_geotransolver_oneshot.yaml
+├── biw_yaris_geotransolver_oneshot.yaml
 ├── bumper_geoflare_oneshot.yaml
-├── crash_geoflare_oneshot.yaml
+├── biw_yaris_geoflare_oneshot.yaml
+├── biw_yaris_deformer.yaml                # DeFormer network, body-in-white Yaris data
+├── px_yaris_deformer.yaml                 # DeFormer network, full-vehicle Yaris mesh
+├── px_yaris_deformer_corrector.yaml       # DeFormer corrector on the frozen network
+├── px_yaris_geotransolver.yaml            # GeoTransolver baseline under the same protocol
 ├── datapipe/                              # dataset configs (generic defaults)
 │   ├── graph.yaml
-│   └── point_cloud.yaml
+│   ├── point_cloud.yaml
+│   └── px_yaris_full.yaml
 ├── model/                                 # model configs
+│   ├── deformer_time_conditional.yaml
+│   ├── deformer_corrector.yaml
 │   ├── geotransolver_one_shot.yaml
 │   ├── geotransolver_autoregressive_rollout_training.yaml
 │   ├── geotransolver_one_step_rollout.yaml
 │   ├── geotransolver_time_conditional.yaml
 │   ├── transolver_one_shot.yaml
 │   ├── figconvunet_one_shot.yaml
-│   ├── mgn_one_shot.yaml
-│   └── ...
+│   └── mgn_one_shot.yaml
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
+│   ├── px_yaris_full.yaml
 │   └── zarr.yaml
 ├── training/default.yaml                  # generic training hyperparameters
 └── inference/default.yaml                 # generic inference options
 ```
 
-Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file.
+Each experiment config is self-contained with its own defaults for reader, datapipe, model, training, and inference. All experiment-specific settings (data paths, dataset sizes, feature lists) are defined directly in the experiment config file; `px_yaris_deformer_corrector` and `px_yaris_geotransolver` inherit `px_yaris_deformer` and override its model group. See [configuration layout](conf/README.md) for every key.
 
 ### Launch Training
 
@@ -211,78 +275,72 @@ torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotranso
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
 Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be opened using ParaView.
 
-## Guardrails (OOD detection)
+## Guardrails (OOD Detection)
 
-An optional out-of-distribution (OOD) guardrail calibrates during training and
-emits warnings at inference when inputs drift outside the training distribution.
-It watches two surfaces:
-
-- **Global parameters** — per-channel bounding box on the global embedding
-  (e.g. `velocity_x`, `thickness_scale`).
-- **Geometry** — k-nearest-neighbour distance on a pooled geometry latent.
-
-To enable the guard, wrap a constructed `GeoTransolver` with
-`GuardedGeoTransolver` (from `physicsnemo.experimental.guardrails.embedded`).
-The wrapper observes the two surfaces above through a forward hook and delegates the
-forward pass unchanged:
+Use the trained model's optional geometry-feature output with the reusable
+`KNNScorer`. Feature collection, threshold selection, and the response to a score
+remain explicit recipe steps. They do not depend on `model.train()` toggling
+reference collection.
 
 ```python
-from physicsnemo.experimental.guardrails.embedded import (
-    GuardedGeoTransolver,
-    OODGuardConfig,
-)
+import logging
+import torch
+from physicsnemo.experimental.uq.ood import KNNScorer
 
-model = instantiate(cfg.model)  # your GeoTransolver (or rollout subclass)
-model = GuardedGeoTransolver(
-    model,
-    OODGuardConfig(
-        buffer_size=121,  # FIFO buffer; typically = num_training_samples
-        knn_k=10,  # k for geometry kNN distance
-        sensitivity=1.5,  # threshold multiplier on 99th-percentile kNN dist
-    ),
+# model is a trained GeoTransolverOneShot; batches contain SimSample objects.
+model.eval()
+
+
+@torch.no_grad()
+def predict_with_features(sample):
+    prediction, tokens = model.forward_with_geometry_features(sample, data_stats)
+    return prediction, tokens.mean(dim=(1, 2))  # [batch, head_dim]
+
+
+reference = torch.cat(
+    [predict_with_features(inputs)[1] for inputs in reference_batches]
 )
+scorer = KNNScorer(k=10, normalize=True)
+scorer.fit(reference)
+threshold = torch.quantile(scorer.reference_scores(), 0.99) * 1.5
+
+prediction, features = predict_with_features(test_inputs)
+flagged = scorer.score(features) > threshold
+if flagged.any():
+    logging.warning("Geometry features exceed the selected OOD threshold")
 ```
 
-Call `model.train()` / `model.eval()` as usual; the wrapper collects during
-training and checks during inference.
+`GeoTransolverOneShot` in `rollout.py` exposes the separate
+`forward_with_geometry_features` method, returning the normal prediction plus
+detached geometry tokens. Direct calls bypass model-level forward hooks.
+Ordinary `model(...)` calls preserve those hooks and return predictions only.
+Other rollout classes can adopt the separate method.
 
-What each parameter controls:
+These are the same geometry tokens previously captured by the guard's hook.
+pooling is visible in the recipe. Prediction and scoring share one forward pass.
+Reference features can also be retained from existing evaluation forwards.
+`reference_scores()` excludes each reference row from its own neighbors, so this
+example retains the old leave-one-out threshold and sensitivity multiplier
+without reserving more training samples. Alternatively, select a threshold from
+independent validation scores. Neither empirical rule guarantees a false-positive
+rate.  Evaluate the chosen policy on held-out cases.
 
-- **`buffer_size`** — Capacity of the FIFO ring buffer that stores pooled
-  geometry latents during training; the kNN threshold is computed over its
-  contents. Set it to at least the training-set size so calibration sees every
-  sample. Under DDP each rank keeps its own buffer and the distributed sampler
-  shuffles, so after a few epochs each rank's FIFO covers most of the data.
-  Memory cost is `buffer_size × head_dim × 4` bytes — typically well under 1 MB.
-- **`knn_k`** — Number of nearest neighbours used in the kNN distance. Smaller
-  `k` is more sensitive to isolated training-set outliers; larger `k` is
-  smoother but can blur multi-modal cluster boundaries. The default of `10`
-  works for buffer sizes from ~100 up to several thousand.
-- **`sensitivity`** — Multiplier on the 99th-percentile training kNN distance
-  used as the OOD threshold. **Higher = less sensitive** (fewer warnings).
-  Raise it if known in-distribution validation data triggers warnings; lower
-  it if known-OOD inputs are being missed.
+Global parameter bounds remain ordinary input checks. For example, compare each
+velocity/thickness parameter with minima and maxima from the reference inputs,
+then let the application warn, reject, or choose a fallback. Keep the parameters'
+units and preprocessing consistent.
 
-Recommended starting points by training-set size:
-
-| Training samples | `buffer_size`           | `knn_k` | `sensitivity` |
-|------------------|-------------------------|---------|---------------|
-| ~100             | 100–200                 | 5–10    | 1.5           |
-| ~500             | 500–1000                | 10      | 1.5           |
-| 5000+            | = dataset size          | 10–15   | 1.5           |
-
-If validation data trips warnings, raise `sensitivity` toward 2.0–3.0; if
-known-OOD inputs slip through, lower it toward 1.0.
-
-Once the model is wrapped, no further changes are required: during training the
-guard silently collects calibration statistics, and during inference it emits
-warnings of the form `OOD Guard: geometry sample ...` or
-`OOD Guard: global_embedding dim ...` to the Python logger whenever a sample
-falls outside the calibrated training envelope.  Warnings do not halt inference.
+Save the scorer's `state_dict()`, threshold, and feature metadata together.
+Before reuse, check checkpoint identity, pooling (`mean` over heads and slices),
+normalization, units, and preprocessing. A matching feature dimension does not
+establish a matching representation. Refer to
+[`examples/minimal/uq`](../../minimal/uq/README.md) for runnable scoring and
+persistence examples. A novelty score is an input to an application decision.
+it does not certify prediction accuracy.
 
 ## Experiments
 
-Each experiment is a self-contained YAML file in `conf/`. Each config file includes all defaults and experiment-specific settings.
+Each experiment is a YAML file in `conf/` that selects the shared component defaults and holds its own settings; the two PX (PhysicsX) Yaris recipes derived from `px_yaris_deformer` inherit it rather than copying it.
 
 ### Anatomy of an experiment config
 
@@ -344,9 +402,13 @@ datapipe:
 |------|---------|-------|----------------|
 | `bumper_geotransolver_oneshot.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=bumper_geotransolver_oneshot` |
 | `bumper_geotransolver_time_conditional.yaml` | Bumper beam (VTP) | GeoTransolver time-conditional | `python train.py --config-name=bumper_geotransolver_time_conditional` |
-| `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
+| `biw_yaris_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=biw_yaris_geotransolver_oneshot` |
 | `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
-| `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
+| `biw_yaris_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=biw_yaris_geoflare_oneshot` |
+| `biw_yaris_deformer.yaml` | Car body-in-white crash (VTP) | DeFormer network, time-conditional | `python train.py --config-name=biw_yaris_deformer` |
+| `px_yaris_deformer.yaml` | Yaris full mesh (Zarr) | DeFormer network | `torchrun --nproc_per_node=<N> train.py --config-name=px_yaris_deformer yaris.data_root=...` |
+| `px_yaris_deformer_corrector.yaml` | Yaris full mesh (Zarr) | DeFormer corrector on the frozen network | `torchrun --nproc_per_node=<N> train.py --config-name=px_yaris_deformer_corrector yaris.data_root=... model.teacher_weights=...` |
+| `px_yaris_geotransolver.yaml` | Yaris full mesh (Zarr) | GeoTransolver time-conditional baseline | `torchrun --nproc_per_node=<N> train.py --config-name=px_yaris_geotransolver yaris.data_root=...` |
 
 ### Choosing a time scheme
 
@@ -366,7 +428,7 @@ Two additional schemes are available in the rollout (`geotransolver_autoregressi
 1. Create `conf/<my_experiment>.yaml` following the template above.
 2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
 3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
-4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot, `one_time_step` for time-conditional.
+4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot or autoregressive rollout, `one_time_step` for time-conditional.
 5. If using global features, set `global_features_filepath`; otherwise use `null`.
 6. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
 7. Run: `python train.py --config-name=<my_experiment>`
@@ -447,13 +509,16 @@ To disable global features entirely, omit `global_features_filepath` (or leave i
 
 #### How the datapipe and model consume global features
 
-At `__getitem__` time, the datapipe converts the selected scalars to a dict of scalar tensors and attaches them to the `SimSample`:
+Training computes mean and standard deviation from the training split and saves them
+with the other dataset statistics. Validation, test, and inference reuse those values
+without recomputing them. At `__getitem__` time, the datapipe standardizes each
+selected scalar and attaches it to the `SimSample`:
 
 ```python
 sample.global_features = {
-    "velocity_x": tensor(-5.0),
-    "thickness_scale": tensor(1.0),
-    "rwall_origin_y": tensor(0.0),
+    "velocity_x": tensor(z_velocity_x),
+    "thickness_scale": tensor(z_thickness_scale),
+    "rwall_origin_y": tensor(z_rwall_origin_y),
 }
 ```
 
@@ -464,7 +529,9 @@ In the model forward pass, these are stacked into a single global embedding vect
 global_dim: 3   # must match len(datapipe.global_features)
 ```
 
-If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShot` uses global features; other models ignore them).
+If `global_features` is `null`, `sample.global_features` is `None` and the selected
+model must support unconditioned execution; GeoTransolver and DeFormer consume
+the global token directly.
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
@@ -472,7 +539,7 @@ The reader opens preprocessed simulation data and produces the arrays the datapi
 
 ### Built‑in VTP reader (PolyData)
 
-A lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
+A lightweight VTP reader is provided in `readers/vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
 
 - loads the reference coordinates from `poly.points`
 - builds absolute positions per timestep as `[t0: coords, t>0: coords + displacement_t]`
@@ -486,7 +553,7 @@ Example Hydra configuration for the VTP reader:
 
 ```yaml
 # conf/reader/vtp.yaml
-_target_: vtp_reader.Reader
+_target_: readers.vtp_reader.Reader
 ```
 
 Select it in your experiment config defaults:
@@ -512,7 +579,7 @@ datapipe:
 
 ### Built‑in Zarr reader
 
-A Zarr reader provided in `zarr_reader.py`. It reads pre-processed Zarr stores created by PhysicsNeMo-Curator, where all heavy computation (node filtering, edge building, thickness computation) has already been done during the ETL pipeline. The reader:
+A Zarr reader provided in `readers/zarr_reader.py`. It reads pre-processed Zarr stores created by PhysicsNeMo-Curator, where all heavy computation (node filtering, edge building, thickness computation) has already been done during the ETL pipeline. The reader:
 
 - loads pre-computed temporal positions directly from `mesh_pos` (no displacement reconstruction)
 - loads pre-computed edges (no connectivity-to-edge conversion needed)
@@ -530,7 +597,7 @@ Example Hydra configuration for the Zarr reader:
 
 ```yaml
 # conf/reader/zarr.yaml
-_target_: zarr_reader.Reader
+_target_: readers.zarr_reader.Reader
 ```
 
 Select it in your experiment config defaults:
@@ -556,11 +623,11 @@ datapipe:
 
 ### Data layout expected by readers
 
-- VTP reader (`vtp_reader.py`):
+- VTP reader (`readers/vtp_reader.py`):
   - `<DATA_DIR>/*.vtp` (each `.vtp` is treated as one run)
   - Displacements stored as 3‑component arrays in point_data with names like `displacement_t0.000`, `displacement_t0.005`, ... (fallback accepts any `displacement_t*`).
 
-- Zarr reader (`zarr_reader.py`):
+- Zarr reader (`readers/zarr_reader.py`):
   - `<DATA_DIR>/*.zarr/` (each `.zarr` directory is treated as one run)
   - Contains pre-computed `mesh_pos`, `edges`, and feature arrays
 
@@ -568,11 +635,12 @@ datapipe:
 
 To write your own reader, implement a Hydra‑instantiable function or class whose call returns a three‑tuple `(srcs, dsts, point_data)`. The first two entries are lists of integer arrays describing edges per run (they can be empty lists if you are not producing a graph), and `point_data` is a list of Python dicts with one dict per run. Each dict must contain `'coords'` as a `[T, N, 3]` array and one array per feature name listed in `conf/datapipe/*.yaml` under `features`. Feature arrays can be `[N]` or `[N, K]` and should use the same node indexing as `'coords'`. For convenience, a simple class reader can accept the Hydra `split` argument (e.g., "train" or "test") and decide whether to save VTP frames, but this is optional.
 
-As a starting point, your YAML can point to a class by dotted path:
+As a starting point, save the class under `readers/` (for example
+`readers/my_reader.py`) and point your YAML to it by dotted path:
 
 ```yaml
 # conf/reader/my_reader.yaml
-_target_: my_reader.MyReader
+_target_: readers.my_reader.MyReader
 # any constructor kwargs here, e.g. thresholds or unit conversions
 ```
 
@@ -647,6 +715,272 @@ python postprocessing/plot_cross_section.py \
 
 run_post_processing.sh can automate all evaluation tasks across runs.
 
+## DeFormer: recipes, data preparation, training and evaluation
+This section documents the DeFormer model family of this example; the pipeline
+it runs on (readers, datapipes, trainer, inference) is described in the sections
+above. Commands below run from the example directory,
+`examples/structural_mechanics/crash`.
+
+**DeFormer** is the crash surrogate of this example: a time-conditional
+deformation transformer (the *network*) followed by a decoupled, contact-aware
+MeshGraphNet *corrector*. Given the undeformed mesh, the shell thickness and a
+query time, it predicts the deformed shape of a full vehicle at that time; every
+frame of a crash is predicted independently from the initial mesh, so there is
+no error accumulation and the frames can be computed in parallel. On the
+full-resolution Toyota Yaris frontal-impact dataset (99 thickness-variation
+designs, 1.48M nodes per design, 5 ms frames) the network reaches a pooled
+validation RMSE of 7.6 mm against 10.1 mm for a GeoTransolver baseline of the
+same width and depth, and the corrector lowers it to 7.5 mm while cutting the
+spurious shell crossings about sevenfold within the metric's 5 mm search band
+(about fivefold when crossings up to 15 mm deep are swept as well, see
+[Evaluate](#evaluate)). The paper, "DeFormer: Deformation
+Transformers with Contact-Aware Local Corrections for Full-Vehicle Crash
+Simulation", is in preparation; a link will follow.
+
+The network (`models.rollout.DeFormerTimeConditional`,
+`conf/model/deformer_time_conditional.yaml`):
+
+* a GeoTransolver/FLARE global stage (`attention_type: GALE_FA`, 6 blocks,
+  width 256, 128 slices) made time-conditional with a learned Fourier time code
+  (8 bands, 32 channels) that enters every node's input and the global token;
+* local stages of static kNN attention over the undeformed mesh
+  (k = 32 Euclidean neighbours, the fused Triton kernel of
+  `physicsnemo.experimental.models.deformer`): a pre-processor before the
+  backbone and a two-stage decoder after it, where stage A emits a provisional
+  shape through a zero-initialised head and stage B, an independent copy of
+  stage A, adds a gated correction;
+* a physical-space MSE loss (position error in millimetres over one 10 mm
+  scale for all three axes) plus 0.1 times the same loss on the provisional
+  shape; Muon/AdamW, cosine schedule, 60 epochs, bf16 autocast, activation
+  checkpointing of the FLARE blocks and the geometry context so a 1.48M-node
+  forward fits one GPU.
+  9,672,505 parameters.
+
+The corrector (`models.rollout.ResidualTimeConditional` around
+`physicsnemo.experimental.models.deformer.DeFormerCorrector`,
+`conf/model/deformer_corrector.yaml`):
+
+* the frozen network is recomputed on the fly (no prediction files); the
+  corrector reads its predicted shape through message passing on the shell
+  mesh edges (reference geometry, predicted geometry and their difference per
+  edge) and on *contact edges* discovered on the predicted shape by the
+  crossing-aware node-to-facet search of
+  `physicsnemo.experimental.nn.shell_contact` (5 mm band, 10 mm reference
+  clearance so that assembled flanges do not count as contact, both message
+  directions);
+* 8 layers of width 128, zero-initialised decoder (epoch 0 reproduces the
+  network), 30 epochs with a one-epoch learning-rate warm-up. 1,250,659
+  parameters;
+* at evaluation the corrected positions are clamped at the rigid wall plane
+  (`model.final_clamp_to_wall`, `datapipe.rigid_wall_position: 100`), which
+  removes the remaining wall crossings at unchanged RMSE.
+
+The library pieces DeFormer relies on are PhysicsNeMo's: the fused kNN
+attention kernel, activation checkpointing of the FLARE blocks, `physicsnemo.Module`
+serialization (`.mdlus` checkpoints) and the Warp contact-search kernels behind
+the `shell_contact` functional.
+
+### Recipes
+
+| Recipe | Model | Purpose |
+| --- | --- | --- |
+| `px_yaris_deformer` | network | the DeFormer network on the Yaris mesh (60 epochs) |
+| `px_yaris_deformer_corrector` | network + corrector | the contact-aware corrector on the frozen network (30 epochs) |
+| `px_yaris_geotransolver` | GeoTransolver (FLARE variant) | the point-model baseline under the identical protocol |
+| `biw_yaris_deformer` | network | the same network on the body-in-white VTP data (26 frames, 100 epochs) |
+
+Recipe names start with their dataset: `px_yaris_*` is the full-vehicle
+Toyota Yaris dataset produced by PhysicsX (PX; Zarr stores) and `biw_yaris_*`
+the body-in-white Yaris VTP data. The three PX Yaris recipes share one data recipe
+(`conf/reader/px_yaris_full.yaml`, `conf/datapipe/px_yaris_full.yaml`) and
+differ only in the model group and the corrector's additions; `conf/README.md`
+lists every key.
+
+### Data preparation
+
+The Yaris recipes read one Zarr store per design with a shared reference mesh:
+`nodes/pos` (`[T, N, 3]` positions in mm at 1 ms), `nodes/thickness` (`[N]`),
+`edges` (`[E, 2]` shell edges), `shell/connectivity` (`[S, 4]` quads,
+triangles with the last id repeated), optionally `solid/connectivity`
+(`[H, 8]` hexahedra) and optionally `nodes/part_id` (`[N]`, copied into the
+node metadata written with the node-error maps). The stores, the split manifest
+and the outlier mask below were produced and delivered in this layout by
+PhysicsX, the dataset's owner; this example ships no converter for them. The
+dataset is not public at the time of writing, and the checkpoints trained on
+it are not distributed, so the recipes document the protocol and the numbers
+rather than a download. The layout is not the one PhysicsNeMo-Curator's crash ETL writes
+(`mesh_pos`, `thickness`, `edges`, read by `readers/zarr_reader.py` for the VTP-derived
+recipes; see [Data Preprocessing](#data-preprocessing)); a store in another
+layout is rejected with a message naming the missing arrays. Two more files are
+needed:
+
+* `splits.csv` with columns `split,sample_name` (`train`, `validation`, `test`)
+  naming the stores: the dataset creator's split is the authority, and a case
+  that must be left out is omitted from this file rather than special-cased in
+  code;
+* `outlier_nodes.npz` with a boolean `exclude` array over the nodes: rigid-wall
+  nodes and fly-away nodes that are dropped from inputs, targets and
+  neighbourhoods (pass `yaris.outlier_mask=null` to keep every node).
+
+Every PX Yaris recipe takes the same four paths: `yaris.data_root` (the stores),
+`yaris.split_manifest`, `yaris.outlier_mask` and `yaris.work_dir` (statistics,
+neighbourhood caches, checkpoints and validation records of the run). Give
+`yaris.work_dir` as an absolute path: Hydra changes into it, and a relative
+path would be resolved again for the statistics, checkpoint and TensorBoard
+directories and nest the outputs under themselves (the trainer rejects it). Prepare
+the frozen normalization statistics and the kNN neighbourhood cache once, on a
+CPU node (minutes for 1.48M nodes):
+
+```bash
+cd examples/structural_mechanics/crash
+python px_yaris_prepare.py --config-name px_yaris_deformer \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/network
+```
+
+The statistics carry an identity (split manifest, outlier mask, kept node
+count, stride, dt); a changed mask or split invalidates them. The corrector
+and the baseline can point `yaris.work_dir` at their own directories and reuse
+the network's statistics by copying `stats/` or by overriding
+`datapipe.stats_dir`. `px_yaris_prepare.py` reads the environment variable
+`YARIS_STATS_WORKERS` (default 8) for its parallel statistics workers. The
+prepare step may be skipped: rank 0 then computes the statistics serially when
+training starts while the other ranks wait, bounded by
+`training.data_startup_timeout_seconds` (one hour by default).
+
+### Train the network
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name px_yaris_deformer \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/network
+```
+
+The reference run used 16 GPUs for 60 epochs (about 6.6 h on GB300s). Pair
+seeds with `training.seed=43 training.sampler_seed=1`. Checkpoints land in
+`<work_dir>/checkpoints/` as `DeFormerTimeConditional.0.<epoch>.mdlus`
+plus the optimizer state; the exact held-out validation (every validation
+design once, pooled over its own horizon) writes `<work_dir>/validation/epoch_<EEEE>.json`
+(zero-padded, e.g. `epoch_0060.json`) every `training.validation_freq` epochs.
+Re-running the same command resumes from `<work_dir>/checkpoints` with the
+optimizer and RNG states; after a change of the GPU count pass
+`training.restore_rng=false`. The reference runs are the only measured
+configuration (16 GB300 GPUs with activation checkpointing on); the per-GPU
+memory of the 1.48M-node forward on smaller cards has not been measured, and
+the exact validation additionally holds about three float64 `[N, T, 3]`
+tensors of metric overhead (about 1.1 GB each; about 4.4 with the node-error
+maps and regions on) on every device.
+
+At full-vehicle scale the three kNN-attention processors dominate the
+activation memory: with the recipe widths under bf16 each one-layer processor
+would hold about 20 GB of activations after the forward pass without
+checkpointing, about 60 GB for the three. The recipe runs every local
+processor as one checkpoint segment (`num_pre_processor_checkpoint_segments`,
+`num_post_processor_checkpoint_segments`), and the edge encoders are
+recomputed inside the segments, so the held activation memory stays at a few
+gigabytes and the peak near 50 GB; without the segments the time-conditional
+recipe does not fit an 80 GB card.
+
+### Train the corrector
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py \
+  --config-name px_yaris_deformer_corrector \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/corrector \
+  datapipe.stats_dir=/runs/network/stats \
+  model.teacher_weights=/runs/network/checkpoints/DeFormerTimeConditional.0.60.mdlus
+```
+
+The recipe turns on the contact topology (`datapipe.contact_surface`), the mesh
+edges (`datapipe.mesh_edges`), the rigid wall (`datapipe.rigid_wall_position`)
+and the evaluation-time wall clamp.
+
+### Evaluate
+
+`evaluate_px_yaris.py` scores a checkpoint with the full validation suite
+without touching the run's own records: pooled and per-frame vector RMSE in
+millimetres, per-case and per-region breakdowns, the target-relative
+penetration statistics of the shell surface and the rigid wall (only
+penetration the ground truth does not have counts against a model) and,
+optionally, node-error maps:
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> evaluate_px_yaris.py \
+  --config-name px_yaris_deformer_corrector \
+  yaris.data_root=/data/yaris_zarr yaris.split_manifest=/data/splits.csv \
+  yaris.outlier_mask=/data/outlier_nodes.npz yaris.work_dir=/runs/corrector \
+  datapipe.stats_dir=/runs/network/stats \
+  model.teacher_weights=/runs/network/checkpoints/DeFormerTimeConditional.0.60.mdlus \
+  training.ckpt_path=/runs/corrector/checkpoints training.load_epoch=30 \
+  training.validation_output_dir=/runs/eval/corrector \
+  hydra.run.dir=/runs/eval/corrector/hydra \
+  training.validation_node_errors=true
+```
+
+Only the requested split (`training.evaluation_split`, `validation` by default
+or `test`) is built, in load mode: the frozen statistics, the kNN statistics and
+the neighbourhood cache are read from `datapipe.stats_dir` and never recomputed
+or written, and no training dataset, optimizer or TensorBoard writer is created.
+`hydra.run.dir` must lie inside the output directory, since the recipe's own run
+directory is the training run. The suite is one implementation
+(`metrics/validation_suite.py`) shared by the Yaris trainer's validation epochs and both
+evaluators.
+
+For the network or the baseline use their recipe with `datapipe.contact_surface=true`
+(the penetration metrics need the shell facets; the models ignore them) and
+`training.validation_penetration.wall_position_mm=100` for the wall family.
+The record is `<validation_output_dir>/epoch_<EEEE>.json` (zero-padded). The
+penetration metrics are the script's purpose: a failure of the probe on any
+rank (pair budget, out of memory, a non-finite frame) leaves `null` values and
+the ranks' `failure_reasons` in the record's `penetration` block, and the
+script then exits with an error.
+
+The surface crossing depth has a detection ceiling. A node is paired with a
+facet only while its unsigned distance to it lies inside the 5 mm band, so a
+node that has travelled further through a shell than the band plus the half
+thicknesses of the pair (about 6 mm with 1 mm shells) has no pair and reads as
+clean; a part pushed deep through another is under-counted. The record states
+the ceiling next to the crossing numbers (`crossing_depth_ceiling_mm`, computed
+with the mean thickness of the validated designs). The opt-in key
+`training.validation_penetration.crossing_radius_mm=<mm>` turns on the crossing
+sweep of the search, which keeps candidates beyond the band up to that radius
+when the side test certifies a crossing and lifts the ceiling accordingly, at
+a multiple of the search cost (the Yaris suite took about twice as long with a
+15 mm radius). Measured on the 20 validation designs with that radius
+(ceiling 16.4 mm instead of 6.4 mm), the spurious shell crossings of the network
+rise from 61,930 to 75,342 node-frames and those of the corrector from 9,091 to
+15,111: 18 % of the network's and 40 % of the corrector's spurious crossings lie
+below the band's ceiling, so the corrector's reduction is about fivefold with
+the sweep and about sevenfold within the band. The reference solution's own
+crossed pairs rise from 78,371 to 109,870 in the same way.
+
+A model-only checkpoint, the `.mdlus` file without the `checkpoint.0.<E>.pt`
+training state (the form in which trained weights are distributed), is scored
+with `training.warm_start_model=<file>.mdlus`; `training.ckpt_path` may then
+point at an empty directory. The corrector's `.mdlus` can also be loaded
+directly with
+`physicsnemo.Module.from_checkpoint(path, override_args={"teacher_weights": "<network .mdlus>"})`;
+without the override it looks for the network's `.mdlus` under the file name
+recorded in the checkpoint (the delivered corrector records
+`DeFormerTimeConditional.0.60.mdlus`, resolved from the working directory).
+
+### The network on the body-in-white data
+
+`biw_yaris_deformer` trains the same network on the
+body-in-white VTP data (26 frames, 127 training and 8 validation cases) with
+geodesic neighbourhoods on the structural edges and without activation
+checkpointing; the recipe is self-contained and needs only the two data paths:
+
+```bash
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name biw_yaris_deformer \
+  training.raw_data_dir=/data/crash/train training.raw_data_dir_validation=/data/crash/validation
+```
+
+`evaluate_biw.py` scores a body-in-white checkpoint with the PX Yaris
+validation suite; the command in its docstring turns on the shell facets and
+the one-ring exclusions that the penetration metrics need.
+
 ## Development tips
 
 ### Dynamics prediction
@@ -707,7 +1041,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 
 ## TODO
 
-- [ ] **Normalize global features**: Global features (e.g., velocity_x, thickness_scale, rwall_origin_y) are currently passed to the model without normalization. Add support for computing and applying per-feature mean/std (or similar) so global inputs are normalized consistently with node features and positions.
+- [x] **Normalize global features**: Training-only mean/std statistics are saved and reused for validation, test, inference, and physical-value reconstruction during autoregressive rollout.
 - [ ] **Normalize dynamic targets**: Dynamic targets (e.g., effective_plastic_strain, stress_vm) are currently passed in the target `y` without normalization, while positions are normalized. Add per-target mean/std and denormalize at inference when exporting to VTP.
 - [ ] **Support batch_size > 1**: The pipeline currently uses `batch_size=1` due to variable node counts per sample. Add padding or batching logic to enable larger batch sizes for improved throughput.
 
@@ -728,6 +1062,7 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 ## References
 
 - [Automotive Crash Dynamics Modeling Accelerated with Machine Learning](https://arxiv.org/pdf/2510.15201)
-- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)]
+- [Crash Assessment via Mesh-Based Graph Neural Networks and Physics-Aware Attention](https://arxiv.org/pdf/2605.11784)
+- [GeoTransolver: Learning Physics on Irregular Domains Using Multi-scale Geometry Aware Physics Attention Transformer](https://arxiv.org/pdf/2512.20399)
 - [Transolver: A Fast Transformer Solver for PDEs on General Geometries](https://arxiv.org/pdf/2402.02366)
 - [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/pdf/2010.03409)
