@@ -187,6 +187,14 @@ def _share_normalizer_constants(
     return OmegaConf.merge(t_cfg, {"fields": {f: own[n] for f, n in names.items()}})
 
 
+def _validation_dataset_config(dataset_cfg: DictConfig) -> DictConfig:
+    """Apply validation reader settings after shared recipe overrides."""
+    reader_overrides = dataset_cfg.get("validation_reader_overrides", None)
+    if not reader_overrides:
+        return dataset_cfg
+    return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
+
+
 ### Transform-config kwargs whose values are file paths and should be
 ### resolved against the recipe root before Hydra instantiates the
 ### transform. Add new entries here when introducing transforms with
@@ -778,14 +786,23 @@ def _build_manifest_val_dataset(
     dataset built with ``augment=False`` over the same ``train_datadir``.
     Its reader globs the same sorted paths, so manifest indices resolved
     against the train reader address the same samples here. When *augment*
-    is ``False`` the train and val transform chains are identical, so this
-    returns ``None`` and the caller lets validation share the train dataset
-    (avoiding a redundant second reader).
+    is ``False`` and neither validation option below is set, the train and
+    val transform chains are identical, so this returns ``None`` and the caller
+    lets validation share the train dataset (avoiding a redundant second reader).
+
+    ``independent_validation`` or ``validation_reader_overrides`` also requests
+    a separate reader, isolating sampling state and applying validation settings.
     """
-    if not augment:
+    # Stochastic anchor readers require separate epoch state even without
+    # augmentation; their validation reader stays at epoch zero.
+    if (
+        not augment
+        and not ds_yaml.get("independent_validation", False)
+        and not ds_yaml.get("validation_reader_overrides", None)
+    ):
         return None
     return build_dataset(
-        ds_yaml,
+        _validation_dataset_config(ds_yaml),
         augment=False,
         device=device,
         num_workers=num_workers,
@@ -954,7 +971,8 @@ def build_dataloaders(
     indices. Augmentations are training-only: when ``cfg.augment`` is set,
     validation uses a separate un-augmented dataset over the same
     directory (mirroring directory mode); otherwise it shares the train
-    dataset.
+    dataset, unless ``independent_validation`` or ``validation_reader_overrides``
+    is set.
 
     Multiple datasets may use either split strategy. Each dataset's local
     train and validation indices are shifted by its cumulative offset in
@@ -1139,9 +1157,9 @@ def build_dataloaders(
 
             ### Augmentations are training-only: when enabled, give
             ### validation its own un-augmented dataset over the same
-            ### directory so eval is never augmented. Otherwise this entry
-            ### shares its training dataset, preserving the same local index
-            ### space without constructing another reader.
+            ### directory so eval is never augmented. Otherwise, unless validation
+            ### options are set, this entry shares its training dataset, preserving
+            ### the same local index space without constructing another reader.
             manifest_val_dataset = _build_manifest_val_dataset(
                 ds_yaml,
                 augment=augment,
@@ -1165,10 +1183,17 @@ def build_dataloaders(
         combined_train_indices.extend(range(train_offset, train_offset + len(dataset)))
         train_offset += len(dataset)
         val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
+        val_yaml = None
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
+        elif ds_yaml.get("independent_validation", False) or ds_yaml.get(
+            "validation_reader_overrides", None
+        ):
+            # Keep validation sampling fixed even when the fallback uses train cases.
+            val_yaml = ds_yaml
+        if val_yaml is not None:
             val_dataset = build_dataset(
-                val_yaml,
+                _validation_dataset_config(val_yaml),
                 augment=False,
                 device=device,
                 num_workers=num_workers,

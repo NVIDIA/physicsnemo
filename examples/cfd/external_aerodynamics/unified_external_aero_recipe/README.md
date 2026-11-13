@@ -18,6 +18,7 @@ Here, you're able to train (and run inference with) the following models:
 - [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
 - ISLA (Invariant Slice Attention, experimental; see [ISLA](#isla))
+- [AB-UPT](https://arxiv.org/abs/2502.09692v4) (experimental; surface, volume, or joint)
 
 We currently support the following datasets:
 - DrivaerML
@@ -66,7 +67,7 @@ python src/infer.py model=geotransolver_surface dataset=highlift_surface \
 ```
 
 For the canonical CLI invocations of every named recipe (FA variants,
-SMART, GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
+SMART, AB-UPT, GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
 [Recipe Gallery](#recipe-gallery) section below.
 
 ## Pipeline architecture
@@ -305,8 +306,8 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume,volume_joint}`, `domino_{surface,volume}` |
-| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume,volume_joint}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
+| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface`, `drivaer_ml_{surface,volume,joint}_point_sets` |
 
 Pick one of each on the CLI:
 
@@ -525,6 +526,7 @@ unified_external_aero_recipe/
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
       flare_{surface,volume}.yaml
+      ab_upt_{surface,volume,joint}.yaml
       smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
       domino_{surface,volume}.yaml
@@ -532,6 +534,7 @@ unified_external_aero_recipe/
                                #  by load_dataset_config, NOT by Hydra)
     dataset_paths.yaml         # local disk paths (edit me)
     drivaer_ml_{surface,volume}.yaml
+    drivaer_ml_{surface,volume,joint}_point_sets.yaml
     highlift_{surface,volume}.yaml
     shift_suv_{estate,fastback}_surface.yaml
   src/
@@ -697,6 +700,11 @@ python src/train.py model=flare_volume dataset=drivaer_ml_volume \
 python src/train.py model=smart_surface dataset=drivaer_ml_surface
 python src/train.py model=smart_volume dataset=drivaer_ml_volume
 
+# AB-UPT: separate surface/volume jobs or joint training
+python src/train.py model=ab_upt_surface dataset=drivaer_ml_surface_point_sets
+python src/train.py model=ab_upt_volume dataset=drivaer_ml_volume_point_sets
+python src/train.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets
+
 # GLOBE (mesh-native)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
 # 180 GB-class devices. First epoch includes ~90 s of torch.compile warmup.
@@ -736,6 +744,43 @@ Surface SMART uses the sampled query cells as geometry, while volume SMART retai
 the full vehicle surface and uses the standard STL-based SDF features. Each model
 samples up to 16,384 geometry points per encoder layer and decodes inference queries
 in chunks of 8,192.
+
+#### AB-UPT options
+
+Use the DrivAerML point-set datasets shown in the gallery and set `drivaer_ml` in
+`datasets/dataset_paths.yaml` to the directory containing native
+`run_*/domain_*.pdmsh` files with a triangulated `vehicle` boundary and freestream metadata. Surface-only mode
+accepts an empty interior. Joint mode uses the shared `target_sources` and `output_groups` contract
+(see [Training on several prediction sets](#training-on-several-prediction-sets)).
+It couples both branches; separate modes
+omit the inactive branch. Surface targets are pressure and wall shear stress;
+volume targets are velocity, pressure, and eddy viscosity.
+
+`dataset_reader_overrides.point_sets.<name>.count` controls `geometry`,
+`supernodes`, `surface_anchors`, `volume_anchors`, `surface_queries`, and
+`interior` independently. Single-branch queries use `interior`; joint surface
+queries use `surface_queries`. Validation samples stay fixed while training varies
+by epoch. These point-set datasets retain the file coordinate frame and configure
+no augmentations, so `augment=true` has no effect and moments default to the file
+origin.
+
+Reuse the training run's model settings from `resolved_config.yaml` at inference.
+
+For anchor supervision, set `+model.train_on_anchors=true` and
+`+dataset_reader_overrides.point_sets.surface_queries.indices_from=surface_anchors`
+for the surface branch in joint mode (`interior.indices_from=surface_anchors`
+in surface-only mode), and
+`+dataset_reader_overrides.point_sets.interior.indices_from=volume_anchors`
+for the volume branch. Validation and inference still decode independent queries.
+
+Use `null` query counts for full fields with the configured anchor budgets:
+
+```bash
+python src/infer.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets \
+    checkpoint_path=/path/to/checkpoints run_id=YOUR_RUN_ID \
+    dataset_reader_overrides.point_sets.surface_queries.count=null \
+    dataset_reader_overrides.point_sets.interior.count=null rescale_geometry=true
+```
 
 ### ISLA
 

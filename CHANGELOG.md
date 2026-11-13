@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Unified external aero recipe: adds AB-UPT surface, volume, and joint
+  configurations calling the library model directly, configurable independent
+  point-set sampling in `DomainMeshReader`, and grouped tensor outputs for
+  unequal surface/volume point counts.
+
 - The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
 - The unified external aerodynamics recipe adds ISLA surface and interior
   configurations on DrivAerML, and a joint surface-and-volume config, which
