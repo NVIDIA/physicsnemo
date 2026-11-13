@@ -166,6 +166,38 @@ def _compute_gradients_cells_lsq(
     return _compute_cell_gradients_lsq(mesh, cell_values, weight_power)
 
 
+def _unoriented_point_normals(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
+    """Unit normals at the points of a codimension-1 mesh, for tangent planes.
+
+    Those of :attr:`~physicsnemo.mesh.Mesh.point_normals`, from the cells
+    around each point oriented consistently first, as
+    :func:`~physicsnemo.mesh.repair.fix_orientation` orients a mesh, but around
+    that point alone. Where neighboring cells are wound oppositely (as in
+    ``get_boundary_mesh`` output or on a Möbius strip), their normals would
+    otherwise cancel in the sum. The orientation follows from connectivity, so
+    the tangent planes do not depend on the winding at any angle between the
+    cells, and consistently wound meshes get ``point_normals`` itself. Cached,
+    as point normals are.
+    """
+
+    def compute() -> torch.Tensor:
+        from physicsnemo.mesh.repair.orientation import _flips_around_points
+
+        # Cached with the topology, as adjacencies are, also when the points
+        # require gradients: the flips depend on the connectivity alone
+        flip = mesh._cache.get(("topology", "flips_around_points"), None)
+        if flip is None:
+            flip = _flips_around_points(mesh.cells, mesh.n_points)
+            mesh._cache["topology", "flips_around_points"] = flip
+        if flip.numel() == 0:  # no cell flips
+            return mesh.point_normals
+        return mesh._compute_point_normals(mesh._point_normal_weighting, flip=flip)
+
+    return mesh._cached(("point", "unoriented_normals"), compute)
+
+
 def project_to_tangent_space(
     mesh: "Mesh",
     gradients: Float[torch.Tensor, "n n_spatial_dims ..."],
@@ -212,9 +244,8 @@ def project_to_tangent_space(
             # Use cell normals
             normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
         else:
-            # For points, use area-weighted averaged normals from adjacent cells
-            # This is already computed and cached by mesh.point_normals
-            normals = mesh.point_normals  # (n_points, n_spatial_dims)
+            # For points, use weighted averages of the normals of adjacent cells
+            normals = _unoriented_point_normals(mesh)  # (n_points, n_spatial_dims)
 
         ### Project: grad_intrinsic = grad - (grad·n)n
         # grad·n contracts along the spatial dimension (dim=1 for gradients)

@@ -156,7 +156,8 @@ Use the following guidelines to choose a function:
   :func:`get_or_compute_dual_volumes_0` read the mesh cache first and
   compute only on a miss. Use them in place of
   :func:`compute_circumcenters` and :func:`compute_dual_volumes_0` when you
-  call them more than once on one mesh.
+  call them more than once on one mesh. When the points require gradients,
+  they compute on every call and leave the cache alone.
 - :func:`compute_vertex_angles` gives one angle for each cell vertex.
   :func:`compute_vertex_angle_sums` adds them up for each point, which gives
   the angle defect for Gaussian curvature.

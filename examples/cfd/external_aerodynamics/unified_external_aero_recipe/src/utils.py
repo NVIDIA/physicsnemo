@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from torch.amp import autocast
 
-from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.datapipes.keys import as_nested_key, rename_keys
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer, Muon
@@ -263,6 +263,43 @@ def normalize_target_measure(target_measure: torch.Tensor) -> torch.Tensor:
     return target_measure / safe_mean
 
 
+def mask_nonfinite(
+    p: torch.Tensor, t: torch.Tensor, field_type: FieldType
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Zero *p* and *t* where the target is not finite (any component, for vectors).
+
+    Returns ``(p, t, valid_fraction)``: sums then cover the valid elements only,
+    and a mean divided by ``valid_fraction`` is their mean (0 / 0 if none is valid).
+    """
+    valid = torch.isfinite(t)
+    if field_type == "vector":
+        valid = valid.all(dim=-1, keepdim=True)
+    fraction = valid.sum() / valid.numel()
+    return torch.where(valid, p, 0.0), torch.where(valid, t, 0.0), fraction
+
+
+def by_source_fields(
+    td: TensorDict,
+    target_sources: dict[str, str] | None,
+    fn: Callable[[TensorDict], TensorDict],
+) -> TensorDict:
+    """Apply *fn* to each source mesh's targets renamed to their source field
+    names (the names normalizer and non-dim rules use), then rename them back.
+    """
+    if target_sources is None:
+        return fn(td)
+    paths = {as_nested_key(n): p for n, p in target_sources.items()}
+    groups: dict[str, dict] = {}
+    for key in td.keys(include_nested=True, leaves_only=True):
+        mesh, _, leaf = paths.get(key, "").partition(".point_data.")
+        groups.setdefault(mesh, {})[key] = as_nested_key(leaf) if leaf else key
+    out = td.empty()
+    for group in groups.values():
+        part = fn(rename_keys(td.select(*group), group, strict=True))
+        out.update(rename_keys(part, {v: k for k, v in group.items()}, strict=True))
+    return out
+
+
 def validate_field_coverage(
     target_config: dict[str, FieldType],
     pred: TensorDict,
@@ -297,6 +334,15 @@ def resolve_dict(cfg: DictConfig, path: str) -> dict[str, Any] | None:
     selected = OmegaConf.select(cfg, path, default=OmegaConf.create({}))
     container = OmegaConf.to_container(selected, resolve=True)
     return container or None
+
+
+def resolve_field_weights(cfg: DictConfig) -> dict[str, float] | None:
+    """``training.field_weights``, joined by the model's ``extra_task.field_weights``."""
+    weights = {
+        **(resolve_dict(cfg, "training.field_weights") or {}),
+        **(resolve_dict(cfg, "extra_task.field_weights") or {}),
+    }
+    return weights or None
 
 
 # ---------------------------------------------------------------------------

@@ -7,29 +7,31 @@ PhysicsNeMo Metrics
 Basics
 -------
 
-PhysicsNeMo provides several general and domain-specific metric calculations you can
-leverage in your custom training and inference workflows. These metrics are optimized to
-operate on PyTorch tensors. 
+PhysicsNeMo provides several general and domain-specific metrics that you can
+use in your custom training and inference workflows. PhysicsNeMo optimizes
+these metrics for operations on PyTorch tensors.
 
 General Metrics and Statistical Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below is a summary of general purpose statistical methods and metrics that are available:
+The following table summarizes the available general-purpose statistical
+methods and metrics:
 
-.. list-table::
+.. list-table:: General Metrics and Statistical Methods
    :widths: 20 80
    :header-rows: 1
 
    * - Metric
      - Description
    * - `physicsnemo.metrics.general.mse.mse <#physicsnemo.metrics.general.mse.mse>`_
-     - Mean Squared error between two tensors
+     - Mean squared error (MSE) between two tensors
    * - `physicsnemo.metrics.general.mse.rmse <#physicsnemo.metrics.general.mse.rmse>`_
-     - Root Mean Squared error between two tensors
+     - Root mean squared error (RMSE) between two tensors
    * - `physicsnemo.metrics.general.histogram.histogram <#physicsnemo.metrics.general.histogram.histogram>`_
      - Histogram of a set of tensors over the leading dimension
    * - `physicsnemo.metrics.general.histogram.cdf <#physicsnemo.metrics.general.histogram.cdf>`_
-     - Cumulative density function of a set of tensors over the leading dimension
+     - Cumulative distribution function (CDF) of a set of tensors over the
+       leading dimension
    * - `physicsnemo.metrics.general.histogram.normal_cdf <#physicsnemo.metrics.general.histogram.normal_cdf>`_
      - Cumulative density function of a normal variable with given mean and standard deviation
    * - `physicsnemo.metrics.general.histogram.normal_pdf <#physicsnemo.metrics.general.histogram.normal_pdf>`_
@@ -37,13 +39,15 @@ Below is a summary of general purpose statistical methods and metrics that are a
    * - `physicsnemo.metrics.general.calibration.find_rank <#physicsnemo.metrics.general.calibration.find_rank>`_
      - Find the rank of the observation with respect to the given counts and bins
    * - `physicsnemo.metrics.general.calibration.rank_probability_score <#physicsnemo.metrics.general.calibration.rank_probability_score>`_
-     - Rank Probability Score for the passed ranks
+     - Rank probability score for the passed ranks
    * - `physicsnemo.metrics.general.entropy.entropy_from_counts <#physicsnemo.metrics.general.entropy.entropy_from_counts>`_
-     - Computes the statistical entropy of a random variable using a histogram.
+     - Computes the statistical entropy of a random variable using a histogram
    * - `physicsnemo.metrics.general.entropy.relative_entropy_from_counts <#physicsnemo.metrics.general.entropy.relative_entropy_from_counts>`_
-     - Computes the relative statistical entropy, or KL Divergence of two random variables using their histograms.
+     - Computes the relative statistical entropy, or Kullback-Leibler (KL)
+       divergence, between two random variables using their histograms
    * - `physicsnemo.metrics.general.crps.crps <#physicsnemo.metrics.general.crps.crps>`_
-     - Local Continuous Ranked Probability Score (CRPS) by computing a histogram and CDF of the predictions
+     - Local continuous ranked probability score (CRPS) by computing a
+       histogram and CDF of the predictions
    * - `physicsnemo.metrics.general.wasserstein.wasserstein_from_cdf <#physicsnemo.metrics.general.wasserstein.wasserstein_from_cdf>`_
      - Wasserstein distance between two discrete CDF functions
    * - `physicsnemo.metrics.general.reduction.WeightedMean <#physicsnemo.metrics.general.reduction.WeightedMean>`_
@@ -53,7 +57,7 @@ Below is a summary of general purpose statistical methods and metrics that are a
    * - `physicsnemo.metrics.general.reduction.WeightedVariance <#physicsnemo.metrics.general.reduction.WeightedVariance>`_
      - Weighted Variance
 
-Below shows some examples of how to use these metrics in your own workflows. 
+The following examples show how to use these metrics in your workflows.
 
 
 To compute RMSE metric:
@@ -103,8 +107,9 @@ To use the histogram for statistical entropy calculations:
     >>> entropy.entropy_from_counts(counts, bins)
     tensor(0.4146)
 
-Many of the functions operate over batches. For example, if one has a collection of two dimensional
-data, then we can compute the histogram over the collection:
+Many of the functions operate over batches. For example, if you have a
+collection of two-dimensional data, you can compute the histogram over the
+collection:
 
 .. code:: python
 
@@ -119,10 +124,10 @@ data, then we can compute the histogram over the collection:
             [0.5099, 0.5309, 0.4519],
             [0.4580, 0.4290, 0.5121]])
 
-There are additional metrics to compute differences between distributions: Ranks, Continuous Rank
+There are additional metrics that you can use to compute differences between distributions. The additional metrics include,Ranks, Continuous Rank
 Probability Skill, and Wasserstein metric.
 
-CRPS:
+To compute the CRPS:
 
 .. code:: python
 
@@ -132,7 +137,7 @@ CRPS:
     >>> crps.crps(x, y)
     tensor([0.8023])
 
-Ranks:
+To compute ranks:
 
 .. code:: python
 
@@ -143,7 +148,7 @@ Ranks:
     >>> ranks = calibration.find_rank(bins, counts, y)
     tensor([0.1920])
 
-Wasserstein Metric:
+To compute the Wasserstein distance:
 
 .. code:: python 
 
@@ -176,8 +181,8 @@ PhysicsNeMo currently offers classes for weighted mean and variance reductions.
 
 Online Statistical Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
-PhysicsNeMo current offers routines for computing online, or out-of-memory, means,
-variances, and histograms.
+PhysicsNeMo currently offers routines that compute means, variances, and
+histograms online or out of memory.
 
 .. code:: python 
 
@@ -194,11 +199,128 @@ variances, and histograms.
   tensor([-0.0545,  0.0267])
 
 
-Climate Related Metrics
+Tensor-Aware Streaming Moments
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``Mean`` and ``Variance`` retain their legacy interfaces. Opt into detached,
+layout-aware accumulation with ``mode="tensor"``:
+
+.. code-block:: python
+
+    from physicsnemo.metrics.general.ensemble_metrics import Mean, Variance
+
+    stats = Variance(mode="tensor", correction=0)
+    for prediction in predictions:
+        stats.update(prediction, dim=None)  # One field/observable per call
+    mean = stats.mean
+    variance = stats.finalize()
+
+    # A batch of observations along one axis:
+    other = Variance(mode="tensor", correction=0)
+    other.update(additional_predictions, dim=0)
+    stats.combine(other)  # Disjoint observations, same output elements/layout
+
+Ordinary tensors remain local even when ``DistributedManager`` is initialized.
+``ShardTensor`` reductions follow the observation axis and mesh placements,
+completing pending reductions before nonlinear operations. Unreduced spatial
+shards stay sharded. All ranks in a participating mesh must follow the same
+update schedule.
+A rank with no observations supplies an empty shard of the global batch.
+
+``dim=None`` means one observation, not a reduction over all dimensions. To
+compute statistics of an observable, compute that observable for each member
+before updating its accumulator. For example, the variance of a spatial mean
+is not the spatial mean of pointwise variances.
+
+Accumulation detaches values, promotes ``float16`` and ``bfloat16`` to
+``float32``, and retains ``float64`` by default. ``like`` or the first update
+determines the accumulation dtype. Later inputs can safely widen to that dtype.
+``float64`` inputs into inferred ``float32`` raise an error. An explicit
+``dtype`` permits casts to that precision. ``dtype=torch.float64`` explicitly
+requests higher precision.
+
+``like=template`` can fix the output shape, device, and layout before the first
+update.
+Empty reads and insufficient sample counts for the requested correction raise
+``ValueError``. Tensor-mode ``update`` returns ``None``. Read results with
+``finalize`` (or ``Variance.mean``). The built-in mean and variance rules
+compute elementwise, equally weighted moments.
+
+The tensor-mode implementation composes a ``TensorAccumulator`` with a
+``MeanRule`` or ``VarianceRule``. A new statistic can reuse the same machinery:
+
+.. code-block:: python
+
+    from physicsnemo.metrics.general.tensor_accumulator import TensorAccumulator
+    from physicsnemo.metrics.general.moment_rules import MeanRule
+
+    stats = TensorAccumulator(MeanRule())
+    stats.update(predictions, dim=0)
+    mean = stats.finalize()
+
+A rule implements three pure operations: ``summarize`` produces sufficient
+statistics, ``merge`` combines independent states, and ``result`` reads a result.
+``summarize`` transfers ownership of its returned state to the accumulator. It
+must not retain references to that state or alias caller inputs. ``merge`` must
+leave both input states unchanged. Built-in rules can reuse fresh scratch buffers
+without mutating stored state. ``combine`` copies a donor's state when needed to
+keep the accumulators independent.
+
+State is a dictionary of floating-point tensors and Python integers. Tensor fields
+can have different shapes, but each field retains its own shape and layout.
+The supplied ``reduce_sum`` helper completes distributed reductions before the
+rule performs nonlinear arithmetic. Its ``SumReduction`` signature accepts
+``(values, dim, *, keepdim=False)``.
+
+``StatisticRule`` exposes extensible callable hooks for ``summarize`` and
+``result``. Each concrete rule declares its accepted auxiliary inputs and result
+options. Unsupported keywords raise ``TypeError``. Two rules are equal only when
+their statistical configuration matches. Frozen dataclasses suit the built-in
+rules.
+
+The accumulator handles the following concerns:
+
+- Detachment
+- Precision
+- Layout validation
+- Ownership
+- Lifecycle
+
+Additional tensor inputs must match the shape and layout of ``values``.
+``examples/minimal/uq/weighted_mean.py`` demonstrates an external weighted-mean
+rule, including collective validation for invalid weights. Extensibility does not
+provide a distributed algorithm for arbitrary statistics. The rule must define a
+mathematically valid merge and respect collective participation.
+
+For a Gaussian process (GP) mixture, stream the components as follows:
+
+- Stream the component means through
+  ``Variance(correction=0, mode="tensor")``.
+- Stream the component variances through ``Mean(mode="tensor")``.
+
+Total predictive variance is the sum of these two results. A single GP already
+supplies both moments directly. Arbitrary field observables require joint
+samples or cross-point covariance. Pointwise variances cannot recover those
+correlations.
+
+Refer to ``examples/minimal/uq`` for runnable examples of the following
+compositions:
+
+- Local
+- Distributed
+- GP
+- Dropout
+- Observable
+
+This path does not require a ``local()`` factory or metric-owned
+``synchronize()``. The default constructor still uses legacy behavior,
+including its existing implicit world-group reductions and return conventions.
+
+Climate-Related Metrics
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-To compute the Anomaly Correlation Coefficient, a metric widely used in weather and
-climate sciences:
+To compute the anomaly correlation coefficient, a metric widely used in weather
+and climate sciences:
 
 .. code:: python
 
@@ -259,7 +381,7 @@ General
     :members:
     :show-inheritance:
 
-Weather and climate metrics
+Weather and Climate Metrics
 ---------------------------
 
 .. automodule:: physicsnemo.metrics.climate.acc
@@ -273,5 +395,4 @@ Weather and climate metrics
 .. automodule:: physicsnemo.metrics.climate.reduction
     :members:
     :show-inheritance:
-
 

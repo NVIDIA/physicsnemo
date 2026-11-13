@@ -102,17 +102,18 @@ def test_postprocess_preserves_sampled_force_coefficients(
             {key: torch.tensor(0.0) for key in ("Cd", "Cl", "Cs")}
         ),
     )
-    traction = torch.tensor([2.0, 3.0, 4.0])
+    ### C_f is the stress on the fluid, so the force on the body is -C_f.
+    wall_shear = torch.tensor([2.0, 3.0, 4.0])
     prediction = sampled.to_point_cloud().with_data(
         point_data={
             "C_p": torch.zeros(sampled.n_points),
-            "C_f": traction.repeat(sampled.n_points, 1),
+            "C_f": wall_shear.repeat(sampled.n_points, 1),
         }
     )
 
     combined = drivaer_dataset.postprocess(pred_mesh=prediction, sample=sample)
 
-    expected_force = traction * total_area / a_ref
+    expected_force = -wall_shear * total_area / a_ref
     for key, axis in (("Cd", 0), ("Cl", 2), ("Cs", 1)):
         torch.testing.assert_close(
             combined.global_data["pred", key], expected_force[axis]

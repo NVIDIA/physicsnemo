@@ -268,3 +268,70 @@ class TestSpecialTopology:
 
         assert stats["orientation"]["n_cells_flipped"] == 1
         assert (_signed_volumes(repaired) > 0).all()
+
+
+class TestFlipsAroundPoints:
+    """The flips that orient the cells around each point on their own."""
+
+    @pytest.mark.parametrize(
+        "name", ["sphere", "mobius", "cube", "square", "tetrahedra", "non_manifold"]
+    )
+    def test_cells_around_each_point_agree(self, device, name):
+        """With the flips at a point, no two cells around it orient a facet alike.
+
+        Also on the non-orientable Mobius strip, on get_boundary_mesh() output,
+        and where three sheets share an edge and two fans share their apex.
+        """
+        from physicsnemo.mesh.primitives.planar import unit_square
+        from physicsnemo.mesh.primitives.surfaces import (
+            mobius_strip,
+            sphere_icosahedral,
+        )
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+        from physicsnemo.mesh.repair.orientation import _flips_around_points
+
+        if name in ("cube", "square"):
+            volume = {"cube": cube_volume, "square": unit_square}[name]
+            mesh = volume.load(subdivisions=2, device=device).get_boundary_mesh()
+        else:
+            if name == "non_manifold":
+                # Three sheets on the edge (0, 1); two fans around point 5
+                cells = [[0, 1, 2], [0, 1, 3], [0, 1, 4], [1, 2, 6], [0, 3, 7]]
+                cells += [[5, 8, 9], [5, 9, 10], [5, 10, 8], [5, 11, 12], [5, 12, 13]]
+                mesh = Mesh(
+                    points=torch.rand(14, 3, device=device),
+                    cells=torch.tensor(cells, device=device),
+                )
+            else:
+                loaders = {
+                    "sphere": lambda: sphere_icosahedral.load(subdivisions=1),
+                    "mobius": mobius_strip.load,
+                    "tetrahedra": lambda: cube_volume.load(subdivisions=2),
+                }
+                mesh = loaders[name]().to(device)
+            generator = torch.Generator().manual_seed(0)
+            reversed_cells = torch.rand(mesh.n_cells, generator=generator) < 0.5
+            mesh = _reverse(mesh, reversed_cells.to(device))
+        assert _orientation_conflicts(mesh.cells.cpu()) > 0
+
+        flips = _flips_around_points(mesh.cells, mesh.n_points).cpu()
+        cells = mesh.cells.cpu()
+        swapped = torch.cat([cells[:, 1:2], cells[:, :1], cells[:, 2:]], dim=1)
+        for point in range(mesh.n_points):
+            cell, vertex = (cells == point).nonzero(as_tuple=True)
+            around = torch.where(flips[cell, vertex, None], swapped[cell], cells[cell])
+            assert _orientation_conflicts(around) == 0
+
+    @pytest.mark.parametrize("name", ["sphere", "three_sheets"])
+    def test_consistently_wound_cells_need_no_flips(self, device, name):
+        """Also where three sheets share an edge, two of which orient it alike."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        from physicsnemo.mesh.repair.orientation import _flips_around_points
+
+        if name == "sphere":
+            sphere = sphere_icosahedral.load(subdivisions=1, device=device)
+            cells, n_points = sphere.cells, sphere.n_points
+        else:
+            cells, n_points = torch.tensor([[0, 1, 2], [0, 1, 3], [1, 0, 4]]), 5
+        flips = _flips_around_points(cells.to(device), n_points)
+        assert flips.shape == (0, 3)

@@ -31,10 +31,13 @@ from pathlib import Path
 
 import pytest
 import torch
+from tensordict import TensorDict
 
+from physicsnemo.core import Module
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from test.models.globe._helpers import assert_globe_attributes
 
 DATA_DIR = Path(__file__).parent / "data"
 SEED = 42
@@ -197,3 +200,85 @@ def test_globe_gradient_flow(device: str) -> None:
         f"Only {n_params_with_grad}/{n_params_total} parameters received "
         f"non-zero gradients"
     )
+
+
+### A committed checkpoint, made with the code of its version, must keep
+### loading through the base class and giving the same outputs.
+CHECKPOINT_PATH = DATA_DIR / "globe_v1.mdlus"
+CHECKPOINT_OUTPUT_PATH = DATA_DIR / "globe_checkpoint_output.pth"
+CHECKPOINT_KWARGS = {
+    "n_spatial_dims": 3,
+    "output_schema": {"C_p": {"rank": 0}, "C_f": {"rank": 1}},
+    "boundary_source_schemas": {"vehicle": {"alpha": {"rank": 0}}, "floor": {}},
+    "reference_length_names": ["L_ref"],
+    "reference_area": 1.0,
+    "global_schema": {"U_inf": {"rank": 1}},
+    "n_communication_hyperlayers": 1,
+    "n_latent_scalars": 2,
+    "n_latent_vectors": 1,
+    "hidden_layer_sizes": [8],
+    "leaf_size": 4,
+}
+
+
+def _make_checkpoint_inputs(device: torch.device) -> dict:
+    """Forward-pass keyword arguments for the checkpointed model.
+
+    Built on CPU and then moved, since ``lumpy_sphere`` draws its noise from
+    a generator on the requested device, which would change the geometry.
+    """
+    mesh_vehicle = lumpy_sphere.load(subdivisions=1)
+    mesh_vehicle.cell_data["alpha"] = mesh_vehicle.cell_centroids[:, 0]
+    generator = torch.Generator(device="cpu").manual_seed(SEED)
+    return {
+        "prediction_points": torch.randn(20, 3, generator=generator).to(device),
+        "boundary_meshes": {
+            "vehicle": mesh_vehicle.to(device),
+            "floor": lumpy_sphere.load(radius=3.0, subdivisions=0).to(device),
+        },
+        "reference_lengths": {"L_ref": torch.tensor(1.0).to(device)},
+        "global_data": TensorDict({"U_inf": torch.tensor([1.0, 0.0, 0.0])}).to(device),
+    }
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_globe_from_checkpoint(device: str) -> None:
+    """``Module.from_checkpoint`` rebuilds GLOBE from the committed checkpoint,
+    with its constructor arguments, and reproduces the reference outputs."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    if not CHECKPOINT_PATH.exists():
+        torch.manual_seed(SEED)
+        model = GLOBE(**CHECKPOINT_KWARGS).eval()
+        model.save(CHECKPOINT_PATH)
+        with torch.no_grad():
+            output = model(**_make_checkpoint_inputs(torch.device("cpu")))
+        _save_reference(output, CHECKPOINT_OUTPUT_PATH)
+        pytest.fail(
+            f"Reference checkpoint {CHECKPOINT_PATH} and outputs "
+            f"{CHECKPOINT_OUTPUT_PATH} did not exist and have been created. "
+            "Re-run the test to verify reproducibility."
+        )
+
+    model = Module.from_checkpoint(CHECKPOINT_PATH).to(device).eval()
+
+    assert type(model) is GLOBE
+    assert_globe_attributes(model, CHECKPOINT_KWARGS)
+
+    with torch.no_grad():
+        output = model(**_make_checkpoint_inputs(torch.device(device)))
+    reference = _load_reference(CHECKPOINT_OUTPUT_PATH, torch.device(device))
+    assert set(output.point_data.keys()) == set(reference)
+    ### The reference was made on CPU; CUDA rounds differently.
+    tolerances = (
+        {"atol": ATOL, "rtol": RTOL}
+        if device == "cpu"
+        else {"atol": 1e-6, "rtol": 1e-4}
+    )
+    for key in reference:
+        torch.testing.assert_close(
+            output.point_data[key],
+            reference[key],
+            **tolerances,
+            msg=f"Output field '{key}' differs from reference",
+        )

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.GeoTransolverOneShot
+_target_: models.rollout.GeoTransolverOneShot
 _convert_: all
 
 functional_dim: 3

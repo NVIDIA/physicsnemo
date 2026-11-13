@@ -45,6 +45,7 @@ from utils import (
     FieldType,
     align_scalar_shapes,
     align_target_measure,
+    mask_nonfinite,
     normalize_target_measure,
     validate_field_coverage,
 )
@@ -194,6 +195,9 @@ class MetricCalculator:
         measure_weighted: When ``True`` (default), weight each target point
             by the ``target_measure`` passed to the call, if any. When
             ``False``, ignore it and count every point alike.
+        mask_nonfinite_targets: When ``True``, target elements that are not
+            finite are left out, as in :class:`loss.LossCalculator`; a field
+            with no finite target gets NaN metrics.
     """
 
     def __init__(
@@ -203,6 +207,7 @@ class MetricCalculator:
         metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
         measure_weighted: bool = True,
+        mask_nonfinite_targets: bool = False,
     ) -> None:
         ### `target_config` values are required to be lowercase per the
         ### `FieldType` contract; copy verbatim so callers can mutate their
@@ -214,6 +219,7 @@ class MetricCalculator:
         )
         self.prefix = prefix
         self.measure_weighted = measure_weighted
+        self.mask_nonfinite_targets = mask_nonfinite_targets
 
         for m in self.metric_names:
             if m not in METRIC_FUNCTIONS:
@@ -263,11 +269,21 @@ class MetricCalculator:
         target: torch.Tensor,
         name_parts: tuple[str, ...],
         weights: torch.Tensor | None = None,
+        fraction: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        return {
-            self._make_key(*name_parts, m): METRIC_FUNCTIONS[m](pred, target, weights)
-            for m in self.metric_names
+        values = {
+            m: METRIC_FUNCTIONS[m](pred, target, weights) for m in self.metric_names
         }
+        ### With masked targets (``fraction``), the mean (``mae``) is rescaled
+        ### to the valid elements; the relative norms are sum ratios already.
+        ### A field with no valid element has no error to report: NaN.
+        if fraction is not None:
+            if "mae" in values:
+                values["mae"] = values["mae"] / fraction
+            values = {
+                m: torch.where(fraction > 0, v, torch.nan) for m, v in values.items()
+            }
+        return {self._make_key(*name_parts, m): v for m, v in values.items()}
 
     def __call__(
         self,
@@ -310,10 +326,15 @@ class MetricCalculator:
                 p, t = pred[key], target[key]
                 if field_type == "scalar":
                     p, t = align_scalar_shapes(p, t)
-                    weights = _point_weights(target_measure, p, field_type)
-                    out.update(self._metrics_for_tensor(p, t, (name,), weights))
+                weights = _point_weights(target_measure, p, field_type)
+                fraction = None
+                if self.mask_nonfinite_targets:
+                    p, t, fraction = mask_nonfinite(p, t, field_type)
+                if field_type == "scalar":
+                    out.update(
+                        self._metrics_for_tensor(p, t, (name,), weights, fraction)
+                    )
                 else:  # vector
-                    weights = _point_weights(target_measure, p, field_type)
                     n_components = p.shape[-1]
                     ### Per-component metrics.
                     for i in range(n_components):
@@ -324,7 +345,7 @@ class MetricCalculator:
                         )
                         out.update(
                             self._metrics_for_tensor(
-                                p[..., i], t[..., i], (name, comp), weights
+                                p[..., i], t[..., i], (name, comp), weights, fraction
                             )
                         )
                     ### Aggregate vector metric under the bare field name:
@@ -336,7 +357,7 @@ class MetricCalculator:
                         weights = weights.unsqueeze(-1).expand_as(p).flatten(-2)
                     out.update(
                         self._metrics_for_tensor(
-                            p.flatten(-2), t.flatten(-2), (name,), weights
+                            p.flatten(-2), t.flatten(-2), (name,), weights, fraction
                         )
                     )
 
