@@ -1000,19 +1000,16 @@ class FlipBoundaryOrientation(MeshTransform):
             raise ValueError(
                 "FlipBoundaryOrientation needs cells of at least 2 vertices"
             )
-        cells = torch.cat((mesh.cells[:, :-2], mesh.cells[:, -2:].flip(1)), dim=1)
-        cell_data = mesh.cell_data.copy()  # only the negated fields get new tensors
+        ### Each cell keeps its vertices, so with_cells keeps its measure and drops
+        ### the normals cached for the old winding.
+        flipped = mesh.with_cells(
+            torch.cat((mesh.cells[:, :-2], mesh.cells[:, -2:].flip(1)), dim=1)
+        )
+        cell_data = flipped.cell_data.copy()  # only the negated fields get new tensors
         for key in self.normal_fields:
             if key in cell_data.keys(include_nested=True):
                 cell_data[key] = -cell_data[key]
-        ### A new Mesh, so no cached normals of the old winding survive.
-        return Mesh(
-            points=mesh.points,
-            cells=cells,
-            point_data=mesh.point_data,
-            cell_data=cell_data,
-            global_data=mesh.global_data,
-        )
+        return flipped.with_data(cell_data=cell_data)
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Reverse the named boundaries of a :class:`DomainMesh`.
