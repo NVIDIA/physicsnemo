@@ -451,6 +451,7 @@ class _NodeMeans(torch.autograd.Function):
         return (sums / measure[:, None]).to(x.dtype)
 
     @staticmethod
+    @once_differentiable
     def backward(ctx, g):
         omega, measure = ctx.saved_tensors
         forest = ctx.forest

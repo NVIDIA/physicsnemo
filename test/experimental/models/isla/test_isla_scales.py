@@ -21,7 +21,8 @@ the scale U and direction g that rank-1 sources define, and the scale rho that a
 rank-0 global defines (``defines``). The tests check that:
 
 - a similarity of the problem, with its dimensionless global inputs unchanged,
-  leaves every internal state unchanged and scales the outputs by their units;
+  leaves every internal state unchanged and scales the outputs by their units, in
+  either task;
 - the condition that carries the source, and the scales, can have any name;
 - U, g and L are the same for every draw and under refinement;
 - a model that declares nothing is the release model;
@@ -119,7 +120,8 @@ def _model(
         **kw,
     )
     m._geo_kernel = "eager"
-    m.tree_read_theta = 0.0  # the exact boundary read
+    if interior:
+        m.tree_read_theta = 0.0  # the exact boundary read (a surface task has none)
     return live(m.double().eval())
 
 
@@ -168,17 +170,19 @@ def _similar(m, meshes, gd, q, schemas, s, c, r, R=None):
         "re_z": gd["re_z"],
     }
     R = torch.eye(3, dtype=D) if R is None else R
-    return out, gd, s * q @ R.T
+    return out, gd, None if q is None else s * q @ R.T
 
 
 def _spy(m):
-    """Record the case's scales and the head's input of every forward pass."""
-    seen = {"scales": [], "h": [], "gauge": []}
+    """Record the case's scales, its derived direction and the head's input of
+    every forward pass."""
+    seen = {"scales": [], "g": [], "h": [], "gauge": []}
     case_scales, case_inputs = m._case_scales, m._case_inputs
 
     def scales(*a, **k):
         out = case_scales(*a, **k)
-        seen["scales"].append(out)
+        seen["scales"].append(out[0])
+        seen["g"].append(out[1])
         return out
 
     def inputs(*a, **k):
@@ -217,17 +221,20 @@ def _run(m, meshes, gd, q=None):
         (1e12, 0.29, 1.0),
     ],
 )
-def test_similarity_leaves_the_internals_and_scales_the_outputs(s, c, r):
+@pytest.mark.parametrize("interior", [False, True], ids=["surface", "interior"])
+def test_similarity_leaves_the_internals_and_scales_the_outputs(s, c, r, interior):
     """(x, v, rho, k, omega, p) -> (s x, c v, r rho, c^2 k, (c/s) omega, r c^2 p), with
     a rotation and re_z unchanged: L -> s L, U -> c U, g rotates, every internal state is
-    unchanged, and every output is scaled by its units (and rotated by its rank). At
+    unchanged, and every output is scaled by its units (and rotated by its rank), in
+    either task (the surface task predicting on every condition's cells). At
     s = 1e-6 the cells' measures are about 1e-12: the floor on the measure is
     relative to the case's total, so it binds at no scale. At s = 1e9 and 1e12 the
     winding number that signs the prediction points' distance takes its float32
     moments in a power-of-two unit of the surface, so they do not overflow."""
-    m = _model()
+    m = _model(interior=interior)
     seen = _spy(m)
     meshes, gd, q = _case()
+    q = q if interior else None
     R = orthogonal(3, 4)
     base = _run(m, meshes, gd, q)
     moved = _run(m, *_similar(m, meshes, gd, q, SCHEMAS, s, c, r, R))
@@ -235,7 +242,7 @@ def test_similarity_leaves_the_internals_and_scales_the_outputs(s, c, r):
     torch.testing.assert_close(b["L"], s * a["L"], atol=0, rtol=1e-12)
     torch.testing.assert_close(b["U"], c * a["U"], atol=0, rtol=1e-12)
     torch.testing.assert_close(b["rho"], r * a["rho"], atol=0, rtol=1e-12)
-    torch.testing.assert_close(b["g"], a["g"] @ R.T, atol=1e-12, rtol=0)
+    torch.testing.assert_close(seen["g"][1], seen["g"][0] @ R.T, atol=1e-12, rtol=0)
     torch.testing.assert_close(seen["h"][1], seen["h"][0], atol=1e-9, rtol=1e-9)
     for name, spec in m.output_schema.items():
         expected = law(base[name], R, spec.rank) * _factor(
@@ -293,11 +300,12 @@ def test_scales_are_independent_of_the_draw_and_of_refinement():
         gd,
         q,
     )
-    for later in seen["scales"][1:]:
-        for key in ("L", "U", "g"):
+    for later, g in zip(seen["scales"][1:], seen["g"][1:]):
+        for key in ("L", "U"):
             torch.testing.assert_close(
                 later[key], seen["scales"][0][key], atol=1e-13, rtol=1e-13
             )
+        torch.testing.assert_close(g, seen["g"][0], atol=1e-13, rtol=1e-13)
     assert torch.equal(seen["gauge"][0], seen["gauge"][1])  # bitwise across draws
     for gauge in seen["gauge"]:
         torch.testing.assert_close(gauge, _full_length(meshes), atol=0, rtol=1e-13)
@@ -425,8 +433,21 @@ def test_the_scales_take_their_hand_values():
     L = (2 * (w * ((pts - centre).square().sum(-1) + J)).sum()).sqrt()
     torch.testing.assert_close(sc["L"], L, atol=0, rtol=1e-13)
     torch.testing.assert_close(sc["U"], U, atol=0, rtol=1e-13)
-    torch.testing.assert_close(sc["g"][0, 0], m1 / m1.norm(), atol=1e-14, rtol=0)
+    torch.testing.assert_close(seen["g"][0][0, 0], m1 / m1.norm(), atol=1e-14, rtol=0)
     torch.testing.assert_close(sc["rho"], torch.tensor(RHO, dtype=D), atol=0, rtol=0)
+
+
+def test_an_absent_source_is_refused_under_torch_compile_too(monkeypatch):
+    """Whether the source's condition is given is structural, so its absence is the
+    same ValueError in a traced forward (``is_tracing`` patched to True), not an
+    error from inside the scales."""
+    from physicsnemo.experimental.models.isla import model as model_mod
+
+    m = _model(interior=False)
+    meshes, gd, _ = _case()
+    monkeypatch.setattr(model_mod, "is_tracing", lambda: True)
+    with pytest.raises(ValueError, match="absent from this case"):
+        _run(m, {k: v for k, v in meshes.items() if k != "inlet"}, gd)
 
 
 def test_an_absent_or_zero_source_and_bad_declarations_are_refused():
@@ -631,6 +652,44 @@ def test_malformed_scale_keys_and_a_zero_global_source_are_refused():
         _run(m, meshes, {**gd, "U_inf": torch.zeros(3, dtype=D)}, q)
 
 
+def test_a_rank_1_field_that_defines_a_scale_has_its_units():
+    """A rank-1 field that defines U has the units {U: 1}: declared without units it
+    gives the outputs of the declaration with them, bitwise, so similarity holds; other
+    units are refused, on a boundary field or a global source."""
+    meshes, gd, q = _case()
+    base = _run(_model(), meshes, gd, q)
+
+    def velocity(**spec):
+        return {
+            **SCHEMAS,
+            "inlet": {
+                **SCHEMAS["inlet"],
+                "bc_velocity": {"rank": 1, **spec, "defines": "U"},
+            },
+        }
+
+    got = _run(_model(schemas=velocity()), meshes, gd, q)
+    assert all(torch.equal(got[k], base[k]) for k in base)
+    plain = {**SCHEMAS, "inlet": {"bc_gamma": {"rank": 0}}, "outlet": {}}
+    bad = [
+        dict(schemas=velocity(units=u)) for u in ({"U": 2}, {"U": 1, "L": 1}, {"U": 0})
+    ]
+    bad.append(
+        dict(
+            schemas=plain,
+            globals_={
+                **GLOBALS,
+                "U_inf": {"rank": 1, "units": {"L": 1}, "defines": "U"},
+            },
+        )
+    )
+    for kw in bad:
+        with pytest.raises(
+            ValueError, match="defines the scale 'U' has the units \\{'U': 1\\}"
+        ):
+            _model(**kw)
+
+
 def test_the_scale_names_are_free():
     """The code names no scale but L: the same declaration with U and rho renamed S
     and m gives the same outputs for the same parameters, bitwise."""
@@ -743,7 +802,7 @@ def test_a_global_source_adds_no_direction():
     gd = {"U_inf": u_inf, "re_z": torch.tensor(RE_Z, dtype=D)}
     base = _run(m, {"airfoil": mesh}, gd, q)
     torch.testing.assert_close(seen["scales"][0]["U"], u_inf.norm(), atol=0, rtol=1e-15)
-    assert seen["scales"][0]["g"] is None
+    assert seen["g"][0] is None
     s, c = 0.3, 2.5
     moved = _run(
         m,
@@ -897,6 +956,35 @@ def test_case_scales_are_the_model_s_bitwise(d, interior, source):
     for k, v in got.items():
         assert v.dtype == D and v.shape == () and torch.equal(v, internal[k]), k
     assert torch.equal(got["L"], seen["gauge"][0].reshape(()).double())
+
+
+@pytest.mark.parametrize("interior", [False, True])
+def test_a_scale_named_g_is_an_ordinary_scale(interior):
+    """A scale may take any name but ``"L"``: one named ``"g"`` (gravity, say), the
+    name of the direction the rank-1 sources derive, gives the outputs of the same
+    scale named ``"U"`` bitwise, and :func:`case_scales` gives the model's scales."""
+
+    def renamed(spec):
+        if not isinstance(spec, dict):
+            return spec
+        out = {k: renamed(v) for k, v in spec.items()}
+        if "units" in spec:
+            out["units"] = {
+                ("g" if n == "U" else n): e for n, e in spec["units"].items()
+            }
+        if spec.get("defines") == "U":
+            out["defines"] = "g"
+        return out
+
+    meshes, gd, q = _case()
+    q = q if interior else None
+    base = _run(_model(interior), meshes, gd, q)
+    m = _model(interior, schemas=renamed(SCHEMAS), outputs_=renamed(OUTPUTS))
+    seen = _spy(m)
+    got = _run(m, meshes, gd, q)
+    assert all(torch.equal(got[k], base[k]) for k in base)
+    defines = {"g": [("inlet", "bc_velocity")], "rho": "physics.density"}
+    assert case_scales(meshes, defines=defines, global_data=gd) == seen["scales"][0]
 
 
 @pytest.mark.parametrize("improper", [False, True])

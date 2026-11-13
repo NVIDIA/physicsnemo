@@ -34,6 +34,7 @@ from physicsnemo.experimental.models.isla._sampling import (
     water_fill,
 )
 from physicsnemo.mesh.sampling.systematic_sampling import _pps_inclusion_probabilities
+from test.experimental.models.isla._forced import in_another_thread_while_compiling, ran
 from test.experimental.models.isla._marks import DEVICES, requires_cuda
 
 D = torch.float64
@@ -358,6 +359,21 @@ def test_the_compiled_draw_is_the_eager_one_bitwise(device):
         ref_kept, ref_w = draw(*args)
         assert torch.equal(kept, ref_kept)
         assert torch.equal(w.view(torch.int64), ref_w.view(torch.int64))
+
+
+def test_the_draw_stays_eager_in_another_thread_while_one_compiles():
+    """Eager code that runs while another thread compiles (a data-loading thread, say)
+    shares the budget on the host, as eager code does: only a trace takes the tensor
+    water fill. Both give the same draw (bitwise, tested above)."""
+    measures, centroids = _conditions((900, 300, 600))
+    start = torch.tensor(0.5, dtype=D)
+    with ran(_water_fill_host, water_fill) as r:
+        kept, w = in_another_thread_while_compiling(
+            lambda: sample_boundary_cells(measures, centroids, 1_000, start)
+        )
+    assert r.count(_water_fill_host) == 1 and r.count(water_fill) == 0
+    ref_kept, ref_w = sample_boundary_cells(measures, centroids, 1_000, start)
+    assert torch.equal(kept, ref_kept) and torch.equal(w, ref_w)
 
 
 def test_the_compiled_draw_runs_its_sums_as_the_opaque_scan():

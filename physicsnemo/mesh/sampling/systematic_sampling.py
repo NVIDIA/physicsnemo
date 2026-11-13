@@ -266,7 +266,6 @@ def _pps_inclusion_probabilities(
     return torch.empty_like(pi).scatter_(0, order, pi)
 
 
-# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 def _systematic_sample(
     inclusion_probabilities: Float[torch.Tensor, " n_cells"],
     n_samples: int,
@@ -365,7 +364,6 @@ def _systematic_sample(
     return order[position].sort().values
 
 
-# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 def _draw_inputs(
     mesh: "Mesh",
 ) -> tuple[
@@ -408,7 +406,6 @@ def _cell_line(
     return _cell_lines(measures, centroids, share, frame, [measures.shape[0]])
 
 
-# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 def _cell_lines(
     measures: Float[torch.Tensor, " n_cells"],
     centroids: Float[torch.Tensor, "n_cells n_spatial_dims"],

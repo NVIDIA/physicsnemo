@@ -44,7 +44,6 @@ if TYPE_CHECKING:
 # Morton code computation
 # ---------------------------------------------------------------------------
 
-# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 # Shift-and-mask steps that move bit b of a coordinate to bit b*D, for the bits
 # per dimension that _compute_morton_codes uses (D=2: 31 bits, D=3: 21 bits).
 # D=1 needs no spreading.
@@ -67,7 +66,6 @@ _MORTON_SPREAD_STEPS: dict[int, tuple[tuple[int, int], ...]] = {
 }
 
 
-# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 def _compute_morton_codes(
     centroids: Float[torch.Tensor, "n_centroids n_spatial_dims"],
     *,

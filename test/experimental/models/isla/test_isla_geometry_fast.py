@@ -575,8 +575,10 @@ def test_ball_search_past_2_31_slots(kernel):
     CPU at 2**20 queries): the 17.2 GB of slots, their masks and the candidates'
     closest points."""
     tail = 64
+    ### A previous variant's cached blocks would count as used memory.
+    torch.cuda.empty_cache()
     if torch.cuda.mem_get_info()[0] < 96 * 2**30:
-        pytest.skip("needs about 60 GiB of free device memory")
+        pytest.skip("needs 96 GiB of free device memory (it uses about 60 GiB)")
     sphere = _sphere(2)
     points, cells = sphere.points.cuda(), sphere.cells.cuda()
     g = torch.Generator(device="cuda").manual_seed(0)

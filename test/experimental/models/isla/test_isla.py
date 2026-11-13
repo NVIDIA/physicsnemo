@@ -30,6 +30,7 @@ import torch
 from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+from test.experimental.models.isla._marks import DEVICES
 from test.experimental.models.isla._meshes import (
     cloud,
     live,
@@ -361,6 +362,7 @@ def _run_on(device, m, mesh, drv, q):
 F32_BOUND = 1e-4
 
 
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("interior", [False, True], ids=["surface", "interior"])
 def test_float32_rigid_motions_on_every_device(device, interior):
     """In float32, on CPU and on CUDA (every kernel at ``auto``): a rotation of the
@@ -650,6 +652,43 @@ def test_non_finite_negative_and_empty_inputs_are_refused():
             global_data={"g": drv},
             prediction_boundaries=["b"],
         )
+
+
+def test_non_finite_fields_and_globals_are_refused():
+    """A declared cell field or a global with a value that is not finite is refused
+    in eager mode with the field named, in both tasks, instead of giving outputs
+    that are NaN everywhere."""
+    pts, nrm, w, drv = cloud(20, dtype=torch.float32)
+    good = soup(pts, nrm, w, cell_data={"T": torch.ones(20)})
+    globals_ = {"g": {"rank": 1}, "re": {"rank": 0}}
+    tasks = [
+        (
+            ISLA(output_schema=PV, boundary_schemas={"wall": {"T": {"rank": 0}}}, global_schema=globals_,
+                 hidden=32, n_layers=1, n_slices=8, interior=interior),
+            {"prediction_points": pts[:3] * 2} if interior else {"prediction_boundaries": ["wall"]},
+        )
+        for interior in (False, True)
+    ]  # fmt: skip
+    gd = {"g": drv, "re": torch.tensor(0.5)}
+    for model, where in tasks:
+        model(boundary_meshes={"wall": good}, global_data=gd, **where)
+        for value in (float("nan"), float("inf")):
+            data = good.cell_data.clone()
+            data["T"][3] = value
+            bad = good.with_data(cell_data=data)
+            with pytest.raises(
+                ValueError,
+                match="boundary_meshes\\['wall'\\].cell_data\\['T'\\] has a non-finite",
+            ):
+                model(boundary_meshes={"wall": bad}, global_data=gd, **where)
+            with pytest.raises(
+                ValueError, match="global_data\\['re'\\] has a non-finite"
+            ):
+                model(
+                    boundary_meshes={"wall": good},
+                    global_data={**gd, "re": torch.tensor(value)},
+                    **where,
+                )
 
 
 def test_inputs_of_another_dtype_than_the_parameters_are_refused():

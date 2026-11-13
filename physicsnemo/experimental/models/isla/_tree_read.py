@@ -86,8 +86,8 @@ position and normal take no gradient. At :math:`\theta = 0` the read is smooth, 
 read's own derivatives in the prediction points and in the boundary's cells are complete:
 the pair invariants take a gradient whenever the geometry requires one
 (:func:`_chunked_basis_from_plan`). The whole model's derivative in the boundary's
-vertices also passes through the slice blocks (see ``tree_read_theta`` in
-:class:`~physicsnemo.experimental.models.isla.model.ISLA`).
+vertices also passes through the token draw's weights and the slice blocks (see
+``tree_read_theta`` in :class:`~physicsnemo.experimental.models.isla.ISLA`).
 
 Rounding. Rounding makes no discrete choice of the forest that an error bound can
 settle, and the caller's precision makes none. The forest is built and
@@ -134,7 +134,6 @@ from physicsnemo.experimental.models.isla._segment_softmax import (
     segment_softmax_read,
 )
 from physicsnemo.experimental.models.isla._tree_build import forest_tables, resolve_tree_build
-from physicsnemo.experimental.models.isla._tree_walk import walk_counts, walk_fits, walk_pairs
 from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
@@ -142,7 +141,7 @@ from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 logger = logging.getLogger(__name__)
 #: Why the fused read used the reference kernel basis, each reason logged once.
 _BASIS_FALLBACKS_LOGGED: set[str] = set()
-#: The walks' resolutions (:func:`resolve_walk`) and fallbacks, each logged once.
+#: The walks' resolutions (:func:`resolve_walk`), each logged once.
 _WALKS_LOGGED: set[tuple[str, str]] = set()
 
 #: Heads of the read; each head owns ``KERNEL_READ_WIDTH // KERNEL_READ_HEADS`` value
@@ -466,6 +465,23 @@ class BoundaryForest:
         :attr:`trees`."""
         return self._per_tree[1]
 
+    @functools.cached_property
+    def walk_tree(self) -> ClusterTree:
+        """The whole forest as one :class:`ClusterTree` over the tables, one root per
+        tree, with the cells in forest order as its sources (it holds no source points):
+        what the fast walk traverses, so its near sources are cells and its far sources
+        are nodes of the table."""
+        leaf = self.left < 0
+        return ClusterTree(
+            node_aabb_min=self.aabb_min, node_aabb_max=self.aabb_max, node_diameter_sq=self.diameter_sq,
+            node_left_child=self.left, node_right_child=self.right,
+            leaf_start=torch.where(leaf, self.range_start, -1), leaf_count=torch.where(leaf, self.range_count, 0),
+            node_range_start=self.range_start, node_range_count=self.range_count, node_total_area=self.measure,
+            sorted_source_order=self.cells, source_points=self.aabb_min[:0],
+            max_depth=torch.tensor(len(self.levels), device=self.cells.device), root_ids=self.node_offset[:-1],
+            batch_size=torch.Size([]),
+        )  # fmt: skip
+
     @classmethod
     def build(
         cls,
@@ -593,8 +609,9 @@ class BoundaryForest:
         its box is well separated from the point and its normals are coherent, so each
         point's list holds every cell exactly once, as itself or inside one node.
         ``walk`` picks how, never what (:func:`resolve_walk`): the fast walk gives the
-        same lists in the same order. Under ``"auto"`` the reference walks lists past
-        Warp's array limit; ``"fast"`` raises on them."""
+        same lists in the same order. In each point's list the cells come first, tree by
+        tree, then the nodes, tree by tree; each tree's entries are in the order of its
+        walk (:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`)."""
         return self.frame_pairs(self.frame_points(points), walk)
 
     def frame_points(self, points: torch.Tensor) -> torch.Tensor:
@@ -609,43 +626,41 @@ class BoundaryForest:
             return torch.stack([frame_coordinates(x - o, self.frame) for o in self.group_origin]).to(points.dtype)
 
     def frame_pairs(
-        self, points_f: torch.Tensor, walk: str = "auto", count_only: bool = False, counts: tuple | None = None
+        self, points_f: torch.Tensor, walk: str = "auto", count_only: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor, int] | torch.Tensor:
         """:meth:`point_pairs` of points already in the trees' coordinates
         (:meth:`frame_points`); with ``count_only`` each point's number of pairs
-        ``(Q,)`` alone, which the fast walk counts without making the lists (so past
-        Warp's limit on the lists too). ``counts`` is these points' rows of
-        :meth:`frame_counts`, when it has run: the fast walk then fills the lists
-        without counting again."""
+        ``(Q,)`` alone, which the walk counts without making the lists."""
         with torch.autocast(points_f.device.type, enabled=False):
-            return self._frame_pairs(points_f, self.theta, walk, count_only, counts)
+            return self._frame_pairs(points_f, self.theta, walk, count_only)
 
-    def frame_counts(self, points_f: torch.Tensor, walk: str = "auto") -> tuple[torch.Tensor, tuple | None]:
-        """Each point's number of pairs ``(Q,)`` (:meth:`frame_pairs` with ``count_only``)
-        and, where the fast walk counted them, its count pass per point and tree
-        (:func:`~._tree_walk.walk_counts`), whose rows of any range of points
-        :meth:`frame_pairs` takes as ``counts``; else ``None`` (the reference walks, no
-        point or tree, past Warp's limit)."""
-        with torch.autocast(points_f.device.type, enabled=False):
-            resolved = resolve_walk(walk, points_f, self.theta, self)
-            raw = walk_counts(self, points_f, self.theta) if resolved == "fast" else None
-            if raw is not None:
-                return (raw[0] + raw[1]).view(points_f.shape[-2], -1).sum(1), raw
-            return self._frame_pairs(points_f, self.theta, walk, True, resolved=resolved), None
-
-    def _frame_pairs(self, points_f, theta, walk, count_only, counts=None, resolved=None):
-        if (resolved or resolve_walk(walk, points_f, theta, self)) == "fast":
-            pairs = walk_pairs(self, points_f, theta, count_only, counts)
-            if pairs is not None:
-                return pairs
-            if walk == "fast":
-                raise ValueError(f"the fast walk's arrays for {points_f.shape[-2]} points pass Warp's 2**31 elements")
-            key = (points_f.device.type, "reference past Warp's array limit")
-            if key not in _WALKS_LOGGED:
-                _WALKS_LOGGED.add(key)
-                logger.info(
-                    "ISLA tree walk=auto walks %d points by the reference: past Warp's array limit", points_f.shape[-2]
-                )
+    def _frame_pairs(self, points_f, theta, walk, count_only):
+        if resolve_walk(walk, points_f, theta, self) == "fast":
+            ### One walk of every tree, each reading its group's row of the points; the
+            ### library falls back to its torch walk, the same plan, where Warp cannot walk.
+            plan = self.walk_tree.find_point_interaction_pairs(
+                points_f,
+                theta,
+                validate=False,
+                source_admissible=self.coherent,
+                implementation="warp" if walk == "fast" else None,
+                count_only=count_only,
+                root_rows=None if points_f.dim() == 2 else self.tree_group,
+            )
+            if count_only:
+                return plan[0] + plan[1]
+            ### Each point's cells, then its nodes: both streams are grouped by point, so
+            ### an entry's place is its place in its stream plus the other stream's
+            ### entries of the points before it (and of its own point, for a node).
+            near_t, far_t = plan.near_target_ids, plan.far_target_ids
+            ends = torch.arange(points_f.shape[-2] + 1, device=near_t.device)
+            near_at = torch.arange(plan.n_near, device=near_t.device) + torch.searchsorted(far_t, ends)[near_t]
+            far_at = torch.arange(plan.n_far, device=near_t.device) + torch.searchsorted(near_t, ends)[far_t + 1]
+            qi = near_t.new_empty(plan.n_near + plan.n_far)
+            si = torch.empty_like(qi)
+            qi[near_at], si[near_at] = near_t, plan.near_source_ids
+            qi[far_at], si[far_at] = far_t, self.n_cells + plan.far_source_node_ids
+            return qi, si, plan.n_far
         qs, ss, n_node = [], [], 0
         for t, tree in enumerate(self.trees):
             a, b = int(self.node_offset[t]), int(self.node_offset[t + 1])
@@ -663,45 +678,39 @@ class BoundaryForest:
         qi, si = torch.cat(qs), torch.cat(ss)
         if count_only:
             return torch.bincount(qi, minlength=points_f.shape[-2])
-        order = torch.argsort(qi, stable=True)
+        ### By point, then cells before nodes, keeping the trees' order (the fast walk's).
+        order = torch.argsort(2 * qi + (si >= self.n_cells), stable=True)
         return qi[order], si[order], n_node
 
 
 def resolve_walk(walk: str, points: torch.Tensor, theta: float, forest: BoundaryForest) -> str:
     """The walk :meth:`BoundaryForest.point_pairs` runs: ``"reference"`` (GLOBE's
-    cluster-tree traversal, tree by tree) or ``"fast"`` (the Warp kernels of
-    :mod:`~._tree_walk`, the same pairs in the same order). ``"auto"`` picks the fast
-    walk for CUDA points when the forest's depth fits its stack, else the reference,
-    and logs each choice once per device type. A forced name is kept (``"fast"`` runs
-    on CPU too; a forced ``"reference"`` runs GLOBE's torch traversal, never its Warp
-    one, and :meth:`BoundaryForest.build` likewise builds its trees). At ``theta = 0`` there is no walk (the plan is every pair), and the
-    reference's construction runs either way. Both walks run outside autocast, in the
-    forest's precision, and the fast walk rounds as the reference's torch kernels
-    do."""
+    cluster-tree traversal, tree by tree) or ``"fast"`` (one library walk of the whole
+    forest, :attr:`BoundaryForest.walk_tree`, in Warp where it can walk: the same pairs
+    in the same order). ``"auto"`` picks the fast walk for CUDA points, else the
+    reference, and logs each choice once per device type. A forced name is kept
+    (``"fast"`` runs Warp on CPU too, and raises where Warp cannot walk; a forced
+    ``"reference"`` runs GLOBE's torch traversal, never its Warp one, and
+    :meth:`BoundaryForest.build` likewise builds its trees). At ``theta = 0`` there is
+    no walk (the plan is every pair), and the reference's construction runs either way.
+    Both walks run outside autocast, in the forest's precision, and the Warp walk
+    rounds as the torch walk's kernels do."""
     if walk not in ("auto", "reference", "fast"):
         raise ValueError(f"walk must be 'auto', 'reference' or 'fast', got {walk!r}")
     if theta == 0:
         return "reference"
-    if walk == "fast" and not walk_fits(forest):
-        raise ValueError(
-            f"the fast walk does not take this forest ({len(forest.levels)} levels, "
-            f"{forest.n_nodes} {forest.aabb_min.shape[1]}-D {forest.aabb_min.dtype} boxes)"
-        )
     if walk != "auto":
         return walk
-    fits = walk_fits(forest)
-    chosen = "fast" if points.is_cuda and fits else "reference"
+    chosen = "fast" if points.is_cuda else "reference"
     key = (points.device.type, chosen)
     if key not in _WALKS_LOGGED:
         _WALKS_LOGGED.add(key)
         logger.info(
-            "ISLA tree walk=auto resolved to %r on %s (cuda=%s, forest depth %d, %s boxes, fits=%s)",
+            "ISLA tree walk=auto resolved to %r on %s (forest depth %d, %s boxes)",
             chosen,
             points.device.type,
-            points.is_cuda,
             len(forest.levels),
             forest.aabb_min.dtype,
-            fits,
         )
     return chosen
 
@@ -917,7 +926,6 @@ class TreeReadWalk:
     points_f: list[torch.Tensor] | None = None
     walk: str = "auto"
     node_condition: list[torch.Tensor] | None = None  # per case (M,), each node's condition
-    counts: list[tuple] | None = None  # per case the fast walk's count pass of every point (walk_pair_counts)
 
 
 def tree_read_pairs(basis: _KernelBasis, **inputs) -> TreeReadPairs:
@@ -1056,35 +1064,24 @@ def walk_points_range(
     walk's rows, or ``query_n`` ``(B, stop - start, d)``, ``query_wall``
     ``(B, stop - start)`` and ``query_r`` ``(B, stop - start, d)`` when given (for a
     walk made without them, or positions in the caller's graph)."""
-    ### The count pass of every point, when walk_pair_counts has run it: this range's rows.
-    counts = walk.counts or [None] * len(walk.forests)
     with torch.no_grad():
-        lists = []
-        for f, p, c in zip(walk.forests, walk.points_f, counts):
-            n_t = int(f.node_offset.shape[0]) - 1
-            rows = None if c is None else tuple(x[start * n_t : stop * n_t] for x in c)
-            lists.append(f.frame_pairs(p[..., start:stop, :], walk=walk.walk, counts=rows))
+        lists = [f.frame_pairs(p[..., start:stop, :], walk=walk.walk) for f, p in zip(walk.forests, walk.points_f)]
     given = {"query_r": query_r, "query_n": query_n, "query_wall": query_wall}
     geometry = [
         {**g, **{k: g[k][start:stop] if v is None else v[i] for k, v in given.items()}}
         for i, g in enumerate(walk.geometry)
     ]
-    return dataclasses.replace(
-        walk, lists=lists, geometry=geometry, n_queries=stop - start, points_f=None, counts=None
-    )
+    return dataclasses.replace(walk, lists=lists, geometry=geometry, n_queries=stop - start, points_f=None)
 
 
 def walk_pair_counts(walk: TreeReadWalk) -> torch.Tensor:
     """The number of pairs of each point of ``walk`` ``(Q,)``, summed over the cases;
     for a walk made without its lists, counted by each forest's walk without making
-    them. The fast walk's count pass stays on ``walk`` (``counts``), so
-    :func:`walk_points_range` fills each range's lists without counting them again."""
+    them."""
     if walk.points_f is None:
         return sum(torch.bincount(qi, minlength=walk.n_queries) for qi, _, _ in walk.lists)
     with torch.no_grad():
-        counts = [f.frame_counts(p, walk.walk) for f, p in zip(walk.forests, walk.points_f)]
-        walk.counts = [raw for _, raw in counts]
-        return sum(per_point for per_point, _ in counts)
+        return sum(f.frame_pairs(p, walk.walk, count_only=True) for f, p in zip(walk.forests, walk.points_f))
 
 
 def _joined(parts: list[torch.Tensor]) -> torch.Tensor:

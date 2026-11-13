@@ -83,6 +83,7 @@ from jaxtyping import Float, Int
 
 from physicsnemo.mesh.sampling.systematic_sampling import _cell_lines, _systematic_sample
 from physicsnemo.mesh.spatial import canonical_frame
+from physicsnemo.utils._tracing import is_tracing
 
 
 def water_fill(
@@ -138,12 +139,13 @@ def sample_boundary_cells(
     Returns the indices of the kept cells into the concatenation of the
     conditions' cells, in increasing order, ``(k,)`` with :math:`k = \min(\sum_c N_c,` ``budget``
     :math:`)`, and their Horvitz-Thompson measure weights :math:`a_i / \pi_i`
-    ``(k,)``, in the dtype of the measures, with the float64 :math:`\pi_i`. The draw
-    is bitwise the same run to run and on every device for the same order (module
-    docstring, **Precision**).
+    ``(k,)``, in the dtype of the measures, with the float64 :math:`\pi_i`; they carry
+    the measures' gradient, with :math:`\pi_i` held fixed. The draw is bitwise the
+    same run to run and on every device for the same order (module docstring,
+    **Precision**).
     """
     with torch.no_grad():
-        if torch.compiler.is_compiling():
+        if is_tracing():
             ### (tensor arithmetic: the counts are symbolic, and a host comparison
             ### would fix the graph to the conditions it keeps whole)
             counts = torch.stack([m.new_full((), m.shape[0], dtype=torch.float64) for m in measures])

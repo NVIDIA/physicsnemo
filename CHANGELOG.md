@@ -141,6 +141,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh.spatial` exports `canonical_frame`, the principal-axis frame
   that a weighted point set carries with it, and `frame_coordinates`, the
   points' coordinates in that frame.
+- `ClusterTree.find_point_interaction_pairs` takes targets of shape `(R, M, D)`
+  with `root_rows`, the row each root's tree reads, so one call walks a forest
+  whose trees each use their own coordinates.
 - Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
   `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
   `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports

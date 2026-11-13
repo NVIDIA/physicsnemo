@@ -35,6 +35,7 @@ Python function that launches it.
 """
 
 import sys
+import threading
 import types
 
 import pytest
@@ -138,3 +139,21 @@ def reaches(monkeypatch, owner, name: str) -> list:
 
     monkeypatch.setattr(owner, name, wrapper)
     return calls
+
+
+def in_another_thread_while_compiling(fn):
+    """Return ``fn()``, run eagerly in a second thread while this thread compiles.
+
+    Since torch 2.13, ``torch.compiler.is_compiling()`` is True in every thread during
+    a compile, so code that guards an eager path with it skips that path here."""
+    result = {}
+
+    def backend(gm, example_inputs):
+        thread = threading.Thread(target=lambda: result.update(value=fn()))
+        thread.start()
+        thread.join()
+        return gm.forward
+
+    torch._dynamo.reset()
+    torch.compile(lambda x: torch.sin(x) + 1, backend=backend)(torch.randn(4))
+    return result["value"]

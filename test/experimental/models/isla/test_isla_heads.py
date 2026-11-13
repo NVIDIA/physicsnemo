@@ -30,6 +30,7 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.isla import ISLA
+from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.fields import RankSpec
 from test.experimental.models.isla._marks import requires_cuda_triton
 from test.experimental.models.isla._meshes import (
@@ -42,6 +43,7 @@ from test.experimental.models.isla._meshes import (
     soup,
     transform,
 )
+from test.experimental.models.isla._model_cases import _sphere_cells
 
 D = torch.float64
 
@@ -197,6 +199,32 @@ def test_covariance_of_every_rank_and_parity(K, improper):
             assert torch.allclose(
                 out[name], _transform(base[name], R, spec), atol=1e-11, rtol=0.0
             ), (name, K, improper)
+
+
+@pytest.mark.parametrize("dtype, tol", [(D, 1e-10), (torch.float32, 1e-3)])
+def test_a_closed_boundary_without_fields_or_globals_is_covariant(dtype, tol):
+    """With K = 0 and no field on a closed boundary every first-block token is alike,
+    so each slice's mean normal is the surface's vector area, zero up to roundoff;
+    the floor on its norm keeps that roundoff from becoming a direction that does not
+    rotate with the case."""
+    p, c = _sphere_cells(2)
+    m = _model(0, output_schema={"s": {"rank": 0}, "v": {"rank": 1}}, n_layers=3)
+    m = m.to(dtype)
+
+    def forward(R, shift=None):
+        mesh = transform(Mesh(points=p, cells=c), R, shift)
+        mesh = Mesh(points=mesh.points.to(dtype), cells=mesh.cells)
+        with torch.no_grad():
+            out = m(boundary_meshes={"wall": mesh}, prediction_boundaries=["wall"])
+        return {k: v.double() for k, v in outputs(out).items()}
+
+    base = forward(torch.eye(3, dtype=D))
+    for seed, improper in ((0, False), (1, True)):
+        R = orthogonal(3, seed, improper)
+        out = forward(R, torch.tensor([1.0, 2.0, -3.0], dtype=D))
+        for name, expect in (("s", base["s"]), ("v", base["v"] @ R.T)):
+            err = (out[name] - expect).abs().max() / base[name].abs().max()
+            assert err < tol, (name, seed, improper, err.item())
 
 
 def test_symmetric_outputs_are_symmetric():

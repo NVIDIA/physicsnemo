@@ -44,7 +44,6 @@ from physicsnemo.experimental.models.isla import _sampling as sampling
 from physicsnemo.experimental.models.isla import _segment_softmax as segment_softmax
 from physicsnemo.experimental.models.isla import _tree_build as tree_build
 from physicsnemo.experimental.models.isla import _tree_read as tree_read
-from physicsnemo.experimental.models.isla import _tree_walk as tree_walk
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
 from physicsnemo.experimental.models.isla._segment_softmax import PairPlan
 from physicsnemo.experimental.models.isla._tree_read import (
@@ -54,6 +53,7 @@ from physicsnemo.experimental.models.isla._tree_read import (
     kernel_geo_width,
 )
 from physicsnemo.mesh.sampling.systematic_sampling import _cumsum, _systematic_sample
+from physicsnemo.mesh.spatial._point_walk_warp import point_walk
 from test.experimental.models.isla._forced import ran
 from test.experimental.models.isla._geometry_cases import (
     _near_wall,
@@ -513,13 +513,13 @@ def test_the_model_repeats_bitwise_on_cuda_with_kernels_auto(task, dims, autocas
         fused_read.fused_node_means,
         segment_softmax.segment_softmax_read,
     )
-    with ran(tree_build.forest_tables, tree_walk.walk_pairs, *reads) as r:
+    with ran(tree_build.forest_tables, point_walk, *reads) as r:
         a, b = (_step(model, task, "cuda", autocast) for _ in range(2))
     kernels = _resolved(model, task, "cuda")
     if task != "surface":
         tables, walks = (
             r.returns(tree_build.forest_tables),
-            r.returns(tree_walk.walk_pairs),
+            r.returns(point_walk),
         )
         kernels["build"] = "fast" if tables and None not in tables else "reference"
         kernels["walk"] = "fast" if walks and None not in walks else "reference"

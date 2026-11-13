@@ -441,10 +441,11 @@ def test_the_eager_references_pass_gradcheck():
 
 
 # --------------------------------------------------------------------------- the whole model
-def _interior_model():
+def _ellipsoid_model(interior=True):
     """An interior model at ``tree_read_theta=0`` in float64 with every parameter
     shifted by seeded noise (some layers start at zero, the reads among them), an
-    ellipsoid's boundary and three prediction points outside it."""
+    ellipsoid's boundary and three prediction points outside it (``interior=False``:
+    the same model for the surface task, at its default angle)."""
     from physicsnemo.experimental.models.isla import ISLA
     from physicsnemo.mesh import Mesh
     from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
@@ -457,8 +458,7 @@ def _interior_model():
         hidden=32,
         n_layers=2,
         n_slices=8,
-        interior=True,
-        tree_read_theta=0.0,
+        **(dict(interior=True, tree_read_theta=0.0) if interior else {}),
     ).to(D)
     g = torch.Generator().manual_seed(1)
     with torch.no_grad():
@@ -482,7 +482,7 @@ def test_interior_outputs_point_derivative_matches_central_differences():
     (``h = 1e-5``: truncation and roundoff both near 1e-10 of the largest) to 1e-8
     of the largest. The read's pair invariants carry their gradient; without it the
     two differ by about 1e-2 of the largest."""
-    model, meshes, x0 = _interior_model()
+    model, meshes, x0 = _ellipsoid_model()
     auto = _point_grad(model, meshes, x0)
     h, fd = 1e-5, torch.zeros_like(x0)
     with torch.no_grad():
@@ -493,6 +493,44 @@ def test_interior_outputs_point_derivative_matches_central_differences():
             lo = model(boundary_meshes=meshes, prediction_points=x0 - e)
             fd[:, i] = (hi.point_data["p"] - lo.point_data["p"]) / (2 * h)
     assert float((auto - fd).abs().max()) <= 1e-8 * float(fd.abs().max())
+
+
+@pytest.mark.parametrize("interior", [True, False], ids=["interior", "surface"])
+def test_outputs_vertex_derivative_matches_central_differences(interior):
+    """The whole model at ``tree_read_theta=0`` in float64, on an asymmetric closed
+    body (an ellipsoid sheared along one axis: distinct variances and third moments,
+    so no tie of its frame): the autograd derivative of the summed outputs in the
+    boundary vertices, projected on seeded random directions, is the central
+    difference's (``h = 1e-5``, truncation near 1e-7 of the largest) to 5e-7 of the
+    largest. In the interior task every cell is a token, and its Horvitz-Thompson
+    weight carries its measure's gradient; without it the two differ by orders of
+    magnitude."""
+    from physicsnemo.mesh import Mesh
+    from test.experimental.models.isla._meshes import outputs
+
+    model, meshes, x = _ellipsoid_model(interior)
+    p, cells = meshes["wall"].points.clone(), meshes["wall"].cells
+    p[:, 0] += 0.3 * p[:, 1] ** 2
+
+    def f(points):
+        wall = {"wall": Mesh(points=points, cells=cells)}
+        if interior:
+            out = model(boundary_meshes=wall, prediction_points=x)
+        else:
+            out = model(boundary_meshes=wall, prediction_boundaries=["wall"])
+        return outputs(out)["p"].sum()
+
+    pg = p.clone().requires_grad_(True)
+    grad = torch.autograd.grad(f(pg), pg)[0]
+    g, h = torch.Generator().manual_seed(0), 1e-5
+    auto, fd = [], []
+    for _ in range(3):
+        v = torch.randn(p.shape, generator=g, dtype=D)
+        auto.append(float((grad * v).sum()))
+        with torch.no_grad():
+            fd.append(float((f(p + h * v) - f(p - h * v)) / (2 * h)))
+    auto, fd = torch.tensor(auto, dtype=D), torch.tensor(fd, dtype=D)
+    assert float((auto - fd).abs().max()) <= 5e-7 * float(fd.abs().max())
 
 
 def test_tree_read_basis_passes_gradcheck_in_the_geometry():

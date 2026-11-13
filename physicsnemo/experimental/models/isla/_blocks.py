@@ -316,9 +316,11 @@ class _SliceBlock(nn.Module):
         z_pos = torch.einsum("bns,bnc->bsc", a, r)  # (B, S, d)
         ### The mean normal of a near-uniform slice on a closed boundary nearly cancels,
         ### so its direction must not be bf16 noise: autocast off (a, n_hat at least float32).
+        ### A slice that cancels to roundoff (every token alike on a closed boundary) has
+        ### no direction: the floor keeps that roundoff small instead of normalizing it.
         with torch.autocast(a.device.type, enabled=False):
             m_s = torch.einsum("bns,bnc->bsc", a, n_hat)
-            m_s = m_s / m_s.norm(dim=-1, keepdim=True).clamp_min(eps)
+            m_s = m_s / m_s.norm(dim=-1, keepdim=True).clamp_min(1e-3)
         ### Geometry refines the routing and the readback. Pooling the invariants over
         ### slices before the projection equals projecting then pooling (the
         ### projection is affine and point_mix sums to one over slices), and saves a

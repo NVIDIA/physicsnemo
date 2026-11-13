@@ -30,6 +30,7 @@ import torch
 from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+from test.experimental.models.isla._forced import in_another_thread_while_compiling
 from test.experimental.models.isla._meshes import (
     cloud,
     law,
@@ -318,6 +319,32 @@ def test_unknown_and_missing_names_are_refused():
         match="boundary_meshes\\['outlet'\\].cell_data is missing the declared fields \\['T', 'p', 'u_rev'\\]",
     ):
         m(boundary_meshes={"outlet": meshes["slip"]}, global_data=GD)
+
+
+def test_the_eager_checks_hold_while_another_thread_compiles():
+    """Since torch 2.13 ``torch.compiler.is_compiling()`` is True in every thread while
+    any thread compiles; the input checks of an eager forward do not read it, so an
+    undeclared condition and a mesh without its fields are still refused in a thread
+    that runs while another compiles."""
+    m = _model()
+    meshes = _meshes()
+
+    def errors():
+        seen = []
+        for boundary_meshes in (
+            {**meshes, "wall": meshes["slip"]},
+            {"outlet": meshes["slip"]},
+        ):
+            try:
+                m(boundary_meshes=boundary_meshes, global_data=GD)
+            except ValueError as e:
+                seen.append(str(e))
+        return seen
+
+    seen = in_another_thread_while_compiling(errors)
+    assert len(seen) == 2
+    assert "which are not declared boundary conditions" in seen[0]
+    assert "is missing the declared fields" in seen[1]
 
 
 #: The conditions' parameters live in an nn.ModuleDict keyed by name, so a name that
