@@ -31,9 +31,9 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
-from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh import FieldSchema, Mesh, RankSpec
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.models.globe import GLOBE
 from test.models.globe._helpers import assert_globe_attributes
 
 ### Test fixtures and helpers

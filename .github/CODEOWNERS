@@ -83,6 +83,7 @@ docs/api/models/diffusion_unets.rst @megnvidia @CharlelieLrt
 docs/api/models/dit.rst @megnvidia @pzharrington
 docs/api/models/fnos.rst @megnvidia @ktangsali
 docs/api/models/fully_connected.rst @megnvidia @peterdsharpe
+docs/api/models/globe.rst @megnvidia @peterdsharpe
 docs/api/models/gnns.rst @megnvidia @mnabian
 docs/api/models/isla.rst @megnvidia @peterdsharpe
 docs/api/models/modules.rst @megnvidia @coreyjadams @CharlelieLrt @ktangsali @peterdsharpe
@@ -290,6 +291,9 @@ physicsnemo/models/figconvnet/ @coreyjadams
 physicsnemo/models/fno/ @ktangsali
 
 physicsnemo/models/geotransolver/ @coreyjadams @mnabian
+
+# GLOBE
+physicsnemo/models/globe/ @peterdsharpe
 
 # GraphCast and GNN
 physicsnemo/models/graphcast/ @mnabian
