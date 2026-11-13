@@ -60,6 +60,7 @@ import torch
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.isla import ISLA
 from test.experimental.models.isla import _model_cases as C
+from test.experimental.models.isla._marks import DEVICES
 from test.experimental.models.isla._meshes import outputs
 from test.experimental.models.isla._release_cases import (
     CHECKPOINTS,
@@ -149,24 +150,13 @@ PUBLIC_ATTRIBUTES = (
     "condition_log_shares",  # None with one declared condition, else a submodule
 )
 
-#: The private attributes the constructor derives from its arguments (the architecture's
-#: counts and layouts), whose values ``test_isla_constructor_attributes`` asserts too.
-DERIVED_ATTRIBUTES = (
-    "_n_true_basis",
-    "_n_pseudo_basis",
-    "_output_layouts",
-    "_n_head_coeffs",
-    "_n_query_features",
-    "_n_block_vecs",
-    "_n_block_tens",
-    "_n_boundary_vecs",
-    "_n_boundary_tens",
-    "_needs_frame",
-    "_global_vector_names",
-    "_global_scalar_names",
-    "_n_global_vectors",
-    "_n_global_scalars",
-)
+#: The head's width (its coefficients) per configuration of ``ATTRIBUTE_CONFIGS``. The
+#: defaults have K = 1 global direction: m = 2K + 3 = 5 true basis vectors, so p costs
+#: 1 and v 5. The custom configuration has K = 3 (g1, g2 and the direction the inlet's
+#: velocity defines) in two dimensions: m = 9 true basis vectors and K + 2 = 5
+#: pseudovectors, so a vector costs 9, a pseudovector 5, a symmetric rank-2 tensor
+#: m(m+1)/2 + 1 = 46 and a general one m^2 + 1 = 82.
+HEAD_WIDTHS = {"with_defaults": 6, "with_defaults_2d": 6, "with_custom_args": 144}
 
 #: Every constructor argument at a value other than its default: an interior task in
 #: two dimensions (rank-2 boundary inputs are refused there) with three conditions, a
@@ -220,21 +210,14 @@ def _ranks(schema) -> dict:
 
 
 def _expected_attributes(config: str) -> dict:
-    """The expected value of every public attribute and of every derived private one
-    (:data:`DERIVED_ATTRIBUTES`; a callable: a predicate)."""
+    """The expected value of every public attribute (a callable: a predicate)."""
     common = dict(
         training=True,
         meta=ISLA.MetaData(),
         logger=lambda v: isinstance(v, logging.Logger),
         block_activation_budget=1.0,
-        _n_query_features=2,  # the built-in distance channels
-        _needs_frame=True,
-        _n_boundary_tens=0,
-        _n_block_tens=0,
     )
     if config != "with_custom_args":
-        ### K = 1: m = 2K + 3 = 5 true basis vectors; (K+2)(K+1)/2 = 3 pseudovectors in
-        ### three dimensions, K + 2 = 3 in two.
         return dict(
             common,
             compile_blocks=False,
@@ -252,31 +235,15 @@ def _expected_attributes(config: str) -> dict:
             query_chunk_pairs=2**28,
             mlp_ratio=4,
             routing_temperature=10.0,
-            _global_vector_names=["g"],
-            _global_scalar_names=[],
-            _n_global_vectors=1,
-            _n_global_scalars=0,
             hidden=512,  # the class defaults
             n_layers=12,
             n_slices=128,
-            _n_boundary_vecs=0,
-            _n_block_vecs=0,
             boundary_names=("wall",),
-            _n_true_basis=5,
-            _n_pseudo_basis=3,
-            _output_layouts=lambda v: (
-                {k: lay.n_coeffs for k, lay in v.items()} == {"p": 1, "v": 5}
-            ),
-            _n_head_coeffs=1 + 5,
             qt=None,
             kernel_basis=None,
             kernel_reads=None,
             condition_log_shares=None,
         )
-    ### K = 3 (g1, g2 and the direction the inlet's velocity defines) in two
-    ### dimensions: m = 9 true basis vectors, K + 2 = 5 pseudovectors; a vector costs 9,
-    ### a pseudovector 5, a symmetric rank-2 tensor m(m+1)/2 + 1 = 46, a general one
-    ### m^2 + 1 = 82.
     return dict(
         common,
         compile_blocks=True,
@@ -310,23 +277,10 @@ def _expected_attributes(config: str) -> dict:
         query_chunk_pairs=1 << 20,
         mlp_ratio=2,
         routing_temperature=5.0,
-        _global_vector_names=["g1", "g2"],
-        _global_scalar_names=["re"],  # rho defines a scale: consumed, not appended
-        _n_global_vectors=3,
-        _n_global_scalars=1,
         hidden=64,
         n_layers=3,
         n_slices=16,
-        _n_boundary_vecs=1,
-        _n_block_vecs=1,
         boundary_names=("inlet", "outlet", "wall"),
-        _n_true_basis=9,
-        _n_pseudo_basis=5,
-        _output_layouts=lambda v: (
-            {k: lay.n_coeffs for k, lay in v.items()}
-            == {"p": 1, "q.s": 1, "u": 9, "w": 5, "stress": 46, "t": 82}
-        ),
-        _n_head_coeffs=144,
     )
 
 
@@ -350,9 +304,8 @@ def test_the_custom_configuration_sets_every_argument():
 def test_isla_constructor_attributes(config):
     """Every public attribute of the model (``vars``, not a submodule or a parameter)
     is in :data:`PUBLIC_ATTRIBUTES` and has its expected value, the default
-    configuration has exactly the listed ones (no stale entry), every derived private
-    one (:data:`DERIVED_ATTRIBUTES`) has its expected value, and the modules the
-    configuration implies are built."""
+    configuration has exactly the listed ones (no stale entry), and the modules the
+    configuration implies are built, the head at its width (:data:`HEAD_WIDTHS`)."""
     kw = ATTRIBUTE_CONFIGS[config]
     m = ISLA(**kw)
     found = _public_attributes(m)
@@ -360,9 +313,8 @@ def test_isla_constructor_attributes(config):
         sorted(set(found) - set(PUBLIC_ATTRIBUTES))
     )
     expected = _expected_attributes(config)
-    public = {k for k in expected if not k.startswith("_")}
+    public = set(expected)
     assert set(found) == public, sorted(set(found) ^ public)
-    assert set(expected) - public == set(DERIVED_ATTRIBUTES)
     if config == "with_defaults":
         assert set(PUBLIC_ATTRIBUTES) == public, sorted(set(PUBLIC_ATTRIBUTES) ^ public)
     for name, want in expected.items():
@@ -371,7 +323,7 @@ def test_isla_constructor_attributes(config):
     assert isinstance(m, Module) and m.reference_kernels is False
     hidden, n_layers = kw.get("hidden", 512), kw.get("n_layers", 12)
     assert len(m.blocks) == n_layers and m.norm_out.normalized_shape == (hidden,)
-    assert m.head.out_features == m._n_head_coeffs
+    assert m.head.out_features == HEAD_WIDTHS[config]
     assert list(m.boundary_conditions) == list(m.boundary_names)
     if m.interior:
         assert m.qt is not None and len(m.kernel_reads) == n_layers
@@ -411,13 +363,17 @@ def test_isla_knobs_have_their_defaults_and_are_validated():
         query_chunk_pairs=(0, 1.5, False),
         mlp_ratio=(0, 2.0, True),
         routing_temperature=(0.0, -1.0, float("inf"), float("nan"), True),
+        hidden=(0, 16.5, True),
+        n_layers=(0, 1.0),
+        n_slices=(0, -8, 8.0),
+        n_spatial_dims=(0, 2.9, True),
     )
     for name, values in bad.items():
         for value in values:
             with pytest.raises(
                 ValueError, match=f"^{name} must be a finite|^{name} must be a positive"
             ):
-                ISLA(**small, interior=True, **{name: value})
+                ISLA(**{**small, "interior": True, name: value})
     for name in ("tree_read_theta", "tree_read_leaf_size", "query_chunk_pairs"):
         with pytest.raises(ValueError, match=f"^{name} sets the interior task's"):
             ISLA(**small, **{name: 2})
@@ -450,6 +406,17 @@ def test_isla_forward_knobs_are_checked_on_assignment_and_overridable(tmp_path):
         1000,
     )
     assert isinstance(m.tree_read_theta, float) and isinstance(m.n_boundary_tokens, int)
+    ### A surface task refuses any value but the default, on assignment as in the
+    ### constructor, and takes the default.
+    s = ISLA(hidden=16, n_layers=1, n_slices=8, **IO)
+    for name, value in (
+        ("n_boundary_tokens", 5),
+        ("tree_read_theta", 0.3),
+        ("query_chunk_pairs", 7),
+    ):
+        with pytest.raises(ValueError, match=r"a surface task \(interior=False\)"):
+            setattr(s, name, value)
+        setattr(s, name, getattr(s, name))
     path = tmp_path / "isla.mdlus"
     m.save(str(path))
     over = dict(n_boundary_tokens=500, tree_read_theta=0.5, query_chunk_pairs=2**10)
@@ -466,6 +433,7 @@ def test_isla_forward_knobs_are_checked_on_assignment_and_overridable(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("config", list(CONFIGS))
 def test_isla_forward_non_regression(device, config):
     """The outputs of ``CONFIGS[config]`` against ``isla_<config>_v1.pth``. Regenerate:
@@ -492,6 +460,7 @@ def test_isla_forward_non_regression(device, config):
 V2_TOL = {("cpu", D): 1e-12, ("cpu", F): 1e-5, ("cuda", D): 1e-12, ("cuda", F): 1e-4}
 
 
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("config", list(V2_CONFIGS))
 def test_isla_forward_non_regression_v2(device, config, monkeypatch):
     """The outputs of each configuration of :data:`V2_CONFIGS` against
@@ -510,6 +479,7 @@ def test_isla_forward_non_regression_v2(device, config, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("device", DEVICES)
 def test_isla_query_chunks_non_regression(device, monkeypatch):
     """``query_chunks`` (every public method has a golden): the outputs of three
     ranges of the interior model's points, its pair counts (exact), and every parameter's
@@ -560,18 +530,10 @@ def _stored_args(path) -> dict:
 
 
 def _comparable(model) -> dict:
-    """The public and the derived private attributes in a comparable form (the output
-    layouts by their specs and coefficient indices, the logger by its name)."""
+    """The public attributes in a comparable form (the logger by its name)."""
     out = {}
-    derived = {k: getattr(model, k) for k in DERIVED_ATTRIBUTES}
-    for k, v in {**_public_attributes(model), **derived}.items():
-        if k == "_output_layouts":
-            v = {n: (lay.spec, lay.n_coeffs, lay.index) for n, lay in v.items()}
-            v = {
-                n: (s, c, None if i is None else i.tolist())
-                for n, (s, c, i) in v.items()
-            }
-        elif k == "logger":
+    for k, v in _public_attributes(model).items():
+        if k == "logger":
             v = v.name
         out[k] = v
     return out
@@ -595,6 +557,7 @@ def test_seeded_fills_leave_other_parameters_bitwise_when_one_is_removed():
     assert all(torch.equal(ga[k], gb[k]) for k in gb)
 
 
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("file_name", list(CHECKPOINTS))
 def test_isla_reference_checkpoint_matches_golden(device, file_name):
     """A committed reference checkpoint (of the current version) loads through

@@ -50,8 +50,8 @@ import torch
 
 import physicsnemo.experimental.models.isla._tree_build as tree_build
 import physicsnemo.experimental.models.isla._tree_read as tree_read
-import physicsnemo.experimental.models.isla._tree_walk as tree_walk
 import physicsnemo.experimental.models.isla.model as model_mod
+import physicsnemo.mesh.spatial.cluster_tree as cluster_tree
 from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.experimental.models.isla._tree_read import (
     KERNEL_READ_HEADS,
@@ -71,8 +71,9 @@ from physicsnemo.experimental.models.isla._tree_read import (
 )
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+from physicsnemo.mesh.spatial._point_walk_warp import point_walk
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
-from test.experimental.models.isla._forced import ran
+from test.experimental.models.isla._forced import in_another_thread_while_compiling, ran
 from test.experimental.models.isla._kernel_cases import (
     _basis_case,
     _basis_step,
@@ -559,82 +560,11 @@ def test_fast_walk_gives_the_reference_lists_in_the_reference_order(dim, dtype, 
     assert torch.equal(torch.sort(si[qi == 5]).values, torch.arange(f.n_cells))
 
 
-@pytest.mark.parametrize(
-    "device", ["cpu", pytest.param("cuda", marks=[pytest.mark.cuda, requires_cuda])]
-)
-@pytest.mark.parametrize(
-    "boxes,diagonals,autocast",
-    [
-        (torch.float32, torch.float32, False),
-        (torch.float64, torch.float64, False),
-        (torch.bfloat16, torch.bfloat16, False),
-        (torch.bfloat16, torch.float32, True),
-    ],
-    ids=["float32", "float64", "bfloat16", "bfloat16_boxes_under_autocast"],
-)
-def test_fast_walk_opening_test_is_the_references_at_the_threshold(
-    device, boxes, diagonals, autocast
-):
-    """Every node a one-leaf tree whose squared diagonal is the reference's own
-    ``min_dist_sq * theta^2`` for one point (not far) or one ulp below it (far): each
-    (point, node) decision of the fast walk is that of GLOBE's traversal, so the walk
-    rounds the test as torch does (its sum order, and the steps autocast runs in
-    float32 for a forest built under it)."""
-    from types import SimpleNamespace
-
-    from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
-
-    n, d, theta, dev = 256, 3, 0.7, torch.device(device)
-    g = torch.Generator().manual_seed(0)
-    scale = torch.logspace(-3, 3, n, dtype=D)[torch.randperm(n, generator=g)][:, None]
-    p, c = (
-        torch.randn(n, d, generator=g, dtype=D) * scale,
-        torch.randn(n, d, generator=g, dtype=D) * 3 * scale,
-    )
-    half = torch.rand(n, d, generator=g, dtype=D) * scale
-    p, lo, hi = (x.to(boxes).to(dev) for x in (p, c - half, c + half))
-    ar, one = torch.arange(n, device=dev), torch.ones(n, dtype=torch.long, device=dev)
-    with torch.autocast(dev.type, dtype=torch.bfloat16, enabled=autocast):
-        pt = p.t().contiguous()
-        gap = torch.clamp(
-            torch.maximum(pt - hi.t().contiguous(), lo.t().contiguous() - pt), min=0
-        )
-        at = (gap.pow(2).sum(dim=0) * theta**2).to(diagonals)
-        bits = {
-            torch.bfloat16: torch.int16,
-            torch.float32: torch.int32,
-            D: torch.int64,
-        }[diagonals]
-        below = torch.where(
-            at > 0, (at.view(bits) - 1).view(diagonals), at
-        )  # one ulp toward zero
-        diam_sq = torch.where(ar % 2 == 0, at, below)
-        leaves = torch.full((n,), -1, device=dev)
-        tree = ClusterTree(
-            node_aabb_min=lo, node_aabb_max=hi, node_diameter_sq=diam_sq, node_left_child=leaves,
-            node_right_child=leaves, leaf_start=ar, leaf_count=one, node_range_start=ar, node_range_count=one,
-            node_total_area=one.float(), sorted_source_order=ar, source_points=p.float(),
-            max_depth=torch.zeros((), dtype=torch.long, device=dev), root_ids=ar, batch_size=torch.Size([]),
-        )  # fmt: skip
-        plan = tree.find_point_interaction_pairs(p, theta=theta, validate=False)
-        forest = SimpleNamespace(
-            aabb_min=lo, aabb_max=hi, diameter_sq=diam_sq, coherent=torch.ones(n, dtype=torch.bool, device=dev),
-            left=leaves, right=leaves, node_offset=torch.arange(n + 1, device=dev), range_start=ar, range_count=one,
-            cells=ar, n_cells=n, levels=[],
-        )  # fmt: skip
-        qi, si, _ = tree_read.walk_pairs(forest, p, theta)
-    ref = torch.zeros(n, n, dtype=torch.bool, device=dev)
-    ref[plan.far_target_ids, plan.far_source_node_ids] = True
-    fast = torch.zeros_like(ref)
-    fast[qi[si >= n], si[si >= n] - n] = True
-    assert 0 < int(ref[ar, ar].sum()) < n
-    assert torch.equal(fast, ref)
-
-
 def test_tree_walk_resolution_and_the_models_walks_agree(monkeypatch):
     """``auto`` walks by the reference on CPU and at theta 0, a forced walk is kept and
-    an unknown one refused; the model's two walks (the resolver patched to force
-    each) give the same pairs, so the same outputs bitwise."""
+    an unknown one refused; the model's two walks (the resolvers patched to force
+    each, and Warp for the fast one) give the same pairs, so the same outputs
+    bitwise."""
     pts, nrm, w, _ = cloud(300, d=3, seed=1)
     f = BoundaryForest.build(pts, w, nrm, None, theta=1.0)
     assert tree_read.resolve_walk("auto", pts, 1.0, f) == "reference"
@@ -647,62 +577,17 @@ def test_tree_walk_resolution_and_the_models_walks_agree(monkeypatch):
     runs = {}
     for walk in ("reference", "fast"):
         monkeypatch.setattr(tree_read, "resolve_walk", lambda *a, w=walk: w)
-        with ran(tree_walk.walk_pairs) as r:
+        if walk == "fast":
+            monkeypatch.setattr(
+                cluster_tree, "_resolve_walk", lambda i, *a: i or "warp"
+            )
+        with ran(point_walk) as r:
             runs[walk] = outputs(_run(tree, mesh, drv, q))
-        assert (r.count(tree_walk.walk_pairs) > 0) == (walk == "fast")
-        assert None not in r.returns(tree_walk.walk_pairs)  # no silent fallback
+        assert (r.count(point_walk) > 0) == (walk == "fast")
+        assert None not in r.returns(point_walk)  # no silent fallback
     assert all(
         torch.equal(runs["fast"][k], runs["reference"][k]) for k in runs["reference"]
     )
-
-
-def test_fast_walk_falls_back_to_the_reference_past_its_limits(monkeypatch):
-    """A forest too deep for the count pass's stack is walked by the reference under
-    ``auto`` and refused under a forced ``"fast"``; so are lists past Warp's array
-    limit, found after the count pass."""
-    pts, nrm, w, _ = cloud(300, d=3, seed=1)
-    q, _, _, _ = cloud(40, d=3, seed=2, scale=(3.0,) * 3)
-    f = BoundaryForest.build(pts, w, nrm, None, theta=1.0)
-    qi, si, n_node = f.point_pairs(q, walk="reference")
-    on_cuda = types.SimpleNamespace(is_cuda=True, device=torch.device("cuda"))
-    assert tree_read.resolve_walk("auto", on_cuda, 1.0, f) == "fast"
-    with monkeypatch.context() as m:
-        m.setattr(tree_walk, "WALK_STACK", len(f.levels) + 1)
-        assert not tree_walk.walk_fits(f)
-        assert tree_read.resolve_walk("auto", on_cuda, 1.0, f) == "reference"
-        with pytest.raises(ValueError, match="does not take this forest"):
-            tree_read.resolve_walk("fast", q, 1.0, f)
-    monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", qi.numel())
-    with pytest.raises(ValueError, match="Warp's 2\\*\\*31"):
-        f.point_pairs(q, walk="fast")
-    monkeypatch.setattr(tree_read, "resolve_walk", lambda *a: "fast")
-    with ran(tree_walk.walk_pairs, ClusterTree.find_point_interaction_pairs) as r:
-        qi_a, si_a, n_node_a = f.point_pairs(q)
-        f.point_pairs(q)  # (the fallback is logged once per device)
-    assert r.returns(tree_walk.walk_pairs) == [None, None]
-    assert r.count(ClusterTree.find_point_interaction_pairs) > 0
-    assert torch.equal(qi_a, qi) and torch.equal(si_a, si) and n_node_a == n_node
-
-
-def test_fast_walk_leaves_boxes_past_warps_limit_to_the_reference(monkeypatch):
-    """The walk hands each node table's boxes to Warp as one flat array of
-    ``n_nodes * d`` entries, up to ``2 N d`` for N cells: from Warp's element limit on
-    the forest does not fit, ``auto`` walks it by the reference and a forced
-    ``"fast"`` refuses it, though the points' arrays fit."""
-    pts, nrm, w, _ = cloud(300, d=3, seed=1)
-    q, _, _, _ = cloud(40, d=3, seed=2, scale=(3.0,) * 3)
-    f = BoundaryForest.build(pts, w, nrm, None, theta=1.0)
-    on_cuda = types.SimpleNamespace(is_cuda=True, device=torch.device("cuda"))
-    entries = f.aabb_min.numel()
-    assert entries == 3 * f.n_nodes and q.shape[0] * max(3, len(f.trees)) < entries
-    monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", entries + 1)
-    assert tree_walk.walk_fits(f)
-    assert tree_read.resolve_walk("auto", on_cuda, 1.0, f) == "fast"
-    monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", entries)
-    assert not tree_walk.walk_fits(f)
-    assert tree_read.resolve_walk("auto", on_cuda, 1.0, f) == "reference"
-    with pytest.raises(ValueError, match="does not take this forest"):
-        f.point_pairs(q, walk="fast")
 
 
 _KERNELS = pytest.mark.parametrize("kernel", ["reference", "fast"])
@@ -1608,8 +1493,9 @@ def test_fast_forest_build_is_the_reference_forest(dim, dtype, autocast, device)
 
 
 def test_fast_forest_build_makes_its_trees_on_first_use():
-    """The fast build makes no ``ClusterTree``: the fast walk reads the tables alone,
-    and the first reference walk makes the trees, once, and walks the same lists."""
+    """The fast build makes no per-face ``ClusterTree``: the fast walk reads the tables
+    alone, and the first reference walk makes the trees, once, and walks the same
+    lists."""
     pts, nrm, w, _ = cloud(1500, d=3, seed=21, dtype=torch.float32)
     q = pts[:50] * 1.5 + 0.25
     f = BoundaryForest.build(
@@ -1674,6 +1560,21 @@ def test_tree_read_kernel_is_the_tree_reads_one_execution_attribute(monkeypatch)
         m._tree_read_kernel = bad
         with pytest.raises(ValueError, match="tree_read_kernel must be"):
             _run(m, mesh, drv, q)
+
+
+def test_tree_build_auto_logs_its_choice_in_another_thread_while_one_compiles(
+    caplog, monkeypatch
+):
+    """The build's "auto" logs its choice in eager code that runs while another
+    thread compiles (a data-loading thread, say): only a trace skips the log."""
+    monkeypatch.setattr(tree_build, "_LOGGED", set())
+    caplog.set_level(logging.INFO, logger=tree_build.__name__)
+    chosen = in_another_thread_while_compiling(
+        lambda: tree_build.resolve_tree_build("auto", torch.zeros(4, 3))
+    )
+    assert chosen == "reference"
+    logged = [r.getMessage() for r in caplog.records]
+    assert sum("tree_build=auto resolved to 'reference'" in m for m in logged) == 1
 
 
 def test_fast_forest_build_refuses_what_it_cannot_build():
@@ -2205,6 +2106,29 @@ def test_fused_node_means_match_the_reference(dtype):
     _two_x(
         "means", res[1][0], res[0][0], exact, 1e-6 if dtype == torch.float32 else 1e-3
     )
+
+
+@pytest.mark.cuda
+@requires_cuda_triton
+def test_fused_node_means_refuse_a_second_derivative():
+    """The fused node means' backward is one Triton pass, not differentiable: a
+    second backward pass through it raises instead of leaving out its term."""
+    from physicsnemo.experimental.models.isla._fused_read import fused_node_means
+
+    mesh, _, _ = _sphere_case(n=300, nq=10)
+    dev = torch.device("cuda")
+    pts = mesh.cell_centroids.float().to(dev)
+    w = mesh.cell_data[EFFECTIVE_MEASURE_KEY].float().to(dev)
+    omega = w / w.sum()
+    forest = BoundaryForest.build(
+        pts, omega, mesh.cell_normals.float().to(dev), None, theta=1.0
+    )
+    x = torch.randn(pts.shape[0], 8, device=dev, requires_grad=True)
+    (gx,) = torch.autograd.grad(
+        fused_node_means(x, forest, omega).square().sum(), x, create_graph=True
+    )
+    with pytest.raises(RuntimeError, match="once_differentiable"):
+        (gx.square().sum() + x.sum()).backward()
 
 
 def _chunked_step(m, kw, loss_of, size):

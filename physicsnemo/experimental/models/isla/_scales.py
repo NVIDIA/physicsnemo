@@ -234,6 +234,11 @@ def parse_scales(
                 raise ValueError(
                     f"{kind}[{name!r}]: a scale is defined by a rank-1 field or a rank-0 global; got rank {rank}"
                 )
+            if defined is not None and rank == 1 and local.get("units", {defined: 1}) != {defined: 1}:
+                raise ValueError(
+                    f"{kind}[{name!r}]: a rank-1 field that defines the scale {defined!r} has the units "
+                    f"{{{defined!r}: 1}}, declared or not; got {local['units']!r}"
+                )
             if (
                 defined is not None
                 and rank == 0
@@ -263,8 +268,13 @@ def parse_scales(
         if e.get("units") and DEFINES not in e and global_schema[n].rank == 0
     }
     global_scale = {n: e["scale"] for n, e in g_extras.items() if "scale" in e}
+    ### A rank-1 field that defines a scale S has the units {S: 1} (its RMS magnitude is S).
     boundary_units = {
-        c: {n: e["units"] for n, e in extras.items() if e.get("units")}
+        c: {
+            n: e.get("units") or {e[DEFINES]: 1}
+            for n, e in extras.items()
+            if e.get("units") or DEFINES in e
+        }
         for c, extras in b_extras.items()
     }
     boundary_scale = {
@@ -386,7 +396,7 @@ def case_scales(
     defines: Mapping[str, Sequence[tuple[str, str]] | str] | None = None,
     global_data: TensorDict | Mapping[str, torch.Tensor] | None = None,
 ) -> dict[str, torch.Tensor]:
-    r"""A case's scales, as :class:`~physicsnemo.experimental.models.isla.model.ISLA`
+    r"""A case's scales, as :class:`~physicsnemo.experimental.models.isla.ISLA`
     computes them from its boundary and its global inputs.
 
     A model needs these scales to make a case's fields dimensionless. They depend

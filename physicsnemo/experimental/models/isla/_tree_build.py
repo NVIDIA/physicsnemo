@@ -44,6 +44,7 @@ import torch.nn.functional as F
 
 from physicsnemo.mesh.spatial.bvh import _MORTON_SPREAD_STEPS
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
+from physicsnemo.utils._tracing import is_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def resolve_tree_build(build: str, points: torch.Tensor) -> str:
     ok = points.is_cuda and points.shape[-1] in (2, 3)
     chosen = "fast" if ok else "reference"
     key = (points.device.type, chosen)
-    if key not in _LOGGED and not torch.compiler.is_compiling():
+    if key not in _LOGGED and not is_tracing():
         _LOGGED.add(key)
         logger.info(
             "ISLA tree_build=auto resolved to %r on %s (cuda=%s, dim=%d)",

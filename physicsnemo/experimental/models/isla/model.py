@@ -157,7 +157,8 @@ its cells.
 ``global_schema`` or of ``output_schema`` may declare ``units``: exponents of
 named scales, such as ``{"L": -1, "E": 1}``. The scales are the built-in length
 :math:`L` above and the scales the fields define (``E`` here). A field defines a
-scale with ``defines: <name>``. Rank-1 boundary fields (pooled) or one rank-1
+scale with ``defines: <name>``; a rank-1 one has the units ``{<name>: 1}``,
+declared or not, and no others. Rank-1 boundary fields (pooled) or one rank-1
 global define one scale, :math:`S = (\sum a |v|^2 / \sum a)^{1/2}`: the
 measure-weighted RMS magnitude over the boundary sources' full-resolution cells,
 or a global source's magnitude. With boundary sources, :math:`\hat g = \sum a v /
@@ -258,7 +259,10 @@ systematic sampling along the Morton order of the cell centroids. The count is
 exactly :math:`\min(\text{cells}, \text{n\_boundary\_tokens})`, a function of the
 cell counts only, so the draw keeps static shapes. Each kept cell's measure is its
 Horvitz-Thompson weight :math:`a_i / \pi_i`, so every measure-weighted read is an
-unbiased quadrature of the full surface, exact on a boundary kept whole. The
+unbiased quadrature of the full surface, exact on a boundary kept whole. The weight
+takes the gradient of :math:`a_i` in the vertices with the kept cells and
+:math:`\pi_i` held fixed (exact on a boundary kept whole, where :math:`\pi_i = 1`;
+otherwise the kept set changes in jumps as the vertices move). The
 sample is spread along the space-filling curve, so every part of the surface is
 represented. In training the draw's start is uniform from the global torch RNG
 (``torch.manual_seed`` reproduces it). In evaluation it is fixed, so inference is
@@ -295,7 +299,7 @@ bitwise. Each piece of the interior task's tree read (the forest build, the walk
 and the read with its node means) runs its fast kernel where that piece's
 requirements hold, and its reference otherwise, logging each choice once. The
 forest and the pairs are the same either way, and the read is the same up to
-summation order. Setting :attr:`ISLA.reference_kernels` to ``True`` runs every
+summation order. Setting :attr:`~physicsnemo.experimental.models.isla.ISLA.reference_kernels` to ``True`` runs every
 one of these on its reference path: the eager geometry region, the reference
 search and every piece's reference read. It is an execution choice, not a
 constructor argument, so a checkpoint does not store it and a loaded model starts
@@ -329,7 +333,7 @@ blocks take plain tensors.
 The surface task's whole model, ``Mesh`` inputs and output included, compiles with
 ``model.compile(fullgraph=True, dynamic=True)`` into one graph for every boundary
 count, boundary inputs up to rank 2 (``test_isla_compile.py``). **Compile it with**
-:meth:`ISLA.compile`, **not** ``torch.compile(model)``: on torch 2.13
+:meth:`~physicsnemo.experimental.models.isla.ISLA.compile`, **not** ``torch.compile(model)``: on torch 2.13
 Inductor's default options make the compiled model compute a different function
 wherever it runs the eager geometry region, without an error or a warning. The interior task
 does not: its boundary read sizes its pairs from the data and breaks a
@@ -407,6 +411,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, cell_measures
 from physicsnemo.mesh.fields import FieldSchema, FieldSchemaLike
 from physicsnemo.mesh.sampling.systematic_sampling import _draw_inputs
+from physicsnemo.utils._tracing import is_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -469,7 +474,7 @@ def _hint_token_axis(n, widths) -> None:
     loop of a ``(B, n, k)`` tensor as ``(n, k)``. :func:`torch._check` records
     each (always true) fact as a guard, which those static checks then read.
     Skipped in eager mode, where every fact is trivially true; the test is
-    ``is_compiling()`` since dynamo traces a SymInt as an int.
+    ``is_tracing()`` since dynamo traces a SymInt as an int.
 
     The CantSplit failure is an Inductor bug in torch 2.13, fixed
     from torch 2.14.0 on. Its trigger in ISLA is an affine LayerNorm over a
@@ -479,7 +484,7 @@ def _hint_token_axis(n, widths) -> None:
     2.14.0, after checking that compiles across token counts still produce
     one graph: without these hints, torch 2.14 compiled a second graph when
     the token count doubled."""
-    if torch.compiler.is_compiling():
+    if is_tracing():
         for k in widths:
             torch._check(k * n % n == 0)
 
@@ -494,7 +499,7 @@ def _pad_tokens(tokens: TensorDict, alignment: int) -> TensorDict:
     pad = -n % alignment
     ### In eager mode an aligned count keeps the tokens as they are. A compiled graph
     ### always pads: a test of pad == 0 would guard the dynamic token count on it.
-    if not torch.compiler.is_compiling() and pad == 0:
+    if not is_tracing() and pad == 0:
         return tokens
 
     ### F.pad rather than a concatenated block of pad tokens: under dynamic shapes
@@ -537,11 +542,28 @@ def _token_count(name: str, value) -> int:
     return int(value)
 
 
-def _checked_knob(name: str, check, doc: str) -> property:
+def _checked_knob(name: str, check, doc: str, default, surface: str) -> property:
     """A knob the forward pass reads, as a property whose every assignment, the
-    constructor's and a later one, is checked by ``check(name, value)``."""
+    constructor's and a later one, is checked by ``check(name, value)``. The knob
+    belongs to the interior task, so a surface task refuses any value but
+    ``default``, with the message ``surface`` (formatted with ``default`` and
+    ``value``)."""
     attr = f"_{name}"
-    return property(lambda self: getattr(self, attr), lambda self, value: setattr(self, attr, check(name, value)), doc=doc)
+
+    def set_(self, value):
+        value = check(name, value)
+        if getattr(self, "interior", True) is False and value != default:
+            raise ValueError(surface.format(name=name, default=default, value=value))
+        setattr(self, attr, value)
+
+    return property(lambda self: getattr(self, attr), set_, doc=doc)
+
+
+#: A surface task's refusal of a boundary-read knob (:func:`_checked_knob`).
+_READ_KNOB_ON_SURFACE = (
+    "{name} sets the interior task's boundary read; a surface task (interior=False) "
+    "has none, so it takes the default ({default!r}); got {value!r}"
+)
 
 
 def _refuse_earlier_state_dict(module, state_dict, prefix, local_metadata, *args) -> None:
@@ -840,12 +862,13 @@ class ISLA(Module):
         the output jumps where a cluster's admission changes, in the point and in
         the boundary's vertices, and a cluster's position and normal take no
         gradient. At 0 the read is smooth, and the model's derivatives in the
-        prediction points are complete. Its derivatives in the boundary's
-        vertices also pass through each slice's mean normal, which can be near
-        zero on a closed boundary whose cells carry no fields, and are then not
-        reliable. Read a model at the angle it was trained at: a cluster's
-        aggregate is what the kernel learns to read. A finite number at least 0;
-        a surface task takes only the default.
+        prediction points and in the boundary's vertices are complete. When the
+        interior task keeps fewer boundary tokens than cells, the kept set
+        changes in jumps as the vertices move, and the vertex derivative holds
+        the kept cells and their inclusion probabilities fixed (the token draw,
+        in the module docstring). Read a model at the angle it was trained
+        at: a cluster's aggregate is what the kernel learns to read. A finite
+        number at least 0; a surface task takes only the default.
     tree_read_leaf_size : int, optional, default=4
         Interior task only: the boundary cells per leaf of the read's trees. At
         :math:`\theta > 0` a leaf that is not read as a cluster is read cell by
@@ -1079,14 +1102,28 @@ class ISLA(Module):
 
     #: The knobs the forward pass reads (the docstring), checked on every assignment as
     #: the constructor checks them, and overridable in ``Module.from_checkpoint``.
-    n_boundary_tokens = _checked_knob("n_boundary_tokens", _token_count, "The interior task's boundary tokens per case.")
+    n_boundary_tokens = _checked_knob(
+        "n_boundary_tokens",
+        _token_count,
+        "The interior task's boundary tokens per case.",
+        _BOUNDARY_TOKENS,
+        "n_boundary_tokens is the interior task's budget of boundary tokens; a surface "
+        "task (interior=False) reads every boundary cell it is given and samples "
+        "none, so it takes the default ({default}); got {value!r}",
+    )
     tree_read_theta = _checked_knob(
         "tree_read_theta",
         lambda name, value: _real_knob(name, value, positive=False),
         "The boundary read's Barnes-Hut opening angle.",
+        TREE_READ_THETA,
+        _READ_KNOB_ON_SURFACE,
     )
     query_chunk_pairs = _checked_knob(
-        "query_chunk_pairs", _integer_knob, "The most walk pairs a chunk of prediction points reads in forward."
+        "query_chunk_pairs",
+        _integer_knob,
+        "The most walk pairs a chunk of prediction points reads in forward.",
+        _QUERY_CHUNK_PAIRS,
+        _READ_KNOB_ON_SURFACE,
     )
     _overridable_args = {"n_boundary_tokens", "tree_read_theta", "query_chunk_pairs"}
 
@@ -1125,9 +1162,9 @@ class ISLA(Module):
         ### The head's basis and coefficient count depend on the spatial dimension d
         ### (pseudovectors by the Levi-Civita construction), so d is a constructor
         ### argument and forward checks the points against it.
-        if int(n_spatial_dims) < 2:
+        self.n_spatial_dims = _integer_knob("n_spatial_dims", n_spatial_dims)
+        if self.n_spatial_dims < 2:
             raise ValueError(f"n_spatial_dims must be at least 2, got {n_spatial_dims!r}")
-        self.n_spatial_dims = int(n_spatial_dims)
         ### Every input and output is a named field of declared rank; the grammar
         ### is the mesh models' shared one (physicsnemo.mesh.fields), flattened to
         ### dotted names here. The ISLA-local keys of a field (units, defines, scale;
@@ -1200,12 +1237,6 @@ class ISLA(Module):
                 f"surface) is implemented in two and three dimensions; got n_spatial_dims={self.n_spatial_dims}"
             )
         self.n_boundary_tokens = n_boundary_tokens
-        if not self.interior and n_boundary_tokens != _BOUNDARY_TOKENS:
-            raise ValueError(
-                "n_boundary_tokens is the interior task's budget of boundary tokens; a surface "
-                "task (interior=False) reads every boundary cell it is given and samples "
-                f"none, so it takes the default ({_BOUNDARY_TOKENS}); got {n_boundary_tokens!r}"
-            )
         ### The tunable knobs (the docstring). The boundary read's are the interior
         ### task's, so a surface task takes their defaults, as it does n_boundary_tokens'.
         self.tree_read_theta = tree_read_theta
@@ -1213,18 +1244,12 @@ class ISLA(Module):
         self.query_chunk_pairs = query_chunk_pairs
         self.mlp_ratio = _integer_knob("mlp_ratio", mlp_ratio)
         self.routing_temperature = _real_knob("routing_temperature", routing_temperature, positive=True)
-        if not self.interior:
-            for name, default in (
-                ("tree_read_theta", TREE_READ_THETA),
-                ("tree_read_leaf_size", TREE_READ_LEAF_SIZE),
-                ("query_chunk_pairs", _QUERY_CHUNK_PAIRS),
-            ):
-                if getattr(self, name) != default:
-                    raise ValueError(
-                        f"{name} sets the interior task's boundary read; a surface task "
-                        f"(interior=False) has none, so it takes the default ({default!r}); "
-                        f"got {getattr(self, name)!r}"
-                    )
+        if not self.interior and self.tree_read_leaf_size != TREE_READ_LEAF_SIZE:
+            raise ValueError(
+                _READ_KNOB_ON_SURFACE.format(
+                    name="tree_read_leaf_size", default=TREE_READ_LEAF_SIZE, value=self.tree_read_leaf_size
+                )
+            )
         ### Checkpoints store the constructor arguments as JSON. Recording the parsed
         ### schemas (a FieldSchema is a dict), merged with their ISLA-local keys, keeps
         ### the metadata JSON-safe whatever container the caller passed (a Hydra
@@ -1261,9 +1286,9 @@ class ISLA(Module):
         ### (torch.autograd.graph.region_activation_memory_budget). Read when the blocks
         ### are first compiled.
         self.block_activation_budget = 1.0
-        self.hidden = int(hidden)
-        self.n_layers = int(n_layers)
-        self.n_slices = int(n_slices)
+        self.hidden = _integer_knob("hidden", hidden)
+        self.n_layers = _integer_knob("n_layers", n_layers)
+        self.n_slices = _integer_knob("n_slices", n_slices)
         ### Each boundary condition's fields, each set with its own invariant layout
         ### (_InputSet). A condition's block vectors and tensors reach the slice
         ### layers through its own linear maps onto shared channels, as many as the
@@ -1387,7 +1412,7 @@ class ISLA(Module):
         ### _tree_read_kernel names the read's implementation, as _geo_kernel does the
         ### geometry region's: "reference" (the per-face cluster trees, GLOBE's walk,
         ### the kernel term a matmul read by _segment_softmax.py) or "auto", where the
-        ### forest build (_tree_build.py), the walk (_tree_walk.py) and the read
+        ### forest build (_tree_build.py), the walk (the library's Warp walk) and the read
         ### (_fused_read.py: the kernel term computed inside the read, nothing per pair
         ### kept but the basis) each take their fast path where their own requirements
         ### hold. reference_kernels sets it.
@@ -1550,7 +1575,9 @@ class ISLA(Module):
         one on its reference path: the eager geometry region, the reference search
         and the reference tree read. Both compute the same outputs up to summation
         order (module docstring, *Kernels*). A checkpoint does not store this
-        execution choice, and a loaded model starts at ``False``.
+        execution choice, and a loaded model starts at ``False``. Second-order
+        gradients need ``True``: the fast kernels' backward passes are not
+        differentiable (a second ``backward()`` through one raises).
 
         Returns
         -------
@@ -1585,7 +1612,7 @@ class ISLA(Module):
             return cached[1]
         reason = self._geo_kernel_unsupported(points, amp)
         chosen = "eager" if reason else "fused"
-        if torch.compiler.is_compiling():
+        if is_tracing():
             ### Inside a traced region: no cache write and no logging (a logger
             ### call breaks fullgraph=True, a module write adds a recompile guard).
             return chosen
@@ -1639,7 +1666,7 @@ class ISLA(Module):
             return cached[1]
         ok = points.is_cuda and _fused_read.HAS_TRITON and points.dtype != torch.float64
         chosen = "fused" if ok else "reference"
-        if torch.compiler.is_compiling():
+        if is_tracing():
             return chosen
         self._tree_read_kernel_cache = (key, chosen)
         logger.info(
@@ -1670,7 +1697,7 @@ class ISLA(Module):
         from physicsnemo.experimental.models.isla._geometry_fast import HAS_TRITON
 
         chosen = "fast" if points.is_cuda and HAS_TRITON else "reference"
-        if torch.compiler.is_compiling():
+        if is_tracing():
             return chosen
         self._geometry_kernel_cache = (key, chosen)
         logger.info(
@@ -1678,10 +1705,17 @@ class ISLA(Module):
         )
         return chosen
 
+    def __getstate__(self):
+        """The state without the compiled blocks, which hold this model's blocks: a
+        deep copy or an unpickled model compiles its own at its first forward."""
+        state = super().__getstate__()
+        state["_block_forwards"] = state["_block_reads"] = None
+        return state
+
     def _block_callables(self):
         r"""The slice blocks as callables: the modules themselves, or their forwards
         under :func:`torch.compile` when ``compile_blocks`` is set (built once)."""
-        if not self.compile_blocks or torch.compiler.is_compiling():
+        if not self.compile_blocks or is_tracing():
             return self.blocks
         if self._block_forwards is None:
             self._block_forwards = [self._compile_block(block.forward) for block in self.blocks]
@@ -1690,12 +1724,12 @@ class ISLA(Module):
     def _reads_compiled(self) -> bool:
         """Whether the boundary reads run their projections compiled (``compile_blocks``
         outside a whole-model compile)."""
-        return self.compile_blocks and not torch.compiler.is_compiling()
+        return self.compile_blocks and not is_tracing()
 
     def _block_read_callables(self):
         r"""The slice blocks' passive reads (:meth:`_SliceBlock.read`), compiled as
         :meth:`_block_callables` compiles their forwards."""
-        if not self.compile_blocks or torch.compiler.is_compiling():
+        if not self.compile_blocks or is_tracing():
             return [block.read for block in self.blocks]
         if self._block_reads is None:
             self._block_reads = [self._compile_block(block.read) for block in self.blocks]
@@ -1715,7 +1749,7 @@ class ISLA(Module):
             inner, warned = fn, self._budget_eager_warned
 
             def fn(*args, **kwargs):
-                if not torch.compiler.is_compiling():
+                if not is_tracing():
                     ### Past Dynamo's recompile limit this frame runs eager, where the
                     ### budget's context raises and no partitioner saves anything:
                     ### say so once, when a backward pass can follow.
@@ -1787,7 +1821,7 @@ class ISLA(Module):
         for name, spec in self.global_schema.items():
             shape, width = spec.shape(self.n_spatial_dims), spec.numel(self.n_spatial_dims)
             t = data.get(FieldSchema.key(name))
-            if not torch.compiler.is_compiling():
+            if not is_tracing():
                 if not isinstance(t, torch.Tensor) or t.numel() % width:
                     raise ValueError(
                         f"global_data[{name!r}]: expected {width} values per case, got "
@@ -1800,12 +1834,13 @@ class ISLA(Module):
             rows.set(FieldSchema.key(name), t.reshape(1, *shape).to(like.dtype))
         return rows
 
-    def _global_fields(self, global_rows: TensorDict, like, scales: dict | None = None):
+    def _global_fields(self, global_rows: TensorDict, like, scales: dict | None = None, g_dir=None):
         r"""The unit global directions (B, K, d) and the global scalars (B, S)
         (``None`` when none are declared) from the global fields over the batch
         (:meth:`_global_rows`), each kind's columns in schema order; with
         ``scales`` (:meth:`_case_scales`) the rank-0 globals divided by their
-        units' scale and the derived direction ``g`` appended to the directions."""
+        units' scale, and the derived direction ``g_dir``, if any, appended to the
+        directions."""
         if self._global_vector_names:
             gv = _pack(global_rows, self._global_vector_layout).unflatten(-1, (-1, self.n_spatial_dims))
             ### Each direction is normalized; the magnitude, if it means anything,
@@ -1825,8 +1860,8 @@ class ISLA(Module):
                     for n in self._global_scalar_names
                 ]
             )
-        if scales["g"] is not None:
-            g_unit = torch.cat([g_unit, scales["g"].to(g_unit.dtype).expand(g_unit.shape[0], 1, -1)], 1)
+        if g_dir is not None:
+            g_unit = torch.cat([g_unit, g_dir.to(g_unit.dtype).expand(g_unit.shape[0], 1, -1)], 1)
         return g_unit, g_scalars
 
     @staticmethod
@@ -1837,20 +1872,21 @@ class ISLA(Module):
         which :func:`~physicsnemo.experimental.models.isla.case_scales` shares)."""
         return length_unit(meshes, measures)
 
-    def _case_scales(self, names, meshes, measures, global_rows: TensorDict, gauge, tests: list) -> dict:
+    def _case_scales(self, names, meshes, measures, global_rows: TensorDict, gauge, tests: list) -> tuple:
         r"""The case's scales in float64 from its full-resolution boundary and its
         globals, before the token draw, by name: ``L`` (the gauge), the scale the
         rank-1 fields define (the measure-weighted RMS magnitude pooled over the
-        boundary sources, or the global source's magnitude), each scale a rank-0
-        global defines (its value), and ``g``, the derived direction ``(1, 1, d)``
-        (``None`` unless the sources are boundary fields). An absent or zero
-        source, or a non-positive value, is refused in eager mode: an absent one
-        here, the others as flags on the device with their messages, appended to
-        ``tests`` for :meth:`_case_inputs` to read. Under torch.compile these
-        data-dependent checks are skipped (as every input check of ``forward`` is),
-        so a compiled model reads such a case as NaN or inf."""
-        check = not torch.compiler.is_compiling()
-        scales = {"L": gauge.reshape(()).double(), "g": None}
+        boundary sources, or the global source's magnitude) and each scale a rank-0
+        global defines (its value); and apart from them, so that no scale's name
+        can collide with it, the derived direction ``g`` ``(1, 1, d)`` (``None``
+        unless the sources are boundary fields). An absent source is refused
+        here, in eager mode and under torch.compile alike (it is structural); a zero
+        source or a non-positive value in eager mode, as flags on the device with
+        their messages, appended to ``tests`` for :meth:`_case_inputs` to read. Under
+        torch.compile these data-dependent checks are skipped (as every input check
+        of ``forward`` is), so a compiled model reads such a case as NaN or inf."""
+        check = not is_tracing()
+        scales, g_dir = {"L": gauge.reshape(()).double()}, None
         if self._boundary_sources:
             present = dict(zip(names, zip(meshes, measures)))
             s0, s2, s1 = rms_moments(
@@ -1862,7 +1898,7 @@ class ISLA(Module):
                 f"the sources {self._boundary_sources!r} of the scale {self._rms_scale!r} are absent from this "
                 "case, have no cells or are zero everywhere: the scale is undefined"
             )
-            if check and not isinstance(s0, torch.Tensor):
+            if not isinstance(s0, torch.Tensor):
                 raise ValueError(absent)
             norm = s1.norm()
             if check:
@@ -1875,7 +1911,7 @@ class ISLA(Module):
                     ),
                 ]
             scales[self._rms_scale] = (s2 / s0).sqrt()
-            scales["g"] = (s1 / norm)[None, None]
+            g_dir = (s1 / norm)[None, None]
         elif self._global_sources:
             v = global_rows.get(FieldSchema.key(self._global_sources[0]))[0].double()
             scales[self._rms_scale] = v.norm()
@@ -1896,7 +1932,7 @@ class ISLA(Module):
                         lambda key=key, n=n: f"the scale {key!r} ({n!r}) must be positive; got {scales[key].item()}",
                     )
                 )
-        return scales
+        return scales, g_dir
 
     @staticmethod
     def _input_factor(units, c, scales) -> torch.Tensor:
@@ -2107,7 +2143,7 @@ class ISLA(Module):
             )
         ### Skipped under torch.compile, where listing the leaves would guard on
         ### their order (the strict select below still fails on a missing leaf).
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             missing = _missing_fields(self.global_schema, td)
             if missing:
                 raise ValueError(f"global_data is missing the declared fields {missing!r}")
@@ -2145,10 +2181,6 @@ class ISLA(Module):
             ### prediction points in chunks of at most query_chunk_pairs walk pairs.
             chunks = QueryChunks(self, c, detach=False)
             spans = chunks.spans(self.query_chunk_pairs)
-            if len(spans) > 1:
-                ### Many points: each chunk counts its own pairs again rather than
-                ### hold the count pass of every point and tree (24 bytes each) through the chunks.
-                chunks._walk.counts = None
             if len(spans) > 1 and not self._forward_chunks_logged:
                 self._forward_chunks_logged = True
                 logger.info(
@@ -2236,7 +2268,7 @@ class ISLA(Module):
         interior task's :class:`QueryChunks`)."""
         ### Validation at the API boundary (skipped under torch.compile): fail
         ### here with the offending mesh, not inside the network.
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             self._validate_meshes(boundary_meshes, prediction_points, prediction_boundaries)
         ### The given conditions in canonical order.
         names = [name for name in self.boundary_names if name in boundary_meshes]
@@ -2261,7 +2293,7 @@ class ISLA(Module):
         ### transfer to the host, and none while the device still runs what was queued
         ### before this call. Nothing in between raises on the values they test.
         tests: list = []
-        if not torch.compiler.is_compiling():
+        if not is_tracing():
             for name, m, w in zip(names, meshes, measures):
                 if m.n_cells:
                     tests.append(
@@ -2287,14 +2319,32 @@ class ISLA(Module):
                             "quadrature weights are undefined",
                         )
                     )
+                    for field in self.boundary_schemas[name]:
+                        tests.append(
+                            (
+                                torch.isfinite(m.cell_data.get(FieldSchema.key(field))).all(),
+                                lambda name=name, field=field: f"boundary_meshes[{name!r}].cell_data[{field!r}] has a "
+                                "non-finite value: repair or remove its cells before the forward pass",
+                            )
+                        )
         like = meshes[0].points
         global_td = self._select_global_data(global_data, like.device)
         global_rows = self._global_rows(global_td, like)
+        if not is_tracing():
+            for name in self.global_schema:
+                tests.append(
+                    (
+                        torch.isfinite(global_rows.get(FieldSchema.key(name))).all(),
+                        lambda name=name: f"global_data[{name!r}] has a non-finite value in this model's dtype",
+                    )
+                )
         ### The length unit (_gauge), from the full-resolution boundary before the draw;
         ### with declared scales, the case's other scales (_case_scales).
         gauge = self._gauge(meshes, measures)
-        scales = self._case_scales(names, meshes, measures, global_rows, gauge, tests) if self._scaled else None
-        g_unit, g_scalars = self._global_fields(global_rows, like, scales)
+        scales, g_dir = (
+            self._case_scales(names, meshes, measures, global_rows, gauge, tests) if self._scaled else (None, None)
+        )
+        g_unit, g_scalars = self._global_fields(global_rows, like, scales, g_dir)
         ### The boundary cells, each condition's with its own inputs, concatenated in
         ### canonical order over a batch axis of one.
         boundary = torch.cat(
@@ -2325,7 +2375,7 @@ class ISLA(Module):
             boundary["condition_log_measure"] = torch.cat(
                 [torch.log(w.double().sum()).expand(1, m.n_cells) for m, w in zip(meshes, measures)], dim=1
             )
-        if prediction_points is not None and not torch.compiler.is_compiling():
+        if prediction_points is not None and not is_tracing():
             pts = prediction_points.points if isinstance(prediction_points, Mesh) else prediction_points
             tests.append(
                 (
@@ -2367,8 +2417,13 @@ class ISLA(Module):
                 start = torch.full((), _EVAL_START, dtype=torch.float64, device=q_points.device)
             with torch.autocast(q_points.device.type, enabled=False):
                 draw = [_draw_inputs(m) for m in meshes]
+                ### The draw's measures take the gradient of the meshes' own (w - w.detach()
+                ### is exactly 0), so the weights carry it in the vertices.
                 kept, weights = sample_boundary_cells(
-                    [a for a, _ in draw], [x for _, x in draw], self.n_boundary_tokens, start
+                    [a + (w - w.detach()).double() for (a, _), w in zip(draw, measures)],
+                    [x for _, x in draw],
+                    self.n_boundary_tokens,
+                    start,
                 )
             boundary = boundary.apply(lambda t: t[:, kept], batch_size=[1, kept.shape[0]])
             boundary["measure"] = weights[None].to(boundary["measure"].dtype)
@@ -2739,7 +2794,7 @@ class QueryChunks:
                 self._g_scalars = self._leaf(self._g_scalars)
             self._surface = (self._leaf(self._surface[0]), self._surface[1])
             if self._scales is not None:
-                self._scales = {k: v if v is None else self._leaf(v) for k, v in self._scales.items()}
+                self._scales = {k: self._leaf(v) for k, v in self._scales.items()}
             ### The read's sources too: their pair invariants take a gradient when the geometry requires one.
             sources = ("src_r", "src_n", "src_vecs", "g_unit")
             self._walk.geometry = [

@@ -32,10 +32,10 @@ from jaxtyping import Float, Int
 
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.experimental.models.isla import _geometry_fast as geometry_fast
-from physicsnemo.experimental.models.isla._tree_walk import WARP_MAX_ELEMENTS
 from physicsnemo.mesh.geometry import compute_cell_normals
 from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
+from physicsnemo.mesh.spatial.cluster_tree import _WARP_MAX_ELEMENTS as WARP_MAX_ELEMENTS
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
 ### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,

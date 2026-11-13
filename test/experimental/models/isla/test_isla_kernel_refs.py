@@ -36,7 +36,6 @@ landing near zero by chance).
 """
 
 import logging
-import types
 
 import pytest
 import torch
@@ -48,7 +47,6 @@ from physicsnemo.experimental.models.isla import _fused_read as fused_read
 from physicsnemo.experimental.models.isla import _geo_kernel as geo_kernel
 from physicsnemo.experimental.models.isla import _segment_softmax as segment_softmax
 from physicsnemo.experimental.models.isla import _tree_read as tree_read
-from physicsnemo.experimental.models.isla import _tree_walk as tree_walk
 from physicsnemo.experimental.models.isla._blocks import _geo_region
 from physicsnemo.experimental.models.isla._segment_softmax import PairPlan
 from physicsnemo.experimental.models.isla._tree_read import BoundaryForest
@@ -350,34 +348,18 @@ def test_fused_kernel_basis_under_float16_autocast_obeys_the_2x_error_rule(
 
 
 # --------------------------------------------------------------------------- never-run paths
-def test_the_fast_walk_of_no_points_or_no_trees_and_at_its_first_size_limit(
-    monkeypatch,
-):
-    """``walk_pairs``: no points, or a forest of no trees, give empty lists (and zero
-    counts with ``count_only``); points times trees (or dimensions) at Warp's element
-    limit give None before any launch, counted or not."""
+def test_the_fast_walk_of_no_points():
+    """The fast walk of no points gives empty lists, and zero counts with
+    ``count_only``."""
     pts, nrm, w, _ = cloud(300, d=3, seed=1)
     f = BoundaryForest.build(pts, w, nrm, None, theta=1.0)
     q = f.frame_points(cloud(40, d=3, seed=2, scale=(3.0,) * 3)[0])
-    qi, si, n_node = tree_walk.walk_pairs(f, q[:0], 1.0)
+    qi, si, n_node = f.frame_pairs(q[:0], walk="fast")
     assert qi.shape == si.shape == (0,) and n_node == 0
     assert torch.equal(
-        tree_walk.walk_pairs(f, q[:0], 1.0, count_only=True),
+        f.frame_pairs(q[:0], walk="fast", count_only=True),
         torch.zeros(0, dtype=torch.long),
     )
-    no_trees = types.SimpleNamespace(
-        aabb_min=f.aabb_min[:0], node_offset=f.node_offset[:1]
-    )
-    qi, si, n_node = tree_walk.walk_pairs(no_trees, q, 1.0)
-    assert qi.shape == si.shape == (0,) and n_node == 0
-    assert torch.equal(
-        tree_walk.walk_pairs(no_trees, q, 1.0, count_only=True),
-        torch.zeros(40, dtype=torch.long),
-    )
-    n_t = int(f.node_offset.shape[0]) - 1
-    monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", 40 * max(3, n_t))
-    assert tree_walk.walk_pairs(f, q, 1.0) is None
-    assert tree_walk.walk_pairs(f, q, 1.0, count_only=True) is None
 
 
 def _basis_geometry(device, dim=3):

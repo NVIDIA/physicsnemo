@@ -24,6 +24,7 @@ whole model under torch.compile, which must stay free of graph breaks."""
 
 import copy
 import logging
+import pickle
 
 import pytest
 import torch
@@ -435,6 +436,35 @@ def test_compile_blocks_matches_eager(device):
     built = opt._block_forwards
     _run(opt, inputs, tgt)
     assert opt._block_forwards is built
+
+
+def test_a_copy_of_a_model_with_compiled_blocks_runs_its_own_blocks():
+    """A deep copy of a ``compile_blocks`` model made after its first forward (an EMA
+    or a best-model copy) runs its own blocks, not the original's, and the model
+    pickles: the compiled blocks, which hold the original's, are not in its state.
+    Dynamo is off, so the compiled callables run eagerly but are still cached."""
+    inputs, _ = _boundary(200, device="cpu", dtype=torch.float64)
+    q = torch.randn(
+        40, 3, generator=torch.Generator().manual_seed(5), dtype=torch.float64
+    )
+    inputs = {**inputs, "prediction_points": q}
+    torch.manual_seed(0)
+    spec = {**REF, "hidden": 32, "n_slices": 8, "interior": True}
+    m = ISLA(**spec, compile_blocks=True).double()
+    with torch.no_grad(), torch._dynamo.config.patch(disable=True):
+        m(**inputs)
+        assert m._block_forwards is not None and m._block_reads is not None
+        twin = copy.deepcopy(m)
+        for p in twin.blocks.parameters():
+            p.add_(0.1 * torch.randn_like(p))
+        eager = ISLA(**spec).double()
+        eager.load_state_dict(twin.state_dict())
+        expect = outputs(eager(**inputs))
+        got = outputs(twin(**inputs))
+        assert all(torch.equal(got[k], expect[k]) for k in expect)
+        loaded = pickle.loads(pickle.dumps(twin))  # noqa: S301 - local round trip
+        got = outputs(loaded(**inputs))
+        assert all(torch.equal(got[k], expect[k]) for k in expect)
 
 
 @pytest.mark.cuda
