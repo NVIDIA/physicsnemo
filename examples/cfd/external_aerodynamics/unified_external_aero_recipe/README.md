@@ -341,6 +341,20 @@ include the weight). Leave it unset by default: the surface dataset YAMLs
 already bring every target to unit scale via `NormalizeMeshFields`, so
 per-field losses are directly comparable without weighting.
 
+**`measure_weighted`** sets how much each target point counts. When a
+dataset puts its targets at cell centroids
+(`MeshToDomainMesh(interior_points=cell_centroids)`, as the surface
+dataset YAMLs do), each target point stands for one cell, and the
+transform stores that cell's measure (its area on a surface, its volume in
+a volume) beside the targets. By default (`measure_weighted: true` in
+`conf/base.yaml`) the loss and the metrics weight each point by this
+measure, so they approximate integrals over the domain and do not depend
+on how finely the mesh resolves each region. Datasets whose targets are
+points without cells carry no measure, and their points always count
+alike. To count every target point alike on every dataset, as earlier
+versions of the recipe did, pass `measure_weighted=false` on the command
+line (to `train.py` and `infer.py` alike).
+
 ### Training on several prediction sets
 
 One sample may carry several prediction point sets, each with its own
@@ -365,7 +379,8 @@ targets, such as the volume interior and a surface point set. The keys:
   no finite target in a sample adds 0 to the loss and gets NaN metrics, which
   the epoch and inference means skip.
 
-Each target is scored on its own set's points. Inference applies the same
+Each target is scored on its own set's points, weighted by that set's measure
+when it stores one (see `measure_weighted` above). Inference applies the same
 model-config hooks, inverts every `NormalizeMeshFields` of the pipeline,
 integrates forces on the set holding a pressure and a shear target together
 when it sits at the `boundaries.vehicle` cell centroids, and writes `pred_*` /

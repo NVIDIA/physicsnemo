@@ -64,9 +64,45 @@ from train import (  # noqa: E402  -- after the skip guard
     _run_epoch,
     _skip_nan,
     _walk_batch_for_logging,
+    forward_pass,
 )
 
 from physicsnemo.mesh import Mesh  # noqa: E402  -- after the importorskip guard
+
+### ---------------------------------------------------------------------------
+### forward_pass: the batch's target_measure reaches the loss and the metrics
+### ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "measure_weighted,expected_mse,expected_mae", [(True, 1.0, 0.5), (False, 2.0, 1.0)]
+)
+def test_forward_pass_weights_loss_and_metrics_by_target_measure(
+    measure_weighted, expected_mse, expected_mae
+):
+    """The erroneous point holds a quarter of the measure: weighted MSE is 1 and
+    MAE 0.5, against 2 and 1 per point."""
+    predictions = torch.tensor([[[1.0], [3.0]]], requires_grad=True)
+    target_config = {"pressure": "scalar"}
+    batch = {
+        "forward_kwargs": {"input": predictions},
+        "targets": TensorDict({"pressure": torch.ones(1, 2)}, batch_size=[1, 2]),
+        "target_measure": torch.tensor([[3.0, 1.0]]),
+    }
+    loss, _, metrics = forward_pass(
+        batch,
+        torch.nn.Identity(),
+        "float32",
+        LossCalculator(target_config, "mse", measure_weighted=measure_weighted),
+        MetricCalculator(
+            target_config, metrics=["mae"], measure_weighted=measure_weighted
+        ),
+        output_type="tensors",
+        target_config=target_config,
+    )
+    assert loss.item() == pytest.approx(expected_mse)
+    assert metrics["pressure_mae"].item() == pytest.approx(expected_mae)
+
 
 ### ---------------------------------------------------------------------------
 ### _walk_batch_for_logging
