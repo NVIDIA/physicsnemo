@@ -27,4 +27,4 @@ from .core.module import Module  # noqa E402
 
 wp.config.log_level = wp.LOG_WARNING
 
-__version__ = "2.3.0a0"
+__version__ = "2.3.0"
