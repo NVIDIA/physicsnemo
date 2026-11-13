@@ -2815,7 +2815,8 @@ class Mesh(
         kept = touching.nonzero().squeeze(-1)
         if not from_points:  # the ids of the sources among the kept cells
             ids = torch.searchsorted(kept, torch.where(ids < 0, ids + n_sources, ids))
-        adjacency = compute_fn(self.slice_cells(kept), **kwargs)[ids]
+        local = Mesh(points=self.points, cells=self.cells[kept])  # no data to copy
+        adjacency = compute_fn(local, **kwargs)[ids]
         if to_cells:  # back to this mesh's cell ids, in place: the result is new
             adjacency.indices = kept[adjacency.indices]
         return adjacency
