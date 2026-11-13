@@ -47,6 +47,11 @@ Spec value semantics:
   fields every set holds), the single prediction set of a model that
   predicts every set at once (see ``output_sets`` in
   :mod:`output_normalize`).
+- ``{literal: <value>}`` gives ``<value>`` as it is, for an argument that
+  is a constant of the model config rather than data of the case (for
+  example a list of boundary names, which would otherwise read as paths).
+  It matches only when ``literal`` is the dict's only key: with another key
+  beside it, as in ``{literal: x, note: y}``, ``x`` reads as a path.
 
 Targets are extracted separately by :func:`extract_targets` from the
 DomainMesh's ``interior.point_data`` by default, or from explicit
@@ -184,6 +189,8 @@ def resolve_spec(spec: Any, source: Any) -> Any:
         return torch.cat(resolved, dim=-1)
 
     if isinstance(spec, dict):
+        if set(spec) == {"literal"}:
+            return spec["literal"]
         if "concat_point_sets" in spec:
             return _concat_point_sets(spec, source)
         if _is_modifier_spec(spec):

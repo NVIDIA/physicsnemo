@@ -226,6 +226,19 @@ class TestResolveSpec:
                 simple_domain,
             )
 
+    def test_literal_passes_as_it_is(self, simple_domain):
+        """A ``{literal: value}`` dict gives its value as it is: names, not paths."""
+        assert resolve_spec({"literal": ["vehicle"]}, simple_domain) == ["vehicle"]
+        assert (
+            resolve_spec({"literal": "interior.points"}, simple_domain)
+            == "interior.points"
+        )
+        ### A literal nested in a dict spec, beside resolved paths.
+        out = resolve_spec(
+            {"names": {"literal": ["a", "b"]}, "v": "boundaries.vehicle"}, simple_domain
+        )
+        assert out["names"] == ["a", "b"] and isinstance(out["v"], Mesh)
+
     def test_none_passes_through(self, simple_domain):
         """None passes through."""
         assert resolve_spec(None, simple_domain) is None

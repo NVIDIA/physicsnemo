@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# A warmup to training.optimizer.lr, then a cosine decay, one step per epoch
+# (scheduler_update_mode: epoch). Both halves follow a half cosine. Select it from a
+# model config with `defaults: [override /scheduler@training.scheduler:
+# warmup_cosine]`, or with `scheduler@training.scheduler=warmup_cosine` on
+# the CLI. The run starts at lr / div_factor and ends at
+# lr / (div_factor * final_div_factor): 1e-6 at lr 3.75e-4.
+#
+# pct_start is the warmup's share of the run. The default 0.01 assumes about
+# 500 epochs (a 5-epoch warmup). At training.num_epochs=100 OneCycleLR raises
+# ZeroDivisionError, and below 100 epochs there is no warmup. For another
+# length set training.scheduler.pct_start=<5 / num_epochs>, e.g. 0.05 at 100.
+# Under scheduler_update_mode: step, set training.scheduler.total_steps to the
+# number of optimizer updates: it counts epochs here, and OneCycleLR raises
+# once the updates pass it.
+_target_: torch.optim.lr_scheduler.OneCycleLR
+max_lr: ${training.optimizer.lr}
+total_steps: ${training.num_epochs}
+pct_start: 0.01
+div_factor: 5
+final_div_factor: 75
+anneal_strategy: cos
+cycle_momentum: false

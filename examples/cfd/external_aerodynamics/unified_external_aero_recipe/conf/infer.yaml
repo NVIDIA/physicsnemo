@@ -33,6 +33,7 @@
 #       dataset=highlift_volume run_id=<the trained run_id> infer_split=test
 defaults:
   - base
+  - scheduler@training.scheduler: step_lr   # for the model templates that override it
   - model: ???   # must match the model the checkpoint was trained with
   - _self_
 
@@ -88,6 +89,10 @@ rescale_geometry: false
 # torch.compile off by default: per-sample point counts vary, so compiling
 # would trigger repeated recompiles for little benefit at inference.
 compile: false
+
+# Inference builds no scheduler (the group above is only for the templates).
+training:
+  scheduler: null
 
 # Run inference at full mesh resolution.  A large cap turns the reader's
 # subsample and the SubsampleMesh transform into no-ops (both resolve

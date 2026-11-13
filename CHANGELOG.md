@@ -16,7 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unequal surface/volume point counts.
 
 - The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
-
+- The unified external aerodynamics recipe adds experimental ISLA configs on
+  DrivAerML (`isla_surface`, `isla_volume` and `isla_volume_joint`) and a
+  `scheduler` config group. Each ISLA config reads the whole flow-domain
+  boundary and fits one 80 GB GPU at its defaults.
+- Adds the `FlipBoundaryOrientation` and `BoundaryCellsToPoints` mesh
+  transforms to `physicsnemo.datapipes`. The first reverses the cell winding
+  and stored normals of named boundaries, and the second adds a point-cloud
+  boundary at drawn cells of another boundary, with those cells' fields and
+  measures.
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference
