@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+_target_: readers.px_yaris_reader.YarisFullReader
+_convert_: all
+manifest_path: ${yaris.split_manifest}
+outlier_mask_path: ${yaris.outlier_mask}
+stride: ${yaris.stride}
+raw_dt: 0.001  # seconds; the stores hold 1 ms frames
+max_frames: null
+include_solid_edges: false  # add hexahedral solid-element edges for geodesic neighborhoods
+connect_isolated_k: 0       # Euclidean links for edge-less nodes (0 = off)

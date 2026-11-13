@@ -28,8 +28,8 @@ CRASH_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))
 if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
-import rollout  # noqa: E402
-from datapipe import SimSample  # noqa: E402
+import models.rollout as rollout  # noqa: E402
+from datapipes.datapipe import SimSample  # noqa: E402
 
 
 def make_sample(N: int = 5, T: int = 4, F: int = 2) -> SimSample:

@@ -99,3 +99,9 @@ targets:
   density: scalar
   velocity: vector
   tau_wall: vector
+
+# Conventions of the stored surface, read by the integrated force coefficients
+# (src/forces.py). The surface is wound so that its normals point into the
+# aircraft. The wall shear stress is the stress the fluid exerts on it.
+surface_normals_point: inward
+wall_shear_acts_on: body

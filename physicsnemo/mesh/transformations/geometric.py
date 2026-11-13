@@ -254,6 +254,7 @@ def _resolve_rotation_axis(
     | None,
     n_spatial_dims: int,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> Float[torch.Tensor, " n_spatial_dims"] | None:
     """Normalize an axis specification into a tensor or None.
 
@@ -267,12 +268,14 @@ def _resolve_rotation_axis(
         Target device for a tensor axis. An axis given as a string or as
         Python values is returned on the host, so that it can be validated
         there without a device synchronization.
+    dtype : torch.dtype
+        Dtype of the rotation matrix. A tensor or sequence axis is resolved in
+        this dtype, or in ``float32`` for reduced-precision dtypes.
 
     Returns
     -------
     Float[torch.Tensor, " n_spatial_dims"] or None
-        Normalized axis tensor with shape :math:`(3,)` and dtype
-        ``float32``, or ``None`` for 2D rotation.
+        Axis tensor with shape :math:`(3,)`, or ``None`` for 2D rotation.
     """
     if isinstance(axis, str):
         axis_map = {"x": 0, "y": 1, "z": 2}
@@ -290,7 +293,7 @@ def _resolve_rotation_axis(
         axis = torch.as_tensor(
             axis,
             device=device if isinstance(axis, torch.Tensor) else "cpu",
-            dtype=torch.float32,
+            dtype=torch.promote_types(dtype, torch.float32),
         )
 
     expected_dims = 2 if axis is None else 3
@@ -339,7 +342,7 @@ def rotation_matrix(
     Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]
         Rotation matrix, shape :math:`(S, S)`.
     """
-    resolved = _resolve_rotation_axis(axis, n_spatial_dims, device)
+    resolved = _resolve_rotation_axis(axis, n_spatial_dims, device, dtype)
     return _build_rotation_matrix(
         angle=angle,
         axis=resolved,
@@ -460,9 +463,15 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
     The test divides :math:`M` by its largest absolute entry, then compares
     :math:`M^\top M / c` with :math:`I`, so its outcome is independent of the
     overall scale. The zero map (:math:`c = 0`) passes, as a uniform scale by
-    zero; maps with non-finite entries fail.
+    zero; maps with non-finite entries fail. The test computes in at least
+    float32. Float16 and bfloat16 rounding moves the Gram matrix of a
+    similarity by up to about 1.5 epsilons, so for those dtypes ``atol`` is
+    raised to two epsilons; float32 and float64 keep ``atol``.
     """
     n = matrix.shape[-1]
+    if matrix.is_floating_point():
+        atol = max(atol, 2 * torch.finfo(matrix.dtype).eps)
+    matrix = matrix.to(torch.promote_types(matrix.dtype, torch.float32))
     peak = matrix.abs().amax()
     matrix = matrix / torch.where(peak > 0, peak, 1)
     gram = matrix.T @ matrix
@@ -482,16 +491,21 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
 def _scale_assumptions(
     factor: float | Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
     n_spatial_dims: int,
+    dtype: torch.dtype,
 ) -> tuple[bool | None, bool | None]:
     """Whether a scale is invertible and a similarity, where knowable on the host.
 
     :func:`transform` otherwise tests both at runtime, and each test reads a
     device scalar back to the host. For Python factors, this applies the same
     tests to ``diag(factor)`` in Python arithmetic: ``|det| > 1e-10``, and the
-    ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`. A scalar
-    factor is an isotropic scale, hence a similarity, whatever its value.
-    Products use ``*``, which overflows to ``inf`` as tensor arithmetic does,
-    where Python's ``**`` raises :class:`OverflowError`.
+    ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`, with its
+    tolerance for ``dtype``, the dtype the matrix is applied in. Factors that
+    round to zero in ``dtype`` count as zero. They are otherwise unrounded, so
+    the similarity test can differ from the runtime one for a factor that
+    rounding to ``dtype`` moves across its tolerance. A scalar factor is an
+    isotropic scale, hence a similarity, whatever its value. Products use
+    ``*``, which overflows to ``inf`` as tensor arithmetic does, where Python's
+    ``**`` raises :class:`OverflowError`.
 
     Returns
     -------
@@ -501,15 +515,22 @@ def _scale_assumptions(
     """
     if isinstance(factor, torch.Tensor):
         return None, (True if factor.ndim == 0 else None)
+    # A value rounds to zero in dtype up to half its smallest subnormal. Rounding
+    # each value through a CPU tensor instead would break torch.compile, where
+    # .item() of a traced float is data-dependent.
+    finfo = torch.finfo(dtype)
+    underflow = finfo.tiny * finfo.eps / 2
     if isinstance(factor, numbers.Real):
+        factor = factor if abs(factor) > underflow else 0.0
         return abs(math.prod([factor] * n_spatial_dims)) > 1e-10, True
-    values = [float(f) for f in factor]
+    values = [v if abs(v) > underflow else 0.0 for v in map(float, factor)]
     peak = max(abs(v) for v in values)
     squares = [(v / peak) * (v / peak) if peak > 0 else v * v for v in values]
     mean = sum(squares) / len(squares)
-    # _is_similarity_transform's torch.allclose(..., I, atol=1e-6, rtol=1e-5)
-    # bounds each diagonal entry by atol + rtol * 1.
-    is_similarity = mean == 0 or all(abs(s / mean - 1) <= 1e-6 + 1e-5 for s in squares)
+    # _is_similarity_transform's torch.allclose(..., I, atol, rtol=1e-5) bounds
+    # each diagonal entry by atol + rtol * 1, with atol raised for 16-bit dtypes
+    atol = max(1e-6, 2 * finfo.eps)
+    is_similarity = mean == 0 or all(abs(s / mean - 1) <= atol + 1e-5 for s in squares)
     return abs(math.prod(values)) > 1e-10, is_similarity
 
 
@@ -621,7 +642,11 @@ def transform(
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
-        det = matrix.det()
+        ### det and inv_ex need LU, which has no float16/bfloat16 kernels, and
+        # |det| can overflow float16: work in at least float32, cast each result
+        solve_dtype = torch.promote_types(matrix.dtype, torch.float32)
+        solve_matrix = matrix.to(solve_dtype)
+        det = solve_matrix.det()
 
         ### The runtime det test syncs (host readback of a cuda tensor).
         if assume_invertible is not None:
@@ -636,7 +661,9 @@ def transform(
             ### Full-dimensional meshes: global area scaling
             if mesh.n_manifold_dims == mesh.n_spatial_dims:
                 if (v := mesh._cache.get(("cell", "areas"), None)) is not None:
-                    new_cache["cell", "areas"] = v * det_abs
+                    new_cache["cell", "areas"] = (v.to(solve_dtype) * det_abs).to(
+                        v.dtype
+                    )
 
             ### Codimension-1 manifolds: per-element area scaling via normals
             # Formula: area' = area * |det(M)| * ||M^{-T} n||
@@ -648,17 +675,21 @@ def transform(
                     mesh._cache.get((association, "normals"), None) is not None
                     for association in ("cell", "point")
                 ):
-                    inverse = torch.linalg.inv_ex(matrix, check_errors=False).inverse
+                    inverse = torch.linalg.inv_ex(
+                        solve_matrix, check_errors=False
+                    ).inverse
 
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = v @ inverse
+                    transformed = v.to(solve_dtype) @ inverse
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
-                        new_cache["cell", "areas"] = areas * det_abs * norm_scale
-                    new_cache["cell", "normals"] = det_sign * safe_normalize(
-                        transformed, dim=-1
-                    )
+                        new_cache["cell", "areas"] = (
+                            areas.to(solve_dtype) * det_abs * norm_scale
+                        ).to(areas.dtype)
+                    new_cache["cell", "normals"] = (
+                        det_sign * safe_normalize(transformed, dim=-1)
+                    ).to(v.dtype)
 
                 ### Vertex (point) normals are a *weighted average* of incident
                 # cell normals, so the inverse-transpose law applies to the average
@@ -679,10 +710,10 @@ def transform(
                         else (not is_tracing() and _is_similarity_transform(matrix))
                     )
                 ):
-                    transformed = v @ inverse
-                    new_cache["point", "normals"] = det_sign * safe_normalize(
-                        transformed, dim=-1
-                    )
+                    transformed = v.to(solve_dtype) @ inverse
+                    new_cache["point", "normals"] = (
+                        det_sign * safe_normalize(transformed, dim=-1)
+                    ).to(v.dtype)
 
     ### Opt-in: centroids
     if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:
@@ -955,7 +986,9 @@ def scale(
             center,
         )
 
-    is_invertible, is_similarity = _scale_assumptions(factor, mesh.n_spatial_dims)
+    is_invertible, is_similarity = _scale_assumptions(
+        factor, mesh.n_spatial_dims, mesh.points.dtype
+    )
     return transform(
         mesh,
         matrix=M,

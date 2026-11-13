@@ -208,6 +208,29 @@ def test_cache_rebuild_paths_under_fullgraph_compile(
         torch.testing.assert_close(actual, reference)
 
 
+@pytest.mark.parametrize("factor", [2.0, [2.0, 3.0, 4.0]])
+def test_scale_by_python_factor_under_dynamic_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor], factor: float | list[float]
+) -> None:
+    """Scale decides on the host from Python factors, also when they are traced
+    as symbolic floats, where ``.item()`` of a tensor would be data-dependent."""
+    points, cells = triangle_3d
+
+    def fn(
+        p: torch.Tensor, c: torch.Tensor, f: float | list[float]
+    ) -> tuple[torch.Tensor, ...]:
+        mesh = Mesh(points=p, cells=c)
+        _ = mesh.cell_areas, mesh.cell_normals
+        mesh = mesh.scale(f)
+        return mesh.points, mesh.cell_areas, mesh.cell_normals
+
+    expected = fn(points, cells, factor)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)
+
+    for actual, reference in zip(compiled(points, cells, factor), expected):
+        torch.testing.assert_close(actual, reference)
+
+
 def test_with_points_checks_point_count_under_fullgraph_compile(
     triangle_3d: tuple[torch.Tensor, torch.Tensor],
 ) -> None:

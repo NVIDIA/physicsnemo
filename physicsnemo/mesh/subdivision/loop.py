@@ -99,8 +99,11 @@ def reposition_original_vertices_2d(
     # Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
     # Shape: (n_points,)
 
-    # Weights are computed in the points' dtype, but at least float32
+    # Weights and positions are computed in the points' dtype, but at least
+    # float32, since neighbor sums can overflow float16; the new positions are
+    # cast back to the points' dtype
     weight_dtype = torch.promote_types(mesh.points.dtype, torch.float32)
+    points = mesh.points.to(weight_dtype)
     valences_float = valences.to(weight_dtype)
     cos_term = 3.0 / 8.0 + 0.25 * torch.cos(2.0 * torch.pi / valences_float)
     beta_else = (1.0 / valences_float) * (5.0 / 8.0 - cos_term * cos_term)
@@ -111,7 +114,7 @@ def reposition_original_vertices_2d(
     ### Compute neighbor position sums for all points using scatter_add
     # For each neighbor relationship, add neighbor's position to source point's sum
     # Shape: (n_points, n_spatial_dims)
-    neighbor_sums = torch.zeros_like(mesh.points)
+    neighbor_sums = torch.zeros_like(points)
 
     # Get source point indices by expanding offsets
     # For adjacency.indices[i], the source point is the one whose offset range contains i
@@ -125,9 +128,7 @@ def reposition_original_vertices_2d(
 
     # Get neighbor positions and scatter-add to source points
     # adjacency.indices contains the neighbor point indices
-    neighbor_positions = mesh.points[
-        adjacency.indices
-    ]  # (total_neighbors, n_spatial_dims)
+    neighbor_positions = points[adjacency.indices]  # (total_neighbors, n_spatial_dims)
 
     # Expand source_point_indices for scatter_add
     source_point_indices_expanded = source_point_indices.unsqueeze(-1).expand(
@@ -148,7 +149,7 @@ def reposition_original_vertices_2d(
 
     interior_new_positions = (
         1 - valences_expanded * beta_expanded
-    ) * mesh.points + beta_expanded * neighbor_sums
+    ) * points + beta_expanded * neighbor_sums
 
     ### Boundary vertices need the Loop boundary/crease mask, not the interior rule.
     # Applying the interior one-ring rule to boundary vertices pulls the open
@@ -163,7 +164,7 @@ def reposition_original_vertices_2d(
     boundary_edges = get_boundary_edges(mesh).long()  # (n_boundary_edges, 2)
 
     if len(boundary_edges) == 0:
-        return interior_new_positions
+        return interior_new_positions.to(mesh.points.dtype)
 
     be0, be1 = boundary_edges[:, 0], boundary_edges[:, 1]
     # index_fill_ passes the value as a kernel argument; ``mask[index] = True``
@@ -172,18 +173,18 @@ def reposition_original_vertices_2d(
     boundary_vertex_mask.index_fill_(0, be0, True)
     boundary_vertex_mask.index_fill_(0, be1, True)
 
-    boundary_neighbor_sums = torch.zeros_like(mesh.points)
+    boundary_neighbor_sums = torch.zeros_like(points)
     idx0 = be0.unsqueeze(-1).expand(-1, mesh.n_spatial_dims)
     idx1 = be1.unsqueeze(-1).expand(-1, mesh.n_spatial_dims)
-    boundary_neighbor_sums.scatter_add_(0, idx0, mesh.points[be1])
-    boundary_neighbor_sums.scatter_add_(0, idx1, mesh.points[be0])
+    boundary_neighbor_sums.scatter_add_(0, idx0, points[be1])
+    boundary_neighbor_sums.scatter_add_(0, idx1, points[be0])
 
     boundary_neighbor_counts = torch.zeros(n_points, dtype=torch.long, device=device)
     ones = torch.ones_like(be0)
     boundary_neighbor_counts.scatter_add_(0, be0, ones)
     boundary_neighbor_counts.scatter_add_(0, be1, ones)
 
-    boundary_new_positions = 0.75 * mesh.points + 0.125 * boundary_neighbor_sums
+    boundary_new_positions = 0.75 * points + 0.125 * boundary_neighbor_sums
 
     # Regular boundary vertex (exactly two boundary neighbours) -> boundary mask;
     # other boundary vertices are held fixed (new_pos = old_pos).
@@ -193,12 +194,12 @@ def reposition_original_vertices_2d(
         boundary_new_positions,
         torch.where(
             boundary_vertex_mask.unsqueeze(-1),
-            mesh.points,
+            points,
             interior_new_positions,
         ),
     )
 
-    return new_positions
+    return new_positions.to(mesh.points.dtype)
 
 
 def compute_loop_edge_positions_2d(
@@ -245,8 +246,11 @@ def compute_loop_edge_positions_2d(
     is_interior = adjacent_counts == 2
 
     ### Boundary rule (simple average), computed for every edge
-    v0_pos = mesh.points[unique_edges[:, 0]]  # (n_edges, n_spatial_dims)
-    v1_pos = mesh.points[unique_edges[:, 1]]  # (n_edges, n_spatial_dims)
+    # In the points' dtype, but at least float32, since sums of positions can
+    # overflow float16; the positions are cast back to the points' dtype
+    points = mesh.points.to(torch.promote_types(mesh.points.dtype, torch.float32))
+    v0_pos = points[unique_edges[:, 0]]  # (n_edges, n_spatial_dims)
+    v1_pos = points[unique_edges[:, 1]]  # (n_edges, n_spatial_dims)
     boundary_positions = (v0_pos + v1_pos) / 2
 
     ### Interior rule (Loop's formula), also computed for every edge
@@ -285,15 +289,15 @@ def compute_loop_edge_positions_2d(
     ).squeeze(2)  # (n_edges, 2)
 
     ### Compute Loop edge rule: 3/8 * (v0 + v1) + 1/8 * (opp0 + opp1)
-    opp0_pos = mesh.points[opposite_vertices[:, 0]]  # (n_edges, n_spatial_dims)
-    opp1_pos = mesh.points[opposite_vertices[:, 1]]  # (n_edges, n_spatial_dims)
+    opp0_pos = points[opposite_vertices[:, 0]]  # (n_edges, n_spatial_dims)
+    opp1_pos = points[opposite_vertices[:, 1]]  # (n_edges, n_spatial_dims)
     interior_positions = (3.0 / 8.0) * (v0_pos + v1_pos) + (1.0 / 8.0) * (
         opp0_pos + opp1_pos
     )
 
     return torch.where(
         is_interior.unsqueeze(-1), interior_positions, boundary_positions
-    )
+    ).to(mesh.points.dtype)
 
 
 def subdivide_loop(mesh: "Mesh") -> "Mesh":

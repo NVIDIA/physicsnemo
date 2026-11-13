@@ -188,6 +188,67 @@ def test_vector_aggregate_l2_is_frobenius():
     assert out["wss_l2"].item() == pytest.approx(expected, rel=1e-5)
 
 
+def _weighted_metric_reference(p, t, m, metric):
+    """Hand-written measure-weighted metric over the last (point) axis."""
+    if metric == "mae":
+        return (m * (p - t).abs()).sum() / m.sum()
+    if metric == "l1":
+        return (m * (p - t).abs()).sum() / (m * t.abs()).sum()
+    return ((m * (p - t) ** 2).sum() / (m * t**2).sum()).sqrt()
+
+
+def _measure_case(seed: int = 3):
+    torch.manual_seed(seed)
+    pred = TensorDict(
+        {"pressure": torch.randn(1, 50), "wss": torch.randn(1, 50, 3)},
+        batch_size=[1, 50],
+    )
+    target = TensorDict(
+        {"pressure": torch.randn(1, 50), "wss": torch.randn(1, 50, 3)},
+        batch_size=[1, 50],
+    )
+    return pred, target, torch.rand(1, 50) * 5 + 0.1
+
+
+@pytest.mark.parametrize("metric", ["mae", "l1", "l2"])
+def test_metrics_with_measure_match_hand_computed_weighted_values(metric):
+    """Scalar, per-component and vector-aggregate metrics are measure-weighted."""
+    pred, target, m = _measure_case()
+    calc = MetricCalculator({"pressure": "scalar", "wss": "vector"}, metrics=[metric])
+    out = calc(pred, target, m)
+
+    expected = {"pressure": (pred["pressure"], target["pressure"], m)}
+    for i, comp in enumerate("xyz"):
+        expected[f"wss_{comp}"] = (pred["wss"][..., i], target["wss"][..., i], m)
+    m_rep = m.unsqueeze(-1).expand(1, 50, 3)
+    expected["wss"] = (pred["wss"], target["wss"], m_rep)
+    for name, (p, t, w) in expected.items():
+        ref = _weighted_metric_reference(p, t, w, metric)
+        torch.testing.assert_close(out[f"{name}_{metric}"], ref, rtol=1e-5, atol=0)
+
+
+def test_metrics_switched_off_ignore_the_measure_bitwise():
+    """``measure_weighted=False`` gives the unweighted metrics bit for bit."""
+    pred, target, m = _measure_case()
+    calc = MetricCalculator(
+        {"pressure": "scalar", "wss": "vector"}, measure_weighted=False
+    )
+    assert "measure_weighted=False" in repr(calc)
+    out, ref = calc(pred, target, m), calc(pred, target)
+    for key in ref.keys():
+        assert torch.equal(out[key], ref[key])
+
+
+def test_metrics_with_equal_measures_match_unweighted():
+    """Equal measures on every point reproduce the unweighted metrics."""
+    pred, target, _ = _measure_case()
+    calc = MetricCalculator({"pressure": "scalar", "wss": "vector"})
+    out = calc(pred, target, torch.full((1, 50), 3.0))
+    ref = calc(pred, target)
+    for key in ref.keys():
+        torch.testing.assert_close(out[key], ref[key])
+
+
 ### ---------------------------------------------------------------------------
 ### Autocast precision contract
 ### ---------------------------------------------------------------------------

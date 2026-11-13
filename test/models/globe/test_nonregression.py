@@ -27,14 +27,21 @@ reference.  If an intentional change alters outputs, delete the
 ``.pth`` file and re-run to regenerate.
 """
 
+import importlib
+import re
+import sys
 from pathlib import Path
 
 import pytest
 import torch
+from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.core import Module
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.models.globe import GLOBE
+from test.models.globe._helpers import assert_globe_attributes
 
 DATA_DIR = Path(__file__).parent / "data"
 SEED = 42
@@ -197,3 +204,124 @@ def test_globe_gradient_flow(device: str) -> None:
         f"Only {n_params_with_grad}/{n_params_total} parameters received "
         f"non-zero gradients"
     )
+
+
+### A committed checkpoint, made with the code of its version, must keep
+### loading through the base class and giving the same outputs.
+CHECKPOINT_PATH = DATA_DIR / "globe_v1.mdlus"
+CHECKPOINT_OUTPUT_PATH = DATA_DIR / "globe_checkpoint_output.pth"
+CHECKPOINT_KWARGS = {
+    "n_spatial_dims": 3,
+    "output_schema": {"C_p": {"rank": 0}, "C_f": {"rank": 1}},
+    "boundary_source_schemas": {"vehicle": {"alpha": {"rank": 0}}, "floor": {}},
+    "reference_length_names": ["L_ref"],
+    "reference_area": 1.0,
+    "global_schema": {"U_inf": {"rank": 1}},
+    "n_communication_hyperlayers": 1,
+    "n_latent_scalars": 2,
+    "n_latent_vectors": 1,
+    "hidden_layer_sizes": [8],
+    "leaf_size": 4,
+}
+
+
+def _make_checkpoint_inputs(device: torch.device) -> dict:
+    """Forward-pass keyword arguments for the checkpointed model.
+
+    Built on CPU and then moved, since ``lumpy_sphere`` draws its noise from
+    a generator on the requested device, which would change the geometry.
+    """
+    mesh_vehicle = lumpy_sphere.load(subdivisions=1)
+    mesh_vehicle.cell_data["alpha"] = mesh_vehicle.cell_centroids[:, 0]
+    generator = torch.Generator(device="cpu").manual_seed(SEED)
+    return {
+        "prediction_points": torch.randn(20, 3, generator=generator).to(device),
+        "boundary_meshes": {
+            "vehicle": mesh_vehicle.to(device),
+            "floor": lumpy_sphere.load(radius=3.0, subdivisions=0).to(device),
+        },
+        "reference_lengths": {"L_ref": torch.tensor(1.0).to(device)},
+        "global_data": TensorDict({"U_inf": torch.tensor([1.0, 0.0, 0.0])}).to(device),
+    }
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_globe_from_checkpoint(device: str) -> None:
+    """``Module.from_checkpoint`` rebuilds GLOBE from the committed checkpoint,
+    with its constructor arguments, and reproduces the reference outputs.
+
+    The checkpoint stores the pre-move class path
+    ``physicsnemo.experimental.models.globe.model``, so this also tests that
+    old checkpoints load as the promoted class."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    if not CHECKPOINT_PATH.exists():
+        torch.manual_seed(SEED)
+        model = GLOBE(**CHECKPOINT_KWARGS).eval()
+        model.save(CHECKPOINT_PATH)
+        with torch.no_grad():
+            output = model(**_make_checkpoint_inputs(torch.device("cpu")))
+        _save_reference(output, CHECKPOINT_OUTPUT_PATH)
+        pytest.fail(
+            f"Reference checkpoint {CHECKPOINT_PATH} and outputs "
+            f"{CHECKPOINT_OUTPUT_PATH} did not exist and have been created. "
+            "Re-run the test to verify reproducibility."
+        )
+
+    model = Module.from_checkpoint(CHECKPOINT_PATH).to(device).eval()
+
+    assert type(model) is GLOBE
+    assert_globe_attributes(model, CHECKPOINT_KWARGS)
+
+    with torch.no_grad():
+        output = model(**_make_checkpoint_inputs(torch.device(device)))
+    reference = _load_reference(CHECKPOINT_OUTPUT_PATH, torch.device(device))
+    assert set(output.point_data.keys()) == set(reference)
+    ### The reference was made on CPU; CUDA rounds differently.
+    tolerances = (
+        {"atol": ATOL, "rtol": RTOL}
+        if device == "cpu"
+        else {"atol": 1e-6, "rtol": 1e-4}
+    )
+    for key in reference:
+        torch.testing.assert_close(
+            output.point_data[key],
+            reference[key],
+            **tolerances,
+            msg=f"Output field '{key}' differs from reference",
+        )
+
+
+def test_globe_legacy_checkpoint_class_path() -> None:
+    """The class paths stored by pre-move checkpoints resolve to GLOBE."""
+    from physicsnemo.experimental.models.globe import GLOBE as LegacyPackageGLOBE
+    from physicsnemo.experimental.models.globe.field_kernel import (
+        BarnesHutKernel as LegacyBarnesHutKernel,
+    )
+    from physicsnemo.experimental.models.globe.model import (
+        GLOBE as LegacyModuleGLOBE,
+    )
+    from physicsnemo.models.globe.field_kernel import BarnesHutKernel
+
+    assert LegacyPackageGLOBE is GLOBE
+    assert LegacyModuleGLOBE is GLOBE
+    assert LegacyBarnesHutKernel is BarnesHutKernel
+
+
+def test_globe_legacy_import_paths() -> None:
+    """The pre-move package warns and re-exports the promoted objects."""
+    from physicsnemo.models.globe import field_kernel
+
+    ### Drop the cached legacy modules so the shim warning fires again.
+    for module_name in list(sys.modules):
+        if module_name.startswith("physicsnemo.experimental.models.globe"):
+            del sys.modules[module_name]
+
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape("physicsnemo.models.globe")
+    ):
+        legacy_pkg = importlib.import_module("physicsnemo.experimental.models.globe")
+
+    assert legacy_pkg.GLOBE is GLOBE
+    for name in ["Kernel", "BarnesHutKernel", "MultiscaleKernel"]:
+        assert getattr(legacy_pkg, name) is getattr(field_kernel, name), name

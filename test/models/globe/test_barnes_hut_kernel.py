@@ -29,15 +29,15 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.field_kernel import (
-    BarnesHutKernel,
-    Kernel,
-    MultiscaleKernel,
-)
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
     DualInteractionPlan,
+)
+from physicsnemo.models.globe.field_kernel import (
+    BarnesHutKernel,
+    Kernel,
+    MultiscaleKernel,
 )
 
 DEFAULT_SEED = 42
@@ -756,7 +756,7 @@ def test_multiscale_bh_convergence(n_dims: int):
 
     # Compute exact reference by evaluating each branch's underlying Kernel
     # (the parent class forward = exact dense evaluation)
-    from physicsnemo.experimental.models.globe.field_kernel import Kernel
+    from physicsnemo.models.globe.field_kernel import Kernel
 
     exact_total = None
     for name in ms.reference_length_names:
@@ -1968,7 +1968,7 @@ def test_bh_compiled_forward_reuses_graph_for_similar_chunk_counts(
     """
     from torch._dynamo.testing import CompileCounter
 
-    import physicsnemo.experimental.models.globe.field_kernel as field_kernel
+    import physicsnemo.models.globe.field_kernel as field_kernel
 
     torch.manual_seed(DEFAULT_SEED)
     bh_kernel = BarnesHutKernel(

@@ -33,8 +33,8 @@ from test.common import (
 )
 
 _DEFAULT_CONFIG = dict(
-    surface_channels=1,
-    volume_channels=3,
+    field="surface",
+    out_dim=1,
     parameter_channels=0,
     hidden_dim=256,
     num_heads=8,
@@ -46,8 +46,10 @@ _DEFAULT_CONFIG = dict(
     eval_seed=0,
     qk_normalization=False,
     qk_temperature_max=None,
-    surface_query_feature_channels=0,
-    volume_query_feature_channels=0,
+    query_feature_channels=0,
+    coordinate_scale=(1.0, 1.0, 1.0),
+    center_on_geometry=False,
+    eval_chunk_size=8192,
 )
 
 
@@ -73,8 +75,8 @@ def _assert_model_attributes(model, config):
         pytest.param({}, id="defaults"),
         pytest.param(
             dict(
-                surface_channels=4,
-                volume_channels=5,
+                field="volume",
+                out_dim=5,
                 parameter_channels=2,
                 hidden_dim=24,
                 num_heads=4,
@@ -86,8 +88,8 @@ def _assert_model_attributes(model, config):
                 eval_seed=7,
                 qk_normalization=True,
                 qk_temperature_max=4.0,
-                surface_query_feature_channels=3,
-                volume_query_feature_channels=4,
+                query_feature_channels=4,
+                center_on_geometry=True,
             ),
             id="custom",
         ),
@@ -124,9 +126,9 @@ def test_geometry_sampling_uses_full_pool_without_dense_embeddings():
     hook = model.position.register_forward_pre_hook(
         lambda _module, args: embedded.append(args[0].detach().clone())
     )
-    before = torch.random.get_rng_state().clone()
-    output = model(points, queries, geometry_generator=torch.Generator().manual_seed(0))
-    assert torch.equal(before, torch.random.get_rng_state())
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        model(points, queries)
     hook.remove()
     assert [x.shape[1] for x in embedded] == [8, 64, 64, 11]
     assert model.num_latents == 8
@@ -139,38 +141,27 @@ def test_geometry_sampling_uses_full_pool_without_dense_embeddings():
         indices = (sample[0, :, 0] * 200).round().long()
         torch.testing.assert_close(sample, points[:, indices], rtol=0, atol=0)
     assert not torch.equal(embedded[1], embedded[2])
-    repeat = model(points, queries, geometry_generator=torch.Generator().manual_seed(0))
-    assert torch.equal(output[0], repeat[0])
 
 
-def test_query_independence_and_chunks(device):
-    torch.manual_seed(9)
-    model = small_model(parameter_channels=2).to(device).eval()
+@pytest.mark.parametrize("field", ["surface", "volume"])
+def test_query_independence_and_chunks(device, field):
+    model = (
+        small_model(field=field, parameter_channels=2, eval_chunk_size=7)
+        .to(device)
+        .eval()
+    )
     geometry = torch.randn(2, 45, 3, device=device)
     parameters = torch.randn(2, 2, device=device)
     queries = torch.randn(2, 23, 3, device=device)
     with torch.no_grad():
         contexts = model.encode_geometry(geometry, parameters)
-        for field in ("surface", "volume"):
-            full = model.decode_queries(queries, contexts, parameters, field=field)
-            chunked = torch.cat(
-                [
-                    model.decode_queries(chunk, contexts, parameters, field=field)
-                    for chunk in queries.split(7, dim=1)
-                ],
-                dim=1,
-            )
-            torch.testing.assert_close(chunked, full, atol=2e-6, rtol=2e-5)
-            indices = torch.tensor([7, 2, 7, 0, 22], device=device)
-            subset = model.decode_queries(
-                queries[:, indices], contexts, parameters, field=field
-            )
-            torch.testing.assert_close(subset, full[:, indices], atol=2e-6, rtol=2e-5)
-        pressure, velocity = model(geometry, queries, queries, parameters)
-        torch.testing.assert_close(velocity, full)
+        full = model.decode_queries(queries, contexts, parameters)
         torch.testing.assert_close(
-            pressure, model.decode_queries(queries, contexts, parameters)
+            model(geometry, queries, parameters), full, atol=2e-6, rtol=2e-5
         )
+        indices = torch.tensor([7, 2, 7, 0, 22], device=device)
+        subset = model.decode_queries(queries[:, indices], contexts, parameters)
+        torch.testing.assert_close(subset, full[:, indices], atol=2e-6, rtol=2e-5)
 
 
 def test_batch_and_geometry_order_independence(device):
@@ -180,11 +171,11 @@ def test_batch_and_geometry_order_independence(device):
         torch.randn(2, 13, 3, device=device),
     )
     with torch.no_grad():
-        full = model(geometry, query)[0]
-        permuted = model(geometry[:, torch.randperm(20, device=device)], query)[0]
+        full = model(geometry, query)
+        permuted = model(geometry[:, torch.randperm(20, device=device)], query)
         torch.testing.assert_close(full, permuted, atol=2e-6, rtol=2e-5)
         torch.testing.assert_close(
-            full[:1], model(geometry[:1], query[:1])[0], atol=2e-6, rtol=2e-5
+            full[:1], model(geometry[:1], query[:1]), atol=2e-6, rtol=2e-5
         )
 
 
@@ -197,14 +188,13 @@ def test_smart_forward_backward(device, share_weights, num_layers):
     queries = torch.randn(2, 9, 3, device=device, requires_grad=True)
     parameters = torch.randn(2, 2, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
-    pressure, velocity = model(geometry, queries, queries, parameters)
+    pressure = model(geometry, queries, parameters)
     assert pressure.shape == (2, 9, 1)
-    assert velocity.shape == (2, 9, 3)
     assert all(
         (block is model.decoder[i]) == share_weights
         for i, block in enumerate(model.encoder_refinement)
     )
-    (pressure.square().mean() + velocity.square().mean()).backward()
+    pressure.square().mean().backward()
     for name, parameter in model.named_parameters():
         assert parameter.grad is not None, name
         assert torch.isfinite(parameter.grad).all(), name
@@ -213,8 +203,8 @@ def test_smart_forward_backward(device, share_weights, num_layers):
     optimizer.step()
     model.eval()
     with torch.no_grad():
-        a = model(geometry, queries, parameters=parameters)[0]
-        b = model(geometry, queries, parameters=parameters + 2)[0]
+        a = model(geometry, queries, parameters=parameters)
+        b = model(geometry, queries, parameters=parameters + 2)
     assert not torch.allclose(a, b)
 
 
@@ -238,14 +228,11 @@ def test_sampling_reproducibility(device):
         assert not torch.allclose(a[0], model.encode_geometry(geometry)[0])
 
 
-def test_empty_query_and_disabled_head(device):
-    model = small_model(volume_channels=0).to(device).eval()
+def test_empty_query(device):
+    model = small_model().to(device).eval()
     geometry = torch.randn(2, 17, 3, device=device)
     queries = torch.empty(2, 0, 3, device=device)
-    pressure, velocity = model(geometry, queries)
-    assert pressure.shape == (2, 0, 1) and velocity is None
-    with pytest.raises(ValueError, match="disabled"):
-        model(geometry, volume_queries=torch.randn(2, 4, 3, device=device))
+    assert model(geometry, queries).shape == (2, 0, 1)
 
 
 @pytest.mark.parametrize(
@@ -254,10 +241,10 @@ def test_empty_query_and_disabled_head(device):
         dict(hidden_dim=25),
         dict(num_layers=0),
         dict(num_latents=0),
-        dict(surface_channels=0, volume_channels=0),
+        dict(out_dim=0),
         dict(parameter_channels=-1),
         dict(hidden_dim=True),
-        dict(surface_channels=True),
+        dict(out_dim=True),
         dict(eval_seed=True),
         dict(eval_seed=0.5),
         dict(eval_seed=2**64),
@@ -271,8 +258,6 @@ def test_invalid_configuration(options):
 def test_invalid_inputs():
     model = small_model(parameter_channels=2)
     geometry, queries = torch.randn(2, 10, 3), torch.randn(2, 8, 3)
-    with pytest.raises(ValueError, match="At least one"):
-        model(geometry)
     with pytest.raises(ValueError, match="shape"):
         model(geometry, queries)
     with pytest.raises(ValueError, match="nonempty"):
@@ -306,7 +291,6 @@ def test_smart_checkpoint(device, tmp_path, monkeypatch, options):
     inputs = (
         torch.randn(2, 8, 3, device=device),
         torch.randn(2, 11, 3, device=device),
-        torch.randn(2, 19, 3, device=device),
         torch.randn(2, 2, device=device),
     )
     assert validate_checkpoint(model, restored, inputs, rtol=0, atol=0)
@@ -326,10 +310,7 @@ def test_smart_forward_accuracy(case, source, device):
     model = model.to(device).eval()
     _assert_model_attributes(model, data["config"])
     inputs = data["inputs"]
-    arguments = tuple(
-        inputs[key]
-        for key in ("geometry", "surface_queries", "volume_queries", "parameters")
-    )
+    arguments = tuple(inputs[key] for key in ("geometry", "queries", "parameters"))
     assert validate_forward_accuracy(
         model,
         arguments,
@@ -343,16 +324,10 @@ def test_smart_forward_accuracy(case, source, device):
     with torch.no_grad():
         contexts = model.encode_geometry(inputs["geometry"], inputs["parameters"])
         torch.testing.assert_close(contexts, data["contexts"], atol=3e-6, rtol=3e-5)
-        for index, field in enumerate(("surface", "volume")):
-            prediction = model.decode_queries(
-                inputs[f"{field}_queries"],
-                data["contexts"],
-                inputs["parameters"],
-                field=field,
-            )
-            torch.testing.assert_close(
-                prediction, expected[index], atol=3e-6, rtol=3e-5
-            )
+        prediction = model.decode_queries(
+            inputs["queries"], data["contexts"], inputs["parameters"]
+        )
+        torch.testing.assert_close(prediction, expected[0], atol=3e-6, rtol=3e-5)
 
 
 @pytest.mark.parametrize("optimization", ["amp", "combo", "jit", "cuda_graphs"])
@@ -364,7 +339,6 @@ def test_smart_optimizations(device, optimization):
     inputs = (
         torch.randn(2, 40, 3, device=device),
         torch.randn(2, 13, 3, device=device),
-        torch.randn(2, 19, 3, device=device),
         torch.randn(2, 2, device=device),
     )
     validators = dict(
@@ -398,12 +372,11 @@ def test_cuda_autocast(dtype):
     inputs = (
         torch.randn(2, 40, 3, device="cuda"),
         torch.randn(2, 13, 3, device="cuda"),
-        torch.randn(2, 19, 3, device="cuda"),
         torch.randn(2, 2, device="cuda"),
     )
     with torch.autocast("cuda", dtype=dtype):
         predictions = model(*inputs)
-    loss = sum(p.float().square().mean() for p in predictions)
+    loss = predictions.float().square().mean()
     loss.backward()
     assert torch.isfinite(loss)
     assert all(torch.isfinite(p.grad).all() for p in model.parameters())
@@ -411,7 +384,7 @@ def test_cuda_autocast(dtype):
 
 def test_autocast_preserves_small_residual_updates(device):
     """Deep mixed-precision decoders must accumulate updates below one bf16 ULP."""
-    model = small_model(num_layers=16, volume_channels=0).to(device).eval()
+    model = small_model(num_layers=16).to(device).eval()
     model.surface_head = torch.nn.Identity()
     with torch.no_grad():
         for parameter in model.parameters():
@@ -452,8 +425,8 @@ def test_qk_normalization_bounds_scores(monkeypatch):
     monkeypatch.setattr(F, "scaled_dot_product_attention", check_scores)
     geometry, query = torch.randn(1, 32, 3), torch.randn(1, 13, 3)
     with torch.no_grad():
-        expected = model(geometry, query)[0]
-        single = model(geometry, query[:, 3:4])[0]
+        expected = model(geometry, query)
+        single = model(geometry, query[:, 3:4])
     torch.testing.assert_close(single, expected[:, 3:4], atol=1e-6, rtol=1e-5)
     assert observed
 
@@ -512,17 +485,3 @@ def test_public_tensor_dtype_and_device_validation(invalid_kind):
     if invalid_kind == "wrong_device":
         with pytest.raises(ValueError, match="Queries.*geometry device"):
             model(geometry, invalid(queries), parameters=conditions)
-
-
-@pytest.mark.parametrize("precision", ["float16", "bfloat16"])
-def test_legacy_attention_override_is_not_silently_discarded(tmp_path, precision):
-    """Unsupported legacy arithmetic must fail instead of changing predictions."""
-    model = small_model()
-    model.__model_checkpoint_version__ = "0.1.0"
-    model._args["__args__"].update(
-        attention_precision=precision, attention_precision_scope="sdpa"
-    )
-    path = tmp_path / "legacy.mdlus"
-    model.save(path)
-    with pytest.raises(ValueError, match="earlier SMART implementation"):
-        Module.from_checkpoint(path)

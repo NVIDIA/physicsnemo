@@ -38,6 +38,7 @@ from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
 from physicsnemo.mesh.sampling import sample_cells_systematic
 from physicsnemo.mesh.sampling.systematic_sampling import (
     _cell_line,
+    _cell_lines,
     _cumsum,
     _draw_inputs,
     _pps_inclusion_probabilities,
@@ -434,6 +435,46 @@ def test_the_cumsum_op_passes_opcheck(device, dtype):
     torch.library.opcheck(_cumsum, (x,))
 
 
+@pytest.mark.parametrize(
+    "sizes", [[1], [2], [1, 1, 1], [3, 1, 5], [64, 1, 63], [500, 40, 3000, 1]]
+)
+def test_the_grouped_float_scan_is_each_group_s_scan_bitwise(sizes, device):
+    """With ``place``, each element's index in its own group, the float scan restarts
+    at every group: each group's sums are bitwise those of the group scanned alone."""
+    g = torch.Generator().manual_seed(sum(sizes))
+    xs = [(torch.rand(n, generator=g, dtype=D) ** 3).to(device) for n in sizes]
+    place = torch.cat([torch.arange(n, device=device) for n in sizes])
+    grouped = _cumsum(torch.cat(xs), place)
+    assert torch.equal(grouped, torch.cat([_cumsum(x) for x in xs]))
+
+
+def test_the_grouped_float_scan_restarts_along_the_first_axis(device):
+    """``place`` indexes axis 0, so a scan of rows restarts each group's rows and
+    leaves the columns apart: each column is its own grouped scan."""
+    sizes = [3, 1, 6]
+    g = torch.Generator().manual_seed(1)
+    x = torch.rand(sum(sizes), 3, generator=g, dtype=D).to(device)
+    place = torch.cat([torch.arange(n, device=device) for n in sizes])
+    grouped = _cumsum(x, place)
+    columns = torch.stack([_cumsum(x[:, j], place) for j in range(3)], dim=1)
+    assert torch.equal(grouped, columns)
+    rows = torch.cat([_cumsum(part) for part in x.split(sizes)])
+    assert torch.equal(grouped, rows)
+
+
+def test_the_grouped_scan_is_for_floats_only():
+    """The integer scan is ``cumsum``, which has no grouped form."""
+    with pytest.raises(ValueError, match="float x only"):
+        _cumsum(torch.arange(4), torch.arange(4))
+
+
+def test_the_grouped_cumsum_op_passes_opcheck(device):
+    """The grouped float scan is a well-formed custom op as well."""
+    x = torch.arange(1000, device=device, dtype=D) * 3 + 1
+    place = torch.cat([torch.arange(n, device=device) for n in (400, 1, 599)])
+    torch.library.opcheck(_cumsum, (x, place))
+
+
 ### Reproducibility ###
 
 
@@ -512,6 +553,31 @@ def test_the_draw_helpers_compose_several_groups_into_one_line(device):
         assert a.dtype == x.dtype == D
         assert torch.equal(a, ref.double())
         assert torch.equal(x, mesh.points.double()[mesh.cells].mean(1))
+
+
+def test_the_grouped_cell_lines_are_each_group_s_cell_line_bitwise(device):
+    """``_cell_lines`` lays several groups in one pass, bit for bit ``_cell_line`` of
+    each group with its order shifted to index the concatenation. The groups
+    include one with zero-measure cells, one of zero measure only, one whose share
+    exceeds its positive cells, ones kept whole and a single cell."""
+    sizes = [500, 40, 3000, 1, 7, 12]
+    shares = [130.0, 40.0, 130.0, 1.0, 3.0, 10.0]
+    measures, centroids = _groups(sizes, device=device)
+    measures[0][::7] = 0.0
+    measures[4][:] = 0.0
+    measures[5][:5] = 0.0
+    a, x = torch.cat(measures), torch.cat(centroids)
+    frame = canonical_frame(x, a)
+    share = torch.tensor(shares, dtype=D, device=device)
+    pi, order = _cell_lines(a, x, share, frame, sizes)
+    pis, orders, offset = [], [], 0
+    for m, c, s in zip(measures, centroids, share):
+        p, o = _cell_line(m, c, s, frame)
+        pis.append(p)
+        orders.append(o + offset)
+        offset += m.shape[0]
+    assert torch.equal(pi, torch.cat(pis))
+    assert torch.equal(order, torch.cat(orders))
 
 
 def test_the_mesh_draw_keeps_min_cells_and_samples(device):
