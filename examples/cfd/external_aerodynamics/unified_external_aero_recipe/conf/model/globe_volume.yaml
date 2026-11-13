@@ -40,7 +40,7 @@ forward_kwargs:
     delta_turb: 0.015                         # nondim
 
 model:
-  _target_: physicsnemo.experimental.models.globe.GLOBE
+  _target_: physicsnemo.models.globe.GLOBE
   n_spatial_dims: 3
   output_schema:
     velocity: {rank: 1}        # vector
