@@ -311,6 +311,7 @@ compositions:
 - GP
 - Dropout
 - Observable
+- Scoring
 
 This path does not require a ``local()`` factory or metric-owned
 ``synchronize()``. The default constructor still uses legacy behavior,
