@@ -23,6 +23,7 @@ from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
+    _sample_point_sets,
     _subsample_mesh_points,
 )
 from physicsnemo.datapipes.transforms.mesh import (
@@ -874,3 +875,60 @@ class TestDomainMeshReaderExtraBoundaryLoading:
         )
         loaded, _ = reader[0]
         assert loaded.boundaries["farfield"].n_points == 9
+
+
+def test_independent_point_sets_share_indices_and_reject_wrong_sources(tmp_path):
+    """Shared selections preserve labels and cannot index an unrelated mesh."""
+    points = torch.arange(60, dtype=torch.float32).reshape(20, 3)
+    domain = DomainMesh(
+        interior=Mesh(points=points, point_data={"id": torch.arange(20)}),
+        boundaries={"wall": Mesh(points=points + 100)},
+    )
+    domain.save(tmp_path / "domain.pdmsh")
+    specs = {
+        "anchors": {"source": "interior", "count": 5, "stream": 1},
+        "interior": {
+            "source": "interior",
+            "indices_from": "anchors",
+            "stream": 2,
+            "fields": {"id": "target.id"},
+        },
+    }
+    reader = DomainMeshReader(tmp_path, point_sets=specs)
+    reader.set_generator(torch.Generator().manual_seed(7))
+    sample, _ = reader[0]
+    torch.testing.assert_close(
+        sample.interior.points, sample.boundaries["anchors"].points
+    )
+    ids = sample.interior.point_data["target", "id"]
+    torch.testing.assert_close(sample.interior.points, points[ids])
+    specs["interior"]["source"] = "wall"
+    with pytest.raises(ValueError, match="same source"):
+        reader[0]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        DomainMeshReader(tmp_path, point_sets=specs, subsample_n_points=3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+@pytest.mark.parametrize("count", [None, 20])
+@pytest.mark.parametrize("output_name", ["interior", "anchors"])
+def test_point_sets_full_selection_with_cuda_default(count, output_name):
+    """CPU point sets and empty interiors stay on CPU under a CUDA default."""
+    points = torch.arange(30, dtype=torch.float32, device="cpu").reshape(10, 3)
+    ids = torch.arange(10, device="cpu")
+    domain = DomainMesh(interior=Mesh(points=points, point_data={"id": ids}))
+    specs = {
+        output_name: {
+            "source": "interior",
+            "count": count,
+            "stream": 0,
+            "fields": {"id": "id"},
+        }
+    }
+    with torch.device("cuda"):
+        sample = _sample_point_sets(domain, specs, seed=1, epoch=0, index=0)
+    selected = (
+        sample.interior if output_name == "interior" else sample.boundaries[output_name]
+    )
+    torch.testing.assert_close(selected.points, points)
+    torch.testing.assert_close(selected.point_data["id"], ids)
