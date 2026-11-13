@@ -62,12 +62,12 @@ from utilities import (
 
 from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
-from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.experimental.utils import (
     disable_autotune_printing,
     prefetch_map,
     silence_compile_logs_on_non_zero_ranks,
 )
+from physicsnemo.models.globe import GLOBE
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper

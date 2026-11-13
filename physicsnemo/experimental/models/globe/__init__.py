@@ -14,12 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.experimental.models.globe.field_kernel import (
-    BarnesHutKernel,
-    Kernel,
-    MultiscaleKernel,
+r"""Legacy import shims for the GLOBE model.
+
+The model now lives in :mod:`physicsnemo.models.globe`. Import it from there
+instead:
+
+.. code-block:: python
+
+    from physicsnemo.models.globe import GLOBE
+
+Importing from this legacy namespace emits a
+:class:`~physicsnemo.core.warnings.LegacyFeatureWarning`; PhysicsNeMo will
+remove these shims in a future release.
+"""
+
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
+
+from .field_kernel import BarnesHutKernel, Kernel, MultiscaleKernel
+from .model import GLOBE
+
+warnings.warn(
+    "Importing from 'physicsnemo.experimental.models.globe' is deprecated. "
+    "Use 'from physicsnemo.models.globe import GLOBE' instead. "
+    "The kernel classes are in 'physicsnemo.models.globe.field_kernel'. "
+    "This backward-compatibility shim will be removed in a future release.",
+    LegacyFeatureWarning,
+    stacklevel=2,
 )
-from physicsnemo.experimental.models.globe.model import GLOBE
 
 __all__ = [
     "GLOBE",
