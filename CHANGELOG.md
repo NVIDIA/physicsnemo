@@ -124,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `physicsnemo.experimental.models.isla.ISLA` (Invariant Slice Attention),
   an experimental mesh-native surrogate for steady boundary-value problems that
   takes the boundary as named meshes, and `case_scales`, which gives other
-  models its length and field scales. ISLA's outputs follow rotations,
+  models ISLA's length and field scales. ISLA's outputs follow rotations,
   reflections and translations of the problem exactly, up to roundoff, except
   on some symmetric or nearly symmetric boundaries described on its
   documentation page.

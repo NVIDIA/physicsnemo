@@ -31,10 +31,9 @@ autograd Functions.
 - The Triton autograd Functions refuse float64, so each is held to the 2x-error rule
   against float64 eager autograd instead: per tensor, the fused path's distance to
   float64 is at most twice the eager path's in the same precision plus a floor at the
-  precision's roundoff. The fused read and the fused basis have that test for every
-  differentiable input in test_isla_tree_read.py (``test_fused_kernel_read_matches_the_
-  reference_read``, ``test_fused_kernel_basis_matches_the_reference_basis``); the
-  segment-softmax read's is in test_isla_kernel_refs.py; the node means' is here.
+  precision's roundoff. Those tests are in test_isla_tree_read.py (the fused read, the
+  fused basis and the node means) and test_isla_kernel_refs.py; here, gradcheck of
+  the float64 eager references they measure against.
 
 The geometry is checked at generic points: off the wall and off ties, each in one
 region of its closest feature (a cell's interior, an edge, a vertex), so the finite
@@ -52,7 +51,7 @@ from physicsnemo.experimental.models.isla import _tree_read as tree_read
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from test.experimental.models.isla._geometry_cases import _circle, _sphere
-from test.experimental.models.isla._kernel_cases import _two_x
+from test.experimental.models.isla._kernel_cases import _SinkRead
 from test.experimental.models.isla._marks import DEVICES, requires_cuda_triton
 
 D = torch.float64
@@ -178,8 +177,8 @@ def test_direction_passes_gradcheck(dim, region, wrt, one_thread):
 
 def _triangle_queries():
     """A triangle and queries off it in its edge region (the point (0.5, -1, 0) and a
-    generic one), a vertex region and its
-    interior, each away from the regions' boundaries."""
+    generic one), a vertex region and its interior, each away from the regions'
+    boundaries."""
     g = torch.Generator().manual_seed(3)
     tri = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]], dtype=D)
     generic = tri + 0.3 * torch.randn(3, 3, dtype=D, generator=g)
@@ -196,22 +195,19 @@ def _triangle_queries():
     ]
 
 
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
 @pytest.mark.parametrize(
     "case", range(4), ids=["edge example", "edge", "vertex", "interior"]
 )
-def test_direction_jacobian_matches_finite_differences(case, kernel, one_thread):
+def test_direction_jacobian_matches_finite_differences(case, one_thread):
     """The full Jacobian of d and u in the query and the vertices of one triangle
     matches central finite differences in float64: off its edge (where the closest
-    point slides along it: before, u's gradient held the point fixed, du_x/dx_x = 1
-    instead of 0 at (0.5, -1, 0)), its vertex and its interior."""
+    point slides along it, so du_x/dx_x = 0 at (0.5, -1, 0)), its vertex and its
+    interior."""
     tri, x = _triangle_queries()[case]
     cells = torch.tensor([[0, 1, 2]])
 
     def f(flat):
-        d, u = exact_boundary_geometry(
-            flat[None, :3], flat[3:].reshape(3, 3), cells, kernel=kernel
-        )
+        d, u = exact_boundary_geometry(flat[None, :3], flat[3:].reshape(3, 3), cells)
         return torch.cat([d, u[0]])
 
     flat = torch.cat([x, tri.reshape(-1)])
@@ -351,25 +347,6 @@ def test_fused_geo_region_ops_pass_opcheck(k, p, dtype):
 
 
 # --------------------------------------------------------------------------- the basis sink
-class _SinkRead(torch.autograd.Function):
-    """``basis @ w.T`` handing its basis gradient to the fused read's sink, as the
-    fused read's backward does (a CPU stand-in for its Triton kernels)."""
-
-    @staticmethod
-    def forward(ctx, basis, token, grad, w):
-        ctx.save_for_backward(basis, w)
-        ctx.grad, ctx.sink_node = grad, token.grad_fn
-        return basis @ w.t()
-
-    @staticmethod
-    def backward(ctx, dout):
-        basis, w = ctx.saved_tensors
-        acc = fused_read._basis_grad_target(ctx, basis)
-        if acc is not None:
-            acc += dout @ w
-        return None, None if acc is None else basis.new_empty(0), None, dout.t() @ basis
-
-
 def test_basis_sink_passes_gradcheck():
     """``_BasisSink``: three reads of one basis (``inv * theta``) through its sink,
     float64; the sink sums their basis gradients and hands them to the basis once, so
@@ -388,46 +365,6 @@ def test_basis_sink_passes_gradcheck():
         return sum(_SinkRead.apply(basis.detach(), *sink, w) for w in ws).square()
 
     assert torch.autograd.gradcheck(reads, (theta, *ws), **GRADCHECK)
-
-
-# --------------------------------------------------------------------------- node means
-@pytest.mark.cuda
-@requires_cuda_triton
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
-def test_fused_node_means_obey_the_2x_error_rule(dtype):
-    """``_NodeMeans`` (Triton, no float64) against float64 eager ``node_means`` on the
-    same forest: the forward and the gradient in ``x`` each within twice the eager
-    ``node_means``' own distance in ``dtype``, plus a floor at the precision's
-    roundoff (1e-6 float32, 1e-3 bfloat16), relative to the float64 tensor's
-    largest entry."""
-    g = torch.Generator().manual_seed(6)
-    pts = torch.randn(3000, 3, generator=g, dtype=D) * torch.tensor(
-        [3.0, 2.0, 1.0], dtype=D
-    )
-    nrm = torch.nn.functional.normalize(
-        torch.randn(3000, 3, generator=g, dtype=D), dim=-1
-    )
-    w = torch.rand(3000, generator=g, dtype=D) + 0.5
-    dev = torch.device("cuda")
-    omega = (w / w.sum()).to(dev)
-    forest = tree_read.BoundaryForest.build(
-        pts.to(dev), omega, nrm.to(dev), None, theta=1.0
-    )
-    x0 = torch.randn(3000, 96, generator=g, dtype=D).to(dev)
-    gout = torch.randn(forest.n_nodes, 96, generator=g, dtype=D).to(dev)
-
-    def run(fn, dt):
-        x = x0.detach().to(dt, copy=True).requires_grad_(True)
-        y = fn(x, forest, omega if dt == D else omega.float())
-        y.backward(gout.to(dt))
-        return y.detach().double(), x.grad.double()
-
-    exact = run(tree_read.node_means, D)
-    eager = run(tree_read.node_means, dtype)
-    fused = run(fused_read.fused_node_means, dtype)
-    floor = 1e-6 if dtype == torch.float32 else 1e-3
-    for name, a, b, e in zip(("means", "grad x"), fused, eager, exact):
-        _two_x(name, a, b, e, floor)
 
 
 # --------------------------------------------------------------------------- the references

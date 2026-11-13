@@ -27,10 +27,10 @@ For every prediction point :math:`q` with pairs :math:`p` (a cell or a virtual c
 
 with :math:`\kappa_{ph}` the pair's kernel term (its basis through the block's kernel
 weights, a matmul outside this module) and :math:`\log m_p` the source's log measure.
-:func:`segment_softmax_read` materializes it pair by pair, several ``(pairs, heads)``
-tensors per block: the reference read, on CPU and in float64, and the oracle of the
-fused read (:mod:`fused_read`), which serves CUDA and keeps nothing per pair. The
-plan (:class:`PairPlan`) and its by-source work items are shared with it.
+:func:`segment_softmax_read` materializes it pair by pair, with several
+``(pairs, heads)`` tensors per block. It is the read on CPU and in float64, and the
+oracle of the fused read (:mod:`fused_read`), which serves CUDA and keeps nothing per
+pair. The fused read shares the plan (:class:`PairPlan`) and its by-source work items.
 """
 
 from __future__ import annotations
@@ -73,9 +73,9 @@ class PairPlan:
         cls, qi: torch.Tensor, bj: torch.Tensor, n_q: int, n_b: int, narrow: bool = False
     ) -> "PairPlan":
         """Index the pair list (``qi`` non-decreasing) by point and, on first use, by
-        source. ``narrow`` (fewer than 2**31 pairs, points and sources): the indices
-        ``qi``, ``bj``, ``perm`` and ``qi_by_b`` in int32, which the fused read widens
-        on load, and the offsets in int64: half the plan's memory."""
+        source. ``narrow`` (fewer than 2**31 pairs, points and sources) stores the
+        indices ``qi``, ``bj``, ``perm`` and ``qi_by_b`` in int32, which the fused read
+        widens on load, and the offsets in int64: half the plan's memory."""
         if narrow:
             qi, bj = qi.int(), bj.int()
         q_offsets = _offsets(qi, n_q)

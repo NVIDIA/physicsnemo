@@ -35,6 +35,8 @@ KW = dict(
 
 
 def test_prototypes_depend_on_the_sample_and_are_accounted_for():
+    """The prototypes change with the tokens, the logits stay within the temperature,
+    and each block's routing holds S x H seeds, two H x H maps and one gain."""
     torch.manual_seed(0)
     rl = _RoutingLogits(16, 4)
     x1, x2 = torch.randn(1, 50, 16), torch.randn(1, 50, 16)
@@ -50,6 +52,8 @@ def test_prototypes_depend_on_the_sample_and_are_accounted_for():
 
 
 def test_centered_prototypes_are_centered_and_scale_bounded():
+    """The prototypes' offsets from the seeds have zero mean over the slices, and
+    their RMS is the unbounded offset's squashed below g times the seeds' RMS."""
     torch.manual_seed(0)
     rl = _RoutingLogits(16, 4).eval()
     x = torch.randn(2, 50, 16)
@@ -76,6 +80,9 @@ def test_centered_prototypes_are_centered_and_scale_bounded():
 
 
 def test_centered_prototypes_equal_the_seeds_on_identical_tokens():
+    """When every token is the same, every slice reads the same value, so the
+    centered offsets vanish and the prototypes are the seeds: the routing cannot
+    collapse to one slice."""
     torch.manual_seed(0)
     rl = _RoutingLogits(16, 4).eval()
     x = (

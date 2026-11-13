@@ -14,17 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The seams that ISLA's patch-then-compare tests force still reach the code.
+"""The exact geometry's seams that the patch-then-compare tests force still reach the
+code.
 
-Each test here forces one seam as an existing test forces it (a resolver patched to
-name a path, a module constant patched to disqualify one, a spy put in a function's
-place) and asserts, through :mod:`._forced`, that the forced code ran and the other
-did not, or that the patched name was looked up. When a function moves into
-the physicsnemo library and the caller stops looking it up in ISLA's module, the test
-of its seam fails here, instead of the patch-then-compare test passing vacuously:
-retarget that test's patch (and the owner named below), then this one. The forced
-paths' outputs are compared with the reference's in the tests that force them; here
-only that they ran.
+Each test here forces a seam as another test forces it (a spy put in a function's
+place, a module constant patched) and asserts, through :mod:`._forced`, that the
+forced code ran and the other did not, or that the patched name was looked up. If a
+function moves into the physicsnemo library and the caller stops looking it up in
+ISLA's module, the seam's test here fails, where the patch-then-compare test would
+pass vacuously: retarget that test's patch, then this one. A seam whose forcing
+test already asserts that the forced code ran (the tree read's resolvers and limits,
+the least-norm point, the closest weights) has no test here.
 """
 
 import types
@@ -34,41 +34,18 @@ import torch
 
 ### The modules that own each seam. A move retargets these imports (and the
 ### patch-then-compare tests' patches); nothing else in this file names a module.
-from physicsnemo.experimental.models.isla import ISLA
-from physicsnemo.experimental.models.isla import _fused_basis as fused_basis
 from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla import _geometry_fast as geometry_fast
-from physicsnemo.experimental.models.isla import _tree_build as tree_build
-from physicsnemo.experimental.models.isla import _tree_read as tree_read
-from physicsnemo.experimental.models.isla import _tree_walk as tree_walk
-from physicsnemo.experimental.models.isla import model as isla_model
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
-from physicsnemo.experimental.models.isla._tree_read import (
-    BoundaryForest,
-    _KernelBasis,
-    kernel_geo_width,
-)
-from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 from test.experimental.models.isla._forced import ran, reaches
 from test.experimental.models.isla._geometry_cases import (
-    _box_ties,
     _capped_cube,
     _circle,
     _near_wall,
     _sphere,
 )
-from test.experimental.models.isla._meshes import cloud, live, points_mesh, soup
 
 D = torch.float64
-#: The reference walk and build: GLOBE's cluster tree, tree by tree.
-REFERENCE_WALK = ClusterTree.find_point_interaction_pairs
-REFERENCE_BUILD = ClusterTree.from_points
-
-
-def _forest(n=300, seed=1, **kw):
-    pts, nrm, w, _ = cloud(n, d=3, seed=seed)
-    q, _, _, _ = cloud(40, d=3, seed=seed + 1, scale=(3.0,) * 3)
-    return BoundaryForest.build(pts, w, nrm, None, theta=1.0, **kw), q, (pts, w, nrm)
 
 
 # --------------------------------------------------------------------------- the helper
@@ -99,176 +76,6 @@ def test_the_helper_sees_a_call_under_any_name_and_a_patch_only_where_looked_up(
     assert len(calls) == 1
     alias(4)
     assert r.count(_watched) == 3
-
-
-# --------------------------------------------------------------------------- the walk
-@pytest.mark.parametrize("walk", ["reference", "fast"])
-def test_a_forced_walk_runs_that_walk(walk, monkeypatch):
-    """``tree_read.resolve_walk`` patched to name a walk (test_isla_tree_read's
-    ``test_tree_walk_resolution_and_the_models_walks_agree`` and
-    ``..._falls_back_to_the_reference_past_its_limits``): the forest's lists come from
-    that walk alone (the fast walk on Warp's CPU backend)."""
-    f, q, _ = _forest()
-    calls = []
-    monkeypatch.setattr(
-        tree_read, "resolve_walk", lambda *a, w=walk: calls.append(a) or w
-    )
-    with ran(tree_walk.walk_pairs, REFERENCE_WALK) as r:
-        f.point_pairs(q)
-    assert calls, "the patched resolver was not consulted"
-    fast, ref = r.count(tree_walk.walk_pairs), r.count(REFERENCE_WALK)
-    assert fast == (1 if walk == "fast" else 0)
-    assert (ref > 0) == (walk == "reference")
-    if walk == "fast":
-        assert r.returns(tree_walk.walk_pairs)[0] is not None
-
-
-def test_a_walk_stack_below_the_forests_depth_disqualifies_the_fast_walk(monkeypatch):
-    """``tree_walk.WALK_STACK`` patched below the forest's depth (the past-its-limits
-    test): the function that decides reads the patched constant."""
-    f, q, _ = _forest()
-    on_cuda = types.SimpleNamespace(is_cuda=True, device=torch.device("cuda"))
-    with ran(tree_walk.walk_fits) as r:
-        assert tree_read.resolve_walk("auto", on_cuda, 1.0, f) == "fast"
-        monkeypatch.setattr(tree_walk, "WALK_STACK", len(f.levels) + 1)
-        assert tree_read.resolve_walk("auto", on_cuda, 1.0, f) == "reference"
-    assert r.returns(tree_walk.walk_fits) == [True, False]
-
-
-def test_lists_past_warps_limit_fall_back_to_the_reference_walk(monkeypatch):
-    """``tree_walk.WARP_MAX_ELEMENTS`` patched to the list length, the fast walk forced
-    (the past-its-limits test): the fast walk runs, finds its lists too long and
-    returns None, and the reference walks the points."""
-    f, q, _ = _forest()
-    n = f.point_pairs(q, walk="reference")[0].numel()
-    monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", n)
-    monkeypatch.setattr(tree_read, "resolve_walk", lambda *a: "fast")
-    with ran(tree_walk.walk_pairs, REFERENCE_WALK) as r:
-        f.point_pairs(q)
-    assert r.returns(tree_walk.walk_pairs) == [None]
-    assert r.count(REFERENCE_WALK) > 0
-
-
-# --------------------------------------------------------------------------- the build
-@pytest.mark.parametrize("build", ["reference", "fast"])
-def test_a_forced_build_runs_that_build(build, monkeypatch):
-    """``tree_read.resolve_tree_build`` patched to name a build
-    (``test_tree_build_auto_resolves_to_the_reference_off_cuda``,
-    ``test_tree_read_kernel_is_the_tree_reads_one_execution_attribute``): the forest
-    comes from that build alone (the fast one from ``forest_tables``)."""
-    calls = []
-    monkeypatch.setattr(
-        tree_read, "resolve_tree_build", lambda *a, b=build: calls.append(a) or b
-    )
-    with ran(tree_build.forest_tables, REFERENCE_BUILD) as r:
-        _forest()
-    assert calls, "the patched resolver was not consulted"
-    tables = r.returns(tree_build.forest_tables)
-    if build == "fast":
-        assert (
-            len(tables) == 1 and tables[0] is not None and r.count(REFERENCE_BUILD) == 0
-        )
-    else:
-        assert not tables and r.count(REFERENCE_BUILD) > 0
-
-
-def test_a_cell_limit_at_the_cell_count_leaves_the_forest_to_the_reference(monkeypatch):
-    """``tree_walk.WARP_MAX_ELEMENTS`` patched to the cell count and ``tree_read.forest_tables``
-    spied (``test_fast_forest_build_refuses_what_it_cannot_build``): the spy is
-    reached, the tables decline and the reference build makes the forest."""
-    calls = reaches(monkeypatch, tree_read, "forest_tables")
-    monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", 300)
-    with ran(tree_build.forest_tables, REFERENCE_BUILD) as r:
-        _forest(build="fast")
-    assert len(calls) == 1
-    assert (
-        r.returns(tree_build.forest_tables) == [None] and r.count(REFERENCE_BUILD) > 0
-    )
-
-
-# --------------------------------------------------------------------------- the kernel basis
-def test_the_fused_basis_seam_and_the_pair_chunk_reach_the_chunked_basis(monkeypatch):
-    """``tree_read.fused_basis.fused_kernel_basis`` replaced by a CPU stand-in and
-    ``tree_read.TREE_READ_PAIR_CHUNK`` patched
-    (``test_fused_basis_chunks_sum_their_weight_gradients_as_the_reference``, and the
-    spy of ``test_tree_read_pairs_fused_on_cuda_builds_the_basis_in_the_fused_kernel``):
-    the basis from the plan calls the stand-in once per chunk of the patched size."""
-    calls = []
-
-    def stand_in(weights, qi, si, q_off, s_off, geometry):
-        calls.append(int(qi.shape[0]))
-        return qi.new_zeros(qi.shape[0], 16, dtype=D)
-
-    monkeypatch.setattr(tree_read, "TREE_READ_PAIR_CHUNK", 300)
-    monkeypatch.setattr(tree_read.fused_basis, "fused_kernel_basis", stand_in)
-    assert tree_read.fused_basis is fused_basis
-    plan = types.SimpleNamespace(
-        qi=torch.zeros(1000, dtype=torch.int32), bj=torch.zeros(1000, dtype=torch.int32)
-    )
-    basis = _KernelBasis(kernel_geo_width(1, 0)).double()
-    geometry_ = {"query_r": torch.zeros(1, 3, dtype=D)}
-    with ran(tree_read._chunked_basis_from_plan) as r:
-        tree_read._chunked_basis_from_plan(
-            basis, plan, 0, 1000, 0, 0, geometry_, weights=()
-        )
-    assert r.count(tree_read._chunked_basis_from_plan) == 1
-    assert calls == [300, 300, 300, 100]
-
-
-# --------------------------------------------------------------------------- the model's seams
-def _dtt_forward():
-    """One evaluation forward of a small float64 ISLA-DTT model (its read live) on
-    CPU, on a 3-D cloud's soup with 40 prediction points."""
-    torch.manual_seed(0)
-    m = ISLA(
-        output_schema={"p": {"rank": 0}, "v": {"rank": 1}},
-        boundary_schemas={"wall": {}},
-        global_schema={"g": {"rank": 1}},
-        interior=True,
-        hidden=32,
-        n_layers=2,
-        n_slices=8,
-    )
-    m = live(m).double().eval()
-    pts, nrm, w, drv = cloud(200, d=3, seed=1)
-    q, _, _, _ = cloud(40, d=3, seed=2, scale=(3.0,) * 3)
-    with torch.no_grad():
-        m(
-            boundary_meshes={"wall": soup(pts, nrm, w)},
-            prediction_points=points_mesh(q),
-            global_data={"g": drv},
-        )
-
-
-def test_the_models_pair_assembly_seam_reaches_the_read(monkeypatch):
-    """``model.walk_range_pairs`` spied
-    (test_isla_tree_read's ``test_tree_read_cuda_matches_cpu_float64`` captures the
-    plans through it): an ISLA-DTT forward looks the name up in the model's module,
-    once, and the tree read's pair assembly runs behind it."""
-    calls = reaches(monkeypatch, isla_model, "walk_range_pairs")
-    with ran(tree_read.walk_range_pairs) as r:
-        _dtt_forward()
-    assert len(calls) == 1 and r.count(tree_read.walk_range_pairs) == 1
-
-
-@pytest.mark.parametrize("kernel", ["reference", "fused"])
-def test_a_forced_tree_read_kernel_reaches_the_read(kernel, monkeypatch):
-    """``ISLA._resolve_tree_read_kernel`` patched to name the read
-    (``test_tree_read_kernel_resolves_to_the_reference_on_cpu`` forces ``"fused"`` on
-    CPU): the model consults the patched resolver and hands its name to the walk
-    (``tree_read_walk``'s ``kernel``), whose pairs' basis comes from the plan
-    (``_chunked_basis_from_plan``) either way."""
-    calls = []
-    monkeypatch.setattr(
-        ISLA,
-        "_resolve_tree_read_kernel",
-        lambda self, p, k=kernel: calls.append(p) or k,
-    )
-    with ran(tree_read.tree_read_walk, tree_read._chunked_basis_from_plan) as r:
-        _dtt_forward()
-    assert calls, "the patched resolver was not consulted"
-    assert [c["kernel"] for c in r.calls(tree_read.tree_read_walk)] == [kernel]
-    assert r.count(tree_read._chunked_basis_from_plan) > 0
 
 
 # --------------------------------------------------------------------------- the exact geometry
@@ -323,26 +130,3 @@ def test_the_switch_and_the_accurate_point_reach_the_closest_weights(monkeypatch
     assert accurate
     monkeypatch.setattr(geometry, "_SWITCH_UNITS", float("inf"))
     assert bool((geometry._closest_weights(q, s) != w1).any())
-
-
-def test_the_least_norm_point_reaches_the_tie_directions(monkeypatch):
-    """``geometry._min_norm_points`` spied
-    (test_isla_interior_geometry's ``test_tie_directions_take_the_exact_least_norm_point``):
-    the tie directions of a square's diagonals call it."""
-    calls = reaches(monkeypatch, geometry, "_min_norm_points")
-    mesh, q, _ = _box_ties(2)
-    exact_boundary_geometry(q, mesh.points, mesh.cells)
-    assert calls
-
-
-def test_the_fast_weights_fall_back_through_the_closest_weights_seam(monkeypatch):
-    """``geometry._closest_weights`` spied (test_isla_geometry_fast's
-    ``test_guard_kernel_falls_back_to_the_torch_code_off_cuda``): off CUDA the fast
-    weights call the torch code through the module's name."""
-    closest = geometry._closest_weights
-    calls = reaches(monkeypatch, geometry, "_closest_weights")
-    g = torch.Generator().manual_seed(1)
-    s = torch.randn(50, 3, 3, dtype=D, generator=g)
-    q = torch.randn(50, 3, dtype=D, generator=g)
-    closest(q, s, None, fast=True)
-    assert len(calls) == 1

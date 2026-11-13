@@ -21,11 +21,10 @@ that would hide what a user meets by default. Each test runs a path twice (or fi
 times) in one process on the same inputs and states what repeats:
 
 - bitwise: the fast exact geometry (d, u, both gradients), the fused geometry
-  region, the fused node means and the fused read with their backward passes, the
-  whole model (the
-  surface task and ISLA-DTT with its draw, in 3-D and 2-D, in float32 and under
-  bfloat16 autocast, forward and backward) on CPU with one thread and on CUDA with
-  kernels auto;
+  region, the fused node means and the fused read with their backward passes, and
+  the whole model (the surface task and the interior task with its draw, in 3-D and
+  2-D, in float32 and under bfloat16 autocast, forward and backward) on CPU with one
+  thread and on CUDA with kernels auto;
 - to a stated tolerance, where the code sums in an order CUDA does not fix: the
   reference (unfused) tree read on CUDA (``node_means``' and the segment-softmax
   read's ``index_add``).
@@ -314,21 +313,18 @@ def test_the_fused_read_with_its_node_means_repeats_on_cuda(dtype):
 @pytest.mark.cuda
 @requires_cuda
 def test_the_reference_tree_read_on_cuda_spreads_within_its_bound():
-    """The reference (unfused) tree read on CUDA in float32, five runs of one block's
-    read (node means by ``index_add``, whose atomic order CUDA does not fix, then the
-    segment-softmax read), each tensor against the first run's, relative in norm: the
-    output within 1e-5, the gradient of ``kernel.weight`` within 3.3e-4 and every other
-    parameter gradient within 3e-5.
+    """The reference (unfused) tree read on CUDA in float32 repeats within its bounds
+    over five runs of one block's read, each tensor against the first run's, relative
+    in norm: the output within 1e-5, the gradient of ``kernel.weight`` within 3.3e-4
+    and every other parameter gradient within 3e-5. The node means sum by
+    ``index_add``, whose atomic order CUDA does not fix.
 
     The gradient bounds are twice the largest spreads measured over 60 fresh processes
-    on CUDA (torch 2.13): 1.61e-4 at ``kernel.weight`` (median 1.0e-4), and 1.48e-5 at
-    the others (at ``norm_q``); the output's was 8.3e-7. ``kernel.weight`` spreads about
-    ten times more than any other gradient because its terms nearly cancel. Its gradient
-    sums, over every pair, the pair's logit gradient times its kernel basis; the
-    softmax makes each point's logit gradients sum to zero over its sources, and the
-    basis changes little between them. So the terms' absolute sum is about 1,000 times
-    the gradient's norm (1 to 20 times at the other linear maps' weights), and the
-    small change the atomics make in each term from run to run is amplified that much."""
+    (torch 2.13): 1.61e-4 at ``kernel.weight`` and 1.48e-5 at the others; the output's
+    was 8.3e-7. ``kernel.weight`` spreads about ten times more because its gradient's
+    terms nearly cancel: the softmax makes each point's logit gradients sum to zero
+    over its sources, and the kernel basis changes little between them, so the terms'
+    absolute sum is about 1,000 times the gradient's norm."""
     torch.manual_seed(0)
     dev = torch.device("cuda")
     pts, nrm, w, g = (t.float().to(dev) for t in cloud(3000, seed=3))
@@ -384,8 +380,10 @@ def test_the_reference_tree_read_on_cuda_spreads_within_its_bound():
 
 
 # --------------------------------------------------------------------------- the whole model
-#: The whole-model cases: the surface task and ISLA-DTT (its read live, its draw
-#: keeping 300 of 400 cells), each in 3-D and in 2-D.
+#: The whole-model cases: the surface task and the interior task (its read live, its
+#: draw keeping 300 of 400 cells), each in 3-D and in 2-D. On CUDA the interior task
+#: also runs with every cell kept (``dtt_every_cell``, the default budget), where the
+#: draw still runs its line over the inclusion probabilities.
 TASKS = ["surface", "dtt"]
 DIMS = [3, 2]
 PRECISIONS = [
@@ -405,20 +403,22 @@ def _model(task, dims):
         n_layers=2,
         n_slices=16,
     )
+    if task != "surface":
+        kw.update(interior=True)
     if task == "dtt":
-        kw.update(interior=True, n_boundary_tokens=300)
+        kw.update(n_boundary_tokens=300)
     return live(ISLA(**kw))
 
 
 def _step(model, task, device, autocast, n=400, nq=120):
     """One training step of ``model`` on a boundary soup of ``n`` cells (and, for
-    ISLA-DTT, ``nq`` prediction points), the global RNG seeded first (the draw's
+    the interior task, ``nq`` prediction points), the global RNG seeded first (the draw's
     start in training): the outputs, every parameter's gradient and the draw's kept
     cells and weights, by name."""
     dims = model.n_spatial_dims
     pts, nrm, w, drv = cloud(n, d=dims, seed=0, dtype=torch.float32)
     mesh = soup(pts, nrm, w).to(device)
-    if task == "dtt":
+    if task != "surface":
         q = cloud(nq, d=dims, seed=1, dtype=torch.float32, scale=(3.0,) * dims)[0]
         where = {"prediction_points": points_mesh(q.to(device))}
     else:
@@ -438,11 +438,11 @@ def _step(model, task, device, autocast, n=400, nq=120):
         )
         sum(o.double().square().mean() for o in out.values()).backward()
     draws = r.returns(sampling.sample_boundary_cells)
-    assert len(draws) == (task == "dtt")
+    assert len(draws) == (task != "surface")
     draw = {}
     if draws:
         draw = dict(zip(("draw.kept", "draw.weights"), draws[0]))
-        assert draw["draw.kept"].shape == (300,)  # the draw is active: 300 of 400 cells
+        assert draw["draw.kept"].shape == (300 if task == "dtt" else n,)
     return {
         **{k: v.detach() for k, v in out.items()},
         **{n: p.grad for n, p in model.named_parameters()},
@@ -462,7 +462,7 @@ def _not_bitwise(a, b) -> list:
 @pytest.mark.parametrize("dims", DIMS)
 @pytest.mark.parametrize("task", TASKS)
 def test_the_model_repeats_bitwise_on_cpu_with_one_thread(task, dims, autocast):
-    """The surface model and ISLA-DTT (read live, draw active), in 3-D and 2-D, in
+    """The surface and interior models (read live, draw active), in 3-D and 2-D, in
     float32 and under bfloat16 autocast: one training step twice on CPU with one
     thread, the outputs, every parameter gradient and the draw bitwise."""
     model = _model(task, dims)
@@ -477,10 +477,11 @@ def test_the_model_repeats_bitwise_on_cpu_with_one_thread(task, dims, autocast):
 
 def _resolved(model, task, device):
     """The kernels "auto" resolves to for ``model`` on ``device`` (float32 points):
-    the geometry region's, and for ISLA-DTT the exact geometry's and the read's."""
+    the geometry region's, and for the interior task the exact geometry's and the
+    read's."""
     p = torch.zeros(1, model.n_spatial_dims, device=device)
     kernels = {"geo": model._resolve_geo_kernel(p)}
-    if task == "dtt":
+    if task != "surface":
         kernels["geometry"] = model._resolve_geometry_kernel(p)
         kernels["tree_read"] = model._resolve_tree_read_kernel(p)
     return kernels
@@ -488,19 +489,24 @@ def _resolved(model, task, device):
 
 @pytest.mark.cuda
 @requires_cuda_triton
-@pytest.mark.parametrize("autocast", PRECISIONS)
-@pytest.mark.parametrize("dims", DIMS)
-@pytest.mark.parametrize("task", TASKS)
+@pytest.mark.parametrize(
+    "task, dims, autocast",
+    [
+        pytest.param(t, d, a.values[0], id=f"{t}-{d}-{a.id}")
+        for t in TASKS
+        for d in DIMS
+        for a in PRECISIONS
+    ]
+    + [pytest.param("dtt_every_cell", 3, False, id="dtt_every_cell-3-fp32")],
+)
 def test_the_model_repeats_bitwise_on_cuda_with_kernels_auto(task, dims, autocast):
-    """The surface model and ISLA-DTT (read live, draw active), in 3-D and 2-D, in
-    float32 and under bfloat16 autocast, on CUDA with every kernel "auto": one
-    training step twice, the outputs, every parameter gradient and the draw bitwise.
-    The kernels that resolve are recorded and asserted: the fused geometry region in
-    3-D and 2-D, and for ISLA-DTT the fast
-    exact geometry, the fused read (seen running: the fused read and node means, not
-    the segment softmax read), the fast forest build and the fast walk.
-
-    ISLA-DTT's draw (its float64 weights included) is bitwise here at 400 cells."""
+    """The surface and interior models (read live, draw active or keeping every cell),
+    in 3-D and 2-D, in float32 and under bfloat16 autocast, on CUDA with every kernel
+    "auto": one training step twice, the outputs, every parameter gradient and the
+    draw (its float64 weights included) bitwise. The test also asserts which kernels run: the
+    fused geometry region, and in the interior task the fast exact geometry, the
+    fused read and node means (not the segment softmax read), the fast forest build
+    and the fast walk."""
     model = _model(task, dims).cuda()
     reads = (
         fused_read.fused_kernel_read,
@@ -510,7 +516,7 @@ def test_the_model_repeats_bitwise_on_cuda_with_kernels_auto(task, dims, autocas
     with ran(tree_build.forest_tables, tree_walk.walk_pairs, *reads) as r:
         a, b = (_step(model, task, "cuda", autocast) for _ in range(2))
     kernels = _resolved(model, task, "cuda")
-    if task == "dtt":
+    if task != "surface":
         tables, walks = (
             r.returns(tree_build.forest_tables),
             r.returns(tree_walk.walk_pairs),
@@ -520,7 +526,7 @@ def test_the_model_repeats_bitwise_on_cuda_with_kernels_auto(task, dims, autocas
         kernels["read_ran"] = {f.__name__ for f in reads if r.count(f)}
     print("resolved:", kernels)
     want = {"geo": "fused"}
-    if task == "dtt":
+    if task != "surface":
         want.update(geometry="fast", tree_read="fused", build="fast", walk="fast")
         want["read_ran"] = {"fused_kernel_read", "fused_node_means"}
     assert kernels == want

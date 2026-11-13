@@ -17,15 +17,18 @@
 """Small model cases shared by the release tests.
 
 Each case is an ISLA configuration, its boundary meshes and its inputs, built on the
-CPU from seeded ``torch.Generator`` draws by correctly rounded operations only
-(float64 draws, ``+ - * /`` and ``sqrt``, one cast to float32), so that the inputs are
-the same bits on every platform. ``_release_cases.py`` records the reference outputs
-of these cases in ``data/`` and ``test_isla_release.py`` compares against them.
+CPU from seeded ``torch.Generator`` draws. ``_release_cases.py`` records the reference
+outputs of these cases in ``data/`` and ``test_isla_release.py`` compares against
+them, with curved meshes from the exact builders (``_exact_*``): correctly rounded
+operations only (float64 draws, ``+ - * /`` and numpy's ``sqrt``, one cast to float32),
+so that the inputs are the same bits on every platform.
 """
 
 import hashlib
+import math
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
 from physicsnemo.experimental.models.isla import ISLA
@@ -241,6 +244,66 @@ def _circle_cells(n=48):
 
     m = circle_2d.load(n_points=n)
     p, c = _oriented(m.points.double(), m.cells, lambda x: x)
+    return _body(p), c
+
+
+### The release cases' meshes (``_release_cases.py``), the same bits on every CPU:
+### float64 ``+ - * /`` and numpy's square root only. torch's CPU sqrt goes through
+### MKL's vector math, which is not correctly rounded and changes with the CPU.
+
+
+def _exact_unit(x: torch.Tensor) -> torch.Tensor:
+    """:func:`_unit` of float64 ``x`` with a correctly rounded square root."""
+    sq = x[..., 0] * x[..., 0]
+    for k in range(1, x.shape[-1]):
+        sq = sq + x[..., k] * x[..., k]
+    return x / torch.from_numpy(np.sqrt(sq.numpy()))[..., None]
+
+
+#: The icosahedron: its vertices ``(0, +-1, +-phi)`` cyclically and its faces.
+_PHI = (1.0 + math.sqrt(5.0)) / 2.0
+_ICO_POINTS = [
+    (-1, _PHI, 0), (1, _PHI, 0), (-1, -_PHI, 0), (1, -_PHI, 0),
+    (0, -1, _PHI), (0, 1, _PHI), (0, -1, -_PHI), (0, 1, -_PHI),
+    (_PHI, 0, -1), (_PHI, 0, 1), (-_PHI, 0, -1), (-_PHI, 0, 1),
+]  # fmt: skip
+_ICO_CELLS = [
+    (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+    (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+    (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+    (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1),
+]  # fmt: skip
+
+
+def _exact_sphere_cells(subdivisions):
+    """:func:`_sphere_cells` from :data:`_ICO_POINTS`: each triangle split into four at
+    its edges' midpoints ``subdivisions`` times, then projected by :func:`_exact_unit`."""
+    p = torch.tensor(_ICO_POINTS, dtype=D)
+    c = torch.tensor(_ICO_CELLS)
+    for _ in range(subdivisions):
+        e = torch.cat([c[:, [0, 1]], c[:, [1, 2]], c[:, [2, 0]]]).sort(-1).values
+        edges, inv = e.unique(dim=0, return_inverse=True)
+        (a, b, d), (ab, bd, da) = c.T, len(p) + inv.view(3, -1)
+        p = torch.cat([p, (p[edges[:, 0]] + p[edges[:, 1]]) * 0.5])
+        children = ((a, ab, da), (ab, b, bd), (da, bd, d), (ab, bd, da))
+        c = torch.cat([torch.stack(t, -1) for t in children])
+    p, c = _oriented(_exact_unit(p), c, lambda x: x)
+    return _body(p), c
+
+
+def _exact_circle_cells(n=48):
+    """:func:`_circle_cells` from the rational parametrization ``(1 - t^2, 2 t) / (1 + t^2)``:
+    ``t`` on an even grid of ``[0, tan(pi / 8)]`` gives ``n / 8`` points of each octant
+    (the second reflected, the other quadrants rotated)."""
+    k = n // 8
+    t = torch.arange(k + 1, dtype=D) * ((math.sqrt(2.0) - 1.0) / k)
+    s = 1 + t * t
+    x, y = (1 - t * t) / s, 2 * t / s
+    q = torch.cat([torch.stack([x, y], -1)[:k], torch.stack([y, x], -1)[1:].flip(0)])
+    for _ in range(3):
+        q = torch.cat([q, torch.stack([-q[-2 * k :, 1], q[-2 * k :, 0]], -1)])
+    c = torch.stack([torch.arange(n), torch.arange(1, n + 1) % n], -1)
+    p, c = _oriented(q, c, lambda x: x)
     return _body(p), c
 
 

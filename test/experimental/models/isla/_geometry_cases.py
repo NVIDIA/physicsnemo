@@ -17,20 +17,34 @@
 """Geometry cases shared by the ISLA geometry tests: closed surfaces and polygons
 with outward normals, an airfoil section, a folded fin, boxes with points at ties and
 on the wall, thin cells and sliver soups with their exact squared distance, queries
-near a wall, and the small interior model of the interior-geometry tests."""
+near a wall, and the small interior model of the interior-geometry tests; also the
+search kernels' test parameters, a renumbering of a surface and a bitwise
+comparison."""
 
 from fractions import Fraction
 
+import pytest
 import torch
 
 from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.curves import circle_2d
 from physicsnemo.mesh.primitives.surfaces import cube_surface, sphere_icosahedral, torus
+from test.experimental.models.isla._marks import requires_cuda
 from test.experimental.models.isla._meshes import orthogonal
 
 D = torch.float64
 PV = {"p": {"rank": 0}, "v": {"rank": 1}}
+_CUDA = [pytest.mark.cuda, requires_cuda]
+#: The ``kernel, device`` parameters of a test of both search kernels. Off CUDA the
+#: fast kernel runs the reference's torch code, so it runs on CUDA only.
+KERNEL_DEVICES = [
+    ("reference", "cpu"),
+    pytest.param("reference", "cuda", marks=_CUDA),
+    pytest.param("fast", "cuda", marks=_CUDA),
+]
+#: The ``device`` parameter of a test of the fast kernel against the reference.
+FAST_DEVICES = [pytest.param("cuda", marks=_CUDA)]
 
 
 def _oriented(mesh: Mesh, outward) -> Mesh:
@@ -339,12 +353,32 @@ def _soup(seed, h):
     return tri.reshape(-1, 3), torch.arange(144).reshape(-1, 3), q
 
 
+def _renumbered(p, c, seed: int = 0):
+    """The surface with its vertices and its cells permuted, each triangle's vertex
+    list rotated (a segment's order is kept: reversing it flips its normal)."""
+    g = torch.Generator().manual_seed(seed)
+    perm = torch.randperm(p.shape[0], generator=g)
+    inv = torch.empty_like(perm)
+    inv[perm] = torch.arange(p.shape[0])
+    c2 = inv[c][torch.randperm(c.shape[0], generator=g)]
+    return p[perm], c2.roll(1, -1) if c.shape[1] == 3 else c2
+
+
+def _bitwise(a, b) -> bool:
+    """Whether two tensors are the same bit for bit, dtype included (``-0`` and NaN
+    payloads too, where ``torch.equal`` passes ``-0 == 0`` and fails on NaN)."""
+    if a.dtype != b.dtype:
+        return False
+    if a.is_floating_point():
+        return torch.equal(a.view(torch.uint8), b.view(torch.uint8))
+    return torch.equal(a, b)
+
+
 def _quad_diagonals(case: str):
     """Float32 queries at the midpoints of a posed torus's quad diagonals (the edge
     each quad's two triangles share, which near-duplicate normals meet across), the
     torus's points and its cells: the 48 x 24 torus (``renumbering``), or the split
-    torus of test_on_wall_direction_is_a_function_of_the_input_mesh
-    (``precision``)."""
+    torus of test_on_wall_direction_is_a_function_of_the_input_mesh (``precision``)."""
     if case == "renumbering":
         m = torus.load(n_major=48, n_minor=24)
         pts = (m.points.double() @ orthogonal(3, 7).T).float()

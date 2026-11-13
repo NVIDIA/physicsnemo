@@ -16,36 +16,35 @@
 
 r"""Fused Triton kernel for ISLA's per-layer geometry region.
 
-The dense geometry region of a slice block (``blocks._geo_region``) evaluates the
-point-anchor relational invariants on the (B, N, S) point-slice grid, the (5+T)->1
-routing-bias Linear on them (T the per-point vectors: the global directions followed by
-the token's rank-1 inputs), the point->slice softmax of the pre-logits plus
-that bias, and the mix-weighted pooling of the invariants back to the points. In
-eager PyTorch every intermediate of that computation -- rel (B,N,S,3), dist, rel_hat,
-the four dot products and the concatenated (B,N,S,geo) invariants -- is written to
-memory and read back; torch.compile fuses the elementwise chain but still
-materializes the (B,N,S,geo) invariants (once in float32 and once in bfloat16 for the
-GEMM) in forward and again in backward. The region is memory-bound, so its cost is
-that traffic.
+The geometry region of a slice block (``_blocks._geo_region``) computes four things on
+the (B, N, S) point-slice grid: the point-anchor relational invariants; the (5+T)->1
+routing-bias Linear on them, with T the per-point vectors (the global directions, then
+the token's rank-1 inputs); the point->slice softmax of the pre-logits plus that bias;
+and the mix-weighted pooling of the invariants back to the points. Eager PyTorch
+writes every intermediate to memory and reads it back: rel (B,N,S,3), dist, rel_hat,
+the T + 3 dot products and the concatenated (B,N,S,geo) invariants. torch.compile
+fuses the elementwise chain but still materializes the (B,N,S,geo) invariants, in
+float32 and again in bfloat16 for the GEMM, in forward and again in backward. The
+region is memory-bound, so this traffic is its cost.
 
-The two kernels here evaluate the same arithmetic on register tiles of
-``BLOCK_N`` points x all ``S`` slices and never write any (B,N,S,.) intermediate:
-the forward reads the pre-logits once and writes the routing bias and the mix once
-(plus the (B,N,geo) pooled invariants); the backward re-derives the invariants from
-the (B,N,3) / (B,S,3) geometry inside the tile, reads the three incoming gradients
-once and writes the pre-logit gradient once. Everything else the region touches is
-O(B N) or O(B S). The per-slice reductions over points (gradients of the anchors and
-of the Linear) are written as per-tile partial sums and reduced by torch, so the
-result is deterministic (no atomics).
+The two kernels here compute the same arithmetic on register tiles of ``BLOCK_N``
+points by all ``S`` slices, and write no (B,N,S,.) intermediate. The forward reads the
+pre-logits once and writes the routing bias, the mix and the (B,N,geo) pooled
+invariants once. The backward rebuilds the invariants inside the tile from the
+(B,N,3) and (B,S,3) geometry, reads the incoming gradients once and writes the
+pre-logit gradient once. Everything else the region touches is O(B N) or O(B S). The
+per-slice sums over points (the gradients of the anchors and of the Linear) are
+stored as per-tile partial sums that torch reduces, so the result is deterministic
+(no atomics).
 
-Same arithmetic, same dtype decisions as the eager region under autocast (the
-invariants and the Linear operands are rounded to bfloat16 where autocast would run
-the Linear and the pooling GEMM in bfloat16, the pre-logit + bias sum is rounded to
-the pre-logits' dtype, the softmax runs in float32), so the fused forward reproduces
-the eager forward to floating-point reordering. In the backward the reductions
-accumulate in float32 where autocast's GEMM backward would have rounded to bfloat16,
-which is the one place the two paths differ by more than reordering (the fused
-gradient is the more precise one). Float64 is supported for exactness tests.
+The kernels round as the eager region does under autocast: the invariants and the
+Linear's operands to bfloat16 where autocast runs the Linear and the pooling GEMM in
+bfloat16, the pre-logit plus bias sum to the pre-logits' dtype, and the softmax in
+float32. The fused forward thus matches the eager forward up to floating-point
+reordering. The backward's reductions accumulate in float32 where autocast's GEMM
+backward rounds to bfloat16. Only there do the two paths differ by more than
+reordering, and the fused gradient is the more precise. Float64 is supported for
+exactness tests.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-### (ISLA resolves _geo_kernel to the eager region whenever HAS_TRITON is False.)
+### ISLA resolves _geo_kernel to the eager region when HAS_TRITON is False.
 from physicsnemo.experimental.models.isla._triton import (
     HAS_TRITON,
     libdevice,
@@ -107,11 +106,11 @@ if HAS_TRITON:
         K: tl.constexpr, T: tl.constexpr, IDX_E: tl.constexpr, IDX_F: tl.constexpr, IDX_G: tl.constexpr,
         LIN_BF16: tl.constexpr, LOGIT_BF16: tl.constexpr, F64: tl.constexpr,
     ):
-        """The forward tile both kernels evaluate, from the loads to the mix: the inputs
-        (the per-point vectors past ``T`` repeat the first), the offsets ``rel``, the
-        distance before and after its clamp, ``rel_hat``, the invariants and routing
-        weights as the Linear reads them (past ``T``, the first direction's), the routing
-        bias and the point->slice mix."""
+        """The forward tile both kernels compute, from the loads to the mix. Returns the
+        inputs, the offsets ``rel``, the distance before and after its clamp,
+        ``rel_hat``, the invariants and routing weights as the Linear reads them, the
+        routing bias and the point->slice mix. The per-point vector slots past ``T``, and
+        their invariants and weights, repeat the first one's."""
         r0, r1, r2 = _load3(r_ptr, pid_b * r_sb + offs_n * r_sn, mask_n)
         n0, n1, n2 = _load3(n_ptr, pid_b * n_sb + offs_n * n_sn, mask_n)
         d0, d1, d2 = _load3(d_ptr, pid_b * d_sb + offs_n * d_sn, mask_n)
@@ -365,8 +364,7 @@ if HAS_TRITON:
         mask_n = offs_n < N
         mask_s = offs_s < S
         mask = mask_n[:, None] & mask_s[None, :]
-        # invariant / weight index of the second, third and fourth per-point vectors: a global
-        # direction sits right after the first (2 + j); a token vector after n.m (5 + K + j')
+        # invariant / weight indices of the later per-point vectors, as in the forward
         IDX_E: tl.constexpr = 3 if K >= 2 else 6
         IDX_F: tl.constexpr = 4 if K >= 3 else 7
         IDX_G: tl.constexpr = 5 if K >= 4 else 8
@@ -560,7 +558,7 @@ if HAS_TRITON:
             gd0 = gg2 * h0
             gd1 = gg2 * h1
             gd2 = gg2 * h2
-            gd = gd_ptr + pid_b * gd_sb + offs_n * gd_sn  # grad_d is (B, N, K, 3) contiguous
+            gd = gd_ptr + pid_b * gd_sb + offs_n * gd_sn  # grad_d is (B, N, T, 3) contiguous
             tl.store(gd + 0, tl.sum(tl.where(mask, gd0, 0.0), axis=1), mask=mask_n)
             tl.store(gd + 1, tl.sum(tl.where(mask, gd1, 0.0), axis=1), mask=mask_n)
             tl.store(gd + 2, tl.sum(tl.where(mask, gd2, 0.0), axis=1), mask=mask_n)
@@ -616,13 +614,16 @@ def _check(r, n_hat, d_hat, z_pos, m_s, logits_pre, weight, bias, n_global):
         raise ValueError(f"routing Linear must be {_geo_width(t)}->1 for {t} vectors")
 
 
-#: Launch configuration (points per program, warps per program); ``None`` picks the
-#: defaults below, launch constants tuned on Ada-class GPUs for compute capability below
-#: 10 and on Blackwell-class GPUs above; re-tune them when the kernel or Triton changes.
-#: The tile size changes only the floating-point summation order (pointwise outputs
-#: agree to about 1e-5 relative).
+#: Launch overrides: points per forward and per backward program, and the backward's
+#: warps. ``None`` picks the defaults below, tuned on Ada-class GPUs (compute capability
+#: below 10) and Blackwell-class GPUs (10 and above); re-tune them when the kernel or
+#: Triton changes. The tile size and the warp count change only the floating-point
+#: summation order (pointwise outputs agree to about 1e-5 relative). On Blackwell at up
+#: to 128 slices the backward runs 1.4 to 1.9 times faster on one warp than on four,
+#: since its reductions then never cross warps; more slices keep four.
 FWD_BLOCK_N: int | None = None
 BWD_BLOCK_N: int | None = None
+BWD_NUM_WARPS: int | None = None
 NUM_WARPS: int = 4
 
 
@@ -653,6 +654,12 @@ def _bwd_block(s, k=1):
     else:
         base = 4 if s <= 256 else 2 if s <= 512 else 1
     return base if k == 1 else max(1, base // 2)
+
+
+def _bwd_warps(s):
+    if BWD_NUM_WARPS is not None:
+        return BWD_NUM_WARPS
+    return 1 if _blackwell() and s <= 128 else NUM_WARPS
 
 
 @torch.library.custom_op("physicsnemo::isla_geo_region_fwd", mutates_args=())
@@ -779,7 +786,7 @@ def _geo_region_bwd(
     block_n, block_s = _bwd_block(s, k), triton.next_power_of_2(max(s, 1))
     n_tiles = triton.cdiv(n, block_n)
     glogit = torch.empty_like(logits_pre)
-    ### A per-point gradient that autograd does not ask for is neither computed nor stored (returned with no points).
+    ### A per-point gradient autograd does not ask for is neither computed nor stored: it comes back with no points.
     gr = torch.empty(b, n if need_r else 0, 3, device=r.device, dtype=r.dtype)
     gn = torch.empty(b, n if need_n else 0, 3, device=r.device, dtype=r.dtype)
     gd = torch.empty(b, n if need_d else 0, t, 3, device=r.device, dtype=r.dtype)
@@ -849,7 +856,7 @@ def _geo_region_bwd(
         F64=r.dtype == torch.float64,
         BLOCK_N=block_n,
         BLOCK_S=block_s,
-        num_warps=NUM_WARPS,
+        num_warps=_bwd_warps(s),
     )
     gz = gz_part.sum(dim=1)
     gm = gm_part.sum(dim=1)
@@ -951,22 +958,23 @@ def fused_geo_region(
     eps: float,
     n_global: int | None = None,
 ):
-    """Drop-in for ``blocks._geo_region``: returns (bias (B,N,S), mix (B,N,S),
-    pooled (B,N,geo)) from one fused kernel. ``d_hat`` holds the per-point unit
-    vectors as (B, N, T, d), d at most 3: the ``n_global`` global directions
-    first (K, possibly none), then the token's rank-1 vectors (P' = T - K), T at
-    most :data:`MAX_DIRECTIONS` with K = 0 counted as one; the invariant order is
-    the eager region's (the K direction dots right after log distance, the
-    token-vector dots after n.m), so the routing Linear's weights mean the same on
-    both paths. ``n_global`` defaults to T (every vector a global direction).
-    ``lin`` is the routing-bias head, ``nn.Linear(n_geo, 1)``, with or without its
-    bias (a missing bias enters as an exact zero).
+    """Drop-in for ``_blocks._geo_region``: (bias (B,N,S), mix (B,N,S), pooled
+    (B,N,geo)) from one fused kernel.
 
-    The kernels are written for three components and at least one direction. A
-    problem in fewer dimensions enters with zero trailing components, and K = 0 as
-    one zero direction with a zero routing weight: both add exact zeros to every
-    norm, dot product and bias sum, so the arithmetic is the unpadded region's, and
-    the padded parts of the outputs and gradients are dropped."""
+    ``lin`` is the routing-bias head, ``nn.Linear(n_geo, 1)``; a missing bias enters
+    as an exact zero. ``d_hat`` (B, N, T, d), d at most 3, holds the per-point unit
+    vectors: the ``n_global`` global directions first (K, possibly none; default T,
+    every vector a global direction), then the token's rank-1 vectors (P' = T - K).
+    T is at most :data:`MAX_DIRECTIONS`, with K = 0 counted as one. The invariants
+    come in the eager region's order (the K direction dots right after log distance,
+    the token-vector dots after n.m), so the routing Linear's weights mean the same on
+    both paths.
+
+    The kernels take three components and at least one direction. A problem in fewer
+    dimensions enters with zero trailing components, and K = 0 as one zero direction
+    with a zero routing weight. Both add exact zeros to every norm, dot product and
+    bias sum, so the arithmetic is the unpadded region's; the padded parts of the
+    outputs and gradients are dropped."""
     if not HAS_TRITON:
         raise RuntimeError("fused geo region requires triton")
     if not isinstance(lin, torch.nn.Linear):

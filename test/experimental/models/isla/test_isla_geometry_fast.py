@@ -35,6 +35,9 @@ from physicsnemo.mesh.primitives.surfaces import cube_surface
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from test.experimental.models.isla._forced import ran
 from test.experimental.models.isla._geometry_cases import (
+    FAST_DEVICES,
+    KERNEL_DEVICES,
+    _bitwise,
     _box_ties,
     _box_wall,
     _capped_cube,
@@ -204,10 +207,12 @@ def _run(kernel, q, points, cells, monkeypatch):
     return [d, u, q.grad, points.grad, *seen["search"], seen["w"]]
 
 
-@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("device", FAST_DEVICES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("case", [c[0] for c in _cases()])
 def test_fast_search_equals_the_reference_bitwise(case, dtype, device, monkeypatch):
+    """On every case, every output of the fast search (d, u, their gradients, the
+    search's outputs and the winding number) is the reference's bitwise."""
     _, mesh, q = next(c for c in _cases() if c[0] == case)
     args = (q.to(device, dtype), mesh.points.to(device, dtype), mesh.cells.to(device))
     ### (one thread: the vertex gradient sums over the cells in a thread-dependent order)
@@ -232,12 +237,7 @@ def test_fast_search_equals_the_reference_bitwise(case, dtype, device, monkeypat
         "w",
     ]
     for name, a, b in zip(names, ref, fast):
-        assert a.dtype == b.dtype, name
-        assert (
-            torch.equal(a.view(torch.uint8), b.view(torch.uint8))
-            if a.is_floating_point()
-            else torch.equal(a, b)
-        ), name
+        assert _bitwise(a, b), name
 
 
 @pytest.mark.parametrize("f", [1, 2, 3, 5, 17, 100, 1000])
@@ -361,12 +361,7 @@ def test_the_search_does_not_depend_on_its_seed_cell(seed, dtype, device, monkey
         patched = _run("reference", *args, monkeypatch)
     assert calls
     for a, b in zip(default, patched):
-        assert a.dtype == b.dtype
-        assert (
-            torch.equal(a.view(torch.uint8), b.view(torch.uint8))
-            if a.is_floating_point()
-            else torch.equal(a, b)
-        )
+        assert _bitwise(a, b)
 
 
 @pytest.mark.parametrize("device", _DEVICES)
@@ -399,12 +394,7 @@ def test_slabs_are_built_only_up_to_their_cells_per_query(device, monkeypatch):
         with_slabs = _run("reference", q[:159], points, cells, monkeypatch)
         assert built == [5120, 5120]
     for a, b in zip(without, with_slabs):
-        assert a.dtype == b.dtype
-        assert (
-            torch.equal(a.view(torch.uint8), b.view(torch.uint8))
-            if a.is_floating_point()
-            else torch.equal(a, b)
-        )
+        assert _bitwise(a, b)
 
 
 @pytest.mark.parametrize("device", _DEVICES)
@@ -503,15 +493,14 @@ def test_the_ball_search_returns_every_cell_within_its_radius(device):
     assert int(found.sum()) < n * f // 20
 
 
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
-def test_ball_search_in_blocks_of_rows_equals_one_launch(kernel, monkeypatch):
+def test_ball_search_in_blocks_of_rows_equals_one_launch(monkeypatch):
     """The ball search launched over blocks of a few query rows, as it is from 2**25 =
     33,554,432 queries on (Warp refuses 2**31 candidate slots), gives every output of
     one launch bitwise, its second pass included: a fan of 96 cells, 50 queries above
     its hub (96 candidates each, more than the 64 slots; 1,600 extra candidates fill
     the overflow list of 450) and 400 elsewhere."""
     q, points, cells = _fan()
-    one = _run(kernel, q, points, cells, monkeypatch)
+    one = _run("reference", q, points, cells, monkeypatch)
     caps, launch = [], geometry.wp.launch
 
     def spy(k, dim, *args, **kwargs):
@@ -523,14 +512,13 @@ def test_ball_search_in_blocks_of_rows_equals_one_launch(kernel, monkeypatch):
         ### Blocks of 64 rows in the first pass, of 42 in the second.
         mp.setattr(geometry, "WARP_MAX_ELEMENTS", 2**12 + 1)
         mp.setattr(geometry.wp, "launch", spy)
-        blocks = _run(kernel, q, points, cells, monkeypatch)
+        blocks = _run("reference", q, points, cells, monkeypatch)
     assert caps == [(64, 64)] * 7 + [(64, 2), (96, 42), (96, 8)]
     for a, b in zip(one, blocks):
         assert torch.equal(a, b)
 
 
-@pytest.mark.parametrize("device", _DEVICES)
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
+@pytest.mark.parametrize("kernel, device", KERNEL_DEVICES)
 @pytest.mark.parametrize("case", ["list", "fallback"])
 def test_ball_search_overflow_list_and_its_fallback_equal_the_default_slots(
     case, kernel, device, monkeypatch
@@ -572,12 +560,7 @@ def test_ball_search_overflow_list_and_its_fallback_equal_the_default_slots(
     else:
         assert extra > q.shape[0] and caps == [2, int(per_query.max())]
     for a, b in zip(default, two):
-        assert a.dtype == b.dtype
-        assert (
-            torch.equal(a.view(torch.uint8), b.view(torch.uint8))
-            if a.is_floating_point()
-            else torch.equal(a, b)
-        )
+        assert _bitwise(a, b)
 
 
 @pytest.mark.cuda
@@ -588,9 +571,9 @@ def test_ball_search_past_2_31_slots(kernel):
     """2**25 + 64 queries, whose 64 candidate slots each pass Warp's 2**31-entry
     arrays: the last 64 queries' distances and directions equal those of the same
     queries alone, bitwise (each query's search, closest point and winding number are
-    its own). Before, Warp refused the slot array. Needs about 60 GiB of device memory
-    (1.6-1.8 kB per query, measured on CPU at 2**20 queries): the 17.2 GB of slots,
-    their masks and the candidates' closest points."""
+    its own). Needs about 60 GiB of device memory (1.6-1.8 kB per query, measured on
+    CPU at 2**20 queries): the 17.2 GB of slots, their masks and the candidates'
+    closest points."""
     tail = 64
     if torch.cuda.mem_get_info()[0] < 96 * 2**30:
         pytest.skip("needs about 60 GiB of free device memory")
@@ -638,6 +621,9 @@ def test_geometry_kernel_auto_resolves_to_the_reference_off_cuda_and_honors_expl
 @requires_cuda_triton
 @pytest.mark.parametrize("n", [1, 5, 1023, 1024, 1025, 70000])
 def test_run_start_kernel_equals_the_torch_scan(n):
+    """The run-start kernel gives each entry the index of the first entry of its run
+    (a running maximum of the run starts), as the torch scan does, on one block and
+    across block edges."""
     g = torch.Generator().manual_seed(n)
     new = torch.rand(n, generator=g) < torch.rand(1, generator=g)
     new[0] = True
@@ -835,12 +821,7 @@ def test_fast_search_equals_the_reference_on_thin_cells(case, columns):
     ref = geometry._closest_candidates(q, p, cells, parity, n64)
     fast = geometry._closest_candidates_fast(q, p, cells, parity, n64)
     for a, b in zip(ref, fast):
-        assert a.dtype == b.dtype
-        assert (
-            torch.equal(a.view(torch.uint8), b.view(torch.uint8))
-            if a.is_floating_point()
-            else torch.equal(a, b)
-        )
+        assert _bitwise(a, b)
 
 
 def test_guard_kernel_falls_back_to_the_torch_code_off_cuda(monkeypatch):

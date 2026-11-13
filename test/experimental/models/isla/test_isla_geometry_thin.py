@@ -102,14 +102,15 @@ def _check(q, p, c, device):
     closest cell within the op's tie bound of the closest distance, and the query on
     the wall exactly when the brute force's distance says so (below ``E / 2`` it must
     be, beyond ``2 E`` it must not, ``E = u (|x| + R) + C u64 (|x'| + R')``, primes
-    in the boundary's centred frame, ``C`` the derived ``_BAND_UNITS``); and the
-    fast search gives the reference's outputs and gradients bitwise."""
+    in the boundary's centred frame, ``C`` the derived ``_BAND_UNITS``); and on CUDA
+    the fast search gives the reference's outputs and gradients bitwise (off CUDA it
+    runs the reference's code)."""
     dtype = q.dtype
     u = torch.finfo(dtype).eps / 2
     tri = p.double()[c]
     exact, holders = _brute(q, tri)
     out = {}
-    for kernel in ("reference", "fast"):
+    for kernel in ("reference", "fast") if device == "cuda" else ("reference",):
         qq, pp = (
             q.to(device).clone().requires_grad_(),
             p.to(device).clone().requires_grad_(),
@@ -119,7 +120,7 @@ def _check(q, p, c, device):
         with torch.no_grad():
             idx, on_wall = _search(q.to(device), p.to(device), c.to(device), kernel)
         out[kernel] = (d.detach(), uu.detach(), qq.grad, pp.grad, idx, on_wall)
-    for a, b in zip(out["reference"], out["fast"]):
+    for a, b in zip(out["reference"], out.get("fast", ())):
         assert torch.equal(a, b)
     d, _, _, _, idx, on_wall = (t.cpu() for t in out["reference"])
     xs = q.double().norm(dim=-1)

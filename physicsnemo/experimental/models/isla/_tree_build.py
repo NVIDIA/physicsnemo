@@ -17,24 +17,31 @@
 r"""The fast build of the interior task's boundary forest (:class:`~._tree_read.BoundaryForest`).
 
 The reference build makes one GLOBE
-:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree` per normal face, and each
-tree's Morton topology splits its ranges level by level with a host sync per level:
-about 180 syncs per case. This build makes the same forest for every face at once
-with one sync. The Morton codes are the reference's expression, evaluated with each
-cell's own face's bounds; two stable sorts give the reference's order (face, then
-code, then cell); one Warp kernel finds every node from the positions (each sorted
-position walks down from its tree's root, computing the reference's split at every
-node on its way, and emits the nodes whose range starts there), a count pass and a
-fill pass; a sort of the nodes by (face, depth, start) is the reference's node
-numbering. The topology is integer arithmetic, so it is the reference's exactly.
-Every floating-point value is computed by the reference's own expressions: the boxes by
-those of :func:`~physicsnemo.mesh.spatial.cluster_tree._node_boxes` on the whole forest
-(an exact min and max), the prefix sums of the measure and of the weighted points, normals and
-rank-1 inputs by the same ``cumsum`` calls on the same per-tree inputs, and the node
-means by the same elementwise operations on the joined table. The forest's ``trees``
-are real ``ClusterTree`` objects over slices of the table, so the reference walk
-(:meth:`~._tree_read.BoundaryForest.point_pairs`) runs on them unchanged; they are made
-when first asked for (``per_tree``), since the fast walk reads the table alone.
+:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree` per normal face. Each
+tree's Morton topology splits its ranges level by level, with a host sync per level:
+about 180 syncs per case. This build makes the same forest for every face at once,
+with one sync:
+
+1. The Morton codes are the reference's expression, evaluated with each cell's own
+   face's bounds.
+2. Two stable sorts give the reference's order: face, then code, then cell.
+3. Two Warp kernels, a count pass and a fill pass, find every node from the
+   positions. Each sorted position walks down from its tree's root, computes the
+   reference's split at every node on its way, and emits the nodes whose range starts
+   there.
+4. A sort of the nodes by (face, depth, start) gives the reference's node numbering.
+
+The topology is integer arithmetic, so it is the reference's exactly. Every
+floating-point value comes from the reference's own expressions: the boxes from those
+of :func:`~physicsnemo.mesh.spatial.cluster_tree._node_boxes` on the whole forest (an
+exact min and max); the prefix sums of the measure and of the weighted points, normals
+and rank-1 inputs from the same ``cumsum`` calls on the same per-tree inputs; and the
+node means from the same elementwise operations on the joined table.
+
+The forest's ``trees`` are real ``ClusterTree`` objects over slices of the table, so
+the reference walk (:meth:`~._tree_read.BoundaryForest.point_pairs`) runs on them
+unchanged. They are made when first asked for (``per_tree``), since the fast walk
+reads the table alone.
 """
 
 import logging
@@ -54,13 +61,13 @@ logger = logging.getLogger(__name__)
 
 #: Bits of a node key below the depth: the node's first sorted position.
 _START_BITS = 40
-#: Depth bins of the one readback; a forest with internal nodes at depth
-#: ``_DEPTH_BINS - 2`` is left to the reference build (one level short of what a
-#: node's 6-bit key depth and int64 path hold).
+#: Depth bins of the one readback. A forest with internal nodes at depth
+#: ``_DEPTH_BINS - 2`` is left to the reference build, one level short of what a
+#: node's 6-bit key depth and int64 path hold.
 _DEPTH_BINS = 64
 #: Rows per tree of the bounds' scatter-reduce (:func:`_morton_codes`), a launch
-#: constant: a minimum and a maximum are exact, so the outputs do not depend on it;
-#: re-tune it when the build changes.
+#: constant. Minima and maxima are exact, so the outputs do not depend on it. Re-tune
+#: it when the build changes.
 _BOUND_LANES = 256
 
 _LOGGED: set = set()
@@ -68,8 +75,8 @@ _LOGGED: set = set()
 
 def resolve_tree_build(build: str, points: torch.Tensor) -> str:
     """The forest build to run: ``"reference"`` or ``"fast"`` when ``build`` forces
-    it; under ``"auto"`` the fast build for CUDA points when the
-    dimension is 2 or 3, else the reference. Logged once per (device type, choice)."""
+    it; under ``"auto"`` the fast build for CUDA points in two or three dimensions,
+    else the reference. Logged once per (device type, choice)."""
     if build not in ("auto", "reference", "fast"):
         raise ValueError(f"build must be 'auto', 'reference' or 'fast', got {build!r}")
     if build == "fast" and points.shape[-1] not in _MORTON_SPREAD_STEPS:
@@ -219,9 +226,9 @@ def _morton_codes(points_f: torch.Tensor, face: torch.Tensor, n_trees: int) -> t
     n_bits = min(62, 63 // d)
     max_val = (1 << n_bits) - 1
     q = points_f.to(torch.float64 if points_f.dtype == torch.float64 else torch.float32)
-    ### Every cell of a tree reducing onto one row contends for it: a tree's cells go
-    ### to its _BOUND_LANES rows by their index, and the rows' minima and maxima are
-    ### reduced again (the same minima and maxima).
+    ### One row per tree would make all its cells contend for it. So a tree's cells go
+    ### to its _BOUND_LANES rows by index, and those rows are reduced again (the same
+    ### minima and maxima).
     row = face * _BOUND_LANES + torch.arange(n, device=q.device) % _BOUND_LANES
     idx = row[:, None].expand(-1, d)
     cmin = q.new_full((n_trees * _BOUND_LANES, d), float("inf")).scatter_reduce(0, idx, q, "amin")
@@ -246,15 +253,17 @@ def forest_tables(
     leaf_size: int,
     n_trees: int | None = None,
 ) -> dict | None:
-    """The fields of :class:`~._tree_read.BoundaryForest` that its trees make, but the
-    walk's node diameters (``diameter_sq``, which ``per_tree`` takes for the trees'
-    ``node_diameter_sq``), with the nodes' raw mean normal as ``mean_n`` and the non-empty
-    trees' numbers as ``tree_index`` ``(T,)``, for the cells at lab ``points`` ``(N, d)``
-    (``points_f`` in their trees' coordinates, ``face`` each cell's tree: its normal's
-    face, :func:`~._tree_read.normal_faces`, or with groups ``2 d g + face``, of
-    ``n_trees`` in all, default ``2 d``), or
-    ``None`` where the reference build must make them (no cells, cells or nodes past
-    Warp's ``tree_walk.WARP_MAX_ELEMENTS``, or a tree too deep for a node path)."""
+    """The fields of :class:`~._tree_read.BoundaryForest` that its trees make, for the
+    cells at lab ``points`` ``(N, d)``. ``points_f`` are the cells in their trees'
+    coordinates, and ``face`` is each cell's tree: its normal's face
+    (:func:`~._tree_read.normal_faces`), or ``2 d g + face`` with groups, of ``n_trees``
+    in all (default ``2 d``).
+
+    All fields but the walk's node diameters (``diameter_sq``, which ``per_tree`` takes
+    for the trees' ``node_diameter_sq``); the nodes' raw mean normal comes as ``mean_n``
+    and the non-empty trees' numbers as ``tree_index`` ``(T,)``. ``None`` where the
+    reference build must make them: no cells, a ``leaf_size`` below 1, cells or nodes
+    past Warp's ``tree_walk.WARP_MAX_ELEMENTS``, or a tree too deep for a node path."""
     n, d = points_f.shape
     ### The build's Warp arrays hold one entry per cell (the count pass) or one per node
     ### (the fill pass), and a forest has up to 2 N - 1 nodes, so each is checked.
@@ -326,9 +335,9 @@ def forest_tables(
     levels = list(zip(*(torch.split(x, sizes) for x in (internal, left[internal], right[internal]))))
 
     ### Boxes in the frame, from the sorted points: exact minima and maxima, as
-    ### cluster_tree._node_boxes makes them (packed as [min, -max], so one minimum
-    ### merges both; a node's children have consecutive ids), with each position's leaf
-    ### and each level's children as they are at hand here.
+    ### cluster_tree._node_boxes makes them. Packed as [min, -max], one minimum merges
+    ### both, and a node's children have consecutive ids. Each position's leaf and each
+    ### level's children come from the tables at hand here.
     sorted_f = points_f[cells]
     packed = torch.cat([sorted_f, -sorted_f], dim=1)
     box = packed.new_empty((m_total, 2 * d))
@@ -380,10 +389,10 @@ def forest_tables(
     node_offset = F.pad(torch.cumsum(nodes_per[tree_index], 0), (1, 0))
 
     def per_tree(diameter_sq: torch.Tensor) -> tuple[list[ClusterTree], list[torch.Tensor]]:
-        """One ClusterTree per face over its slice of the table (local ids), with the
-        walk's node diameters ``(M,)``, and the cells each holds, for the reference walk:
-        each field made for the whole table (row by row, so each tree's rows are its own
-        computation's) and sliced per tree."""
+        """For the reference walk: one ClusterTree per non-empty tree over its slice of
+        the table (local ids), with the walk's node diameters ``(M,)``, and the cells
+        each holds. Each field is made for the whole table and sliced per tree; it is
+        computed row by row, so each tree's rows equal its own computation's."""
         depth_per = torch.zeros(n_face, dtype=torch.long, device=device).scatter_reduce_(
             0, pos_tree, leaf_depth, "amax"
         )

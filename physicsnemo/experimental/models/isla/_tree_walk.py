@@ -19,23 +19,25 @@ in two Warp kernels (``walk="fast"``), with the reference's pairs in the referen
 order.
 
 The reference walks each tree level by level for every point at once
-(:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`):
-at each level the opened nodes hand on their left children, then their right
-children, so a point's entries at one depth are in the lexicographic order of their
-paths read from the deepest step up, and after the sort by point each point holds,
-tree by tree, its near cells (leaves by depth and that order, then the leaf's cells
-in order) and then its far nodes (by depth and that order). Here one thread walks
-one tree for one point. A depth-first count pass sizes each thread's segment of the
-output; a breadth-first fill pass writes the entries in that order, each level a
-buffer of the opened nodes' (left, right) pairs read even entries first, so no sort
-follows. The opening test is the reference's arithmetic, operation by operation in
-the boxes' dtype, in a module compiled without contracted multiply-adds, so every
-decision is the reference's. The forest is built and walked outside autocast, in its
-inputs' precision (:meth:`~._tree_read.BoundaryForest.build`); for a forest of
-reduced-precision inputs the dtype of each step of the test is read from torch's
-dispatch, and the kernels compute in float32 and round to bfloat16 or float16 where
-torch's kernels do (each elementwise result; a sum once, after accumulating in
-float32).
+(:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`).
+At each level the opened nodes hand on their left children, then their right
+children. So a point's entries at one depth are in the lexicographic order of their
+paths, read from the deepest step up. After the sort by point, each point holds, tree
+by tree, its near cells (leaves by depth and that order, then each leaf's cells in
+order) and then its far nodes (by depth and that order).
+
+Here one thread walks one tree for one point. A depth-first count pass sizes each
+thread's segment of the output. A breadth-first fill pass writes the entries in that
+order, so no sort follows: each level is a buffer of the opened nodes' (left, right)
+pairs, read even entries first.
+
+The opening test is the reference's arithmetic, operation by operation in the boxes'
+dtype, in a module compiled without contracted multiply-adds, so every decision is the
+reference's. The forest is built and walked outside autocast, in its inputs' precision
+(:meth:`~._tree_read.BoundaryForest.build`). For a forest of reduced-precision
+inputs, the dtype of each step of the test is read from torch's dispatch. The kernels
+then compute in float32 and round to bfloat16 or float16 where torch's kernels do:
+each elementwise result, and a sum once, after accumulating in float32.
 """
 
 from typing import Any
@@ -53,7 +55,7 @@ wp.set_module_options({"fuse_fp": False, "enable_backward": False})
 #: by the reference (:func:`walk_fits`).
 WALK_STACK = 96
 _walk_stack = wp.types.vector(length=WALK_STACK, dtype=wp.int32)
-#: Warp refuses an array of this many elements or more, and its thread ids are int32
+#: Warp rejects an array of this many elements or more, and its thread ids are int32
 #: (:func:`walk_fits`, :func:`~._tree_build.forest_tables`).
 WARP_MAX_ELEMENTS = 2**31
 
@@ -107,11 +109,11 @@ def _is_far(
     theta_sq: Any,
     mode: int,
 ):
-    """The reference's admission of node ``m`` for point ``q``: the squared gap from the
-    point to the box summed over the axes in torch's order, times ``theta_sq``, above
-    the squared diagonal, and the node coherent; a NaN gap is never far. ``mode``
-    packs the roundings of the differences, the squares and the sum and product
-    (bits 0-1, 2-3, 4-5; see :func:`_low`)."""
+    """The reference's opening test of node ``m`` for point ``q``: far when the squared
+    gap from the point to the box, summed over the axes in torch's order, times
+    ``theta_sq``, is above the squared diagonal, and the node is coherent. A NaN gap is
+    never far. ``mode`` packs the roundings (:func:`_low`) of the differences (bits
+    0-1), the squares (bits 2-3), and the sum and product (bits 4-5)."""
     zero = type(theta_sq)(0.0)
     s0 = _gap_sq(pts, q, lo, hi, m, d, 0, mode, zero)
     s1 = _gap_sq(pts, q, lo, hi, m, d, 1, mode, zero)
@@ -211,7 +213,7 @@ def _fill_kernel(
     previous level's opened nodes as (left, right) pairs in its order, so its even
     entries then its odd ones are the reference's order at that depth. The levels
     alternate between the front of the thread's scratch (entry ``j`` at ``base + j``)
-    and its back (at ``last - j``); two consecutive levels are disjoint sets of the
+    and its back (at ``last - j``). Two consecutive levels are disjoint sets of the
     thread's visited nodes, so they fit together."""
     tid = wp.tid()
     t = tid // n_q
@@ -264,13 +266,13 @@ _LOW = {torch.bfloat16: 1, torch.float16: 2}
 
 
 def walk_fits(forest) -> bool:
-    """The forest is two- or three-dimensional, its depth fits the count pass's stack,
-    its boxes are floating point and their entries (the node tables' largest Warp
-    arrays, up to 2 N d for N cells) stay below Warp's ``WARP_MAX_ELEMENTS`` (2**31).
-    The walk's other arrays (the points' coordinates, the per-thread counts, the pairs
-    and the scratch) must also each stay below it; the pairs' and the scratch's sizes
-    are known only after the count pass, so :func:`walk_pairs` checks them and returns
-    ``None``."""
+    """Whether the forest is two- or three-dimensional, its depth fits the count pass's
+    stack, its boxes are floating point, and their entries (the node tables' largest
+    Warp arrays, up to 2 N d for N cells) stay below Warp's ``WARP_MAX_ELEMENTS``
+    (2**31). The walk's other arrays (the points' coordinates, the per-thread counts,
+    the pairs and the scratch) must also each stay below it. The pairs' and the
+    scratch's sizes are known only after the count pass, so :func:`walk_pairs` checks
+    them and returns ``None``."""
     fields = (forest.aabb_min, forest.aabb_max, forest.diameter_sq)
     return (
         forest.aabb_min.shape[1] in (2, 3)
@@ -354,12 +356,12 @@ def _count(forest, n_q: int, n_t: int, inputs: tuple) -> tuple[torch.Tensor, tor
 def walk_counts(
     forest, points_f: torch.Tensor, theta: float
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
-    """The count pass of :func:`walk_pairs` alone, kept for it: each point's near cells,
-    far nodes and visited nodes in each tree, three ``(Q T,)`` tensors with point
-    ``q``'s numbers in tree ``t`` at ``q T + t``; no host read. The rows ``a T`` to
-    ``b T`` are the count pass of the points ``a`` to ``b`` (a thread reads only its
-    own point), which :func:`walk_pairs` takes as ``counts``. ``None`` when there is
-    nothing to count (no points or no trees) or an array would pass Warp's limit."""
+    """The count pass of :func:`walk_pairs` alone, which :func:`walk_pairs` takes as
+    ``counts``: each point's near cells, far nodes and visited nodes in each tree, three
+    ``(Q T,)`` tensors with point ``q``'s numbers in tree ``t`` at ``q T + t``; no host
+    read. The rows ``a T`` to ``b T`` are the count pass of the points ``a`` to ``b``,
+    since a thread reads only its own point. ``None`` when there is nothing to count (no
+    points or no trees) or an array would pass Warp's limit."""
     n_q, d = points_f.shape[-2:]
     n_g = 1 if points_f.dim() == 2 else points_f.shape[0]
     n_t = int(forest.node_offset.shape[0]) - 1
@@ -377,13 +379,12 @@ def walk_pairs(
 ) -> tuple[torch.Tensor, torch.Tensor, int] | torch.Tensor | None:
     """Every point's list ``(qi, si, n_node)`` for the points ``points_f`` ``(Q, d)`` in
     the forest's frame (or ``(G, Q, d)``, each group's coordinates, for a forest of
-    ``G`` groups: :meth:`~._tree_read.BoundaryForest.frame_points`) at ``theta > 0``,
-    equal to the reference's
-    (:meth:`BoundaryForest.point_pairs`) entry for entry; one host read, of the sizes.
-    ``None`` when an array would pass Warp's limit (:func:`walk_fits`). With
-    ``count_only`` the count pass alone: each point's list length ``(Q,)``, no host read.
-    ``counts`` is these points' count pass when it has run (:func:`walk_counts`): the
-    fill pass alone runs."""
+    ``G`` groups: :meth:`~._tree_read.BoundaryForest.frame_points`) at ``theta > 0``.
+    The lists equal the reference's (:meth:`BoundaryForest.point_pairs`) entry for
+    entry, with one host read, of the sizes. ``None`` when an array would pass Warp's
+    limit (:func:`walk_fits`). With ``count_only``, the count pass alone: each point's
+    list length ``(Q,)``, with no host read. ``counts`` is these points' count pass when
+    it has run (:func:`walk_counts`); then the fill pass alone runs."""
     device = forest.aabb_min.device
     n_q, d = points_f.shape[-2:]
     n_g = 1 if points_f.dim() == 2 else points_f.shape[0]

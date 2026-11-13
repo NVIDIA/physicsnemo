@@ -16,9 +16,9 @@
 
 """ISLA's input side: the field declarations and the invariants they contribute.
 
-:func:`_declare` parses and checks one of the constructor's rank-spec declarations;
+:func:`_declare` parses and checks one of the constructor's rank-spec declarations.
 :class:`_InputSet` holds one token class's per-token fields and turns them into the
-seed invariants, the block-level derived vectors and the block-level rank-2 tensors;
+seed invariants, the block-level derived vectors and the block-level rank-2 tensors.
 :class:`_BoundaryCondition` holds one named boundary condition's input parameters.
 Private to :mod:`physicsnemo.experimental.models.isla`."""
 
@@ -39,12 +39,10 @@ def _declare(
     """Parse and check one of the constructor's field declarations (``None`` is
     the empty schema).
 
-    The grammar is :meth:`~physicsnemo.mesh.fields.FieldSchema.parse`: a field
-    is a :class:`~physicsnemo.mesh.fields.RankSpec` or a mapping of values such
-    as ``{"rank": 0}``; a mapping of mappings is a nested group, and a flat name
-    may contain ``"."`` for the same nesting. ISLA's own limits are applied to
-    the parsed fields, raising :class:`NotImplementedError` (as GLOBE does):
-    ``max_rank`` per declaration, and pseudotensor inputs refused.
+    The grammar is :meth:`~physicsnemo.mesh.fields.FieldSchema.parse` (the ISLA
+    module docstring, *Rank specs*). ISLA's own limits on the parsed fields raise
+    :class:`NotImplementedError`, as GLOBE does: a rank above ``max_rank``, and a
+    pseudotensor unless ``allow_odd``.
     """
     out = FieldSchema({}) if specs is None else FieldSchema.parse(specs, label=kind)
     for name, spec in out.items():
@@ -82,10 +80,10 @@ def _missing_fields(specs, data: TensorDict) -> list[str]:
 
 def _schema_layout(fields) -> PackLayout:
     """A :class:`~tensordict.PackLayout` over ``fields`` (dotted name -> feature
-    shape) in the given order, which is the schema's: :meth:`TensorDict.pack`
-    alone orders the columns by key, and a column's position is what a trained
-    weight reads. Built once, outside any compiled region (a cached layout is a
-    constant under torch.compile); its batch dimensions are those of the data."""
+    shape) in the given order, the schema's. :meth:`TensorDict.pack` alone orders
+    the columns by key, and a trained weight depends on each column's position. Build
+    it once, outside any compiled region: a cached layout is a constant under
+    torch.compile. Its batch dimensions are those of the data."""
     template = TensorDict()
     for name, shape in fields.items():
         template.set(FieldSchema.key(name), torch.zeros(shape))
@@ -191,9 +189,9 @@ class _InputSet:
         in ``d`` spatial dimensions. Returns ``(seed (B, N, n_features), vecs (B,
         N, n_block_vecs, d), tens (B, N, n_block_tens, d, d))``.
         """
-        ### The invariants and the derived vectors are geometry: computed in the
-        ### input precision even under autocast (the embedding that consumes the
-        ### seed is autocast on its own).
+        ### The invariants and the derived vectors are geometry, so they stay in the
+        ### input precision under autocast. The embedding that consumes the seed is
+        ### autocast on its own.
         with torch.autocast(frame.device.type, enabled=False):
             return self._features(fields.to(frame.dtype), frame)
 
@@ -235,17 +233,18 @@ class _InputSet:
 class _BoundaryCondition(nn.Module):
     """One named boundary condition's input parameters.
 
-    ``seed`` is the condition's input layer, ``(hidden, 1 + n_seed)`` without a bias:
-    it maps the condition's seed ``[1, n.g_k, field invariants, global scalars]``
-    to the token width, its first column (on the constant 1) being the condition's
-    learned offset, so that two conditions differ in the parameters their tokens
-    read even when neither declares a field. ``vector_map`` ``(n_vecs, P')`` and
-    ``tensor_map`` ``(n_tens, Q)`` are linear maps from the condition's own block
-    vectors and rank-2 tensors (:class:`_InputSet`) to the model's shared channels;
-    a linear combination with scalar weights commutes with every orthogonal map, so
-    the channels are true vectors and tensors like their inputs. Both start as the
-    identity padded with zeros (the condition's ``j``-th vector is channel ``j``)
-    and are ``None`` where the condition has no such input.
+    ``seed`` is the condition's input layer, ``(hidden, 1 + n_seed)`` without a bias.
+    It maps the condition's seed ``[1, n.g_k, field invariants, global scalars]`` to
+    the token width. Its first column, on the constant 1, is the condition's learned
+    offset, so two conditions' tokens differ even when neither declares a field.
+
+    ``vector_map`` ``(n_vecs, P')`` and ``tensor_map`` ``(n_tens, Q)`` map the
+    condition's own block vectors and rank-2 tensors (:class:`_InputSet`) linearly
+    to the model's shared channels. A linear combination with scalar weights
+    commutes with every orthogonal map, so the channels are true vectors and tensors
+    like their inputs. Both maps start as the identity padded with zeros (the
+    condition's ``j``-th vector is channel ``j``), and are ``None`` where the
+    condition has no such input.
     """
 
     def __init__(self, inputs: _InputSet, n_seed: int, hidden: int, n_vecs: int, n_tens: int) -> None:

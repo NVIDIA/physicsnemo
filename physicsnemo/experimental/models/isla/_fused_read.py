@@ -14,41 +14,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""The tree read with its kernel term fused in (Triton): nothing per pair is kept
-between forward and backward but the kernel basis and the plan.
+r"""The tree read with its kernel term fused in (Triton). Between forward and backward
+it keeps nothing per pair but the kernel basis and the plan.
 
 The reference read (:mod:`segment_softmax` behind
 :class:`~physicsnemo.experimental.models.isla._tree_read._TreeKernelRead`) takes each
 block's kernel term :math:`\kappa_{ph} = \sum_f \phi_{pf} W_{hf}` as a ``(P, H)``
-tensor, a matmul of the shared basis :math:`\phi` ``(P, F)`` with the block's kernel
-weights, which autograd keeps for backward in every block (2e8 to 7e8 pairs at
+tensor: a matmul of the shared basis :math:`\phi` ``(P, F)`` with the block's kernel
+weights. Autograd keeps that tensor for backward in every block (2e8 to 7e8 pairs at
 DrivAerML scale). Here the read's kernels compute :math:`\kappa` per tile from the
-basis and the weights instead, in forward and again in backward (as flash attention
+basis and the weights, in forward and again in backward (as flash attention
 recomputes its logits), so a block keeps only its per-point output and log-sum-exp.
-The backward recomputes each pair's softmax weight and logit gradient once, in the
-by-point kernel, which writes them (float32) in the plan's by-source order; the
-by-source kernel sums them against the points' queries and output gradients into the
-keys' and values' gradients, chunk by chunk of each source's pairs, and the chunks of
-a source are then summed in order: no atomics, so the backward is deterministic.
 
-The arithmetic is the reference's but for summation order: :math:`\kappa` is a sum of
-exact products in float32 rounded to the basis's dtype (bfloat16 under autocast, as
-the reference matmul's output is), its gradient is rounded to that dtype before it
-reaches the basis and the weights (as the reference read's kernel-term gradient is),
-the basis gradient of each block is rounded to that dtype (the reference matmul's
-backward), and the weights' gradient is a float32 sum over every pair rounded once.
-The blocks' basis gradients are summed in place, in one buffer, in the order and at
-the rounding points of autograd's own sum over the basis's uses (each block's
-contribution rounded, then added to the running sum and rounded again), and handed to
-the basis once, after the last read's backward (:func:`basis_sink`): no block's
-gradient is materialized beside the sum. A backward pass that will not reach the basis
+The by-point backward kernel recomputes each pair's softmax weight and logit gradient
+once, and writes them (float32) in the plan's by-source order. The by-source kernel
+sums them against the points' queries and output gradients into the keys' and values'
+gradients, one chunk of a source's pairs at a time, and a source's chunks are then
+summed in order. It uses no atomics, so the backward is deterministic.
+
+The arithmetic is the reference's but for summation order:
+
+- :math:`\kappa` is a sum of exact products in float32, rounded to the basis's dtype
+  (bfloat16 under autocast, as the reference matmul's output is);
+- its gradient is rounded to that dtype before it reaches the basis and the weights,
+  as the reference read's kernel-term gradient is;
+- each block's basis gradient is rounded to that dtype, as in the reference matmul's
+  backward;
+- the weights' gradient is a float32 sum over every pair, rounded once.
+
+The blocks' basis gradients are summed in place in one buffer, in the order and at the
+rounding points of autograd's own sum over the basis's uses: each block's contribution
+is rounded, added to the running sum, and rounded again. The sum reaches the basis
+once, after the last read's backward (:func:`basis_sink`), and no block's gradient is
+materialized beside it. A backward pass that will not reach the basis
 (``torch.autograd.grad`` of other inputs, ``backward(inputs=...)``) adds nothing to it.
-The small products are float32 broadcast sums. Triton turns a sum over
-the middle axis, ``(M, K, 1) * (1, K, N)`` summed over ``K``, into a TF32 ``tl.dot``:
-with bfloat16 or float16 operands its products are exact and it accumulates in
-float32 on the tensor cores, as the reference's bfloat16 GEMM does (the basis
-gradient under autocast takes that form, the fastest); with float32 operands it is
-1e-3 off, so there the basis gradient is summed head by head instead.
+
+The small products are float32 broadcast sums. Triton turns a sum over the middle
+axis, ``(M, K, 1) * (1, K, N)`` summed over ``K``, into a ``tl.dot``. With bfloat16 or
+float16 operands its products are exact and it accumulates in float32 on the tensor
+cores, as the reference's bfloat16 GEMM does; the basis gradient under autocast takes
+that form, the fastest. With float32 operands the dot is TF32, 1e-3 off, so there the
+basis gradient is summed head by head instead.
 """
 
 from __future__ import annotations
@@ -60,18 +66,19 @@ from physicsnemo.experimental.models.isla._triton import HAS_TRITON, tl, triton
 from physicsnemo.experimental.models.isla._segment_softmax import PairPlan, _source_items
 
 #: Pairs per tile of a program's loop, warps per program, and pairs per program of
-#: the by-source backward: launch constants tuned on Blackwell-class GPUs; the outputs
-#: depend on them at most through summation order; re-tune them when the kernels or
+#: the by-source backward. Launch constants tuned on Blackwell-class GPUs: the outputs
+#: depend on them at most through summation order. Re-tune them when the kernels or
 #: Triton change.
 BLOCK_PAIRS = 32
 NUM_WARPS = 1
 SOURCE_CHUNK = 512
 
 #: Registers per thread of the forward (under a narrow and under a float32 basis) and of
-#: the by-point and by-source backward kernels: launch constants tuned on Blackwell-class
-#: GPUs (these one-warp kernels are latency-bound, and a cap lets more programs reside per
-#: multiprocessor); outputs do not depend on them; re-tune them when the kernels or Triton
-#: change. CUDA only (ROCm's Triton has no maxnreg).
+#: the by-point and by-source backward kernels (under a narrow basis; a float32 one runs
+#: them uncapped). Launch constants tuned on Blackwell-class GPUs: these one-warp kernels
+#: are latency-bound, and a cap lets more programs reside per multiprocessor. The outputs
+#: do not depend on them. Re-tune them when the kernels or Triton change. CUDA only
+#: (ROCm's Triton has no maxnreg).
 FORWARD_MAXNREG = 96
 FORWARD_MAXNREG_FLOAT32 = 128
 POINT_MAXNREG = 128
@@ -83,7 +90,7 @@ def _pow2(n: int) -> bool:
 
 
 def supported(basis: torch.Tensor, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
-    """The fused read applies: CUDA tensors, Triton importable, no float64 (the
+    """Whether the fused read applies: CUDA tensors, Triton importable, no float64 (the
     reference read runs float64 eagerly), and power-of-two widths."""
     h, kc, c, f = q.shape[1], q.shape[2], v.shape[2], basis.shape[1]
     return (
@@ -114,7 +121,8 @@ if HAS_TRITON:
         basis_ptr, p, msk, w, wp, H: tl.constexpr, F: tl.constexpr, BLOCK: tl.constexpr, NARROW: tl.constexpr
     ):
         """The pairs' basis rows ``(BLOCK, F)`` (in the basis's dtype when NARROW, else
-        float32) and kernel terms ``(BLOCK, H)`` rounded to the basis's dtype (float32)."""
+        float32) and kernel terms ``(BLOCK, H)``, rounded to the basis's dtype and held
+        in float32."""
         ff = tl.arange(0, F)
         bas = tl.load(basis_ptr + p[:, None] * F + ff[None, :], mask=msk[:, None], other=0.0)
         if NARROW:
@@ -134,7 +142,7 @@ if HAS_TRITON:
         """One point: online softmax over its pairs; out[s] (H, C), lse[s] (H)."""
         s = tl.program_id(0).to(tl.int64)
         ### int64 pair offsets whatever the plan's dtype: p * F passes 2**31 at
-        ### P > 2**27 pairs, and PairPlan.build gives int32 offsets for int32 indices.
+        ### P > 2**27 pairs (F = 16), and PairPlan.build gives int32 offsets for int32 indices.
         start = tl.load(off_ptr + s).to(tl.int64)
         end = tl.load(off_ptr + s + 1).to(tl.int64)
         hh = tl.arange(0, H)
@@ -185,12 +193,12 @@ if HAS_TRITON:
         scale, H: tl.constexpr, C: tl.constexpr, KC: tl.constexpr, F: tl.constexpr, BLOCK: tl.constexpr,
         BASIS_GRAD: tl.constexpr, NARROW: tl.constexpr, FIRST: tl.constexpr,
     ):  # fmt: skip
-        """One point: dq[s], the basis gradient of its pairs through this block's
-        weights added to dbasis (BASIS_GRAD; FIRST: written, the sum's first term), its part of the weights' gradient,
-        dw[s] (2H, F) float32 with the heads at the even rows, and each pair's softmax
-        weights and logit gradients (H each, float32) in the pair's row of prdz in the
-        plan's by-source order (inv: each pair's position there). NARROW: the basis is
-        bfloat16 or float16."""
+        """One point: dq[s]; its part of the weights' gradient, dw[s] (2H, F) float32
+        with the heads at the even rows; and each pair's softmax weights and logit
+        gradients (H each, float32) in the pair's row of prdz, in the plan's by-source
+        order (inv: each pair's position there). With BASIS_GRAD, the basis gradient of
+        its pairs through this block's weights is added to dbasis (with FIRST, written:
+        the sum's first term). NARROW: the basis is bfloat16 or float16."""
         s = tl.program_id(0).to(tl.int64)
         start = tl.load(off_ptr + s).to(tl.int64)  # int64 pair offsets, as in the forward
         end = tl.load(off_ptr + s + 1).to(tl.int64)
@@ -275,9 +283,9 @@ if HAS_TRITON:
         scale, CHUNK, H: tl.constexpr, C: tl.constexpr, KC: tl.constexpr, BLOCK: tl.constexpr,
         LOGM_GRAD: tl.constexpr,
     ):  # fmt: skip
-        """One chunk of one source's pairs (the plan's by-source order): its part of
-        dk[j] and dv[j] from the pairs' softmax weights and logit gradients (prdz, by
-        the point kernel), in its row of part; with LOGM_GRAD its part of dlogm[j], the
+        """One chunk of source j's pairs, in the plan's by-source order: its part of dk[j]
+        and dv[j], in its row of part, from the pairs' softmax weights and logit gradients
+        (prdz, from the point kernel). With LOGM_GRAD, also its part of dlogm[j], the
         pairs' logit gradients summed over the heads, in its entry of lpart."""
         item = tl.program_id(0).to(tl.int64)
         j = tl.load(item_src_ptr + item).to(tl.int64)
@@ -468,15 +476,17 @@ def node_means_supported(x: torch.Tensor) -> bool:
 
 def fused_node_means(x: torch.Tensor, forest, omega: torch.Tensor) -> torch.Tensor:
     """:func:`~physicsnemo.experimental.models.isla._tree_read.node_means` of ``x``
-    ``(N, D)`` in a few kernels: the leaves' sums (each leaf's cells in position
-    order), then one launch per depth, every internal node the float32 sum of its two
-    children; the backward adds each node's gradient to its children's depth by depth
-    from the roots. The same float32 operations as the reference's tensor ops but
-    the order of each leaf's sum (an atomic ``index_add`` there): its backward is
-    bitwise the reference's, its forward bitwise wherever no leaf holds three or
-    more cells. ``forest`` the case's
-    :class:`~physicsnemo.experimental.models.isla._tree_read.BoundaryForest`, ``omega``
-    ``(N,)`` the cells' measure fractions; requires :func:`node_means_supported`."""
+    ``(N, D)`` in a few kernels. ``forest`` is the case's
+    :class:`~physicsnemo.experimental.models.isla._tree_read.BoundaryForest` and
+    ``omega`` ``(N,)`` the cells' measure fractions; requires
+    :func:`node_means_supported`.
+
+    The forward sums each leaf's cells in position order, then makes one launch per
+    depth, every internal node the float32 sum of its two children. The backward adds
+    each node's gradient to its children's, depth by depth from the roots. The float32
+    operations are the reference's tensor ops but for the order of each leaf's sum (an
+    atomic ``index_add`` there). So the backward is bitwise the reference's, and the
+    forward is bitwise wherever no leaf holds three or more cells."""
     return _NodeMeans.apply(x, forest, omega)
 
 
@@ -487,8 +497,9 @@ class _BasisGrad:
 
 
 class _BasisSink(torch.autograd.Function):
-    """The basis's one consumer in autograd's eyes: an empty token every fused read takes,
-    so its backward runs after every read's and hands the summed gradient to the basis."""
+    """The basis's only consumer in the autograd graph: every fused read takes its empty
+    token, so its backward runs after every read's and passes the summed gradient to the
+    basis."""
 
     @staticmethod
     def forward(ctx, basis, grad: _BasisGrad):
@@ -504,8 +515,8 @@ class _BasisSink(torch.autograd.Function):
 
 def basis_sink(basis: torch.Tensor) -> tuple[torch.Tensor, _BasisGrad] | None:
     """The token and running sum through which every fused read of one forward pass
-    passes its gradient to ``basis`` (``None`` when ``basis`` needs none): give it to
-    each :func:`fused_kernel_read` of that basis."""
+    passes its gradient to ``basis``, or ``None`` when ``basis`` needs no gradient.
+    Give it to each :func:`fused_kernel_read` of that basis."""
     if not (torch.is_grad_enabled() and basis.requires_grad):
         return None
     grad = _BasisGrad()
@@ -513,11 +524,11 @@ def basis_sink(basis: torch.Tensor) -> tuple[torch.Tensor, _BasisGrad] | None:
 
 
 def _basis_grad_target(ctx, basis: torch.Tensor, zeroed: bool = True) -> torch.Tensor | None:
-    """The running sum a read's backward adds its basis gradient into, or ``None`` when
-    this backward pass will not run the basis's sink (a pass of other inputs only),
-    whose part would otherwise stay in the sum and be added to a later pass's.
+    """The running sum that a read's backward adds its basis gradient to. ``None`` when
+    this backward pass will not run the basis's sink (a pass of other inputs only): the
+    read's part would otherwise stay in the sum and be added to a later pass's.
     ``ctx.grad`` and ``ctx.sink_node`` are the read's sink, set in its forward. A new
-    sum is zeros, or with ``zeroed=False`` unset, for a first read that writes it."""
+    sum is zeros, or uninitialized with ``zeroed=False`` for a first read that writes it."""
     grad = ctx.grad
     if grad is None or not torch._C._will_engine_execute_node(ctx.sink_node):
         return None
@@ -532,8 +543,8 @@ def _narrow(basis: torch.Tensor) -> bool:
 
 def _plan_source_items(plan: PairPlan):
     """The by-source work items of ``plan`` (source and chunk index), each source's
-    first item and each pair's position in the by-source order, built once (the
-    items' count costs a host sync) and kept on the plan for every block's backward."""
+    first item, and each pair's position in the by-source order. Built once (counting
+    the items costs a host sync) and kept on the plan for every block's backward."""
     items = getattr(plan, "_fused_source_items", None)
     if items is None:
         src, chunk_idx = _source_items(plan, SOURCE_CHUNK)
@@ -637,17 +648,19 @@ def fused_kernel_read(
     out_dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """``segment_softmax_read(basis @ w.T, logm[plan.bj], q, k, v, plan, scale)`` with the
-    kernel term computed inside the read: ``basis`` ``(P, F)`` the pairs' kernel basis,
-    ``w`` ``(H, F)`` the block's kernel weights in the basis's dtype, ``logm`` ``(n_b,)``
-    the sources' log measures (per source, not per pair); the rest as
+    kernel term computed inside the read. ``basis`` ``(P, F)`` is the pairs' kernel basis,
+    ``w`` ``(H, F)`` the block's kernel weights in the basis's dtype, and ``logm``
+    ``(n_b,)`` the sources' log measures (per source, not per pair); the rest are as in
     :func:`~physicsnemo.experimental.models.isla._segment_softmax.segment_softmax_read`.
-    Differentiable in ``basis``, ``w``, ``logm``, ``q``, ``k`` and ``v`` (``logm``'s
-    gradient, each source's pairs' logit gradients summed over the heads, computed only
-    when it is asked for); requires :func:`supported`. Reads of
-    one basis share its :func:`basis_sink` (``sink``); without one, the read's basis
-    gradient is its own. The output is rounded to
-    ``out_dtype``: under autocast the dtype the next matmul rounds it to anyway, so
-    its gradient arrives in that dtype, as the reference's (cast back to float32) does."""
+    Requires :func:`supported`.
+
+    Differentiable in ``basis``, ``w``, ``logm``, ``q``, ``k`` and ``v``. ``logm``'s
+    gradient, each source's pairs' logit gradients summed over the heads, is computed
+    only when it is asked for. Reads of one basis share its :func:`basis_sink`
+    (``sink``); without one, the read's basis gradient is its own. The output is rounded
+    to ``out_dtype``. Under autocast that is the dtype the next matmul rounds it to
+    anyway, so its gradient arrives in that dtype, as the reference's (cast back to
+    float32) does."""
     if w.dtype != basis.dtype:
         raise TypeError(f"the kernel weights ({w.dtype}) must be in the basis's dtype ({basis.dtype})")
     if sink is None:

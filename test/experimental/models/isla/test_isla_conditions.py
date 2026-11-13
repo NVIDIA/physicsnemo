@@ -89,7 +89,7 @@ SCALED_OUT = {
 
 
 def _interior(schemas):
-    """The conditions without their rank-2 fields: the interior task (ISLA-DTT) takes
+    """The conditions without their rank-2 fields: the interior task takes
     no rank-2 boundary inputs (refused at construction), the surface task does."""
     return {
         k: {f: s for f, s in v.items() if s["rank"] < 2} for k, v in schemas.items()
@@ -221,7 +221,7 @@ def test_remeshing_one_condition_changes_no_interior_prediction(name):
     """Splitting every cell of one condition into two half-measure copies with its
     fields (the budget above every cell count, so the draw keeps every cell) leaves
     the interior predictions unchanged, for a condition with fields and without. The
-    invariance is exact for ISLA-DTT's exact read (theta = 0, every cell pair read); at
+    invariance is exact for the interior task's exact read (theta = 0, every cell pair read); at
     the default opening angle the split boundary's forest differs and the Barnes-Hut
     read is an approximation."""
     m = _model(interior=True)
@@ -301,6 +301,8 @@ def test_an_absent_condition_is_a_condition_without_cells(interior):
 
 
 def test_unknown_and_missing_names_are_refused():
+    """An undeclared condition, an empty mapping and a mesh without its condition's
+    fields are refused, each error naming the condition."""
     m = _model()
     meshes = _meshes()
     with pytest.raises(
@@ -318,6 +320,11 @@ def test_unknown_and_missing_names_are_refused():
         m(boundary_meshes={"outlet": meshes["slip"]}, global_data=GD)
 
 
+#: The conditions' parameters live in an nn.ModuleDict keyed by name, so a name that
+#: is one of its attributes is refused too, naming the argument.
+MODULE_DICT_NAMES = ["keys", "type", "update", "training", "items", "forward"]
+
+
 @pytest.mark.parametrize(
     "schemas, match",
     [
@@ -325,23 +332,17 @@ def test_unknown_and_missing_names_are_refused():
         (None, "non-empty mapping"),
         ({"a.b": {}}, "without '.'"),
         ({"": {}}, "without '.'"),
+    ]
+    + [
+        ({**SCHEMAS, n: {}}, f"boundary_schemas: the condition name '{n}'")
+        for n in MODULE_DICT_NAMES
     ],
 )
 def test_the_declaration_is_validated(schemas, match):
+    """An empty declaration, a name with a dot or no name, and a name that is an
+    attribute of nn.ModuleDict are refused at construction."""
     with pytest.raises(ValueError, match=match):
         _model(schemas=schemas)
-
-
-@pytest.mark.parametrize(
-    "name", ["keys", "type", "update", "training", "items", "forward"]
-)
-def test_a_condition_name_that_is_a_module_dict_attribute_is_refused(name):
-    """The conditions' parameters live in an nn.ModuleDict keyed by name, so a name
-    that is one of its attributes is refused at construction, naming the argument."""
-    with pytest.raises(
-        ValueError, match=f"boundary_schemas: the condition name '{name}'"
-    ):
-        _model(schemas={**SCHEMAS, name: {}})
 
 
 def test_the_declaration_is_canonical_and_per_condition():
@@ -385,27 +386,10 @@ def test_a_condition_s_fields_and_maps_change_the_outputs():
     assert not torch.allclose(_run(m, meshes, q=Q)["p"], base["p"], atol=1e-6)
 
 
-def test_the_interior_task_refuses_rank_2_boundary_inputs():
-    """The interior task's boundary read has no pair contractions for rank-2 inputs,
-    so an interior model with the outlet's rank-2 field is refused; the surface task
-    takes it."""
-    with pytest.raises(NotImplementedError, match="rank-2"):
-        ISLA(
-            output_schema=OUT,
-            boundary_schemas=SCHEMAS,
-            global_schema={"g": {"rank": 1}},
-            interior=True,
-            hidden=32,
-            n_layers=1,
-            n_slices=8,
-        )
-    assert _model()._n_boundary_tens == 1
-
-
 def test_every_condition_s_parameters_train_even_when_it_is_absent():
     """DDP needs every parameter in every pass: with the slip condition absent and the
-    outlet given without cells, every parameter still receives a gradient. ISLA-DTT
-    takes no rank-2 inputs, so its outlet declares none."""
+    outlet given without cells, every parameter still receives a gradient. The
+    interior task takes no rank-2 inputs, so its outlet declares none."""
     schemas = _interior(SCHEMAS)
     torch.manual_seed(0)
     m = ISLA(

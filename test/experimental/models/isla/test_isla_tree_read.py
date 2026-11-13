@@ -14,26 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contract tests for ISLA-DTT's boundary read (the interior task, ``interior=True``).
+"""Contract tests of the interior task's boundary read (``interior=True``).
 
-Passive prediction points read every boundary cell after every block: a softmax over
-the cells with the log measure fraction as bias, a learned kernel of the pair
-invariants and a query-key match, evaluated through a forest of Barnes-Hut cluster
-trees over the boundary cells (GLOBE's ``ClusterTree``, one tree per normal cube face),
-walked once per prediction point at the opening angle ``TREE_READ_THETA``. At
-``theta = 0`` (the model's ``tree_read_theta``, set by these tests) it reads
-every cell pair for pair, so every contract must hold exactly there: equality with a
-brute-force all-pairs reference kept in this file, Euclidean covariance, the
-similarity gauge, refinement and measure-scale invariance, CUDA against CPU. Query
-independence holds exactly at every ``theta`` (a point's walk depends on the forest
-and the point alone). At a finite ``theta`` the read is an approximation whose error
-falls with ``theta``; the tests measure that on a smooth boundary and check that the
-pair list still covers the whole boundary measure exactly once per point and admits
-only well-separated, orientation-coherent clusters. The forest itself is a function of
-the boundary alone: the same in float32 poses of a mesh aligned with its own frame
-(where sign octants and the box test's ties were decided by rounding), bitwise the same
-under bf16 autocast, and the same under a renumbering of the cells. The read's output
-projection starts at zero, so most tests give every read parameter a random value first.
+Prediction points read every boundary cell after every block: a softmax over the
+cells with the log measure fraction as bias, a learned kernel of the pair invariants
+and a query-key match. The read walks a forest of Barnes-Hut cluster trees over the
+boundary cells (GLOBE's ``ClusterTree``, one tree per normal cube face) once per
+prediction point, at the opening angle ``TREE_READ_THETA``.
+
+At ``theta = 0`` (the model's ``tree_read_theta``, which these tests set) the read
+takes every cell pair, so it must equal the brute-force all-pairs read kept in this
+file, be invariant under similarity, refinement and a rescale of the measures, and
+give the same outputs on CUDA as on CPU. Query independence holds exactly at every ``theta``: a point's
+walk depends on the forest and the point alone. At a finite ``theta`` the read is an
+approximation: the tests measure its error, and check that each point's pairs cover
+the boundary measure exactly once and admit only well-separated, orientation-coherent
+clusters. The forest is a function of the boundary alone: the same in float32 poses
+of a mesh aligned with its own frame (where rounding would decide sign octants and
+the box test's ties), bitwise the same under bf16 autocast, and the same under a
+renumbering of the cells. Covariance under rigid motions is tested with the other
+model contracts, in test_isla_dtt_contracts.py.
+
+The read's output projection starts at zero, so most tests give every read parameter
+a random value first.
 """
 
 import copy
@@ -70,7 +73,14 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 from test.experimental.models.isla._forced import ran
-from test.experimental.models.isla._kernel_cases import _basis_case, _basis_step, _to
+from test.experimental.models.isla._kernel_cases import (
+    _basis_case,
+    _basis_step,
+    _read_case,
+    _SinkRead,
+    _to,
+    _two_x,
+)
 from test.experimental.models.isla._marks import requires_cuda, requires_cuda_triton
 from test.experimental.models.isla._meshes import (
     cloud,
@@ -208,9 +218,14 @@ def _with_exact_read(model):
     ref._tree_read_walk = spy
     ref._query_tokens = spy_tokens
     for read in ref.kernel_reads:
-        read.sources = types.MethodType(lambda self, h_b, walk: h_b, read)
+        read.sources = types.MethodType(
+            lambda self, h_b, walk, compiled=False: h_b, read
+        )
         read.read = types.MethodType(
-            lambda self, h_b, h_q, pairs: _exact_read(ref, self, h_b, h_q, tok), read
+            lambda self, h_b, h_q, pairs, compiled=False: _exact_read(
+                ref, self, h_b, h_q, tok
+            ),
+            read,
         )
     return ref
 
@@ -659,7 +674,8 @@ def test_fast_walk_falls_back_to_the_reference_past_its_limits(monkeypatch):
     monkeypatch.setattr(tree_read, "resolve_walk", lambda *a: "fast")
     with ran(tree_walk.walk_pairs, ClusterTree.find_point_interaction_pairs) as r:
         qi_a, si_a, n_node_a = f.point_pairs(q)
-    assert r.returns(tree_walk.walk_pairs) == [None]
+        f.point_pairs(q)  # (the fallback is logged once per device)
+    assert r.returns(tree_walk.walk_pairs) == [None, None]
     assert r.count(ClusterTree.find_point_interaction_pairs) > 0
     assert torch.equal(qi_a, qi) and torch.equal(si_a, si) and n_node_a == n_node
 
@@ -794,14 +810,13 @@ def _float32_cells(simplex):
     )
 
 
-@_KERNELS
-def test_forest_is_the_same_in_float32_poses_of_a_frame_aligned_case(kernel):
+def test_forest_is_the_same_in_float32_poses_of_a_frame_aligned_case():
     """Posing in float32 a case whose normals lie along its own frame or at exactly 45
     degrees to it (``_lattice_cells``) rounds every input differently; the faces take
     the normals' error bounds, so the posed forest holds the same cells in the same
     trees and nodes and gives every query the same list. Sign octants, decided by the
-    sign of the rounding of the zero components, gave different lists."""
-    f0, (qi0, si0, n0) = _lattice_forest(kernel=kernel)
+    sign of the rounding of the zero components, would give different lists."""
+    f0, (qi0, si0, n0) = _lattice_forest()
     assert len(f0.trees) == 6 and n0 > 0
     assert torch.allclose(
         f0.frame.abs().amax(0), torch.ones(3, dtype=D)
@@ -809,7 +824,7 @@ def test_forest_is_the_same_in_float32_poses_of_a_frame_aligned_case(kernel):
     for seed in range(4):
         R = orthogonal(3, 20 + seed, seed % 2 == 1)
         t = torch.tensor([0.37, -1.21, 2.03], dtype=D) * (seed + 1)
-        f1, (qi1, si1, n1) = _lattice_forest(R, t, kernel)
+        f1, (qi1, si1, n1) = _lattice_forest(R, t)
         assert torch.equal(f1.cells, f0.cells), seed
         assert torch.equal(f1.range_start, f0.range_start) and torch.equal(
             f1.range_count, f0.range_count
@@ -817,11 +832,10 @@ def test_forest_is_the_same_in_float32_poses_of_a_frame_aligned_case(kernel):
         assert n1 == n0 and torch.equal(qi1, qi0) and torch.equal(si1, si0), seed
 
 
-@_KERNELS
 @pytest.mark.parametrize(
     "device", ["cpu", pytest.param("cuda", marks=[pytest.mark.cuda, requires_cuda])]
 )
-def test_forest_is_bitwise_the_same_under_bf16_autocast(device, kernel):
+def test_forest_is_bitwise_the_same_under_bf16_autocast(device):
     """The forest is built and walked outside autocast in the inputs' precision: under
     bf16 autocast its lists, boxes, diameters, measures and virtual cells are bitwise
     those of the float32 build (a training forward reads the forest a float32 score
@@ -835,8 +849,10 @@ def test_forest_is_bitwise_the_same_under_bf16_autocast(device, kernel):
     )
 
     def forest():
-        f = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA, build=kernel)
-        return f, f.point_pairs(q32, walk=kernel)
+        f = BoundaryForest.build(
+            pts, w, nrm, None, theta=TREE_READ_THETA, build="reference"
+        )
+        return f, f.point_pairs(q32, walk="reference")
 
     f0, l0 = forest()
     with torch.autocast(device, dtype=torch.bfloat16):
@@ -857,8 +873,7 @@ def test_forest_is_bitwise_the_same_under_bf16_autocast(device, kernel):
     assert f1.aabb_min.dtype == torch.float32 and f1.measure.dtype == torch.float32
 
 
-@_KERNELS
-def test_forest_is_the_same_under_renumbering_of_the_cells(kernel):
+def test_forest_is_the_same_under_renumbering_of_the_cells():
     """The forest is a function of the cells' positions, normals and measures, not of
     their order: a permutation of the cells permutes its cell indices and nothing else."""
     pts, nrm = _lattice_cells()
@@ -869,13 +884,15 @@ def test_forest_is_the_same_under_renumbering_of_the_cells(kernel):
         (_lattice_queries() @ R.T + t).float(),
     )
     w = torch.ones(pts.shape[0])
-    f0 = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA, build=kernel)
-    qi0, si0, _ = f0.point_pairs(q, walk=kernel)
+    f0 = BoundaryForest.build(
+        pts, w, nrm, None, theta=TREE_READ_THETA, build="reference"
+    )
+    qi0, si0, _ = f0.point_pairs(q, walk="reference")
     perm = torch.randperm(pts.shape[0], generator=torch.Generator().manual_seed(4))
     f1 = BoundaryForest.build(
-        pts[perm], w, nrm[perm], None, theta=TREE_READ_THETA, build=kernel
+        pts[perm], w, nrm[perm], None, theta=TREE_READ_THETA, build="reference"
     )
-    qi1, si1, _ = f1.point_pairs(q, walk=kernel)
+    qi1, si1, _ = f1.point_pairs(q, walk="reference")
     assert torch.equal(perm[f1.cells], f0.cells)
     n = pts.shape[0]
     mapped = torch.where(si1 < n, perm[si1.clamp_max(n - 1)], si1)
@@ -921,26 +938,30 @@ def _tie_queries(f, nodes, theta):
     return (f.origin + q_f @ f.frame.t()).float()
 
 
-@_KERNELS
-def test_box_test_ties_are_opened(kernel):
+def test_box_test_ties_are_opened():
     """A point at exactly theta times a node's box diagonal from its box is a tie of the
     admission criterion, which rounding of the point would decide either way: the walk
     never admits the node for it (it reads the node's children or cells instead)."""
     pts, nrm, w, _ = cloud(2000, d=3, seed=12)
     f = BoundaryForest.build(
-        pts.float(), w.float(), nrm.float(), None, theta=TREE_READ_THETA, build=kernel
+        pts.float(),
+        w.float(),
+        nrm.float(),
+        None,
+        theta=TREE_READ_THETA,
+        build="reference",
     )
     inner = (f.left >= 0).nonzero().squeeze(-1)
     nodes = inner[
         torch.randperm(inner.numel(), generator=torch.Generator().manual_seed(1))[:400]
     ]
     q = _tie_queries(f, nodes, TREE_READ_THETA)
-    qi, si, _ = f.point_pairs(q, walk=kernel)
+    qi, si, _ = f.point_pairs(q, walk="reference")
     admitted = (si == f.n_cells + nodes[qi]).sum()
     assert int(admitted) == 0
     ### A point a little beyond the tie (1 % farther) reads the node whole.
     far = _tie_queries(f, nodes, TREE_READ_THETA / 1.01)
-    qi, si, _ = f.point_pairs(far, walk=kernel)
+    qi, si, _ = f.point_pairs(far, walk="reference")
     assert float((si == f.n_cells + nodes[qi]).sum()) >= 0.9 * nodes.numel()
 
 
@@ -973,12 +994,12 @@ def test_a_nearly_tied_frame_widens_the_separation_test_by_the_nodes_own_size(
     monkeypatch,
 ):
     """When the canonical frame's variances nearly tie, its rotation bound eta is large
-    (here about 0.05). The rotation moves the points and the cells together, so it
+    (about 0.05 here). The rotation moves the points and the cells together, so it
     widens each node's separation diameter in proportion to the node's own size, and
-    the pairs stay within a fraction of those of the same forest with eta at zero (1.4
-    times here). Treating eta as an error of every coordinate in proportion to its
-    distance from the centroid (kappa = 3u + eta) would open the small nodes near the
-    wall for the points beside them: 3.0 times the pairs here."""
+    the pairs stay within 1.4 times those of the same forest with eta at zero. An error
+    of eta times each coordinate's distance from the centroid (kappa = 3u + eta) would
+    open the small nodes near the wall for the points beside them: 3.0 times the
+    pairs."""
     pts, nrm, w, q = _nearly_tied_ellipsoid(6000, 21.0, seed=3)
     seen = {}
     bound = tree_read.frame_rotation_bound
@@ -1092,11 +1113,11 @@ def test_separation_diameter_is_bounded_as_the_frame_ties():
 def test_model_forward_is_the_same_in_float32_poses_of_a_frame_aligned_case(
     monkeypatch,
 ):
-    """ISLA-DTT on a float32 boundary whose normals lie along its own frame or at
-    exactly 45 degrees to it (``_lattice_cells`` as small triangles): the forest of a
-    posed copy, built from the posed mesh's normals with the bounds on their rounding,
-    gives every point the same pairs, so the outputs equal the native ones to float32
-    roundoff."""
+    """The interior model on a float32 boundary whose normals lie along its own frame
+    or at exactly 45 degrees to it (``_lattice_cells`` as small triangles): the forest
+    of a posed copy, built from the posed mesh's normals with the bounds on their
+    rounding, gives every point the same pairs, so the outputs equal the native ones
+    to float32 roundoff."""
     pts, nrm = _lattice_cells()
     mesh = soup(pts, nrm, torch.full((pts.shape[0],), 1e-3, dtype=D))
     q = _lattice_queries()[::7] + 0.013
@@ -1131,36 +1152,6 @@ def test_model_forward_is_the_same_in_float32_poses_of_a_frame_aligned_case(
         assert float((out["v"] - rot).norm() / rot.norm()) < 1e-5
 
 
-@pytest.mark.parametrize("improper", [False, True], ids=["rotation", "reflection"])
-def test_tree_read_is_covariant_in_every_pose_at_finite_theta(improper):
-    """At theta 1 the read is an approximation, but the same approximation in every
-    pose of the case, so a rotated, reflected and translated copy gives the same
-    predictions to roundoff (the posed protocol equals the native one)."""
-    tree = _tree(3, TREE_READ_THETA)
-    mesh, drv, q = _case(3)
-    base = outputs(_run(tree, mesh, drv, q))
-    R = orthogonal(3, 4, improper)
-    t = torch.arange(1.0, 4.0, dtype=D)
-    out = outputs(_run(tree, transform(mesh, R, t), drv @ R.T, q @ R.T + t))
-    assert torch.allclose(out["p"], base["p"], atol=1e-9)
-    assert torch.allclose(out["v"], base["v"] @ R.T, atol=1e-9)
-
-
-def test_tree_read_error_falls_with_theta_on_a_smooth_boundary():
-    """Against the exact read (theta = 0), the tree read's deviation at theta = 0.25 is
-    below the deviation at theta = 1 and both are small on a sphere (smooth normals, so
-    the cluster monopoles are good far-field surrogates)."""
-    tree = _tree(3, 0.0, seed=1)
-    mesh, drv, q = _sphere_case()
-    ref = outputs(_run(tree, mesh, drv, q))
-    devs = {}
-    for theta in (0.25, 1.0):
-        tree.tree_read_theta = theta
-        devs[theta] = _rel(outputs(_run(tree, mesh, drv, q)), ref)
-    assert devs[0.25] < devs[1.0], devs
-    assert devs[1.0] < 0.1, devs
-
-
 @pytest.mark.parametrize("theta", [0.0, 0.5, 1.0])
 def test_tree_read_is_exactly_query_independent_at_every_theta(theta):
     """A prediction depends on its own point and the boundary only, whatever theta (a
@@ -1180,20 +1171,10 @@ def test_tree_read_is_exactly_query_independent_at_every_theta(theta):
     assert same(prefix, _rows(full, torch.arange(half)), atol=1e-11)
 
 
-@pytest.mark.parametrize("improper", [False, True], ids=["rotation", "reflection"])
-@pytest.mark.parametrize("dim", [3, 2])
-def test_tree_read_covariance_at_theta_zero(improper, dim):
-    tree = _tree(dim, 0.0)
-    mesh, drv, q = _case(dim)
-    base = outputs(_run(tree, mesh, drv, q))
-    R = orthogonal(dim, 4, improper)
-    t = torch.arange(1.0, dim + 1.0, dtype=D)
-    out = outputs(_run(tree, transform(mesh, R, t), drv @ R.T, q @ R.T + t))
-    assert torch.allclose(out["p"], base["p"], atol=1e-10)
-    assert torch.allclose(out["v"], base["v"] @ R.T, atol=1e-10)
-
-
 def test_tree_read_similarity_refinement_and_measure_scale_at_theta_zero():
+    """At theta 0 the read is the exact read, so the outputs stay the same (to 1e-10)
+    when the case is scaled by 2.5, refined (each cell as two half-measure copies) or
+    given three times every cell's measure."""
     tree = _tree(3, 0.0)
     mesh, drv, q = _case()
     base = outputs(_run(tree, mesh, drv, q))
@@ -1215,11 +1196,12 @@ def test_tree_read_similarity_refinement_and_measure_scale_at_theta_zero():
 def test_tree_read_at_the_default_theta_under_refinement_and_similarity(
     case, seed, bound
 ):
-    """At the default opening angle the read approximates the exact read within a
-    measured bound for the case and for its refinement (each cell as two half-measure
-    copies, which the exact read does not see but the forest does). Its similarity
-    copies (lengths times 1e-6 and 1e6) give the same approximation to roundoff: the
-    forest and the opening test read frame units only."""
+    """At the default opening angle the read is within a measured bound of the exact
+    read, for the case and for its refinement (each cell as two half-measure copies,
+    which the forest sees and the exact read does not). On the sphere, whose smooth
+    normals make the nodes good far-field surrogates, the error at theta 0.25 is
+    below the default's. Similar copies (lengths times 1e-6 and 1e6) give the same
+    approximation to roundoff: the forest and the opening test use frame units only."""
     mesh, drv, q = (_case if case == "cloud" else _sphere_case)()
     exact = outputs(_run(_tree(3, 0.0, seed=seed), mesh, drv, q))
     tree = _tree(3, TREE_READ_THETA, seed=seed)
@@ -1227,6 +1209,11 @@ def test_tree_read_at_the_default_theta_under_refinement_and_similarity(
     refined = outputs(_run(tree, refine(mesh), drv, q))
     assert _rel(base, exact) < bound, _rel(base, exact)
     assert _rel(refined, exact) < bound, _rel(refined, exact)
+    if case == "sphere":
+        tree.tree_read_theta = 0.25
+        finer = outputs(_run(tree, mesh, drv, q))
+        tree.tree_read_theta = TREE_READ_THETA
+        assert _rel(finer, exact) < _rel(base, exact)
     for k in (1e-6, 1e6):
         scaled = outputs(_run(tree, transform(mesh, scale=k), drv, k * q))
         assert _rel(scaled, base) < 1e-12, (k, _rel(scaled, base))
@@ -1234,8 +1221,9 @@ def test_tree_read_at_the_default_theta_under_refinement_and_similarity(
 
 @pytest.mark.parametrize("randomize", [False, True], ids=["initial", "random"])
 def test_tree_read_every_parameter_receives_a_gradient(randomize):
-    """DDP: every parameter takes part in the loss, from the zero-initialized start
-    of the read's output projection included."""
+    """Every parameter gets a finite gradient (as DDP needs), from the read's
+    zero-initialized output projection too; with random read weights every read and
+    basis parameter's gradient is nonzero."""
     m = _model(3, 0.5, randomize=randomize).double()
     mesh, drv, q = _case()
     out = m(
@@ -1265,7 +1253,7 @@ def test_tree_read_starts_as_no_update_and_is_live_everywhere():
         no_read = copy.deepcopy(m)
         for read in no_read.kernel_reads:
             read.read = types.MethodType(
-                lambda self, kv, h_q, pairs: torch.zeros_like(h_q), read
+                lambda self, kv, h_q, pairs, compiled=False: torch.zeros_like(h_q), read
             )
         a, b = _run(m, mesh, drv, q), _run(no_read, mesh, drv, q)
         if not randomize:
@@ -1318,6 +1306,8 @@ def test_tree_pair_invariants_are_scale_free_and_the_near_wall_invariant():
 
 
 def test_tree_read_bf16_autocast_is_finite():
+    """Under bf16 autocast the outputs and every gradient are finite, at points on a
+    cell centroid (d_q = 0) too."""
     m = _model()
     mesh, drv, q = _case()
     q = torch.cat([q, mesh.cell_centroids[:2]])  # points on a cell centroid: d_q = 0
@@ -1342,13 +1332,8 @@ def test_tree_read_bf16_autocast_is_finite():
     )
 
 
-def test_tree_read_rank2_inputs_are_refused():
-    with pytest.raises(NotImplementedError, match="rank-2"):
-        _model(boundary_schemas={"wall": {"S": {"rank": 2}}}, randomize=False)
-
-
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_tree_read_cuda_fused_and_compiled_training_path():
     """The protocol's training path on CUDA: fused geometry kernel, compiled blocks,
     bf16 autocast. One training step is finite with every parameter's gradient
@@ -1462,21 +1447,6 @@ def test_fast_walk_on_cuda_gives_the_reference_lists_in_the_reference_order(dim,
 
 @pytest.mark.cuda
 @requires_cuda
-def test_tree_read_cuda_float32_matches_cpu_float64():
-    """The whole tree read on CUDA in float32 (the fused kernel) against the CPU float64
-    eager form, at a finite theta."""
-    tree = _tree(3, 0.5)
-    mesh, drv, q = _sphere_case(n=1500, nq=120)
-    cpu = outputs(_run(tree, mesh, drv, q))
-    dev = torch.device("cuda")
-    tree_c = tree.to(dev).float()
-    mesh_c = mesh.to(dev).apply(lambda t: t.float() if t.is_floating_point() else t)
-    gpu = outputs(_run(tree_c, mesh_c, drv.to(dev).float(), q.to(dev).float()))
-    assert _rel({k: v.cpu().double() for k, v in gpu.items()}, cpu) < 1e-3
-
-
-@pytest.mark.cuda
-@requires_cuda
 @pytest.mark.parametrize("theta", [0.0, 0.5])
 def test_tree_read_cuda_matches_cpu_float64(theta, monkeypatch):
     """The float64 model on CUDA against CPU: both walk the forest to the same pair
@@ -1501,11 +1471,6 @@ def test_tree_read_cuda_matches_cpu_float64(theta, monkeypatch):
     gpu = outputs(_run(tree_c, mesh.to(dev), drv.to(dev), q.to(dev)))
     assert len(plans) == 2 and plans[0] == plans[1]  # the same opening decisions
     gpu = {k: v.cpu() for k, v in gpu.items()}
-    for k in cpu:
-        d = (gpu[k] - cpu[k]).abs()
-        print(
-            f"{k}: max abs {d.max().item():.3e}, of the allclose bound {(d / (1e-9 + 1e-5 * cpu[k].abs())).max().item():.3e}"
-        )
     assert same(gpu, cpu, atol=1e-9)
 
 
@@ -1620,14 +1585,22 @@ _PRECISIONS = pytest.mark.parametrize(
 )
 
 
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=[pytest.mark.cuda, requires_cuda])]
+)
 @_PRECISIONS
 @pytest.mark.parametrize("dim", [3, 2])
-def test_fast_forest_build_is_the_reference_forest(dim, dtype, autocast):
-    """The fast build (one pass over all faces, Warp's CPU backend here) gives the
+def test_fast_forest_build_is_the_reference_forest(dim, dtype, autocast, device):
+    """The fast build (one pass over all faces; on CPU, Warp's CPU backend) gives the
     reference's forest in every bit, under bfloat16 autocast too: node table, levels,
     boxes, diameters, virtual cells, measures, coherence and every tree's own fields,
-    so the reference walk makes the same pair lists on it."""
-    _check_fast_build(dim, dtype, "cpu", autocast)
+    so the reference walk makes the same pair lists on it. On CUDA "auto" picks it."""
+    if device == "cuda":
+        assert (
+            tree_build.resolve_tree_build("auto", torch.zeros(1, dim, device="cuda"))
+            == "fast"
+        )
+    _check_fast_build(dim, dtype, device, autocast)
 
 
 def test_fast_forest_build_makes_its_trees_on_first_use():
@@ -1751,34 +1724,28 @@ def test_fast_forest_build_leaves_nodes_past_warps_limit_to_the_reference(monkey
         assert (tables[-1] is None) == declines, limit
 
 
-@pytest.mark.cuda
-@requires_cuda
-@_PRECISIONS
-@pytest.mark.parametrize("dim", [3, 2])
-def test_fast_forest_build_is_the_reference_forest_on_cuda(dim, dtype, autocast):
-    """On CUDA, where "auto" picks it, the fast build gives the reference's forest in
-    every bit, under bfloat16 autocast too."""
-    from physicsnemo.experimental.models.isla._tree_build import resolve_tree_build
-
-    assert resolve_tree_build("auto", torch.zeros(1, dim, device="cuda")) == "fast"
-    _check_fast_build(dim, dtype, "cuda", autocast)
-
-
 @pytest.mark.parametrize(
     "device", ["cpu", pytest.param("cuda", marks=[pytest.mark.cuda, requires_cuda])]
 )
 def test_fast_forest_and_walk_are_the_reference_on_face_and_box_ties(device):
     """On the cases where rounding would decide the forest (``_lattice_cells``: normals
-    along the frame or at exactly 45 degrees to it, native, posed in float32 and
-    renumbered, under bf16 autocast too; and points at a box-test tie), the fast build
-    and walk give the reference's forest in every bit and its lists entry for entry."""
+    along the frame or at exactly 45 degrees to it, native, in the poses of the forest
+    tests above, posed in float32 and renumbered, under bf16 autocast too; and points
+    at a box-test tie), the fast build and walk give the reference's forest in every
+    bit and its lists entry for entry. So the forest tests above, which build and walk
+    by the reference, hold for the fast build and walk too."""
     pts0, nrm0 = _lattice_cells()
     q0 = _lattice_queries()
     perm = torch.randperm(pts0.shape[0], generator=torch.Generator().manual_seed(4))
     cases = [(pts0, nrm0, q0)]
-    for seed in range(2):
-        R = orthogonal(3, 20 + seed, seed % 2 == 1)
-        t = torch.tensor([0.37, -1.21, 2.03], dtype=D) * (seed + 1)
+    ### the poses of the reference-only forest tests above
+    shift = torch.tensor([0.37, -1.21, 2.03], dtype=D)
+    poses = [(orthogonal(3, 20 + i, i % 2 == 1), shift * (i + 1)) for i in range(4)]
+    poses += [
+        (orthogonal(3, 7, False), torch.tensor([1.5, -0.5, 3.0], dtype=D)),
+        (orthogonal(3, 9, False), torch.full((3,), 0.5, dtype=D)),
+    ]
+    for R, t in poses:
         cases.append((pts0 @ R.T + t, nrm0 @ R.T, q0 @ R.T + t))
     cases.append((cases[1][0][perm], cases[1][1][perm], cases[1][2]))
     for i, (pts, nrm, q) in enumerate(cases):
@@ -1852,26 +1819,34 @@ def test_tree_read_kernel_resolves_to_the_reference_on_cpu(monkeypatch):
     try:
         ref = _step_grads(m, mesh, drv, q)
         monkeypatch.setattr(ISLA, "_resolve_tree_read_kernel", lambda self, p: "fused")
-        with ran(tree_read.tree_read_walk) as r:
+        with ran(tree_read.tree_read_walk, tree_read._chunked_basis_from_plan) as r:
             fused = _step_grads(m, mesh, drv, q)
     finally:
         torch.set_num_threads(threads)
-    ### The forced name reached the read (else the reference is compared with itself).
+    ### The forced name reached the read (else the reference is compared with itself),
+    ### and the pairs' basis still came from the plan.
     assert [c["kernel"] for c in r.calls(tree_read.tree_read_walk)] == ["fused"]
+    assert r.count(tree_read._chunked_basis_from_plan) > 0
     for a, b in zip(ref, fused):
         assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
 
 
 @pytest.mark.cuda
-@requires_cuda
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
+@requires_cuda_triton
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.float32, torch.bfloat16, torch.float16],
+    ids=["fp32", "bf16", "fp16"],
+)
 def test_fused_kernel_read_matches_the_reference_read(dtype):
     """The fused read (kernel term inside the kernels) against the reference read fed
-    ``basis @ W.T``, values and every gradient, on a ragged random plan with empty
-    sources and one source read by half the pairs: in float32 and bfloat16 each is as
-    close to the float64 eager read as the reference is (the same rounding points,
-    another summation order)."""
+    ``basis @ W.T``, values and every gradient, on a ragged random plan with a point
+    without pairs and one source read by half the pairs: in float32, bfloat16 and
+    float16 (``_narrow``, as under float16 autocast) each is as close to the float64
+    eager read as the reference is (the same rounding points, another summation
+    order)."""
     from physicsnemo.experimental.models.isla._fused_read import (
+        _narrow,
         fused_kernel_read,
         supported,
     )
@@ -1882,32 +1857,18 @@ def test_fused_kernel_read_matches_the_reference_read(dtype):
     )
 
     dev = torch.device("cuda")
-    g = torch.Generator().manual_seed(4)
-    n_q, n_b, h, kc, c, f = 37, 50, 8, 4, 8, 16
-    counts = torch.randint(0, 5000, (n_q,), generator=g)
-    counts[3] = 0
-    p = int(counts.sum())
-    qi = torch.repeat_interleave(torch.arange(n_q), counts)
-    bj = torch.randint(0, n_b - 5, (p,), generator=g)
-    bj[: p // 2] = 0
-    leaves = [
-        torch.randn(p, f, generator=g, dtype=D),
-        0.3 * torch.randn(h, f, generator=g, dtype=D),
-        torch.randn(n_q, h, kc, generator=g, dtype=D),
-        torch.randn(n_b, h, kc, generator=g, dtype=D),
-        torch.randn(n_b, h, c, generator=g, dtype=D),
-    ]
-    logm = -torch.rand(n_b, generator=g, dtype=D) * 8  # per source
-    seed = torch.randn(n_q, h, c, generator=g, dtype=D)
+    case = _read_case(4)
 
     def run(kind, device, dt):
-        plan = PairPlan.build(qi.to(device), bj.to(device), n_q, n_b)
+        plan = PairPlan.build(
+            case.qi.to(device), case.bj.to(device), case.n_q, case.n_b
+        )
         b, w, q, k, v = ins = [
-            t.detach().clone().to(device, dt).requires_grad_(True) for t in leaves
+            t.detach().clone().to(device, dt).requires_grad_(True) for t in case.leaves
         ]
-        lm = logm.to(device, torch.float32 if dt != D else D)
+        lm = case.logm.to(device, torch.float32 if dt != D else D)
         if kind == "fused":
-            assert supported(b, q, k, v)
+            assert supported(b, q, k, v) and _narrow(b) == (dt != torch.float32)
             out = fused_kernel_read(b, w, lm, q, k, v, plan, 0.5)
         elif kind == "reference":
             out = segment_softmax_read(
@@ -1917,26 +1878,23 @@ def test_fused_kernel_read_matches_the_reference_read(dtype):
             out = _eager_segment_softmax_read(
                 b @ w.t(), lm[plan.bj.long()], q, k, v, plan, 0.5
             )
-        (out.double() * seed.to(device)).sum().backward()
+        (out.double() * case.out_grad.to(device)).sum().backward()
         return [out.detach().double().cpu()] + [t.grad.double().cpu() for t in ins]
 
     exact = run("eager", "cpu", D)
     fused, ref = run("fused", dev, dtype), run("reference", dev, dtype)
-    rows = counts > 0
+    rows = case.counts > 0
     floor = 1e-6 if dtype == torch.float32 else 1e-3
     for name, a, b, e in zip(("out", "basis", "w", "q", "k", "v"), fused, ref, exact):
         if name == "out":
             a, b, e = a[rows], b[rows], e[rows]
         scale = e.abs().max()
         d_fused, d_ref = (a - e).abs().max() / scale, (b - e).abs().max() / scale
-        print(
-            f"{name}: fused {d_fused:.2e}, reference {d_ref:.2e}, fused-reference {(a - b).abs().max() / scale:.2e}"
-        )
         assert d_fused <= 2 * d_ref + floor, name
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.parametrize("autocast", [False, True], ids=["fp32", "bf16_autocast"])
 def test_tree_read_fused_matches_the_reference_on_cuda(autocast):
     """The model on CUDA reads through the fused read by default; one training step's
@@ -1961,12 +1919,13 @@ def test_tree_read_fused_matches_the_reference_on_cuda(autocast):
             scale = max(float(e[k].abs().max()) for k in keys)
             d_fused = max(float((a[k] - e[k]).abs().max()) for k in keys) / scale
             d_ref = max(float((b[k] - e[k]).abs().max()) for k in keys) / scale
-            print(f"{grp}: fused {d_fused:.2e}, reference {d_ref:.2e}")
             assert d_fused <= 2 * d_ref + floor, grp
+            if a is fused[0] and not autocast:
+                assert d_fused < 1e-3, grp  # the outputs, against float64
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_fused_reads_sum_their_basis_gradients_as_autograd_does():
     """Fused reads of one basis that share its sink sum their basis gradients in place
     bitwise as autograd sums them when each read passes its own (bfloat16, the
@@ -2041,10 +2000,9 @@ def test_fused_kernel_read_with_int32_offsets_past_2_27_pairs():
     """An int32-offset plan of 2**27 + 65,536 pairs (F = 16): the last 64 points, whose
     pairs' basis offsets p * F pass 2**31, get the outputs, query gradients and pair
     basis gradients of the same points read alone (each point's program reads only its
-    own pairs), bitwise. With the plan's int32 offsets the kernels read and wrote the
-    wrong basis rows or faulted. Needs about 21 GiB of device memory: the bfloat16 basis
-    and its gradient (4.3 GB each), the backward's (P, 2H) float32 softmax weights and
-    logit gradients (8.6 GB) and the plan."""
+    own pairs), bitwise. Needs about 21 GiB of device memory: the bfloat16 basis and its
+    gradient (4.3 GB each), the backward's (P, 2H) float32 softmax weights and logit
+    gradients (8.6 GB) and the plan."""
     from physicsnemo.experimental.models.isla._fused_read import fused_kernel_read
 
     per, tail, n_b, h, kc, c, f = 1024, 64, 4096, 8, 4, 8, 16
@@ -2141,27 +2099,6 @@ def test_tree_read_pairs_basis_from_the_plan_is_exact_for_a_batch(
     assert sum("reference kernel basis" in m for m in logged) == 1, logged
 
 
-class _SinkProbeRead(torch.autograd.Function):
-    """``basis @ w.T``, passing its basis gradient through the fused read's sink as
-    the fused read does (a stand-in for its Triton kernels on CPU)."""
-
-    @staticmethod
-    def forward(ctx, basis, token, grad, w):
-        ctx.save_for_backward(basis, w)
-        ctx.grad, ctx.sink_node = grad, token.grad_fn
-        return basis @ w.t()
-
-    @staticmethod
-    def backward(ctx, dout):
-        from physicsnemo.experimental.models.isla._fused_read import _basis_grad_target
-
-        basis, w = ctx.saved_tensors
-        acc = _basis_grad_target(ctx, basis)
-        if acc is not None:
-            acc += dout @ w
-        return None, None if acc is None else basis.new_empty(0), None, dout.t() @ basis
-
-
 def _partial_backward_sequences(read, theta, ws, x, loss_of):
     """theta.grad after each partial-backward sequence, ``read(basis, w)`` the read."""
     out = []
@@ -2187,6 +2124,7 @@ def test_fused_read_sink_ignores_backward_passes_that_skip_the_basis():
 
     g = torch.Generator().manual_seed(8)
     inv = torch.randn(50, 16, generator=g, dtype=D)
+    assert basis_sink(inv) is None  # a basis that needs no gradient has no sink
     theta = torch.randn(16, generator=g, dtype=D).requires_grad_(True)
     ws = [
         torch.randn(8, 16, generator=g, dtype=D).requires_grad_(True) for _ in range(3)
@@ -2200,20 +2138,20 @@ def test_fused_read_sink_ignores_backward_passes_that_skip_the_basis():
         outs = [
             basis @ w.t()
             if read is None
-            else _SinkProbeRead.apply(basis.detach(), *sinks[-1], w)
+            else _SinkRead.apply(basis.detach(), *sinks[-1], w)
             for w in ws
         ]
         return (sum(outs) * x).square().sum()
 
     ref = _partial_backward_sequences(None, theta, ws, x, loss_of)
-    fused = _partial_backward_sequences(_SinkProbeRead, theta, ws, x, loss_of)
+    fused = _partial_backward_sequences(_SinkRead, theta, ws, x, loss_of)
     for a, b in zip(fused, ref):
         assert torch.allclose(a, b, rtol=1e-12, atol=0)
     assert all(s[1].acc is None for s in sinks[2:])
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_fused_read_partial_backward_matches_the_reference_read():
     """The same partial-backward sequences through the fused reads (float32) against the
     reference read fed ``basis @ W.T``."""
@@ -2271,13 +2209,13 @@ def test_fused_read_partial_backward_matches_the_reference_read():
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
 def test_fused_node_means_match_the_reference(dtype):
     """The fused node means against ``node_means`` on a forest of a sphere: the
     backward bitwise (the same float32 additions, one per node), the forward to
     float32 roundoff before the cast (the reference sums each leaf's cells by atomics,
-    in no fixed order)."""
+    in no fixed order) and within the 2x-error rule of the float64 means."""
     from physicsnemo.experimental.models.isla._fused_read import fused_node_means
 
     mesh, _, _ = _sphere_case(n=3000, nq=10)
@@ -2301,6 +2239,10 @@ def test_fused_node_means_match_the_reference(dtype):
         res[1][0], res[0][0], rtol=tol, atol=tol * res[0][0].abs().max()
     )
     assert torch.equal(res[1][1], res[0][1])
+    exact = tree_read.node_means(x0.double(), forest, omega.double())
+    _two_x(
+        "means", res[1][0], res[0][0], exact, 1e-6 if dtype == torch.float32 else 1e-3
+    )
 
 
 def _chunked_step(m, kw, loss_of, size):
@@ -2578,6 +2520,50 @@ def test_query_chunks_need_an_interior_model():
         )
 
 
+def test_compile_blocks_compiles_the_reads_projections_as_eager_computes_them():
+    """Under ``compile_blocks`` the boundary read's LayerNorms and projections run
+    compiled, in the forward and in :meth:`ISLA.query_chunks`: outputs and every
+    parameter's gradient equal the eager model's to float64 roundoff."""
+    m_e = _model(3, TREE_READ_THETA).double()
+    m_c = _model(3, TREE_READ_THETA, compile_blocks=True).double()
+    m_c.load_state_dict(m_e.state_dict())
+    mesh, drv, q = _case()
+    kw = {
+        "boundary_meshes": {"wall": mesh},
+        "prediction_points": points_mesh(q),
+        "global_data": {"g": drv},
+    }
+    w = torch.linspace(-1, 1, q.shape[0], dtype=D)
+
+    def loss_of(out, rows):
+        return (out["p"] * w[rows]).sum() + out["v"].square().sum()
+
+    def grads(m):
+        g = {n: p.grad.clone() for n, p in m.named_parameters()}
+        m.zero_grad(set_to_none=True)
+        return g
+
+    tree_read._COMPILED.clear()
+    runs = []
+    for m in (m_e, m_c):
+        torch.manual_seed(3)
+        out = outputs(m(**kw))
+        loss_of(out, slice(None)).backward()
+        runs.append(({k: v.detach() for k, v in out.items()}, grads(m)))
+    torch.manual_seed(3)
+    runs.append((_chunked_step(m_c, kw, loss_of, 37), grads(m_c)))
+    assert set(tree_read._COMPILED) == {
+        tree_read._source_states,
+        tree_read._query_states,
+    }
+    (out_e, grad_e), *compiled = runs
+    scale = max(float(g.abs().max()) for g in grad_e.values())
+    for out, grad in compiled:
+        assert same(out, out_e, atol=1e-12)
+        for name, g in grad_e.items():
+            assert torch.allclose(grad[name], g, rtol=1e-9, atol=1e-12 * scale), name
+
+
 class _Walked(Exception):
     """Raised by a spy on the walk to stop a forward pass once the walk is recorded."""
 
@@ -2755,7 +2741,7 @@ def test_fused_basis_chunks_sum_their_weight_gradients_as_the_reference(monkeypa
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.parametrize(
     "gelu_tables", [False, True], ids=["gelu_computed", "gelu_tables"]
 )
@@ -2797,7 +2783,6 @@ def test_fused_kernel_basis_matches_the_reference_basis(
         scale = e.abs().max()
         d_fused = (a.double().cpu() - e).abs().max() / scale
         d_ref = (b.double().cpu() - e).abs().max() / scale
-        print(f"{name}: fused {d_fused:.2e}, reference {d_ref:.2e}")
         assert d_fused <= 2 * d_ref + floor, name
     if autocast:
         ### The reference's rounding points, which a lost rounding would pass above: the
@@ -2808,13 +2793,12 @@ def test_fused_kernel_basis_matches_the_reference_basis(
             float((a - b).abs().max() / 2.0 ** (b.abs().max().log2().floor() - 7))
             for a, b in zip(fused[1:], ref[1:])
         ]
-        print(f"basis bitwise {same:.6f}; gradient ulps {ulps}")
         assert same >= 0.99
         assert max(ulps) <= 4, dict(zip(names[1:], ulps))
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_fused_basis_leaves_the_geometrys_graph_alone():
     """The fused basis gives its geometry no gradient and keeps no edge into the
     geometry's graph: rank-1 inputs from a learned map (as ISLA's are) survive one
@@ -2838,7 +2822,7 @@ def test_fused_basis_leaves_the_geometrys_graph_alone():
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=["bf16", "fp16"])
 def test_fused_basis_gelu_tables_are_pytorchs_gelu_on_every_input(dtype):
     """The fused basis's GELU tables give PyTorch's 16-bit GELU and its backward
@@ -2861,7 +2845,7 @@ def test_fused_basis_gelu_tables_are_pytorchs_gelu_on_every_input(dtype):
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=["bf16", "fp16"])
 def test_fused_basis_backward_computes_pytorchs_gelu_on_every_input(dtype):
     """The fused basis backward's computed GELU (CUDA 13's erff, ported) is PyTorch's
@@ -2888,7 +2872,7 @@ def test_fused_basis_backward_computes_pytorchs_gelu_on_every_input(dtype):
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton
 def test_tree_read_pairs_fused_on_cuda_builds_the_basis_in_the_fused_kernel(
     monkeypatch,
 ):

@@ -38,28 +38,27 @@ from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
-### (Query, cell) pairs per chunk of the two-dimensional search, and (point,
-### subset) pairs per chunk of the least-norm solve; bound their blocks. Both are in
-### a custom op, so the loops over chunks do not specialize a dynamic query count
-### under torch.compile.
+### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,
+### subset) pairs per chunk of the least-norm solve: a bound on their blocks. Both
+### run in a custom op, so their loops over chunks do not specialize a dynamic query
+### count under torch.compile.
 _SEARCH_PAIRS = 2**23
 
-#: The softening of the logarithmic length channels (:func:`soft_log_length`), in
-#: the frame's length unit: a precision margin of about 17 times float32's unit
-#: roundoff relative to the length unit.
+#: The softening of the logarithmic length channels, in the frame's length unit
+#: (:func:`soft_log_length` gives its reason).
 LENGTH_SOFTENING = 1e-6
 
 #: The far-field criterion of the winding number that signs the distance
 #: (:func:`_packed_winding_sum`; Barill et al. 2018's ``beta``): a BVH node's
 #: expansion stands in for its cells when the query lies farther than this many node
 #: radii from its centre. A performance setting, like the tree read's
-#: ``TREE_READ_THETA``: the error falls to zero as it grows. Measured at 2 against
-#: the exact sum (float64, 3,000 queries each): at most 3.1e-2 (median 1e-3) on an
-#: icosphere of 5,120 triangles, 1.9e-2 on a torus, 1.2e-2 on a cube with a face
+#: ``TREE_READ_THETA``: the error falls to zero as it grows. At 2 its error against
+#: the exact sum (float64, 3,000 queries each) is at most 3.1e-2 (median 1e-3) on an
+#: icosphere of 5,120 triangles, 1.9e-2 on a torus, and 1.2e-2 on a cube with a face
 #: removed. Off a closed or double-sided surface the exact ``w`` is an integer, half
-#: away from the threshold, so the sign is the surface's; it can depend on the tree
-#: only where the exact ``|w - sigma / 2|`` is below that error (behind an isolated
-#: sheet, across a hole).
+#: away from the threshold, so the sign is the surface's. The sign can depend on the
+#: tree only where the exact ``|w - sigma / 2|`` is below that error (behind an
+#: isolated sheet, across a hole).
 WINDING_NUMBER_BETA = 2.0
 
 
@@ -67,24 +66,24 @@ def soft_log_length(s: torch.Tensor) -> torch.Tensor:
     r"""The logarithmic channel of a signed length ``s`` in the frame's length unit:
     :math:`\operatorname{asinh}(s / \varepsilon)`.
 
-    It is :math:`\operatorname{sign}(s) \log(2 \lvert s \rvert / \varepsilon)` up to
-    :math:`O((\varepsilon / s)^2)` when :math:`\lvert s \rvert \gg \varepsilon`, so
-    it resolves the distances to a wall over many decades, as a logarithm does, and
-    it is linear, :math:`s / \varepsilon`, near zero: odd, smooth and continuous
-    through :math:`s = 0`, with slope at most :math:`1 / \varepsilon` (Lupton, Gunn
-    and Szalay 1999, "asinh magnitudes", soften a logarithm the same way at the
-    noise level of what it measures). A signed logarithm
-    :math:`\operatorname{sign}(s) \log(\lvert s \rvert + \epsilon)` instead jumps
-    by :math:`2 \lvert \log \epsilon \rvert` at :math:`s = 0`, so a point on a wall,
-    whose distance is zero or a rounding error of either sign, gets a code that
-    rounding or a rigid motion can change by tens.
+    For :math:`\lvert s \rvert \gg \varepsilon` it is
+    :math:`\operatorname{sign}(s) \log(2 \lvert s \rvert / \varepsilon)` up to
+    :math:`O((\varepsilon / s)^2)`, so it resolves the distances to a wall over many
+    decades, as a logarithm does. Near zero it is linear, :math:`s / \varepsilon`:
+    odd, smooth and continuous through :math:`s = 0`, with slope at most
+    :math:`1 / \varepsilon`. Lupton, Gunn and Szalay (1999, "asinh magnitudes")
+    soften a logarithm the same way at the noise level of what it measures. A signed
+    logarithm :math:`\operatorname{sign}(s) \log(\lvert s \rvert + \epsilon)` instead
+    jumps by :math:`2 \lvert \log \epsilon \rvert` at :math:`s = 0`. A point on a
+    wall, whose distance is zero or a rounding error of either sign, then gets a code
+    that rounding or a rigid motion can change by tens.
 
-    The softening :math:`\varepsilon = 10^{-6}` (in the frame's length unit, so
-    the channel is invariant to a uniform scaling of the geometry) is a numerical
-    resolution, not a model parameter: about 17 times float32's unit roundoff
+    The softening :math:`\varepsilon = 10^{-6}` is a numerical resolution, not a
+    model parameter. It is in the frame's length unit, so the channel is invariant to
+    a uniform scaling of the geometry. It is about 17 times float32's unit roundoff
     :math:`2^{-24}`, the resolution of a distance relative to the frame's length
     wherever the geometry sits in its domain. The channel is linear for
-    :math:`\lvert s \rvert` below :math:`\varepsilon`; with the whole boundary of an
+    :math:`\lvert s \rvert` below :math:`\varepsilon`. For the whole boundary of an
     external flow the length unit is the domain's size, so that range can reach into
     the boundary layer.
     """
@@ -99,20 +98,21 @@ def rms_pairwise_distance(
     """Measure-weighted RMS pairwise distance of a sampled boundary, shape (B, 1, 1).
 
     ``L^2 = sum_ij w~_i w~_j |x_i - x_j|^2`` with ``w~ = w / sum(w)`` (uniform
-    weights when ``measure_weights`` is ``None``), evaluated in O(N) through the
-    variance identity ``L^2 = 2 sum_i w~_i (|x_i - c|^2 + J_i)`` with ``c`` the weighted
-    mean and ``J_i`` each point's own second moment about itself, per unit measure
-    (``second_moments`` ``(B, N)``, :func:`cell_second_moments`; ``None``: points).
-    With the cells' centroids, measures and second moments it is the exact RMS
-    distance between two points of the piecewise-flat surface, the same for every
-    subdivision of its cells. A normalized two-point statistic: it converges under refinement of any
-    boundary whose normalized measure converges (including fractal boundaries
-    whose total measure diverges), is invariant to a uniform rescale of the
-    weights, and is covariant under a geometric rescale. The mean ``c`` is an
-    intermediate of this scalar only; no centre is exposed. Its two floors, on the
-    total weight and on the result, are the dtype's smallest normal number: they
-    guard a boundary of no measure only, and bind at no length scale the dtype
-    represents.
+    weights when ``measure_weights`` is ``None``). It is evaluated in O(N) through the
+    variance identity ``L^2 = 2 sum_i w~_i (|x_i - c|^2 + J_i)``, with ``c`` the
+    weighted mean and ``J_i`` each point's own second moment about itself, per unit
+    measure (``second_moments`` ``(B, N)``, :func:`cell_second_moments`; ``None`` for
+    points). With the cells' centroids, measures and second moments it is the exact
+    RMS distance between two points of the piecewise-flat surface, the same for every
+    subdivision of its cells.
+
+    As a normalized two-point statistic, it converges under refinement of any
+    boundary whose normalized measure converges (fractal boundaries of divergent
+    total measure included). It is invariant to a uniform rescale of the weights and
+    covariant under a geometric rescale. The mean ``c`` is an intermediate of this
+    scalar only; no centre is exposed. Its two floors, on the total weight and on the
+    result, are the dtype's smallest normal number. They guard only a boundary of no
+    measure, and bind at no length scale the dtype represents.
     """
     b, n = points.shape[0], points.shape[1]
     if measure_weights is None:
@@ -180,11 +180,11 @@ def _segment_t(q, a, b):
 
 
 def _canonical_cells(points, cells):
-    """Each cell's vertices in the lexicographic order of their positions, ``(F,
-    d)``, and the parity of that permutation ``(F,)`` (+1 or -1): a function of the
-    positions alone, the same for every numbering of the vertices and every
-    rotation of a cell's vertex list, so the closest points computed on it are too;
-    a winding flip changes only the parity, which carries the orientation."""
+    """Each cell's vertices in the lexicographic order of their positions ``(F,
+    d)``, and the parity of that permutation ``(F,)`` (+1 or -1). Both are functions
+    of the positions alone, the same for every numbering of the vertices and every
+    rotation of a cell's vertex list, so the closest points computed on them are too.
+    A winding flip changes only the parity, which carries the orientation."""
     k = cells.shape[1]
     vert, slot = list(cells.unbind(1)), [torch.full_like(cells[:, 0], i) for i in range(k)]
     ### A stable sort per coordinate, as argsort's (NaN last), by adjacent swaps of
@@ -202,26 +202,26 @@ def _canonical_cells(points, cells):
 
 def _closest_weights(q, simplex, flat=None, fast=False):
     """The barycentric weights ``(P, d)`` of the point of each simplex closest to
-    its query (Ericson 2005, Sec. 5.1.5), exact zeros outside the face region; call
-    in float64 (the face-region weights are ratios of Gram determinants that cancel
-    on thin cells). An edge-region point of a triangle is recomputed on the edge
-    alone, so every triangle sharing the edge gives it bitwise. A zero-area triangle
-    (``flat`` ``(P,)``, :func:`_zero_area`; canonical vertices) is the union of its
-    two edges between consecutive vertices, since on a line the lexicographic order
-    is the order along it: its closest point is the nearer of theirs (the first at
-    equal distances), computed as a triangle sharing that edge computes it.
+    its query (Ericson 2005, Sec. 5.1.5), with exact zeros outside the face region.
+    Call it in float64: the face-region weights are ratios of Gram determinants that
+    cancel on thin cells. An edge-region point of a triangle is recomputed on the
+    edge alone, so every triangle sharing the edge gives it bitwise. A zero-area
+    triangle (``flat`` ``(P,)``, :func:`_zero_area`; canonical vertices) is the union
+    of its two edges between consecutive vertices, since on a line the lexicographic
+    order is the order along it. Its closest point is the nearer of theirs (the first
+    at equal distances), computed as a triangle sharing that edge computes it.
 
     On a thin triangle Ericson's face-region weights move the point along the face
     by up to :func:`_ericson_error`. A pair where that bound reaches one unit of the
     arithmetic, ``u64 (|x| + R_k)`` (``R_k`` the cell's greatest vertex norm), is
-    guarded: it keeps Ericson's weights only where its distance is within one unit
-    (``_SWITCH_UNITS``) of the accurate point's (:func:`_accurate_weights`), within
-    87 units of the exact one (``_FOOT_UNITS``), so that Ericson's is within the tie
-    bound's arithmetic share, 91 units (``_BAND_UNITS``); otherwise it takes the
-    accurate point. At every pair below the guard, Ericson's weights stand,
-    bitwise. Both branches are certified: the guard by ``K`` (:data:`_ERICSON_K`),
-    the switch by a band of at least ``_SWITCH_UNITS + _FOOT_UNITS``, each a worst
-    case. ``unit`` is measured in the frame of ``q`` and ``simplex``. ``fast`` computes
+    guarded. It keeps Ericson's weights only where its distance is within one unit
+    (``_SWITCH_UNITS``) of the accurate point's (:func:`_accurate_weights`), which is
+    within 87 units of the exact one (``_FOOT_UNITS``). So Ericson's is within the
+    tie bound's arithmetic share, 91 units (``_BAND_UNITS``). Otherwise it takes the
+    accurate point. Every pair below the guard keeps Ericson's weights, bitwise. Both
+    branches are certified, each by a worst case: the guard by ``K``
+    (:data:`_ERICSON_K`), the switch by a band of at least ``_SWITCH_UNITS +
+    _FOOT_UNITS``. ``unit`` is measured in the frame of ``q`` and ``simplex``. ``fast`` computes
     the weights of triangles by two Triton kernels on CUDA, bitwise these
     (:func:`~physicsnemo.experimental.models.isla._geometry_fast.closest_weights`)."""
     if q.shape[-1] == 2:
@@ -284,16 +284,16 @@ def _two_product(a, b):
 
 def _zero_area(simplex: torch.Tensor, cells: torch.Tensor):
     """Whether each cell ``simplex`` ``(F, d, d)`` (float64, the coordinates as the
-    search reads them) has zero measure, exactly, ``(F,)``, and whether any has. A
-    segment has zero length when its two vertices coincide (welded, one index); a
+    search reads them) has exactly zero measure ``(F,)``, and whether any has. A
+    segment has zero length when its two vertices coincide (welded, one index). A
     triangle has zero area when its cross product is exactly zero (two or three
     vertices coincide, or three distinct ones are collinear). Each component of the
     cross product is first evaluated in float64 with Shewchuk's (1997) error bound,
-    which proves it nonzero for every cell of nonzero area but the very thinnest;
-    those left are evaluated exactly, ``a x b + b x c + c x a`` as six exact products
+    which proves it nonzero for every cell of nonzero area but the very thinnest.
+    Those left are evaluated exactly: ``a x b + b x c + c x a`` as six exact products
     (:func:`_two_product`) summed as a nonoverlapping expansion (Shewchuk's
-    Grow-Expansion), zero exactly when its every term is. Exact unless an
-    intermediate overflows or underflows: never for float32 coordinates (in float64
+    Grow-Expansion), zero exactly when its every term is. The test is exact unless an
+    intermediate overflows or underflows: always for float32 coordinates (in float64
     their products lie on a grid of ``2^-298``), and for float64 ones when every
     nonzero magnitude lies in ``[2^-485, 2^510]``. Torch evaluates each operation by
     itself, without a fused multiply-add, and the caller runs in a custom op, which
@@ -373,9 +373,8 @@ def _cross_expansion(v0, v1, v2, i, j):
 #:    theta) u l^2 / (rho^2 L)``. Where ``Delta <= L``, ``theta <= 66 / K + 3 u``, and
 #:    ``K = 101.25 / (1 - 66 / K)`` gives ``K = 167.25`` (the ``5 u L D`` of step 3 is
 #:    ``3 u L D`` on the face, where ``sum |v_i| = D``; harmlessly over-counted). The
-#:    one denominator that
-#:    cancels, ``denom~``, is kept as ``(1 - theta) D``, so its amplification is in
-#:    the bound; the products of two error terms (``(5 u L l)^2`` against ``20 u L^2
+#:    one denominator that cancels, ``denom~``, is kept as ``(1 - theta) D``, so its
+#:    amplification is in the bound; the products of two error terms (``(5 u L l)^2`` against ``20 u L^2
 #:    l^2``) add at most ``3e-15`` relative: 168 is a worst case.
 #: 6. A region decided wrongly by rounding: an exact face point taken on the edge
 #:    ``ab`` has ``vc <= |Dvc|``, so it lies within ``(vc / D) L <= 22 u l^2 / (rho^2
@@ -642,21 +641,21 @@ def _hull_candidates(cc: torch.Tensor, subsets: list[torch.Tensor]):
 
 def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     """For each row of ``c`` ``(n, K, d)`` (``K`` distinct unit vectors), the point
-    of their convex hull closest to the origin ``(n, d)``. It lies in the relative
-    interior of a face spanned by at most ``d`` of them (Caratheodory), where it is
-    that face's least-norm affine point with non-negative weights, and every such
-    point lies in the hull: so it is the least-norm one over those faces (a pair's
-    midpoint, since the vectors have equal norms; the first in the enumeration at
-    equal norms) that meets the optimality condition ``c_k . x >= |x|^2``, which
-    only the hull's least-norm point does (other faces' points can match its norm
-    to rounding where vectors nearly coincide). When none meets it to rounding, the
-    origin is outside the hull exactly when a candidate separates it (``c_k . x >
-    0`` for every ``k``; the least-norm point does): then the candidate with the
-    least duality gap ``g = |x|^2 - min_k c_k . x`` (``|x - x*| <= sqrt(2 g)``),
-    otherwise 0. ``c`` in a canonical order, so the result is a function of the
-    set. Chunked over the rows; where one row's subsets and directions overflow a
-    chunk (a vertex shared by hundreds of cells), one row at a time over chunks of
-    its subsets, with the same result."""
+    of their convex hull closest to the origin ``(n, d)``. That point lies in the
+    relative interior of a face spanned by at most ``d`` of them (Caratheodory), where
+    it is the face's least-norm affine point with non-negative weights, and every
+    such point lies in the hull. So it is the least-norm one over those faces (a
+    pair's midpoint, since the vectors have equal norms; the first in the enumeration
+    at equal norms) that meets the optimality condition ``c_k . x >= |x|^2``. Only
+    the hull's least-norm point meets it; other faces' points can match its norm to
+    rounding where vectors nearly coincide. When none meets it to rounding, the
+    origin is outside the hull exactly when a candidate separates it (``c_k . x > 0``
+    for every ``k``; the least-norm point does). The result is then the candidate
+    with the least duality gap ``g = |x|^2 - min_k c_k . x`` (``|x - x*| <= sqrt(2
+    g)``), and otherwise 0. ``c`` comes in a canonical order, so the result is a
+    function of the set. The work is chunked over the rows. Where one row's subsets
+    and directions overflow a chunk (a vertex shared by hundreds of cells), it runs
+    one row at a time over chunks of its subsets, with the same result."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
@@ -815,20 +814,21 @@ def _ball_candidates_kernel(
     overflow_cell: wp.array(dtype=wp.int64),
     overflow_count: wp.array(dtype=wp.int64),
 ):
-    """Every cell within ``radius`` of the query ``rows[tid]``: a depth-first
-    traversal of the BVH from ``root``, left child first, on one record per inner node
-    (``children``: both children are tested where their parent is read, and the right
-    one waits on a stack), pruning the nodes whose boxes lie farther than ``radius32``
-    (float32 boxes rounded outward, a radius padded over float32 rounding) and the
-    inner nodes whose slabs lie farther than ``reach32``, then the cells
-    farther than ``radius`` (float64, :func:`_beyond`; ``corners`` holds each cell's
-    three vertices, ``thin`` its ``kappa`` and longest edge), after a float32 lower
-    bound on their distance rejects the far ones: the distance to the cell's plane
-    and beyond its farthest edge, from the unit normals in ``planes`` (the plane's,
-    then each edge's outward one in the plane, with their offsets), against
-    ``reach32``. Writes the first ``cap`` of them from ``tid * cap`` on, the
-    others as (query, cell) pairs to the overflow list while it has room (its
-    counter, shared by every thread, counts them all), and counts them all."""
+    """Every cell within ``radius`` of the query ``rows[tid]``. A depth-first
+    traversal of the BVH from ``root``, left child first, reads one record per inner
+    node (``children``): both children are tested where their parent is read, and the
+    right one waits on a stack. It prunes the nodes whose boxes lie farther than
+    ``radius32`` (float32 boxes rounded outward, a radius padded over float32
+    rounding) and the inner nodes whose slabs lie farther than ``reach32``. At a leaf,
+    a float32 lower bound on the cell's distance first rejects the far cells: the
+    distance to the cell's plane and beyond its farthest edge, from the unit normals
+    in ``planes`` (the plane's, then each edge's outward one in the plane, with their
+    offsets), against ``reach32``. Then it prunes the cells farther than ``radius``
+    (float64, :func:`_beyond`; ``corners`` holds each cell's three vertices, ``thin``
+    its ``kappa`` and longest edge). It writes the first ``cap`` cells from ``tid *
+    cap`` on, and the others as (query, cell) pairs to the overflow list while it has
+    room (its counter, shared by every thread, counts them all). ``count`` gets the
+    query's total."""
     tid = wp.tid()
     q = rows[tid]
     x = query[q]
@@ -890,10 +890,9 @@ def _ball_candidates_kernel(
     count[tid] = k
 
 
-#: Candidate slots per query of :func:`_ball_candidates`; a query with more writes
-#: the rest to an overflow list of one entry per query. Only when that list is full
-#: are the queries with more searched again with as many slots as they need, a
-#: second pass that takes about a whole traversal's time however few queries it holds.
+#: Candidate slots per query of :func:`_ball_candidates`, before its overflow list.
+#: Its second pass, which runs only when that list is full, takes about a whole
+#: traversal's time however few queries it holds.
 #: A performance setting: the outputs do not depend on it; re-tune it when the search
 #: changes.
 _BALL_SLOTS = 64
@@ -1025,19 +1024,18 @@ def _inner_per_level(f: int) -> list[int]:
 
 
 def _preorder_cell_tree(simplex: torch.Tensor):
-    """A BVH over the cells ``simplex`` ``(F, 3, 3)``, one cell per leaf (the
-    midpoint-split LBVH of :class:`physicsnemo.mesh.spatial.BVH`), built by one kernel,
-    its nodes in depth-first preorder, so a node's left child is the next node; with
-    what a stackless traversal needs: each node's two children, its escape pointer (the
-    node after its subtree, -1 at the end), the inner nodes of each level, root first,
-    each node's cell (-1 inside), and each node's box ``(N, 3)`` twice (least and
-    greatest corner), in float32 rounded outward for the traversals' pruning. The cells
-    are put in Morton order in the boundary's canonical frame
+    """A BVH over the cells ``simplex`` ``(F, 3, 3)``, one cell per leaf: the
+    midpoint-split LBVH of :class:`physicsnemo.mesh.spatial.BVH`, built by one kernel,
+    its nodes in depth-first preorder, so a node's left child is the next node. It
+    holds what a stackless traversal needs: each node's two children; its escape
+    pointer (the node after its subtree, -1 at the end); the inner nodes of each
+    level, root first; each node's cell (-1 inside); and each node's box ``(N, 3)``
+    twice (least and greatest corner), in float32 rounded outward for the traversals'
+    pruning. The cells are put in Morton order in the boundary's canonical frame
     (:func:`~physicsnemo.mesh.spatial._frame.canonical_frame`), so the tree, and the
     far field of :func:`_packed_winding_sum` on it, is the same in every pose of the
-    case; the boxes are in the queries' frame. Its leaves hold the cells in sorted
-    order: leaf ``i`` holds row ``i`` of ``simplex[order]``, returned with ``order``
-    ``(F,)``."""
+    case. The boxes are in the queries' frame. Leaf ``i`` holds row ``i`` of
+    ``simplex[order]``, returned with ``order`` ``(F,)``."""
     f, dev = simplex.shape[0], simplex.device
     order = _morton_order(simplex)
     n = 2 * f - 1
@@ -1062,34 +1060,39 @@ def _preorder_cell_tree(simplex: torch.Tensor):
 
 def _ball_candidates(query: torch.Tensor, radius: torch.Tensor, simplex: torch.Tensor, tree, children, reach, flat=None):
     """The (query, cell) pairs ``(P,)``, ``(P,)`` of every cell of ``simplex`` ``(F,
-    3, 3)`` within ``radius`` ``(Q,)`` of its query ``(Q, 3)``, all float64: a Warp
+    3, 3)`` within ``radius`` ``(Q,)`` of its query ``(Q, 3)``, all float64. A Warp
     traversal of the BVH ``tree`` over the cells (:func:`_preorder_cell_tree`, its
-    nodes' ``children`` from :func:`_child_records`),
-    with its boxes and the queries in float32 for the pruning (rounded outward and
-    padded) and the distances to the cells in float64. An inner node is also skipped
-    where its slab (:func:`_node_slabs`) lies farther than the padded radius of the
-    cells' float32 lower bound: with the slab's direction ``n`` as stored (``|n| <= 1 +
-    2^-23``) and offsets ``lo <= n . y <= hi`` over the node's cells (float64, rounded
-    outward), a point ``y`` of a cell is at least ``(n . x - hi) / |n|`` from ``x``;
-    the float32 product, the direction's length and the float64 offsets' rounding stay
-    far inside that pad (``32 u32`` of the magnitudes and ``1e-5`` of the radius), so
-    every cell within ``radius`` is still found. A cell the search keeps only for lack
-    of a certificate (a zero-area or thin one) can go with a node it lies beyond; it is
-    then farther than ``radius``, and no output of the caller depends on such a pair (it
-    is not the least, it fails the tie test, and a pair that ties on a vertex or an edge
-    of its cell would put the cell within ``radius``), where the pairs' distances are
-    numbers: the magnitudes ``_BAND_UNITS`` covers. One pass fills
-    ``_BALL_SLOTS`` slots per query and an overflow list of ``Q`` pairs; when that
-    list is full, the queries that overflow their slots are searched again with as
-    many slots as they need, so no candidate is dropped. The pairs come in no
-    particular order (the caller sorts them). The queries are traversed in Morton
-    order, so neighbouring threads visit neighbouring nodes. ``reach`` is the
-    greatest norm of a vertex. The zero-area cells ``flat`` ``(F,)``
-    (:func:`_zero_area`) have no plane, and the float64 distance is not defined on
-    them: they are kept wherever their boxes and the slabs above them are reached. Nor are the planes of a
-    cell whose float64 normal is not certified to its float32 rounding (``delta >
-    u32``, :func:`_thin_bounds`); its float64 distance is rejected only beyond the
-    bound on its error (:func:`_beyond`)."""
+    nodes' ``children`` from :func:`_child_records`) prunes with its boxes and the
+    queries in float32 (rounded outward and padded), and takes the distances to the
+    cells in float64.
+
+    An inner node is also skipped where its slab (:func:`_node_slabs`) lies farther
+    than the padded radius of the cells' float32 lower bound. With the slab's
+    direction ``n`` as stored (``|n| <= 1 + 2^-23``) and offsets ``lo <= n . y <= hi``
+    over the node's cells (float64, rounded outward), a point ``y`` of a cell is at
+    least ``(n . x - hi) / |n|`` from ``x``. The float32 product, the direction's
+    length and the float64 offsets' rounding stay far inside that pad (``32 u32`` of
+    the magnitudes and ``1e-5`` of the radius), so every cell within ``radius`` is
+    still found. A cell the search keeps only for lack of a certificate (a zero-area
+    or thin one) can go with a node it lies beyond. It is then farther than
+    ``radius``, and no output of the caller depends on such a pair, wherever the
+    pairs' distances are numbers (the magnitudes ``_BAND_UNITS`` covers): it is not
+    the least, it fails the tie test, and a pair that ties on a vertex or an edge of
+    its cell would put the cell within ``radius``.
+
+    One pass fills ``_BALL_SLOTS`` slots per query and an overflow list of ``Q``
+    pairs. When that list is full, the queries that overflow their slots are searched
+    again with as many slots as they need, so no candidate is dropped. The pairs come
+    in no particular order (the caller sorts them). The queries are traversed in
+    Morton order, so neighbouring threads visit neighbouring nodes. ``reach`` is the
+    greatest norm of a vertex.
+
+    The zero-area cells ``flat`` ``(F,)`` (:func:`_zero_area`) have no plane, and the
+    float64 distance is not defined on them: they are kept wherever their boxes and
+    the slabs above them are reached. Nor are the planes used for a cell whose float64
+    normal is not certified to its float32 rounding (``delta > u32``,
+    :func:`_thin_bounds`): its float64 distance rejects it only beyond the bound on
+    its error (:func:`_beyond`)."""
     dev = query.device
     lo, hi = tree[5:]
     ### Each cell's unit normal and its edges' outward unit normals in its plane
@@ -1191,14 +1194,14 @@ _nearest_gaps = wp.types.vector(length=_NEAREST_STACK, dtype=wp.float32)
 #: The first run of :func:`_nearest_cell_kernel` skips a node whose box's squared
 #: distance times this (1.05 squared) reaches the nearest cell's so far. A performance
 #: setting: the second run is exact whatever its value. Inside a finely meshed far
-#: field most cells are nearly as far as the nearest one, and one exact run opens
-#: nearly every box that holds the query before it meets a near cell; a kernel takes
-#: as long as its slowest thread. Re-tune it when the search changes.
+#: field most cells are nearly as far as the nearest one, so a single exact run opens
+#: nearly every box that holds the query before it meets a near cell, and a kernel
+#: takes as long as its slowest thread. Re-tune it when the search changes.
 _NEAREST_FIRST_PASS = 1.05**2
 
-#: :func:`_node_slabs` is one more pass over the cells, in which every leaf walks to the
-#: root, and it saves the seed search and the ball search a bounded time per query: the
-#: slabs are built up to this many cells per query, and above it both searches skip
+#: :func:`_node_slabs` costs one more pass over the cells, in which every leaf walks to
+#: the root, and saves the seed search and the ball search a bounded time per query. So
+#: the slabs are built up to this many cells per query; above it both searches skip
 #: nodes by their boxes alone (:func:`_no_slabs`). A performance setting: the outputs
 #: are the same with the slabs as without; re-tune it when the searches change.
 _SLAB_CELLS_PER_QUERY = 32
@@ -1273,17 +1276,17 @@ def _node_slab_kernel(
 def _node_slabs(simplex: torch.Tensor, parity: torch.Tensor, tree):
     """Per node of ``tree`` (:func:`_preorder_cell_tree`, its leaves holding the rows of
     ``simplex`` ``(F, 3, 3)`` with orientations ``parity`` ``(F,)``), a slab that holds
-    the node's cells: a direction ``(N, 3)``, the mean normal of the node's cells (their
-    summed area vectors, normalized; zero where they cancel), and the least and the
-    greatest offset of their vertices along it ``(N,)`` twice, in float32. A point's
-    distance to the node's cells is at least its distance to the slab: where the cells
-    form a patch of a smooth surface the slab is as thin as the patch is curved, while
-    the patch's box, unless it lies along the axes, is as thick as the patch is wide.
-    :func:`_nearest_cells` reads it to skip nodes without a pad, so the offsets' rounding
-    (outward; the query's own product is not padded) can only cost it a cell that is
-    nearer by float32's roundoff of the coordinates, the accuracy of its float32
-    distances themselves; :func:`_ball_candidates`, which must not miss a cell, tests
-    it against a padded radius."""
+    the node's cells: a direction ``(N, 3)`` and the least and the greatest offset of
+    their vertices along it ``(N,)`` twice, in float32. The direction is the mean
+    normal of the node's cells (their summed area vectors, normalized; zero where they
+    cancel). A point's distance to the node's cells is at least its distance to the
+    slab. Where the cells form a patch of a smooth surface the slab is as thin as the
+    patch is curved, while the patch's box, unless it lies along the axes, is as thick
+    as the patch is wide. :func:`_nearest_cells` uses the slab to skip nodes without a
+    pad. The offsets' rounding (outward; the query's own product is not padded) can
+    then cost it only a cell nearer by float32's roundoff of the coordinates, the
+    accuracy of its float32 distances themselves. :func:`_ball_candidates`, which must
+    not miss a cell, tests the slab against a padded radius."""
     left, right, _, levels, leaf_cell, _, _ = tree
     n, leaf = left.shape[0], leaf_cell >= 0
     cell = leaf_cell[leaf]
@@ -1369,10 +1372,10 @@ def _child_records(tree, slabs):
     """One :class:`_NodeChildren` per node of ``tree`` (:func:`_preorder_cell_tree`;
     unset at the leaves) from the nodes' boxes and ``slabs`` (:func:`_node_slabs`), as
     the Warp array the seed and ball traversals read, with the buffer that holds it. A
-    traversal bound by its slowest query takes as long as that query's chain of loads:
-    with both children in their parent's record it is one load per opened node, where
-    the nodes' own arrays took one per node tested (the ball search) or two per opened
-    node (the seed)."""
+    traversal takes as long as its slowest query's chain of loads. With both children
+    in their parent's record, that is one load per opened node, not one per node
+    tested (the ball search) or two per opened node (the seed) from the nodes' own
+    arrays."""
     left, right, _, _, leaf_cell, lo, hi = tree
     device, stream = FunctionSpec.warp_launch_context(left)
     with FunctionSpec.warp_stream_scope(stream):
@@ -1408,16 +1411,16 @@ def _nearest_cell_kernel(
     rows: wp.array(dtype=wp.int64),
     nearest: wp.array(dtype=wp.int64),
 ):
-    """A cell nearest to the query ``rows[tid]`` in float32: a depth-first traversal of
-    the BVH from ``root`` on one record per inner node (``children``), nearer child
-    first, that skips the nodes that lie no nearer than the
-    nearest cell so far (each stacked with its distance: the larger of its box's and
-    its slab's, :func:`_node_slabs`), run twice. The first
-    run skips a node already when its box's squared distance times
-    ``_NEAREST_FIRST_PASS`` reaches the nearest so far, so it ends early at a cell within
-    that factor of the nearest; the second, exact, starts from that cell's distance. A
-    NaN distance (a degenerate cell) is never the nearest; with no other cell,
-    ``nearest`` keeps its value."""
+    """A cell nearest to the query ``rows[tid]`` in float32. A depth-first traversal
+    of the BVH from ``root`` reads one record per inner node (``children``), nearer
+    child first. It skips the nodes no nearer than the nearest cell so far, each
+    stacked with its distance: the larger of its box's and its slab's
+    (:func:`_node_slabs`). It runs twice. The first run also skips the nodes within
+    the factor ``_NEAREST_FIRST_PASS`` of the nearest so far, so it ends early at a
+    cell within that factor of the nearest; the second, exact, starts from that
+    cell's distance. A NaN distance
+    (a degenerate cell) is never the nearest; with no other cell, ``nearest`` keeps
+    its value."""
     q = rows[wp.tid()]
     x = query32[q]
     best = wp.float32(wp.inf)
@@ -1694,19 +1697,20 @@ def _packed_winding_kernel(
 def _packed_winding_sum(query: torch.Tensor, simplex: torch.Tensor, parity: torch.Tensor, area: torch.Tensor, tree):
     """The generalized winding number times ``4 pi`` of the oriented triangles
     ``simplex`` ``(F, 3, 3)`` (canonical, orientation ``parity`` ``(F,)``, area vectors
-    ``area`` ``(F, 3)``) at each query ``(Q, 3)``, all float64, by Barill, Dickson,
-    Schmidt, Levin and Jacobson (2018) on the BVH ``tree`` from
-    :func:`_preorder_cell_tree` whose leaves hold the rows of ``simplex``: every node
-    carries the area-weighted centre ``p`` of its cells, a radius about it, their dipole
-    moment ``m = sum a_f n_f`` and its spread ``N = sum a_f n_f (c_f - p)^T`` (one
-    bottom-up pass over the levels); a node farther than ``WINDING_NUMBER_BETA`` radii
-    takes the expansion of the solid angle about ``p`` to first order, ``m . r / |r|^3
-    + tr(N) / |r|^3 - 3 r . N r / |r|^5`` with ``r = p - x``, and the near leaves the
-    exact solid angle. Its moments, then one record per node and one traversal, the
-    queries in Morton order. The lengths are first divided by the power of two
-    nearest above the cells' extent: exact, so the sum is the same at every power-of-two
-    scale, and the float32 moments (the spread grows as a length cubed, its product
-    with ``r`` as the fifth power) neither overflow nor underflow at any scale."""
+    ``area`` ``(F, 3)``) at each query ``(Q, 3)``, all float64. It follows Barill,
+    Dickson, Schmidt, Levin and Jacobson (2018) on the BVH ``tree`` from
+    :func:`_preorder_cell_tree`, whose leaves hold the rows of ``simplex``. Every node
+    carries the area-weighted centre ``p`` of its cells, a radius about it, their
+    dipole moment ``m = sum a_f n_f`` and its spread ``N = sum a_f n_f (c_f - p)^T``
+    (one bottom-up pass over the levels). A node farther than ``WINDING_NUMBER_BETA``
+    radii takes the expansion of the solid angle about ``p`` to first order, ``m . r /
+    |r|^3 + tr(N) / |r|^3 - 3 r . N r / |r|^5`` with ``r = p - x``; the near leaves
+    take the exact solid angle. The moments come first, then one record per node, then
+    one traversal with the queries in Morton order. The lengths are first divided by
+    the power of two nearest above the cells' extent. That is exact, so the sum is the
+    same at every power-of-two scale, and the float32 moments (the spread grows as a
+    length cubed, its product with ``r`` as the fifth power) neither overflow nor
+    underflow at any scale."""
     unit = torch.ldexp(torch.ones_like(simplex[0, 0, 0]), torch.frexp(simplex.abs().amax()).exponent)
     query, simplex, area = query / unit, simplex / unit, area / unit.square()
     left, _, escape, _, leaf_cell, _, _ = tree
@@ -1787,19 +1791,18 @@ def _segment_winding_numbers(query: torch.Tensor, simplex: torch.Tensor, parity:
 
 
 def _winding_sign(sigma: torch.Tensor, w: torch.Tensor):
-    """The sign of the distance at each query, float64: ``sign(sigma / 2 - w)``, with
-    ``w`` ``(Q,)`` the generalized winding number of the oriented cells at the queries
-    (Jacobson, Kavan and Sorkine-Hornung 2013; :func:`_packed_winding_sum` in three
-    dimensions, :func:`_segment_winding_numbers` in two) and ``sigma`` the sign of the
-    volume they enclose (:func:`_oriented_areas`),
-    ``V = sum_f a_f n_f . (c_f - g) / d`` about their area-weighted centroid ``g``
-    (+1 at ``V = 0`` and at ``w = sigma / 2``). For a closed surface ``w`` is
-    ``(sigma - 1) / 2`` on the side the normals point to and ``(sigma + 1) / 2`` on
-    the other (0 and 1 for outward normals, -1 and 0 for normals into the region they
-    bound), so ``sigma / 2 - w`` is +1/2 or -1/2: positive on the side the normals
-    point to; coincident cells of opposite orientation (a
-    zero-thickness fold) cancel in ``w``, so both of its sides take the sign of the
-    region around it."""
+    """The sign of the distance at each query, float64: ``sign(sigma / 2 - w)``.
+    ``w`` ``(Q,)`` is the generalized winding number of the oriented cells at the
+    queries (Jacobson, Kavan and Sorkine-Hornung 2013; :func:`_packed_winding_sum` in
+    three dimensions, :func:`_segment_winding_numbers` in two). ``sigma`` is the sign
+    of the volume they enclose (:func:`_oriented_areas`), ``V = sum_f a_f n_f . (c_f -
+    g) / d`` about their area-weighted centroid ``g`` (+1 at ``V = 0`` and at ``w =
+    sigma / 2``). For a closed surface ``w`` is ``(sigma - 1) / 2`` on the side the
+    normals point to and ``(sigma + 1) / 2`` on the other (0 and 1 for outward
+    normals, -1 and 0 for normals into the region they bound). So ``sigma / 2 - w`` is
+    +1/2 or -1/2, positive on the side the normals point to. Coincident cells of
+    opposite orientation (a zero-thickness fold) cancel in ``w``, so both of its sides
+    take the sign of the region around it."""
     return torch.where(0.5 * sigma - w >= 0, 1.0, -1.0).to(w)
 
 
@@ -1876,11 +1879,8 @@ def _closest_pair(li, pk, dist, err, points, cells, parity, nq):
     first = torch.full((nq,), li.shape[0], dtype=torch.long, device=li.device).scatter_reduce(
         0, li, torch.where(dist == d_min[li], pair, li.shape[0]), "amin"
     )
-    ### Equal least distances (cells sharing the closest point compute it bitwise, so
-    ### they tie exactly) are broken by the cells' positions, not by their indices: the
-    ### lexicographic order of their canonical vertices as given, then their parity.
-    ### So the closest cell, its band and its weights are functions of the positions.
-    ### One key column at a time, each keeping the rows at the query's least value;
+    ### The tie-break of the docstring, one key column at a time, each keeping the rows
+    ### at the query's least value;
     ### identical keys are the same cell, so the least pair among them is the cell.
     least = dist == d_min[li]
     key = torch.cat([points[cells[pk]].flatten(1), parity[pk, None].to(points.dtype)], 1)
@@ -1945,8 +1945,8 @@ def _tie_uncertainty(st, q64, tq, eta, e_t, d_t, wall, on_cell):
     (``wall``), where normals that differ tie. ``on_cell`` rows take the cell's normal
     with Ericson's misplacement, the others the direction from the point."""
     ### Off the surface, a tie is two certified-distinct directions, |c_i - c_j| >
-    ### tau_i + tau_j, tau = sqrt(2) s (the chord of a sine error s < 1; else 2).
-    ### A cell's normal: its vertices each within eta = u |v| of the exact ones (their
+    ### tau_i + tau_j; tau = sqrt(2) s is the chord of a sine error s < 1. A cell's
+    ### normal: its vertices each within eta = u |v| of the exact ones (their
     ### storage rounding), so |dX| <= 4 eta L + 4 eta^2 against the certified
     ### |X| - |E| (Shewchuk), with the float64 normal's own bound (delta) and its
     ### normalization. A direction from a point: the point within the band E_k (and
@@ -1965,80 +1965,80 @@ def _tie_uncertainty(st, q64, tq, eta, e_t, d_t, wall, on_cell):
     s_p = torch.where(d_t > 0, (e_t + 4 * u64 * d_t) / d_t, torch.inf)
     s_c = s_n + torch.where(d_t > 0, (mis + e_t) / d_t, torch.inf)
     s = torch.where(wall, s_n, torch.where(on_cell, s_c, s_p))
-    ### On the surface the bound is 0 (normals that differ tie): the least-norm point of
+    ### On the surface the bound is 0 (normals that differ tie). The least-norm point of
     ### their hull lies within tau_k + max_j tau_j of each member k, the group's
-    ### certified uncertainty, so it needs no certificate, and it is the certified case's own value, so u does not depend on
-    ### the queries' precision.
+    ### certified uncertainty, so it needs no certificate. It is also the certified
+    ### case's own value, so u does not depend on the queries' precision.
     return torch.where(wall, 0.0, torch.where(s < 1, 2.0**0.5 * s, 2.0))
 
 
 def _closest_candidates_impl(query_points, points, cells, parity, face_normals, fast: bool):
-    """The closest-feature search (no gradient): for every query the cell of its
-    closest point ``(Q,)``, whether several features tie for it ``(Q,)``, at a tie
-    the least-norm point of the hull of their directions ``(Q, d)``, the sign of the
-    distance from the winding number of the cells (:func:`_winding_sign`) ``(Q,)``,
-    whether the query is on the surface (below) ``(Q,)``, and the barycentric
-    weights of its closest point on its cell (:func:`_closest_weights`, float64)
-    ``(Q, d)``; see
-    :func:`exact_boundary_geometry`. ``cells`` in canonical order with their
-    orientations ``parity`` (:func:`_canonical_cells`), the normals in float64.
+    """The closest-feature search (no gradient); see :func:`exact_boundary_geometry`.
+    For every query it gives the cell of its closest point ``(Q,)``; whether several
+    features tie for it ``(Q,)``; at a tie, the least-norm point of the hull of their
+    directions ``(Q, d)``; the sign of the distance from the winding number of the
+    cells (:func:`_winding_sign`) ``(Q,)``; whether the query is on the surface
+    (below) ``(Q,)``; and the barycentric weights of its closest point on its cell
+    (:func:`_closest_weights`, float64) ``(Q, d)``. ``cells`` come in canonical order
+    with their orientations ``parity`` (:func:`_canonical_cells`), the normals in
+    float64.
 
     The search runs in the boundary's centred frame: every float64 coordinate less
     ``c``, the measure-weighted centroid of its distinct cells (:func:`_centroid`),
-    rounded to the queries' precision (so float32 inputs centre exactly), so its
-    arithmetic scales with the boundary's size, not with its distance from the
+    rounded to the queries' precision (so float32 inputs centre exactly). Its
+    arithmetic then scales with the boundary's size, not with its distance from the
     origin. The exact predicates (:func:`_zero_area`) and the normals stay on the
-    coordinates as given. Every candidate distance is computed in float64 on the
-    canonical cell; the features tie when their distances are equal within the
-    error bound ``E_k = u (|x| + R_k) + C u_64 (|x'| + R'_k)`` of the distance to
-    cell ``k`` (``R_k = max_{v in k} |v|``; primes in the centred frame). Its first
-    term is the rounding of the coordinates as they were given, ``u`` the unit
-    roundoff of the queries' precision, so it is measured in the frame they were
-    given in: a case posed far from the origin is rounded more coarsely, and a term
-    measured about ``c`` would not bound it. Its second is float64's
-    arithmetic in the frame it runs in, ``C`` a worst case (``_BAND_UNITS``: 91 in
-    three dimensions, 17 in two; for float32 queries 1.7e-7 of the bound, for
-    float64 ones it decides). Cell ``k`` ties when
-    ``D_k - E_k <= min_j (D_j + E_j)``, i.e. when it may be the closest one, and
-    its closest point is a local minimum of the distance on the surface: on a
-    vertex or an edge, every cell sharing that feature reaches the same point
-    (otherwise a neighbouring cell holds a closer point of the same patch, as
-    beside the foot of the perpendicular on a cell next to the vertex), except on
-    the surface, where every cell within the bound holds the query. The query is
-    on the surface when its closest cell's distance interval reaches 0, ``D_min -
-    E_min <= 0``: its coordinates cannot tell it from a point of the surface. Cells
-    at exactly the least distance (cells sharing the closest point compute it
-    bitwise) are ordered by their positions, the lexicographic order of their
-    canonical vertices as given and then their parity, not by their indices, so the
-    closest cell, its bound and its weights do not depend on the cells' order. A tie's
-    directions are the unit vectors from the surface to the query, and on the
-    surface the unit normals of the tied cells that have one (with none, the query
-    keeps its closest cell's normal). On the surface the query is tied when two of
-    these normals differ, certified distinct or not: their least-norm point lies in
-    their hull, so within ``tau_k + max_j tau_j`` of each member ``k`` (the group's
-    certified uncertainty) where none is certified distinct, and it is a function of
-    the set, where one of them would depend on the cells' order and the certificate
-    on the queries' precision. Off the surface it is tied when two of its directions
-    are certified distinct, farther apart than the sum of their bounds
-    ``tau = sqrt(2) s`` (2 where ``s >= 1``), ``s`` a bound on the sine of the angle
-    between a computed direction and the exact one of the inputs as given (below).
-    The least-norm point is then taken over all of the tie's directions, odd in them
-    on the surface (half its value at the normals less its value at their negations),
-    so a winding flip negates it bitwise.
+    coordinates as given.
 
-    The exact search runs on candidate pairs that contain every cell with
-    ``D_k - max_j E_j`` within that bound. In three dimensions a Warp traversal of a
-    BVH over the cells finds a cell nearest in float32 (:func:`_nearest_cells`), whose
-    exact distance plus its error bound bounds the closest distance, and a second
-    traversal of the same BVH returns the cells within that radius; in two
-    a brute force in the queries' precision, on the centred coordinates, keeps the
-    segments within its own rounding (``40 u (|x'| + max |v'|)`` on each side, with
-    room over a first-order count of 33.5 units: the brute-force distance 14, the
-    centred copies' rounding 1, the comparison's square and root 2.5, and the
-    arithmetic share of the least's bound 16) and the error bounds of the least. The BVH
-    is built in depth-first preorder with its cells in leaf order
-    (:func:`_preorder_cell_tree`), and the winding number takes the same BVH in three
-    dimensions, on packed node records (:func:`_packed_winding_sum`), unless cells
+    Every candidate distance is computed in float64 on the canonical cell. The error
+    bound of the distance to cell ``k`` is ``E_k = u (|x| + R_k) + C u_64 (|x'| +
+    R'_k)``, with ``R_k = max_{v in k} |v|`` and primes in the centred frame. Its first
+    term is the rounding of the coordinates as they were given, ``u`` the unit
+    roundoff of the queries' precision. So it is measured in the frame they were
+    given in: a case posed far from the origin is rounded more coarsely, and a term
+    measured about ``c`` would not bound it. Its second term is float64's arithmetic
+    in the frame it runs in, ``C`` a worst case (``_BAND_UNITS``: 91 in three
+    dimensions, 17 in two). It is 1.7e-7 of the bound for float32 queries, and
+    matters only for float64 ones.
+
+    Cell ``k`` ties when it may be the closest one, ``D_k - E_k <= min_j (D_j +
+    E_j)``, and its closest point is a local minimum of the distance on the surface.
+    On a vertex or an edge, that needs every cell sharing that feature to reach the
+    same point; otherwise a neighbouring cell holds a closer point of the same patch,
+    as beside the foot of the perpendicular on a cell next to the vertex. On the
+    surface the second condition is dropped, since every cell within the bound holds
+    the query. The query is on the surface when its closest cell's distance interval
+    reaches 0, ``D_min - E_min <= 0``: its coordinates cannot tell it from a point of
+    the surface. Cells at exactly the least distance are ordered by their positions,
+    not by their indices (:func:`_closest_pair`).
+
+    A tie's directions are the unit vectors from the surface to the query. On the
+    surface they are the unit normals of the tied cells that have one; with none, the
+    query keeps its closest cell's normal. On the surface the query is tied when two
+    of these normals differ, certified distinct or not. Their least-norm point lies in
+    their hull, so within ``tau_k + max_j tau_j`` of each member ``k`` (the group's
+    certified uncertainty) where none is certified distinct. It is also a function of
+    the set, where one of the normals would depend on the cells' order and the
+    certificate on the queries' precision. Off the surface the query is tied when two
+    of its directions are certified distinct: farther apart than the sum of their
+    bounds ``tau`` (:func:`_tie_uncertainty`). The least-norm point is then taken over
+    all of the tie's directions. On the surface it is odd in them (half its value at
+    the normals less its value at their negations), so a winding flip negates it
+    bitwise.
+
+    The exact search runs on candidate pairs that contain every cell with ``D_k -
+    max_j E_j`` within that bound. In three dimensions a Warp traversal of a BVH over
+    the cells finds a cell nearest in float32 (:func:`_nearest_cells`). Its exact
+    distance plus its error bound bounds the closest distance, and a second traversal
+    of the same BVH returns the cells within that radius. In two dimensions a brute
+    force in the queries' precision, on the centred coordinates, keeps the segments
+    within its own rounding and the error bounds of the least. That rounding is ``40
+    u (|x'| + max |v'|)`` on each side, with room over a first-order count of 33.5
+    units: the brute-force distance 14, the centred copies' rounding 1, the
+    comparison's square and root 2.5, and the arithmetic share of the least's bound
+    16. The BVH is built in depth-first preorder with its cells in leaf order
+    (:func:`_preorder_cell_tree`). In three dimensions the winding number takes the
+    same BVH, on packed node records (:func:`_packed_winding_sum`), unless cells
     repeat.
 
     ``fast`` computes the closest weights (:func:`_closest_weights`: Ericson's, the
@@ -2233,21 +2233,22 @@ def _closest_features(
     cells: Int[torch.Tensor, "cells dim"],
     kernel: str = "reference",
 ):
-    """The closest surface point of each query and its feature: the offset ``x -
-    p`` from the point ``(Q, d)``, evaluated in float64 as ``(x - v_0) - sum_{i > 0}
-    w_i (v_i - v_0)`` from the coordinates as given and rounded once to the queries'
-    precision, whether the point is interior to its cell ``(Q,)``, the cell's unit
-    normal ``(Q, d)``, at a closest-feature tie (:func:`_closest_candidates`)
-    whether there is one ``(Q,)`` and the direction ``(Q, d)``, the sign of the
-    distance ``(Q,)``, at a tie the distance ``(Q,)``, and whether the query is on the
-    surface ``(Q,)``; see
-    :func:`exact_boundary_geometry`. Last, whether the point lies inside an edge of
-    a triangle (off the surface, untied) ``(Q,)``, and there the direction from the
-    edge's closest point ``(Q, d)``, in float64 from the query and the edge's
-    vertices: the offset is rebuilt from frozen weights, which hold the point
-    fixed, while on an edge it slides with the query and the vertices, so the
-    direction takes its gradient from this one (:class:`_StraightThrough`).
-    ``kernel`` names the search's implementation."""
+    """The closest surface point of each query and its feature; see
+    :func:`exact_boundary_geometry`. Returns, in order: the offset ``x - p`` from the
+    point ``(Q, d)``, evaluated in float64 as ``(x - v_0) - sum_{i > 0} w_i (v_i -
+    v_0)`` from the coordinates as given and rounded once to the queries' precision;
+    whether the point is interior to its cell ``(Q,)``; the cell's unit normal ``(Q,
+    d)``; whether there is a closest-feature tie (:func:`_closest_candidates`)
+    ``(Q,)`` and its direction ``(Q, d)``; the sign of the distance ``(Q,)``; the
+    distance at a tie ``(Q,)``; whether the query is on the surface ``(Q,)``; whether
+    the point lies inside an edge of a triangle (off the surface, untied) ``(Q,)``;
+    and there the direction from the edge's closest point ``(Q, d)``, in float64 from
+    the query and the edge's vertices.
+
+    The last two serve the gradient. The offset is rebuilt from frozen weights, which
+    hold the point fixed, while on an edge the point slides with the query and the
+    vertices, so the direction takes its gradient from the sliding one
+    (:class:`_StraightThrough`). ``kernel`` names the search's implementation."""
     search = {"reference": _closest_candidates, "fast": _closest_candidates_fast}[kernel]
     points = points.to(query_points.dtype)
     if kernel == "fast":
@@ -2326,75 +2327,76 @@ def exact_boundary_geometry(
     the distance to the surface signed by the generalized winding number
     :math:`w` of the oriented cells (Jacobson, Kavan and Sorkine-Hornung, 2013;
     evaluated as Barill et al., 2018, :func:`_winding_sign`) against half the sign
-    :math:`\sigma` of the volume they enclose: for a closed surface
+    :math:`\sigma` of the volume they enclose. For a closed surface
     :math:`\sigma / 2 - w` is :math:`+1/2` on the side the normals point to and
     :math:`-1/2` on the other, whichever way the normals point, so :math:`d` is
-    **positive on the side the normals point to**; the two sheets of a
+    **positive on the side the normals point to**. The two sheets of a
     zero-thickness fold (coincident cells of opposite orientation) cancel in
-    :math:`w`, so both of its sides take the sign of the region around it, and an
-    open surface is signed by the standard threshold :math:`w = 1/2` (on the side
-    of :math:`\sigma`). The :math:`\sigma` of an open surface depends on its shape,
-    so close the boundary (give its far field) for a reliable sign. :math:`u` is the
-    direction from the surface to the query (``sign(0) = +1``). A query on
-    the surface (its float64 distance within the error bound of that distance,
-    :func:`_closest_candidates`: its coordinates cannot tell it from a point of
-    the surface) takes :math:`d = 0` and the same rule with the directions replaced by the unit
-    normals of the cells that hold it (below): the cell's normal inside a cell,
-    the least-norm point of the hull of the normals of the cells sharing an edge
-    or a vertex. Coincident vertices are welded
-    first, so a surface stored as pieces or as a triangle soup has the
-    connectivity of the surface it describes. A cell of zero area (two or three
-    coincident vertices, or three collinear ones, by an exact test,
-    :func:`_zero_area`) is the segment or the point its vertices span. Lying along
-    the edges of other cells or at one of their vertices, it adds nothing to the
-    surface and is left out; otherwise its closest point lies on that set, it has no
-    normal and no solid angle, and a query on it takes the normals of the cells
-    there that have one, or :math:`u = 0` with none.
+    :math:`w`, so both of its sides take the sign of the region around it. An open
+    surface is signed by the standard threshold :math:`w = 1/2` (on the side of
+    :math:`\sigma`). Its :math:`\sigma` depends on its shape, so close the boundary
+    (give its far field) for a reliable sign. :math:`u` is the direction from the
+    surface to the query (``sign(0) = +1``).
 
-    Where several features tie for the closest point (the medial surface: a
-    plate's mid-plane, a corner's bisector), within the error bound of the
-    distance computation (:func:`_closest_candidates`), :math:`u` is the point of
-    the convex hull of their directions :math:`u_k` closest to the origin, so
+    A query is on the surface when its float64 distance is within the error bound of
+    that distance (:func:`_closest_candidates`): its coordinates cannot tell it from
+    a point of the surface. It takes :math:`d = 0`, and :math:`u` follows the same
+    rule with the unit normals of the cells that hold it in place of the directions
+    (below): the cell's normal inside a cell, and the least-norm point of the hull of
+    the normals of the cells sharing an edge or a vertex.
+
+    Coincident vertices are welded first, so a surface stored as pieces or as a
+    triangle soup has the connectivity of the surface it describes. A cell of zero
+    area (two or three coincident vertices, or three collinear ones, by an exact
+    test, :func:`_zero_area`) is the segment or the point its vertices span. If it
+    lies along the edges of other cells or at one of their vertices, it adds nothing
+    to the surface and is left out. Otherwise its closest point lies on that set; it
+    has no normal and no solid angle, and a query on it takes the normals of the
+    cells there that have one, or :math:`u = 0` with none.
+
+    Where several features tie for the closest point within the error bound of the
+    distance (:func:`_closest_candidates`), as on the medial surface (a plate's
+    mid-plane, a corner's bisector), :math:`u` is the point of the convex hull of
+    their directions :math:`u_k` closest to the origin. So
     :math:`\operatorname{sign}(d)\, u` is the least-norm element of the Clarke
-    generalized gradient of :math:`d`: the midpoint of two directions, zero when
+    generalized gradient of :math:`d`: the midpoint of two directions, and zero when
     they cancel (no preferred direction). It is a function of the tie set, not of
-    the order of the vertices, the cells or the search (where cells lie at exactly
-    the least distance and their directions do not tie, the closest cell is chosen
-    by their positions, not their indices), and a winding flip
-    negates :math:`d` and :math:`\operatorname{sign}(d)\, u` bitwise (every closest point is
-    computed on its cell's vertices in the lexicographic order of their
-    positions).
+    the order of the vertices, the cells or the search. Where cells lie at exactly
+    the least distance and their directions do not tie, the closest cell is chosen by
+    their positions, not their indices. A winding flip negates :math:`d` and
+    :math:`\operatorname{sign}(d)\, u` bitwise, since every closest point is computed
+    on its cell's vertices in the lexicographic order of their positions.
 
-    :math:`d` and :math:`u` are functions of the surface alone (not of how a
-    sample of it was drawn): invariant to splitting a cell, converging as
-    :math:`O(h^2)` under refinement of a smooth surface, :math:`d` invariant
-    and :math:`u` covariant under every rigid motion and reflection (with the
-    cells re-oriented so their normals follow the map), :math:`d` scaling
-    with the geometry.
+    :math:`d` and :math:`u` are functions of the surface alone, not of how a sample
+    of it was drawn. They are invariant to splitting a cell and converge as
+    :math:`O(h^2)` under refinement of a smooth surface. Under every rigid motion and
+    reflection (with the cells re-oriented so their normals follow the map),
+    :math:`d` is invariant and :math:`u` covariant; :math:`d` scales with the
+    geometry.
 
-    Every decision (a tie off the surface, the query on the surface and the cells
-    that hold it) is certified against the inputs' own rounding: the error bound is
-    the rounding of the coordinates as given in the queries' precision plus a worst
-    case of the float64 arithmetic, which runs in the boundary's centred frame (its
-    measure-weighted centroid as the origin), so a boundary far from the origin
-    costs the arithmetic nothing; and off the surface directions tie only where
-    they are certified distinct (on it the cells that hold the query are certified,
-    and u is the least-norm point of their normals wherever they differ).
+    Every decision (a tie off the surface, the query on the surface, and the cells
+    that hold it) is certified against the inputs' own rounding. The error bound is
+    the rounding of the coordinates as given, in the queries' precision, plus a worst
+    case of the float64 arithmetic. That arithmetic runs in the boundary's centred
+    frame (its measure-weighted centroid as the origin), so a boundary far from the
+    origin costs it nothing. Off the surface, directions tie only where they are
+    certified distinct. On the surface the cells that hold the query are certified,
+    and :math:`u` is the least-norm point of their normals wherever they differ.
 
-    The search runs without gradient; the offset :math:`x - p` is then rebuilt
-    from the query and its cell's vertices with the barycentric weights of its
-    Voronoi region (computed in float64, Ericson 2005, Sec. 5.1.5), in float64,
-    and rounded once to the queries' precision, so :math:`d` and :math:`u` are
-    differentiable in the query and the vertex positions: :math:`d` with the
-    gradient of the envelope theorem (the closest point held fixed), :math:`u`
-    with the derivative of the direction to the closest point as it moves (fixed
-    at a vertex, sliding along a triangle's edge, the normal inside a cell; at a
-    tie, :math:`u` carries none).
+    The search runs without gradient. The offset :math:`x - p` is then rebuilt in
+    float64 from the query and its cell's vertices, with the barycentric weights of
+    its Voronoi region (computed in float64; Ericson 2005, Sec. 5.1.5), and rounded
+    once to the queries' precision. So :math:`d` and :math:`u` are differentiable in
+    the query and the vertex positions. :math:`d` has the gradient of the envelope
+    theorem (the closest point held fixed). :math:`u` has the derivative of the
+    direction to the closest point as it moves: fixed at a vertex, sliding along a
+    triangle's edge, the normal inside a cell. At a tie :math:`u` carries no
+    gradient.
 
-    ``kernel`` names the implementation of the search, not what it computes:
-    ``"reference"`` defines it, and ``"fast"`` gives the same outputs bitwise
-    from Triton kernels on CUDA: the weld, the canonical cells and the closest
-    points' weights fused into two kernels (:func:`_closest_candidates_impl`).
+    ``kernel`` names the implementation of the search, not what it computes.
+    ``"reference"`` defines it, and ``"fast"`` gives the same outputs bitwise from
+    Triton kernels on CUDA for the weld, the canonical cells and the closest points'
+    weights (``_geometry_fast``).
     """
     if query_points.shape[-1] not in (2, 3):
         raise NotImplementedError(

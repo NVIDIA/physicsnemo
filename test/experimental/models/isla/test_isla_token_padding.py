@@ -129,7 +129,7 @@ def test_an_aligned_token_count_runs_no_padding(task):
         assert "constant_pad_nd" in ops(aligned - nq + 1)
         assert "constant_pad_nd" not in ops(aligned - nq)
         return
-    ### ISLA-DTT's forest build runs constant_pad_nd ops of its own, so the interior
+    ### The interior task's forest build runs constant_pad_nd ops of its own, so the interior
     ### task is checked by the token count its blocks see, the boundary tokens alone
     ### (the points read the blocks' slices): no padding token at an aligned count, a
     ### padded axis at an unaligned one.

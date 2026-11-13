@@ -20,12 +20,12 @@
   same autocast, slice counts past each launch branch (257, 513, 1024), and every
   tile size.
 - The segment-softmax read: its bfloat16 gradients, rounded once.
-- The fused read and the fused basis under float16 (``_narrow`` and
-  ``unsupported_reason`` accept it).
-- Paths no other test runs: the ball search's second pass, the nearest-cell
-  stack's refusal, the forest build's depth-bin fallback, the walk of an empty forest
-  or of no points and its first size limit, ``fused_basis.unsupported_reason``'s
-  branches, and the geometry kernel's disqualifiers on CUDA.
+- The fused read's gradient in the log measure.
+- The fused basis under float16 autocast (``unsupported_reason`` accepts it).
+- Paths no other test runs: the forest build's depth-bin fallback, the walk of an
+  empty forest or of no points and its first size limit,
+  ``fused_basis.unsupported_reason``'s branches, and the geometry kernel's
+  disqualifiers on CUDA.
 
 The 2x-error rule (as in test_isla_tree_read.py): per tensor, the fast path's largest
 distance to float64 eager autograd, relative to the float64 tensor's largest entry,
@@ -45,24 +45,22 @@ from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.experimental.models.isla import _fused_basis as fused_basis
 from physicsnemo.experimental.models.isla import _fused_read as fused_read
 from physicsnemo.experimental.models.isla import _geo_kernel as geo_kernel
-from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla import _segment_softmax as segment_softmax
 from physicsnemo.experimental.models.isla import _tree_build as tree_build
 from physicsnemo.experimental.models.isla import _tree_read as tree_read
 from physicsnemo.experimental.models.isla import _tree_walk as tree_walk
 from physicsnemo.experimental.models.isla._blocks import _geo_region
-from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
 from physicsnemo.experimental.models.isla._segment_softmax import PairPlan
 from physicsnemo.experimental.models.isla._tree_read import BoundaryForest
 from test.experimental.models.isla._forced import ran
-from test.experimental.models.isla._geometry_cases import _fan
 from test.experimental.models.isla._kernel_cases import (
     _basis_case,
     _basis_step,
+    _read_case,
     _to,
     _two_x,
 )
-from test.experimental.models.isla._marks import DEVICES, requires_cuda_triton
+from test.experimental.models.isla._marks import requires_cuda_triton
 from test.experimental.models.isla._meshes import cloud
 
 D = torch.float64
@@ -161,6 +159,7 @@ def test_fused_geo_region_bf16_backward_obeys_the_2x_error_rule(k, p, bf16):
     exact = _run_region(False, exact_leaves, wts, k, p)
     eager = _run_region(False, leaves, wts, k, p, autocast=True, logits_bf16=bf16)
     fused = _run_region(True, leaves, wts, k, p, autocast=True, logits_bf16=bf16)
+    assert [t.dtype for t in fused[0]] == [t.dtype for t in eager[0]]
     for i, name in enumerate(("bias", "mix", "pooled")):
         _two_x(name, fused[0][i], eager[0][i], exact[0][i], 1e-3)
     for name in exact[1]:
@@ -248,12 +247,12 @@ def _ssr_run(read, plan_args, leaves, logm, seed, device, dtype):
 @pytest.mark.parametrize("h, kc, c", [(8, 4, 8), (4, 8, 16)])
 def test_the_eager_segment_softmax_read_in_bfloat16_rounds_its_gradients_once(h, kc, c):
     """The eager read with bfloat16 ker, q, k and v (the reference read on every
-    device) against the float64 read of the same inputs: its
-    output and the gradients of ker, q, k and v within one bfloat16 ulp of each
-    float64 tensor's largest entry, 2**-7 (the output stays float32, at most 2.7e-6;
-    the gradients are computed in float32 and rounded once to bfloat16, at most 2**-8
-    of it; measured at most 3.0e-3). Casting after the gathers instead added each
-    source's pair gradients up in bfloat16 (an error of 0.58 for dv here)."""
+    device) against the float64 read of the same inputs: its output and the gradients
+    of ker, q, k and v are within one bfloat16 ulp of each float64 tensor's largest
+    entry, 2**-7. The output stays float32; the gradients are computed in float32 and
+    rounded once to bfloat16 (measured at most 3.0e-3). A cast after the gathers
+    would sum each source's pair gradients in bfloat16 (an error of 0.58 for dv
+    here)."""
     plan_args, leaves, logm, seed, _ = _ssr_case(h, kc, c, n_q=20)
     leaves = [t.bfloat16().double() for t in leaves]
     eager = segment_softmax._eager_segment_softmax_read
@@ -261,7 +260,6 @@ def test_the_eager_segment_softmax_read_in_bfloat16_rounds_its_gradients_once(h,
     exact = _ssr_run(eager, plan_args, leaves, logm, seed, "cpu", D)
     for name, a, e in zip(("out", "ker", "q", "k", "v"), low, exact):
         err = float((a.double() - e).abs().max() / e.abs().max())
-        print(f"{name}: {err:.2e} of max|float64|")
         assert err <= 2**-7, (name, err)
 
 
@@ -269,36 +267,23 @@ def test_the_eager_segment_softmax_read_in_bfloat16_rounds_its_gradients_once(h,
 @requires_cuda_triton
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
 def test_the_fused_read_differentiates_the_log_measure(dtype):
-    """``fused_kernel_read`` is differentiable in ``logm`` (per source, as ISLA-DTT's
-    per-condition log shares need): its gradient, each source's pairs' logit
-    gradients summed over the heads by the source kernels, obeys the 2x-error rule
-    against the reference read's (``segment_softmax_read`` of ``logm[plan.bj]``)
-    beside the float64 eager read on CPU, and asking for it leaves the output and
-    every other gradient bitwise."""
-    g = torch.Generator().manual_seed(5)
-    n_q, n_b, h, kc, c, f = 37, 50, 8, 4, 8, 16
-    counts = torch.randint(0, 5000, (n_q,), generator=g)
-    counts[3] = 0
-    p = int(counts.sum())
-    qi = torch.repeat_interleave(torch.arange(n_q), counts)
-    bj = torch.randint(0, n_b - 5, (p,), generator=g)
-    bj[: p // 2] = 0
-    leaves = [
-        torch.randn(p, f, generator=g, dtype=D),
-        0.3 * torch.randn(h, f, generator=g, dtype=D),
-        torch.randn(n_q, h, kc, generator=g, dtype=D),
-        torch.randn(n_b, h, kc, generator=g, dtype=D),
-        torch.randn(n_b, h, c, generator=g, dtype=D),
-    ]
-    logm = -torch.rand(n_b, generator=g, dtype=D) * 8
-    seed = torch.randn(n_q, h, c, generator=g, dtype=D)
+    """``fused_kernel_read`` is differentiable in ``logm`` (per source, as the
+    interior task's per-condition log shares need). Its gradient, each source's
+    pairs' logit gradients summed over the heads, obeys the 2x-error rule against the
+    reference read's (``segment_softmax_read`` of ``logm[plan.bj]``), with the float64
+    eager read on CPU as the exact one. Asking for it leaves the output and every
+    other gradient bitwise."""
+    case = _read_case(5)
 
     def run(kind, device, dt, logm_grad=True):
-        plan = PairPlan.build(qi.to(device), bj.to(device), n_q, n_b)
+        plan = PairPlan.build(
+            case.qi.to(device), case.bj.to(device), case.n_q, case.n_b
+        )
         b, w, q, k, v = ins = [
-            t.detach().to(device, dt, copy=True).requires_grad_(True) for t in leaves
+            t.detach().to(device, dt, copy=True).requires_grad_(True)
+            for t in case.leaves
         ]
-        lm = logm.to(device, D if dt == D else torch.float32, copy=True)
+        lm = case.logm.to(device, D if dt == D else torch.float32, copy=True)
         lm.requires_grad_(logm_grad)
         if kind == "fused":
             assert fused_read.supported(b, q, k, v)
@@ -310,83 +295,20 @@ def test_the_fused_read_differentiates_the_log_measure(dtype):
                 else segment_softmax._eager_segment_softmax_read
             )
             out = read(b @ w.t(), lm[plan.bj.long()], q, k, v, plan, 0.5)
-        (out.double() * seed.to(device)).sum().backward()
+        (out.double() * case.out_grad.to(device)).sum().backward()
         return [out.detach()] + [t.grad for t in ins] + [lm.grad]
 
     exact = run("eager", "cpu", D)
     fused, ref = run("fused", "cuda", dtype), run("reference", "cuda", dtype)
     plain = run("fused", "cuda", dtype, logm_grad=False)
-    assert fused[-1] is not None and fused[-1].shape == (n_b,) and plain[-1] is None
+    assert fused[-1] is not None and fused[-1].shape == (case.n_b,)
+    assert plain[-1] is None
     _two_x("logm", fused[-1], ref[-1], exact[-1], _LOW[dtype])
     for i, name in enumerate(("out", "basis", "w", "q", "k", "v")):
         assert torch.equal(fused[i], plain[i]), name
 
 
 # --------------------------------------------------------------------------- float16 narrow paths
-@pytest.mark.cuda
-@requires_cuda_triton
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=["bf16", "fp16"])
-def test_fused_kernel_read_in_16_bits_obeys_the_2x_error_rule(dtype):
-    """The fused read with float16 operands (``_narrow``: the basis and the weights in
-    float16, as under float16 autocast; bfloat16 beside it, as test_isla_tree_read.py
-    has it) against the reference read fed ``basis @ W.T`` in the same dtype: output
-    and the gradients of basis, w, q, k and v each given, and each as close to the
-    float64 eager read as the reference's (floor 1e-3)."""
-    g = torch.Generator().manual_seed(4)
-    n_q, n_b, h, kc, c, f = 37, 50, 8, 4, 8, 16
-    counts = torch.randint(0, 5000, (n_q,), generator=g)
-    counts[3] = 0
-    p = int(counts.sum())
-    qi = torch.repeat_interleave(torch.arange(n_q), counts)
-    bj = torch.randint(0, n_b - 5, (p,), generator=g)
-    bj[: p // 2] = 0
-    leaves = [
-        torch.randn(p, f, generator=g, dtype=D),
-        0.3 * torch.randn(h, f, generator=g, dtype=D),
-        torch.randn(n_q, h, kc, generator=g, dtype=D),
-        torch.randn(n_b, h, kc, generator=g, dtype=D),
-        torch.randn(n_b, h, c, generator=g, dtype=D),
-    ]
-    logm = -torch.rand(n_b, generator=g, dtype=D) * 8
-    seed = torch.randn(n_q, h, c, generator=g, dtype=D)
-
-    def run(kind, device, dt):
-        plan = PairPlan.build(qi.to(device), bj.to(device), n_q, n_b)
-        b, w, q, k, v = ins = [
-            t.detach().to(device, dt, copy=True).requires_grad_(True) for t in leaves
-        ]
-        lm = logm.to(device, torch.float32 if dt != D else D)
-        if kind == "fused":
-            assert fused_read.supported(b, q, k, v) and fused_read._narrow(b)
-            out = fused_read.fused_kernel_read(b, w, lm, q, k, v, plan, 0.5)
-        else:
-            read = (
-                segment_softmax.segment_softmax_read
-                if kind == "reference"
-                else segment_softmax._eager_segment_softmax_read
-            )
-            out = read(b @ w.t(), lm[plan.bj.long()], q, k, v, plan, 0.5)
-        (out.double() * seed.to(device)).sum().backward()
-        return [out.detach()] + [t.grad for t in ins]
-
-    exact = run("eager", "cpu", D)
-    fused, ref = run("fused", "cuda", dtype), run("reference", "cuda", dtype)
-    names = ("out", "basis", "w", "q", "k", "v")
-    missing = [
-        f"{kind} {n}"
-        for kind, res in (("fused", fused), ("reference", ref))
-        for n, t in zip(names, res)
-        if t is None
-    ]
-    assert not missing, missing
-    rows = counts > 0
-    for i, name in enumerate(("out", "basis", "w", "q", "k", "v")):
-        a, b, e = fused[i], ref[i], exact[i]
-        if name == "out":
-            a, b, e = a.cpu()[rows], b.cpu()[rows], e[rows]
-        _two_x(name, a, b, e, 1e-3)
-
-
 @pytest.mark.cuda
 @requires_cuda_triton
 @pytest.mark.parametrize("dim, n_vecs", [(3, 1), (2, 0)])
@@ -428,53 +350,6 @@ def test_fused_kernel_basis_under_float16_autocast_obeys_the_2x_error_rule(
 
 
 # --------------------------------------------------------------------------- never-run paths
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
-@pytest.mark.parametrize("device", DEVICES)
-def test_the_ball_search_second_pass_finds_the_one_pass_candidates(
-    device, kernel, monkeypatch
-):
-    """With ``_BALL_SLOTS`` patched to 2, the candidates past the slots must fill the
-    overflow list (one entry per query) for the overflowing queries to be searched
-    again with as many slots as they need (``_geometry.py``'s second pass): a fan of 48
-    cells, whose 50 hub queries have 48 candidates each (2,300 extra against a list of
-    450). The search's outputs, d and u are bitwise those of the default 64 slots,
-    where no query overflows."""
-    q, pts, cells = (t.to(device) for t in _fan(48))
-    search = next(
-        c
-        for c in geometry._ball_candidates.__code__.co_consts
-        if getattr(c, "co_name", "") == "search"
-    )
-
-    def run():
-        outs = []
-        op = {
-            "reference": geometry._closest_candidates,
-            "fast": geometry._closest_candidates_fast,
-        }[kernel]
-
-        def spy(*args):
-            outs.append(op(*args))
-            return outs[-1]
-
-        with monkeypatch.context() as m:
-            m.setattr(
-                geometry,
-                "_closest_candidates" + ("_fast" if kernel == "fast" else ""),
-                spy,
-            )
-            with ran(search) as r:
-                d, u = exact_boundary_geometry(q, pts, cells, kernel=kernel)
-        return [d, u, *outs[0]], r.count(search)
-
-    default, n_default = run()
-    monkeypatch.setattr(geometry, "_BALL_SLOTS", 2)
-    small, n_small = run()
-    assert n_small > n_default  # the second pass ran
-    for a, b in zip(small, default):
-        assert torch.equal(a, b)
-
-
 def _forest_fields(f):
     return [
         f.cells,
@@ -613,7 +488,8 @@ def test_geo_kernel_auto_disqualifiers_on_cuda():
     """On CUDA with Triton, ``_geo_kernel="auto"`` picks the fused region for a model
     it fits and the eager region for each disqualifier: five per-point vectors (five
     global directions, or two and three rank-1 boundary inputs), more slices than
-    ``MAX_SLICES``, a rank-2 boundary input, float16 autocast (the fused region's only
+    ``MAX_SLICES``, a rank-2 boundary input, more than three dimensions (the kernel
+    takes at most three components), float16 autocast (the fused region's only
     autocast dtype is bfloat16; the choice is re-made when the autocast dtype changes)."""
     pts = torch.zeros(4, 3, device="cuda")
     m = _geo_model()
@@ -648,3 +524,5 @@ def test_geo_kernel_auto_disqualifiers_on_cuda():
     assert m._n_global_vectors + m._n_block_vecs <= geo_kernel.MAX_DIRECTIONS
     for name, m in cases.items():
         assert m._geo_kernel == "auto" and m._resolve_geo_kernel(pts) == "eager", name
+    m = _geo_model(n_spatial_dims=4)
+    assert m._resolve_geo_kernel(torch.zeros(4, 4, device="cuda")) == "eager"

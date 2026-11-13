@@ -112,6 +112,9 @@ def _assert_covariant(m, call, improper):
 
 @pytest.mark.parametrize("improper", [False, True], ids=["rotation", "reflection"])
 def test_boundary_inputs_covariance(improper):
+    """Rank-1 and rank-2 boundary fields moved with the boundary keep every output
+    covariant; the fields are live, and rotating the fields alone is not a
+    symmetry."""
     m = _model(boundary_schemas={"wall": BIN})
     pts, nrm, w, _ = cloud(200)
     bf = _boundary_fields(200)
@@ -298,24 +301,6 @@ def test_field_validation_errors():
         global_data=gd,
     )
     assert out.point_data["p"].shape == (20,)
-    ### every boundary mesh carries its own condition's fields
-    m2 = _model(
-        boundary_schemas={
-            "a": {"trac": {"rank": 1}, "tag": {"rank": 0}},
-            "b": {"tag": {"rank": 0}},
-        }
-    )
-    with pytest.raises(
-        ValueError,
-        match="boundary_meshes\\['b'\\].cell_data is missing the declared fields \\['tag'\\]",
-    ):
-        m2(
-            boundary_meshes={
-                "a": soup(pts, nrm, w, cell_data={"trac": trac, "tag": tag}),
-                "b": soup(pts + 10, nrm, w, cell_data={"trac": trac}),
-            },
-            global_data=gd,
-        )
     ### the prediction points must match the model's dimension
     mq = _model(interior=True)
     q = pts[:7] * 2
@@ -329,7 +314,7 @@ def test_field_validation_errors():
 
 def test_fused_kernel_auto_falls_back_with_tensor_inputs():
     """The fused kernel does not take rank-2 inputs: auto falls back to eager (off CUDA
-    it does anyway). The surface task takes them; the interior task (ISLA-DTT, whose
+    it does anyway). The surface task takes them; the interior task (whose
     boundary read has no pair contractions for them) refuses them."""
     base = dict(
         output_schema=OUT,

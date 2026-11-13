@@ -28,7 +28,6 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.isla import ISLA
-from physicsnemo.experimental.models.isla._tree_read import TREE_READ_THETA
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
 from test.experimental.models.isla._meshes import (
@@ -37,7 +36,6 @@ from test.experimental.models.isla._meshes import (
     orthogonal,
     outputs,
     points_mesh,
-    refine,
     same,
     soup,
     transform,
@@ -203,27 +201,6 @@ def test_global_vector_magnitude_invariance(setup, k):
     assert same(_run(m, mesh, drv * k), base, atol=1e-10)
 
 
-def test_measure_scale_invariance(setup):
-    m, mesh, drv, base = setup
-    w = mesh.cell_data[EFFECTIVE_MEASURE_KEY]
-    scaled = mesh.with_data(cell_data={EFFECTIVE_MEASURE_KEY: w * 137.0})
-    assert same(_run(m, scaled, drv), base, atol=1e-9)
-
-
-def test_token_permutation_equivariance(setup):
-    """Reordering the boundary cells permutes the outputs and changes nothing else."""
-    m, mesh, drv, base = setup
-    perm = torch.randperm(mesh.n_cells, generator=torch.Generator().manual_seed(3))
-    permuted = Mesh(
-        points=mesh.points,
-        cells=mesh.cells[perm],
-        cell_data={EFFECTIVE_MEASURE_KEY: mesh.cell_data[EFFECTIVE_MEASURE_KEY][perm]},
-    )
-    out = _run(m, permuted, drv)
-    assert torch.allclose(out.points, base.points[perm])
-    assert same(outputs(out), _rows(base, perm), atol=1e-10)
-
-
 def test_no_effective_measures_is_the_geometric_quadrature(setup):
     """Without ``_effective_measure`` the cells' geometric measures are the weights;
     a soup without prescribed measures has congruent cells, so this is the uniform
@@ -287,92 +264,11 @@ def test_every_parameter_receives_a_gradient(interior):
     assert not any(n.startswith("qt") for n, _ in m.named_parameters()) or interior
 
 
-def test_interior_task_contracts():
-    """The interior task, ISLA-DTT (its boundary read live, at the default opening
-    angle but for the refinement check): the prediction points
-    read every block's slices and never write into them, so a prediction is exactly
-    independent of the other points of the request (alone, a prefix, any order, any
-    chunking), while
-    rotation/translation covariance, the similarity gauge and boundary-refinement
-    invariance hold; there is no routing-mass parameter,
-    every parameter receives a gradient, and bf16 autocast stays finite."""
-    torch.manual_seed(0)
-    pts, nrm, w, drv = cloud(400)
-    mesh = soup(pts, nrm, w)
-    qpts = torch.randn(150, 3, dtype=D) * 4.0
-    m = live(_isla(hidden=64, n_layers=2, n_slices=16, interior=True).double().eval())
-    assert not hasattr(m.qt, "logw") and not any(
-        n == "qt.logw" for n, _ in m.named_parameters()
-    )
-    base = _run(m, mesh, drv, qpts)
-    assert base.point_data["p"].shape == (150,) and base.point_data["v"].shape == (
-        150,
-        3,
-    )
-    assert base.n_cells == 0 and torch.equal(base.points, qpts)
-    assert all(torch.isfinite(o).all() for o in outputs(base).values())
-    perm = torch.randperm(150, generator=torch.Generator().manual_seed(1))
-    assert same(_run(m, mesh, drv, qpts[:50]), _rows(base, slice(0, 50)), atol=1e-12)
-    assert same(_run(m, mesh, drv, qpts[7:8]), _rows(base, slice(7, 8)), atol=1e-12)
-    assert same(_run(m, mesh, drv, qpts[perm]), _rows(base, perm), atol=1e-12)
-    chunks = [outputs(_run(m, mesh, drv, c)) for c in qpts.split(40)]
-    assert same(
-        {k: torch.cat([c[k] for c in chunks]) for k in chunks[0]}, base, atol=1e-12
-    )
-    ### the boundary still determines the prediction
-    assert not same(_run(m, soup(pts * 1.1, nrm, w), drv, qpts), base, atol=1e-6)
-    q = _rotation()
-    shift = torch.tensor([3.0, -7.0, 11.0], dtype=D)
-    _assert_rotated(
-        _run(m, transform(mesh, q, shift), drv @ q.T, qpts @ q.T + shift), base, q
-    )
-    k = 2.7
-    assert same(
-        _run(m, transform(mesh, shift=shift, scale=k), drv, k * qpts + shift),
-        base,
-        atol=1e-10,
-        rtol=0.0,
-    )
-    ### Refinement invariance is exact for the exact read (theta = 0, every cell pair
-    ### read); at the default opening angle the refined boundary's forest differs and
-    ### the Barnes-Hut read is an approximation (measured 1.4e-4 on p, 1.9e-3 on v).
-    m.tree_read_theta = 0.0
-    assert same(
-        _run(m, refine(mesh), drv, qpts), _run(m, mesh, drv, qpts), atol=1e-10, rtol=0.0
-    )
-    m.tree_read_theta = TREE_READ_THETA
-    m.train()
-    out = outputs(
-        m(
-            boundary_meshes={"wall": mesh},
-            prediction_points=qpts,
-            global_data={"g": drv},
-        )
-    )
-    sum(o.square().mean() for o in out.values()).backward()
-    missing = [n for n, p in m.named_parameters() if p.grad is None]
-    assert not missing, missing
-    m32 = live(_isla(hidden=32, n_layers=2, n_slices=8, interior=True))
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        out = outputs(
-            m32(
-                boundary_meshes={"wall": soup(pts.float(), nrm.float(), w.float())},
-                prediction_points=qpts.float(),
-                global_data={"g": drv.float()},
-            )
-        )
-    sum(o.float().sum() for o in out.values()).backward()
-    assert all(torch.isfinite(o.float()).all() for o in out.values())
-    assert all(
-        torch.isfinite(p.grad).all() for p in m32.parameters() if p.grad is not None
-    )
-
-
 def test_live_makes_the_boundary_read_contribute():
-    """The interior contract tests run ISLA-DTT through ``live``, which seeds the
-    boundary read's zero-initialized output projection: under it the read changes the
-    prediction (zeroing the projection again changes the outputs), so those tests
-    cannot pass with a read that adds nothing."""
+    """The interior contract tests run the interior model through ``live``, which
+    seeds the boundary read's zero-initialized output projection. Under it the read
+    changes the prediction, and zeroing the projection again restores the dead read's
+    outputs, so those tests cannot pass with a read that adds nothing."""
     torch.manual_seed(0)
     pts, nrm, w, drv = cloud(200)
     mesh = soup(pts, nrm, w)
@@ -426,34 +322,6 @@ def test_geometric_scale_equivariance(interior):
     assert same(b, a, atol=1e-10, rtol=0.0)
 
 
-def test_boundary_scalars_reach_the_interior_prediction():
-    """Boundary inputs are per-boundary-cell data: prediction-point tokens carry
-    zeros in the channel, and the interior prediction depends on the boundary data."""
-    torch.manual_seed(0)
-    pts, nrm, w, drv = cloud(60)
-    bs = {"bc_a": torch.randn(60, dtype=D), "bc_b": torch.randn(60, dtype=D)}
-    m = (
-        _isla(
-            hidden=32,
-            n_layers=2,
-            n_slices=8,
-            interior=True,
-            boundary_schemas={"wall": {"bc_a": {"rank": 0}, "bc_b": {"rank": 0}}},
-        )
-        .double()
-        .eval()
-    )
-    live(m)
-    q = pts[:17] * 0.5
-    out = _run(m, soup(pts, nrm, w, cell_data=bs), drv, q)
-    out2 = _run(
-        m, soup(pts, nrm, w, cell_data={k: 2 * v for k, v in bs.items()}), drv, q
-    )
-    assert out.point_data["p"].shape == (17,) and out.point_data["v"].shape == (17, 3)
-    assert all(torch.isfinite(o).all() for o in outputs(out).values())
-    assert not same(out, out2, atol=1e-6)
-
-
 def _biased_poisson_subsample(pts, w, n_expected, bias, generator):
     """10:1 Poisson subsample with exact Horvitz-Thompson weights, biased toward x
     below the median (a data pipeline's biased subsample of a surface)."""
@@ -468,25 +336,6 @@ def _biased_poisson_subsample(pts, w, n_expected, bias, generator):
 def _frame_cloud(n=300, seed=0):
     pts, nrm, w, drv = cloud(n, seed=seed)
     return soup(pts + 5.0, nrm, w), drv
-
-
-def test_frame_contracts():
-    """The origin-free frame: exact translation invariance without centering
-    (fp64) by a shift a thousand times the cells' size, and the feature widths (one
-    seed invariant n.g, six relational invariants in the slice blocks)."""
-    mesh, drv = _frame_cloud()
-    shift = torch.tensor([300.0, -70.0, 1100.0], dtype=D)
-    torch.manual_seed(1)
-    m = _isla(hidden=64, n_layers=2, n_slices=16).double().eval()
-    assert (
-        m.boundary_conditions["wall"].seed.in_features == 1 + 1
-    )  # the constant and n.g
-    assert m.blocks[0].geo_logit.in_features == 6
-    base = _run(m, mesh, drv)
-    assert all(torch.isfinite(o).all() for o in outputs(base).values())
-    ### the cell normals are recomputed from the shifted vertices (a 1e3 shift on
-    ### 0.2 cells costs ~1e-13 in the normals), hence 1e-10 rather than 1e-12
-    assert same(_run(m, transform(mesh, shift=shift), drv), base, atol=1e-10)
 
 
 def _float32_case(device, interior):
@@ -513,33 +362,23 @@ F32_BOUND = 1e-4
 
 
 @pytest.mark.parametrize("interior", [False, True], ids=["surface", "interior"])
-def test_float32_rotation_equivariance_on_every_device(device, interior):
+def test_float32_rigid_motions_on_every_device(device, interior):
     """In float32, on CPU and on CUDA (every kernel at ``auto``): a rotation of the
     boundary, the global direction and the prediction points keeps p and rotates v,
-    to F32_BOUND of the largest output."""
+    and a translation changes no output, to F32_BOUND of the largest output."""
     m, mesh, drv, q = _float32_case(device, interior)
     base = _run_on(device, m, mesh, drv, q)
+    tol = F32_BOUND * max(float(v.abs().max()) for v in base.values())
     R = _rotation().float()
     rot = _run_on(
         device, m, transform(mesh, R), drv @ R.T, None if q is None else q @ R.T
     )
-    tol = F32_BOUND * max(float(v.abs().max()) for v in base.values())
     assert torch.allclose(rot["p"], base["p"], atol=tol, rtol=0.0)
     assert torch.allclose(rot["v"], base["v"] @ R.T.to(device), atol=tol, rtol=0.0)
-
-
-@pytest.mark.parametrize("interior", [False, True], ids=["surface", "interior"])
-def test_float32_translation_invariance_on_every_device(device, interior):
-    """In float32, on CPU and on CUDA (every kernel at ``auto``): a translation of
-    the boundary and the prediction points changes no output, to F32_BOUND of the
-    largest output."""
-    m, mesh, drv, q = _float32_case(device, interior)
-    base = _run_on(device, m, mesh, drv, q)
     t = torch.tensor([3.0, -7.0, 11.0])
     moved = _run_on(
         device, m, transform(mesh, shift=t), drv, None if q is None else q + t
     )
-    tol = F32_BOUND * max(float(v.abs().max()) for v in base.values())
     assert same(moved, base, atol=tol)
 
 
@@ -565,11 +404,11 @@ def test_the_default_configuration_keeps_the_contracts(interior):
 
 
 def test_frame_is_sampling_consistent():
-    """The discriminating contract of the origin-free frame. Under a 10:1 biased
-    Poisson subsample with exact HT weights, a model whose frame carries no
-    sample statistic moves its predictions at fixed prediction points between the
-    uniform and the biased draw by no more than the measure noise -- the same
-    order as between two independent uniform draws."""
+    """The origin-free frame uses no sample statistic. Under a 10:1 biased Poisson
+    subsample with exact Horvitz-Thompson weights, the predictions at fixed points
+    move between a uniform and a biased draw by about the measure noise, the change
+    between two uniform draws (a frame centred on the sample's centroid would move
+    them by much more)."""
     pts, nrm, w, drv = cloud(100000)
     q = pts[:40] * 1.2
     torch.manual_seed(1)
@@ -592,22 +431,20 @@ def test_frame_is_sampling_consistent():
     ### measure-noise level: the biased draw's HT estimates have a larger variance
     ### than a uniform draw's (10x fewer points in the undersampled half), so the
     ### bias-vs-uniform difference may exceed the uniform-vs-uniform one by a
-    ### bounded factor -- not the order of magnitude a centroid shift produces.
+    ### bounded factor, far below the order of magnitude a centroid shift produces.
     ratio = sum(d_bias) / sum(d_noise)
     assert ratio < 4.0, (ratio, d_bias, d_noise)
 
 
 def test_the_class_defaults():
-    """The class defaults: a surface task (no prediction points, no boundary read), the
-    automatic geometry kernel, one seed invariant n.g and six relational invariants;
-    an interior model adds the prediction-point embedding over the built-in distance
-    pair and is ISLA-DTT (the boundary read, no routing mass)."""
+    """The class defaults: a surface task (no prediction points, no boundary read) and
+    the automatic geometry kernel. An interior model adds the prediction-point
+    embedding over the built-in distance pair and the boundary read, with no routing
+    mass."""
     m = _isla(hidden=32, n_layers=2, n_slices=8)
     assert m.interior is False and m.qt is None
     assert m.kernel_basis is None and m.kernel_reads is None
     assert m._geo_kernel == "auto"
-    assert m.boundary_conditions["wall"].seed.in_features == 1 + 1
-    assert m.blocks[0].geo_logit.in_features == 6
     mi = _isla(hidden=32, n_layers=2, n_slices=8, interior=True)
     assert mi.qt.seed.in_features == 1 + 2  # n.g and the built-in distance pair
     assert not hasattr(mi.qt, "logw")  # no routing mass
@@ -670,6 +507,7 @@ def test_interior_flag_structures_the_forward():
         global_data={"g": drv},
     )
     assert out.point_data["p"].shape == (3,)
+    assert out.n_cells == 0 and torch.equal(out.points, pts[:3] * 2)
     bare = interior(
         boundary_meshes={"wall": mesh},
         prediction_points=pts[:3] * 2,
@@ -805,10 +643,11 @@ def test_inputs_of_another_dtype_than_the_parameters_are_refused():
     """A boundary mesh whose floating dtype is not the parameters', in either
     direction, and prediction points wider than the parameters are refused in eager
     mode with the input named and the casts that fix it, in both tasks (not a matmul
-    error deep inside). Narrower prediction points run, as before the check:
-    float32 points into a float64 model give the float64 points' outputs to
-    float32 roundoff (measured 4e-8 on outputs of order 0.2; bound 1e-6). Float32
-    inputs to a float32 model under bfloat16 autocast run."""
+    error deep inside). Narrower prediction points are promoted to the parameters'
+    dtype: float32 points into a float64 model, and float16 or bfloat16 points into
+    a float32 model, give exactly the outputs and points of the same values passed
+    in the parameters' dtype. Float32 inputs to a float32 model under bfloat16
+    autocast run."""
     pts, nrm, w, drv = cloud(20, dtype=torch.float32)
     good = soup(pts, nrm, w)
     surface = _isla(hidden=32, n_layers=1, n_slices=8)
@@ -856,7 +695,17 @@ def test_inputs_of_another_dtype_than_the_parameters_are_refused():
     with torch.no_grad():
         promoted = interior(**kw, prediction_points=pts[:3] * 2)
         cast = interior(**kw, prediction_points=(pts[:3] * 2).double())
-    assert same(promoted, cast, atol=1e-6)
+    assert promoted.points.dtype == torch.float64
+    assert same(promoted, cast, atol=0.0)
+    interior = interior.float()
+    kw = {"boundary_meshes": {"wall": good}, "global_data": {"g": drv}}
+    for low in (torch.float16, torch.bfloat16):
+        q = (pts[:3] * 2).to(low)
+        with torch.no_grad():
+            promoted = interior(**kw, prediction_points=q)
+            cast = interior(**kw, prediction_points=q.float())
+        assert promoted.points.dtype == torch.float32, low
+        assert same(promoted, cast, atol=0.0), low
 
 
 def test_the_execution_attributes_are_validated():
@@ -1013,28 +862,6 @@ def test_geo_kernel_auto_resolves_to_eager_off_cuda_and_honors_explicit_choices(
     ya, ye = outputs(_run(auto, mesh, drv)), outputs(_run(eager, mesh, drv))
     assert all(torch.equal(ya[k], ye[k]) for k in ya)
     assert auto._geo_kernel_cache[1] == "eager"
-    # five global directions: auto stays eager (off CUDA it does anyway; the kernel is
-    # unrolled for one to four)
-    five = {
-        "g1": {"rank": 1},
-        "g2": {"rank": 1},
-        "g3": {"rank": 1},
-        "g4": {"rank": 1},
-        "g5": {"rank": 1},
-    }
-    two = (
-        ISLA(
-            output_schema=PV,
-            boundary_schemas=WALL,
-            global_schema=five,
-            hidden=32,
-            n_layers=2,
-            n_slices=8,
-        )
-        .double()
-        .eval()
-    )
-    assert two._resolve_geo_kernel(pts) == "eager"
 
 
 def test_scalar_only_model_has_no_frame_routing_and_every_parameter_gets_a_gradient():

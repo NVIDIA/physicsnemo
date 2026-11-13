@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ISLA-DTT's boundary forest builds one set of face trees per declared condition,
+"""The interior task's boundary forest builds one set of face trees per declared condition,
 each in coordinates about its condition's own measure-weighted centroid, the frame
 and its rotation bound staying the whole boundary's, so a node summarises one
 condition.
@@ -70,7 +70,7 @@ def _differing(a: BoundaryForest, b: BoundaryForest) -> list[str]:
 
 
 def _two_conditions(seed=0, n_body=120, n_far=200):
-    """A 2D boundary of two conditions, AirfRANS-like: a small closed body (an
+    """A 2D boundary of two conditions, as an airfoil case: a small closed body (an
     ellipse of chord 1 at the origin, condition 0) inside a large far field (a
     half-disc of radius 200 joined to a box to x = 200, sheared so that the whole
     boundary has no mirror symmetry, condition 1), whose centroid lies tens of chords
@@ -178,6 +178,9 @@ def test_one_group_is_the_ungrouped_forest_bitwise(dim, kernel):
 def test_each_tree_holds_one_condition_about_its_centroid_and_lists_cover_every_cell_once(
     case, kernel
 ):
+    """The trees come in the conditions' order and each holds cells of one condition,
+    every point's list covers every cell once, and each condition's trees live about
+    its own centroid in the whole boundary's frame."""
     pts, nrm, w, groups = (
         _two_conditions() if case == "two_conditions_2d" else _three_conditions_3d()
     )
@@ -238,6 +241,8 @@ def test_each_tree_holds_one_condition_about_its_centroid_and_lists_cover_every_
 
 @pytest.mark.parametrize("case", ["two_conditions_2d", "three_conditions_3d"])
 def test_the_fast_build_and_walk_are_the_reference_s_with_groups(case):
+    """With conditions, the fast forest build and the fast walk give bitwise the
+    reference's forest, lists and pair counts, at two opening angles."""
     pts, nrm, w, groups = (
         _two_conditions() if case == "two_conditions_2d" else _three_conditions_3d()
     )
@@ -408,6 +413,8 @@ def test_one_given_condition_of_two_builds_the_ungrouped_forest(monkeypatch):
 
 
 def test_forward_is_finite_and_differentiable_with_two_conditions():
+    """A float32 training step of the two-condition airfoil model is finite and gives
+    every parameter a gradient."""
     m = _airfoil_model().train()
     out = m(
         boundary_meshes=_airfoil_meshes(),

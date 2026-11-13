@@ -16,312 +16,315 @@
 
 r"""ISLA: Invariant Slice Attention.
 
-An E(d)-equivariant soft-slice transformer (any spatial dimension d >= 2)
-for steady boundary-value PDE
-surrogates on the mesh-native API of the mesh models (GLOBE's): one case at a
-time, the boundary goes in as a mapping of :class:`~physicsnemo.mesh.mesh.Mesh`
-objects keyed by boundary-condition name (each a ``Mesh[d-1, d]``; its cells
-are the tokens, with their centroids, normals and effective measures: every
-cell for a surface task, a sample of the full-resolution cells drawn inside the
-model for an interior task), the
-problem's data as *named fields of declared tensor rank*: global inputs in a
-TensorDict (a direction, a diffusivity, a dimensionless group), per-cell boundary
-inputs in the meshes' ``cell_data``, declared per condition (an inlet's
-prescribed velocity, a loaded face's traction; a no-slip wall declares none);
-an interior task's prediction points are read by their positions alone (their
-geometry is computed inside the model). A point-cloud ``Mesh`` comes out whose ``point_data`` holds fields of
-declared rank: scalars, vectors, rank-2 tensors, up to rank 4, each covariant
-by its rank. The name states the design principle: the attention operates only
-on invariants of the per-point vector set :math:`\{r_i, n_i, \hat g_1, \dots,
-\hat g_K, v_{i1}, \dots\}` (scaled position, unit normal, unit global vectors,
-the token's own tensor inputs), and the frame is re-attached only at the
-heads, so exact rotation, reflection and translation covariance is paid once
-at the network's edges instead of in every layer.
+An E(d)-equivariant soft-slice transformer (any spatial dimension d >= 2) for
+surrogates of steady boundary-value PDEs, on the mesh-native API of the mesh
+models (GLOBE's). It takes one case at a time:
+
+- the boundary, a mapping of :class:`~physicsnemo.mesh.mesh.Mesh` objects keyed
+  by boundary-condition name, each a ``Mesh[d-1, d]``. Its cells are the tokens,
+  with their centroids, normals and effective measures: every cell for a surface
+  task, and for an interior task a sample of the full-resolution cells, drawn
+  inside the model;
+- the problem's data, as *named fields of declared tensor rank*: global inputs in
+  a TensorDict (a direction, a diffusivity, a dimensionless group), and per-cell
+  boundary inputs in the meshes' ``cell_data``, declared per condition (an inlet's
+  prescribed velocity, a loaded face's traction; a no-slip wall declares none);
+- an interior task's prediction points, read by their positions alone (the model
+  computes their geometry).
+
+It returns a point-cloud ``Mesh`` whose ``point_data`` holds fields of declared
+rank: scalars, vectors, rank-2 tensors, up to rank 4, each covariant by its rank.
+The name states the design principle. The attention operates only on invariants
+of the per-point vector set :math:`\{r_i, n_i, \hat g_1, \dots, \hat g_K, v_{i1},
+\dots\}` (scaled position, unit normal, unit global vectors, the token's own
+tensor inputs). The frame is re-attached only at the heads, so exact rotation,
+reflection and translation covariance is paid for once, at the network's edges,
+instead of in every layer.
 
 **Where the covariance is exact.** The network is exactly covariant by
 construction. The interior task draws its boundary tokens, lays out its boundary
 read's forest and builds its exact geometry's winding-number tree in the
-boundary's canonical frame (``canonical_frame``).
-The full model is therefore exactly covariant, up to roundoff, when that frame
-is unique. The draw is not a continuous function of the coordinates, though: a
-rotation applied in floating point moves them by roundoff, which can change the
-drawn cells of a dense boundary close to a tie (two nearly equal principal
-variances, or an axis that is nearly symmetric), and the outputs then agree only
-approximately. The frame is not unique on a boundary with a symmetry that
-reverses a principal axis (a mirror plane, a two-fold axis, a centre of
-symmetry), or with equal spread along two principal axes. The tied axes then
-take their direction (equal spreads) or their sign (a symmetric axis) from the
-lab axes. On such a boundary a surface task, which samples none and has neither
-read nor tree, stays exact. An interior task is exact only with
-``n_boundary_tokens`` at least the cell count, ``tree_read_theta=0`` and a
-closed boundary. Otherwise the drawn tokens, the read's clusters or, near a
-hole in an open boundary, the distance's sign depend on the pose, and the
-outputs agree only approximately.
+boundary's canonical frame (``canonical_frame``). The full model is therefore
+exactly covariant, up to roundoff, when that frame is unique. The draw is not a
+continuous function of the coordinates, though. A rotation applied in floating
+point moves them by roundoff, which can change the drawn cells of a dense
+boundary close to a tie (two nearly equal principal variances, or an axis that
+is nearly symmetric), and the outputs then agree only approximately. The frame is
+not unique on a boundary with a symmetry that reverses a principal axis (a mirror
+plane, a two-fold axis, a centre of symmetry), or with equal spread along two
+principal axes. The tied axes then take their direction (equal spreads) or their
+sign (a symmetric axis) from the lab axes. On such a boundary a surface task,
+which samples no cells and has neither read nor tree, stays exact. An interior
+task is exact only with ``n_boundary_tokens`` at least the cell count,
+``tree_read_theta=0`` and a closed boundary. Otherwise the drawn tokens, the
+read's clusters or, near a hole in an open boundary, the distance's sign depend
+on the pose, and the outputs agree only approximately.
 
-**Rank specs.** Inputs and outputs are declared in the field-schema grammar
-shared by every mesh model (``physicsnemo.mesh.fields``): a mapping from a
-field name to a field declaration, a :class:`~physicsnemo.mesh.fields.RankSpec`
-or a mapping of values ``{"rank": r, "symmetric": bool, "parity": "even" |
-"odd"}`` (``r`` = 0 scalar, 1 vector, 2 rank-2 tensor, ...); a mapping of
-mappings is a nested group, and a flat name may contain ``"."`` for the
-same nesting (``{"surface": {"pressure": {"rank": 0}}}`` and
-``{"surface.pressure": {"rank": 0}}`` declare the same field). Each parsed
-declaration is a :class:`~physicsnemo.mesh.fields.FieldSchema`. ``symmetric`` (rank
-:math:`\ge 2`) means fully symmetric under index permutation and
-``parity="odd"`` (outputs only) a pseudotensor that flips sign under a
-reflection (a vorticity). One name declares one field; several independent
+**Rank specs.** Inputs and outputs are declared in the field-schema grammar that
+every mesh model shares (``physicsnemo.mesh.fields``). A schema maps a field name
+to a declaration: a :class:`~physicsnemo.mesh.fields.RankSpec`, or a mapping
+``{"rank": r, "symmetric": bool, "parity": "even" | "odd"}`` (``r`` = 0 scalar,
+1 vector, 2 rank-2 tensor, ...). A mapping of mappings is a nested group, and a
+flat name may contain ``"."`` for the same nesting: ``{"surface": {"pressure":
+{"rank": 0}}}`` and ``{"surface.pressure": {"rank": 0}}`` declare the same field.
+Each parsed declaration is a :class:`~physicsnemo.mesh.fields.FieldSchema`.
+``symmetric`` (rank :math:`\ge 2`) means fully symmetric under index permutation.
+``parity="odd"`` (outputs only) declares a pseudotensor, which flips sign under a
+reflection (a vorticity); pseudoscalar outputs (rank 0, odd) are not implemented
+and are refused. One name declares one field, so several independent
 scalars are several rank-0 names. The same grammar serves the constructor's
-``output_schema``, each schema of ``boundary_schemas`` and ``global_schema``, and
-the same dotted names address the fields in the meshes' ``cell_data`` and
-in ``global_data`` (``td["surface", "pressure"]``).
+``output_schema``, each schema of ``boundary_schemas``, and ``global_schema``. The
+same dotted names address the fields in the meshes' ``cell_data`` and in
+``global_data`` (``td["surface", "pressure"]``).
 
 **Inputs of any rank enter through invariants.** A rank-1 boundary input
-:math:`v_i` at a token contributes the seed scalars :math:`v_i \cdot \hat
-n_i`, :math:`v_i \cdot \hat g_k`, :math:`|v_i|` and its dot products with
-the token's other vector inputs, and, inside every slice layer where the
-token-to-anchor direction :math:`\hat\rho_{is}` exists, the contraction
-:math:`v_i \cdot \hat\rho_{is}` next to the existing :math:`\hat n_i \cdot
-\hat\rho_{is}` and :math:`\hat g_k \cdot \hat\rho_{is}` (one shared helper
-contracts every per-token vector with the anchor direction; the normal is
-just the first of them). A rank-2 input :math:`T_i` contributes the seed
-scalars :math:`a^{\mathsf T} T_i b` over the frame vectors :math:`a, b \in
-\{\hat n_i, \hat g_k\}`, :math:`\operatorname{tr} T_i` and
-:math:`\|T_i\|_F`, and in the layers :math:`\hat\rho^{\mathsf T} T_i
-\hat\rho`, :math:`\hat\rho \cdot T_i \hat n_i` and :math:`\hat\rho \cdot
-T_i \hat g_k` (the last two are contractions of the derived true vectors
-:math:`T_i \hat n_i`, :math:`T_i \hat g_k` with the anchor direction, so they
-ride on the same helper). Only true vectors appear on the input side, no
-cross products, so every input invariant is invariant under improper
-rotations as well; pseudotensor *inputs* are therefore refused. Rank-0
-inputs are the scalars themselves. Inputs of rank above 2 are refused (the
-contraction set grows combinatorially).
+:math:`v_i` at a token contributes the seed scalars :math:`v_i \cdot \hat n_i`,
+:math:`v_i \cdot \hat g_k`, :math:`|v_i|` and its dot products with the token's
+other vector inputs. Inside every slice layer, where the token-to-anchor
+direction :math:`\hat\rho_{is}` exists, it also contributes :math:`v_i \cdot
+\hat\rho_{is}`, next to :math:`\hat n_i \cdot \hat\rho_{is}` and :math:`\hat g_k
+\cdot \hat\rho_{is}`. One shared helper contracts every per-token vector with the
+anchor direction; the normal is the first of them. A rank-2 input :math:`T_i`
+contributes the seed scalars :math:`a^{\mathsf T} T_i b` over the frame vectors
+:math:`a, b \in \{\hat n_i, \hat g_k\}`, :math:`\operatorname{tr} T_i` and
+:math:`\|T_i\|_F`, and in the layers :math:`\hat\rho^{\mathsf T} T_i \hat\rho`,
+:math:`\hat\rho \cdot T_i \hat n_i` and :math:`\hat\rho \cdot T_i \hat g_k`. The
+last two contract the derived true vectors :math:`T_i \hat n_i` and :math:`T_i
+\hat g_k` with the anchor direction, through the same helper. The input side has
+only true vectors and no cross products, so every input invariant is invariant
+under improper rotations as well, and pseudotensor *inputs* are refused. Rank-0
+inputs are the scalars themselves. Inputs of rank above 2 are refused, since the
+contraction set grows combinatorially.
 
 **Boundary conditions by name.** ``boundary_schemas`` declares the boundary
 conditions by name, each with its own per-cell fields (an empty schema for a
-condition without any, a no-slip wall). A condition's identity is structural:
-its tokens enter through the condition's own input layer, whose column on a
-constant is its learned offset, and its vector and tensor inputs reach the
-slice layers through its own linear maps onto shared channels (equivariant: a
-linear combination with scalar weights commutes with every orthogonal map). No
-tag field names a condition. The slice layers are shared: every condition's
-tokens route into the same slices and read the same anchors, which is how the
-conditions interact. ``forward`` takes any non-empty subset of the declared
-names; the tokens are the given conditions' cells in canonical (sorted) order,
-so the order of the input mapping changes nothing. With more than one declared
-condition the quadrature is per condition: a token's log weight is
-:math:`\log a_i - \log A_k + \beta_k`, :math:`A_k` the full-resolution measure of
-its condition :math:`k` and :math:`\beta_k` a learned log share
-(``condition_log_shares.beta``, zero at construction), so each condition weighs
-:math:`e^{\beta_k}` in every measure-weighted read, whatever its size. The interior
-form's forest keeps the cells' own measures and builds one set of face trees per condition,
-so a node holds cells of one condition and in its read weighs its cells' measure
-shifted by that condition's share.
+condition without any, such as a no-slip wall). A condition's identity is
+structural; no tag field names it. Its tokens enter through the condition's own
+input layer, whose column on the constant is its learned offset. Its vector and
+tensor inputs reach the slice layers through its own linear maps onto shared
+channels. These are equivariant, since a linear combination with scalar weights
+commutes with every orthogonal map. The slice layers are shared: every
+condition's tokens route into the same slices and read the same anchors, which is
+how the conditions interact. ``forward`` takes any non-empty subset of the
+declared names. The tokens are the given conditions' cells in canonical (sorted)
+order, so the order of the input mapping changes nothing. With more than one
+declared condition the quadrature is per condition: a token's log weight is
+:math:`\log a_i - \log A_k + \beta_k`, with :math:`A_k` the full-resolution
+measure of its condition :math:`k` and :math:`\beta_k` a learned log share
+(``condition_log_shares.beta``, zero at construction). Each condition then weighs
+:math:`e^{\beta_k}` in every measure-weighted read, whatever its size. The
+interior task's forest keeps the cells' own measures and builds one set of face
+trees per condition, so a node holds cells of one condition, and its read weighs
+its cells' measure shifted by that condition's share.
 
-**Outputs of any rank leave through an equivariant basis.** One linear head
-on the normalized final token state emits invariant coefficients; a rank-
-:math:`r` output is the contraction of those coefficients with tensor
-products of :math:`r` vectors from the token's basis: the *true* vectors
-:math:`t_1, \dots, t_m` (the global directions, the normal, the radial
-direction from the token's soft anchor and the :math:`e_\theta`
-complements; :math:`m = 2K + 3` in every dimension) for even parity, and
-products with exactly one *pseudovector* factor for odd parity, the
-pseudovectors being the Levi-Civita construction from the primary true vectors
-:math:`\hat g_k, \hat n_i, \hat u_i`: their pairwise cross products in three
-dimensions (:math:`p = \binom{K+2}{2}`), their perpendiculars in two
-(:math:`p = K + 2`); odd parity is refused in four or more dimensions, where a
-pseudovector needs :math:`d - 1` vectors. Plus the isotropic tensors of that
-rank and parity (the identity at rank 2, the three products of Kronecker
-deltas at rank 4, the Levi-Civita symbol, of rank :math:`d`, for odd parity).
-A symmetric spec uses the symmetrized basis with one
-coefficient per unordered multi-index. Coefficient counts are in the class
-docstring; ranks above 4 are refused. The complements add coefficients but no
-rank: :math:`e_\theta(\hat u, \hat a)` is :math:`-\hat a` projected off
+**Outputs of any rank leave through an equivariant basis.** One linear head on
+the normalized final token state emits invariant coefficients. A rank-:math:`r`
+output is the contraction of those coefficients with tensor products of :math:`r`
+vectors from the token's basis. For even parity these are the *true* vectors
+:math:`t_1, \dots, t_m`: the global directions, the normal, the radial direction
+from the token's soft anchor and the :math:`e_\theta` complements (:math:`m = 2K
++ 3` in every dimension). For odd parity the products have exactly one
+*pseudovector* factor. The pseudovectors are the Levi-Civita construction from
+the primary true vectors :math:`\hat g_k, \hat n_i, \hat u_i`: their pairwise
+cross products in three dimensions (:math:`p = \binom{K+2}{2}`), and their
+perpendiculars in two (:math:`p = K + 2`). Odd parity is refused in four or more
+dimensions, where a pseudovector needs :math:`d - 1` vectors. The basis also
+holds the isotropic tensors of that rank and parity: the identity at rank 2, the
+three products of Kronecker deltas at rank 4, and, for odd parity, the
+Levi-Civita symbol of rank :math:`d`. A symmetric spec uses the symmetrized basis,
+with one coefficient per unordered multi-index. The class docstring gives the
+coefficient counts; ranks above 4 are refused. The complements add coefficients
+but no rank: :math:`e_\theta(\hat u, \hat a)` is :math:`-\hat a` projected off
 :math:`\hat u`, so it lies in the span of :math:`\hat u` and :math:`\hat a`, and
 the true vectors span at most :math:`K + 2` directions. With no global direction
-in three dimensions every even-parity vector output lies in the plane of
-:math:`\hat n` and :math:`\hat u` (a known limit, ``test_isla_heads.py``).
+in three dimensions, every even-parity vector output therefore lies in the plane
+of :math:`\hat n` and :math:`\hat u` (a known limit, ``test_isla_heads.py``).
 
-**The frame.** ISLA has no frame origin: positions enter only as
-point-to-anchor differences, and the one length scale :math:`L` is the
-measure-weighted root-mean-square pairwise distance of every cell of the given
-boundaries at full resolution (computed before an interior task's token draw, so
-it is exact and the same for every draw), a
-normalized two-point statistic that is invariant to the weights' overall
-scale and converges under refinement of any boundary with a finite second
-moment, fractal ones included. No centroid, no per-dataset reference length
-and no external frame appears anywhere in the forward pass, so the frame
-carries no information about where the mesher placed its cells.
+**The frame.** ISLA has no frame origin: positions enter only as point-to-anchor
+differences. The one length scale :math:`L` is the measure-weighted
+root-mean-square pairwise distance of every cell of the given boundaries at full
+resolution. It is computed before an interior task's token draw, so it is the
+same for every draw. It is exact for the piecewise-flat boundary: each cell
+enters with its own second moment about its centroid, so a subdivision of the
+cells changes nothing. It is a normalized two-point statistic, so it is
+invariant to the weights' overall scale and converges under refinement of any
+boundary with a finite second moment, fractal ones included. No centroid, no
+per-dataset reference length and no external frame appears anywhere in the
+forward pass, so the frame holds no information about where the mesher placed
+its cells.
 
-**Scales (opt-in).** A field of a condition's schema, of ``global_schema`` or of
-``output_schema`` may declare, next to its rank spec, ``units``: exponents of
-named scales, the built-in length :math:`L` above and the scales the fields define
-(``{"L": -1, "E": 1}``, with ``E`` a scale a field defines). A field defines
-a scale with ``defines: <name>``: rank-1 boundary fields (pooled) or one rank-1
-global define one scale, :math:`S = (\sum a |v|^2 / \sum a)^{1/2}`, the
-measure-weighted RMS magnitude over the boundary sources' full-resolution cells
-(a global source's magnitude), and with boundary sources :math:`\hat g = \sum a v /
+**Scales (opt-in).** Next to its rank spec, a field of a condition's schema, of
+``global_schema`` or of ``output_schema`` may declare ``units``: exponents of
+named scales, such as ``{"L": -1, "E": 1}``. The scales are the built-in length
+:math:`L` above and the scales the fields define (``E`` here). A field defines a
+scale with ``defines: <name>``. Rank-1 boundary fields (pooled) or one rank-1
+global define one scale, :math:`S = (\sum a |v|^2 / \sum a)^{1/2}`: the
+measure-weighted RMS magnitude over the boundary sources' full-resolution cells,
+or a global source's magnitude. With boundary sources, :math:`\hat g = \sum a v /
 |\sum a v|` is appended to the global directions (a global source is a direction
-already); both are computed per case in float64 before the draw, and an absent or
-zero source is refused (in eager mode; torch.compile skips the data-dependent
-checks). A rank-0 global that defines a scale gives its value and is not
-appended. Every declared boundary field and rank-0 global is divided by its
-units' :math:`\prod \text{scale}^{\text{exp}}` and by its constant ``scale`` (the
-typical size of the dimensionless field, default 1) before it enters the invariants,
-and every output with units is the head's dimensionless prediction times both, then
-standardized by the constants ``output_stats`` (vector means zero). The length
-:math:`L` is exact for the piecewise-flat boundary: each cell enters with its own
-second moment about its centroid, so a subdivision of the cells changes nothing. The
-keys are ISLA's own, popped before the shared grammar parses the field; with
-none declared the model is the unscaled one. So a similarity of the problem
+already). Both are computed per case in float64 before the draw. An absent or
+zero source is refused in eager mode; torch.compile skips the data-dependent
+checks. A rank-0 global that defines a scale gives its value and is not appended.
+Every declared boundary field and rank-0 global is divided by its units'
+:math:`\prod \text{scale}^{\text{exp}}` and by its constant ``scale`` (the typical
+size of the dimensionless field, default 1) before it enters the invariants.
+Every output with units is the head's dimensionless prediction times both, then
+standardized by the constants ``output_stats`` (vector means zero). These keys
+are ISLA's own, popped before the shared grammar parses the field;
+with none declared the model is the unscaled one. So a similarity of the problem
 (lengths times :math:`s`, each defined scale times its own factor, every field
 times its units' factor) leaves every internal state unchanged and scales each
 output by its units.
 
 **Routing.** Each block routes tokens to slices by bounded cosine logits:
 ``routing_temperature`` :math:`T` times the cosine between the normalized token
-state and a prototype per slice, so every logit lies in :math:`[-T, T]` and
-no block can route every point to one slice however its weights grow. The
-prototypes are synthesized per sample: learned seeds attend over the token
-states with a measure-weighted softmax, the attended term is centered across
-the slices and smoothly bounded to a learned fraction of the seeds' spread,
-and the result is added to the seeds (``_RoutingLogits``). The
-quadrature measure enters the routing as a log-space bias, so slice states
-are measure-weighted (quadrature) means; with no measures the weights are
-uniform.
+state and a prototype per slice. Every logit lies in :math:`[-T, T]`, so no block
+can route every point to one slice however its weights grow. The prototypes are
+synthesized per sample (``_RoutingLogits``): learned seeds attend over the token
+states with a measure-weighted softmax, and the attended term, centered across
+the slices and smoothly bounded to a learned fraction of the seeds' spread, is
+added to the seeds. The quadrature measure enters the routing as a log-space
+bias, so slice states are measure-weighted (quadrature) means; with no measures
+the weights are uniform.
 
 **Surface and interior tasks.** Both tasks read the whole boundary: every cell of
-every mesh in ``boundary_meshes`` is a token (the interior task's a sample of
-them). ``interior=False`` (a surface task) predicts at the cells of the
-``prediction_boundaries`` given to ``forward``, the names of the conditions that
-carry the outputs (a vehicle's wall, with the tunnel's floor, walls, inlet and
-outlet read as conditions only); its output points are those cells' centroids.
-``interior=True`` (an interior task)
-predicts at the ``prediction_points`` given to ``forward`` (a point-cloud
-``Mesh``, whose ``points`` alone are read, or a bare ``(N, d)`` tensor): they
-enter the encoder as tokens next to the boundary cells and the
-outputs are returned for them only. Their only inputs are their positions and
-the geometry the model computes for them; per-cell boundary inputs (declared per
-condition in ``boundary_schemas``) are carried by the boundary cells of that
-condition. The interior task takes the query-independent form: the
-prediction-point tokens are passive, they carry no routing weight, so at every
-depth they
-read the slices, anchors and prototypes the boundary formed and never write into
-them, and after every block each one also reads every boundary cell
-(``_tree_read``: a learned kernel of the
-pair's relative geometry and an attention over the cells' states at that depth,
-weighted by each cell's share of the boundary measure and evaluated through a
-Barnes-Hut forest over the cells). The prediction at a point is then a function of
-that point and the boundary alone (any request can be split into chunks with the
-same result). The two tasks own different parameter sets (the interior task adds
-the prediction-point input layer and the boundary read), which is why the choice
-is a constructor argument: a parameter that takes no part in a forward pass stops
-DDP.
+every mesh in ``boundary_meshes`` is a token (for the interior task, a sample of
+them). A surface task (``interior=False``) predicts at the centroids of the cells
+of the ``prediction_boundaries`` given to ``forward``, the names of the
+conditions that carry the outputs. For a vehicle that is its wall, with the
+tunnel's floor, walls, inlet and outlet read as conditions only. An interior task
+(``interior=True``) predicts at the ``prediction_points`` given to ``forward``: a
+point-cloud ``Mesh``, whose ``points`` alone are read, or a bare ``(N, d)``
+tensor. They enter the encoder as tokens next to the boundary cells, and the
+outputs are returned for them only. Their only inputs are their positions and the
+geometry the model computes for them; each condition's per-cell boundary inputs
+(declared in ``boundary_schemas``) are carried by that condition's cells.
 
-**Interior geometry.** A prediction-point token needs a direction (its
-"normal" in every invariant) and a distance to the wall. Both are computed
-inside the model from the boundary *surface*, the union of the cells of
-``boundary_meshes`` at full resolution, never taken as inputs: for each
-prediction point :math:`x_q` the exact closest point :math:`p_q` on the
+The interior task takes the query-independent form: the prediction-point tokens
+are passive and carry no routing weight. At every depth they read the slices,
+anchors and prototypes the boundary formed, and never write into them. After
+every block each one also reads every boundary cell (``_tree_read``): a learned
+kernel of the pair's relative geometry and an attention over the cells' states at
+that depth, weighted by each cell's share of the boundary measure and evaluated
+through a Barnes-Hut forest over the cells. The prediction at a point is then a
+function of that point and the boundary alone, so any request can be split into
+chunks with the same result. The two tasks own different parameter sets (the
+interior task adds the prediction-point input layer and the boundary read). The
+choice is therefore a constructor argument: a parameter that takes no part in a
+forward pass stops DDP.
+
+**Interior geometry.** A prediction-point token needs a direction (its "normal"
+in every invariant) and a distance to the wall. The model computes both from the
+boundary *surface*, the union of the cells of ``boundary_meshes`` at full
+resolution, and never takes them as inputs (``exact_boundary_geometry``). For
+each prediction point :math:`x_q`, the exact closest point :math:`p_q` on the
 surface's cells (point to face, never point to centroid) gives the distance
-:math:`d_q = \pm |x_q - p_q|`, signed by the generalized winding number of the
-oriented cells (``exact_boundary_geometry``), so positive on the side the cells'
-normals point to (an open surface, a boundary given without its far field, is signed
-by the threshold :math:`w = 1/2` on the side of :math:`\sigma`, which depends on its
-shape: give the whole boundary for a reliable sign), and the
-direction :math:`u_q`: the cell's normal, oriented toward the query, when
-:math:`p_q` is interior to a cell, else :math:`(x_q - p_q) / |x_q - p_q|`
-(``exact_boundary_geometry``). The token reads :math:`s_q = d_q / L` and
-:math:`\operatorname{asinh}(s_q / 10^{-6})` (``soft_log_length``; logarithmic
-away from the wall, linear through it and within :math:`10^{-6} L` of it) as its
-two distance channels, and
-:math:`\operatorname{sign}(d_q)\, u_q`
-(with :math:`\operatorname{sign}(0) = +1`, the gradient of the signed distance) as
-its direction. Both are continuous through the surface: a point on it, whose
-distance is zero or a rounding error of either sign, gets the code of the points
-just off it on either side. The boundary read also takes :math:`\log(r / |d_q|)`,
-floored at :math:`|d_q| = 10^{-12} L`, which is not continuous there: predict boundary
-values at a small offset into the domain, the offset the model was trained at.
-:math:`(d_q, u_q)` are functions of the surface
-and its orientation alone: the same for every draw of the boundary tokens,
-invariant to splitting a cell and converging as :math:`O(h^2)` under refinement
-of the surface, like a stored signed-distance field computed from the same
-surface, which the model therefore does not read. The search is a Warp BVH in three dimensions (a torch custom op) and
-an exact brute force over the segments in two (the interior task is
-implemented in two and three dimensions); the closest point is rebuilt from its
-cell's vertices, so both quantities are differentiable, and both are built from
+:math:`d_q = \pm |x_q - p_q|`. The generalized winding number of the oriented
+cells gives its sign, positive on the side the cells' normals point to. An open
+surface, such as a boundary given without its far field, is signed by the
+threshold :math:`w = \sigma / 2`, with :math:`\sigma` the sign of the volume
+the cells enclose, which depends on its shape: give the whole boundary for a
+reliable sign. The direction :math:`u_q` is the cell's normal, oriented toward
+the query, when :math:`p_q` is interior to a cell, and
+:math:`(x_q - p_q) / |x_q - p_q|` otherwise. The token reads
+:math:`s_q = d_q / L` and :math:`\operatorname{asinh}(s_q / 10^{-6})`
+(``soft_log_length``: logarithmic away from the wall, linear through it and
+within :math:`10^{-6} L` of it) as its two distance channels. Its direction is
+:math:`\operatorname{sign}(d_q)\, u_q`, the gradient of the signed distance, with
+:math:`\operatorname{sign}(0) = +1`. Both are continuous through the surface: a
+point on it, whose distance is zero or a rounding error of either sign, gets the
+code of the points just off it on either side. The boundary read also takes
+:math:`\log(r / |d_q|)`, floored at :math:`|d_q| = 10^{-12} L`, which is not
+continuous there: predict boundary values at a small offset into the domain, the
+offset the model was trained at.
+
+:math:`(d_q, u_q)` are functions of the surface and its orientation alone. They
+are the same for every draw of the boundary tokens, invariant to splitting a
+cell, and converge as :math:`O(h^2)` under refinement of the surface, as a stored
+signed-distance field computed from the same surface does; the model therefore
+does not read one. The search is a Warp BVH in three dimensions (a torch custom
+op) and an exact brute force over the segments in two; the interior task is
+implemented in two and three dimensions. The closest point is rebuilt from its
+cell's vertices, so both quantities are differentiable. Both are built from
 differences of positions, so every covariance contract holds.
 
-**Boundary tokens of the interior task.** The boundary tokens are a sample of
-the same cells, drawn inside the forward pass
-(``_sampling.sample_boundary_cells``):
-``n_boundary_tokens`` (default 200,000) tokens per case, shared over the named
-boundaries by water filling (a boundary with fewer cells than its share is kept
-whole and its unused share goes to the others), each cell drawn with
-probability :math:`\pi_i` proportional to its measure (capped at one) by
+**Boundary tokens of the interior task.** The boundary tokens are a sample of the
+same cells, drawn inside the forward pass (``_sampling.sample_boundary_cells``).
+The ``n_boundary_tokens`` (default 200,000) tokens per case are shared over the
+named boundaries by water filling: a boundary with fewer cells than its share is
+kept whole, and its unused share goes to the others. Each cell is drawn with
+probability :math:`\pi_i` proportional to its measure (capped at one), by
 systematic sampling along the Morton order of the cell centroids. The count is
 exactly :math:`\min(\text{cells}, \text{n\_boundary\_tokens})`, a function of the
-cell counts only, so the draw keeps static shapes; each kept cell's measure is its Horvitz-Thompson weight
-:math:`a_i / \pi_i`, so every measure-weighted read is an unbiased quadrature
-of the full surface, exact on a boundary kept whole; and the sample is spread
-along the space-filling curve, so every part of the surface is represented. In
-training the draw's start is uniform from the global torch RNG
-(``torch.manual_seed`` reproduces it), in evaluation it is fixed, so inference
-is deterministic. The draw reads the cells' measures and centroids in float64
-from the input meshes, so it is the same at every model precision. A surface
-task reads every cell it is given (its outputs are predicted at the cells of its
-prediction boundaries, which must all be tokens) and samples none.
+cell counts only, so the draw keeps static shapes. Each kept cell's measure is its
+Horvitz-Thompson weight :math:`a_i / \pi_i`, so every measure-weighted read is an
+unbiased quadrature of the full surface, exact on a boundary kept whole. The
+sample is spread along the space-filling curve, so every part of the surface is
+represented. In training the draw's start is uniform from the global torch RNG
+(``torch.manual_seed`` reproduces it). In evaluation it is fixed, so inference is
+deterministic. The draw reads the cells' measures and centroids in float64 from
+the input meshes, so it is the same at every model precision. A surface task
+samples none: it reads every cell it is given, and its outputs are predicted at
+the cells of its prediction boundaries, which must all be tokens.
 
-**Global inputs.** Rank-1 global inputs are the :math:`K` global directions:
-each is normalized to a unit direction inside the model (a direction is what
-the invariants consume; a physically meaningful magnitude belongs among the
-rank-0 global inputs), enters the seed through :math:`\hat n_i \cdot \hat
-g_k`, the layers through :math:`\hat g_k \cdot \hat\rho_{is}`, and the head
-basis as :math:`\hat g_k` with the complements of :math:`(\hat u_i, \hat
-g_k)`. Rank-0 global inputs are appended to every token's seed. Global
-inputs of rank 2 are refused (broadcast the tensor to the boundary cells and
-declare it as a boundary input instead).
+**Global inputs.** Rank-1 global inputs are the :math:`K` global directions. The
+model normalizes each to a unit direction, since a direction is what the
+invariants consume; a physically meaningful magnitude belongs among the rank-0
+global inputs. A direction enters the seed through :math:`\hat n_i \cdot \hat
+g_k`, the layers through :math:`\hat g_k \cdot \hat\rho_{is}`, and the head basis
+as :math:`\hat g_k` with the complements of :math:`(\hat u_i, \hat g_k)`. Rank-0
+global inputs are appended to every token's seed. Global inputs of rank 2 are
+refused: broadcast the tensor to the boundary cells and declare it as a boundary
+input instead.
 
-**Kernels.** The per-layer geometry region has two exact implementations
-of the same arithmetic: the eager PyTorch region, which rebuilds its
-intermediates in backward instead of storing them, and the fused one (one
-Triton kernel per direction that never materializes the (B, N, S, .) tensor;
-CUDA, float32/float64 geometry, autocast off or in bfloat16, at most three spatial
-dimensions, at most four per-point vectors counting the global directions (none
-counts as one) and the token's rank-1 inputs together, at most 1024
-slices, no rank-2 inputs). At the first forward pass the model picks the
-fused kernel when the inputs are on CUDA, Triton is importable and the
-constraints hold, and the eager region otherwise, logging the choice once. The
-fused kernel does not implement the per-token rank-2 contractions
-(rho^T T rho), so a model with rank-2 boundary inputs runs the eager region.
-The search of the prediction points' boundary geometry likewise runs a fast
-implementation on CUDA when Triton is importable and its reference otherwise,
-and the two give the same outputs bitwise. Each piece of the interior task's tree read
-(the forest build, the walk, the read with its node means) runs its fast
-kernel where that piece's requirements hold, each choice logged once, and its
-reference otherwise; the forest and the pairs are the same either way, the read
-the same up to summation order. Setting :attr:`ISLA.reference_kernels` to
-``True`` runs every one of these on its reference path: the eager geometry
-region, the reference search and every piece's reference read. It is an
-execution choice, not a constructor argument, so a checkpoint does not store it
-and a loaded model starts at ``False``.
+**Kernels.** The per-layer geometry region has two exact implementations of the
+same arithmetic. The eager PyTorch region rebuilds its intermediates in backward
+instead of storing them. The fused one is one Triton kernel per direction that
+never materializes the (B, N, S, .) tensor. It requires CUDA, float32 or float64
+geometry, autocast off or in bfloat16, at most three spatial dimensions, at most
+1024 slices, and at most four per-point vectors, counting the global directions
+(none counts as one) and the token's rank-1 inputs together. It also requires no
+rank-2 inputs, since it does not implement their per-token contractions
+(rho^T T rho). At the first forward pass the model picks the fused kernel when
+the inputs are on CUDA, Triton is importable and these constraints hold, and the
+eager region otherwise, logging the choice once. The search of the prediction
+points' boundary geometry likewise runs a fast implementation on CUDA when Triton
+is importable, and its reference otherwise; the two give the same outputs
+bitwise. Each piece of the interior task's tree read (the forest build, the walk,
+and the read with its node means) runs its fast kernel where that piece's
+requirements hold, and its reference otherwise, logging each choice once. The
+forest and the pairs are the same either way, and the read is the same up to
+summation order. Setting :attr:`ISLA.reference_kernels` to ``True`` runs every
+one of these on its reference path: the eager geometry region, the reference
+search and every piece's reference read. It is an execution choice, not a
+constructor argument, so a checkpoint does not store it and a loaded model starts
+at ``False``.
 
-Every constructor argument and every ``forward`` input is keyword-only, so a
-call reads as the recipe's ``forward_kwargs`` mapping does and models can be
-swapped without positional bookkeeping. ``forward(boundary_meshes=...,
-prediction_points=..., global_data=...)`` (interior) and ``forward(boundary_meshes=...,
-prediction_boundaries=..., global_data=...)`` (surface) return a point-cloud ``Mesh``;
-see the class docstring of :class:`ISLA`.
+Every constructor argument and every ``forward`` input is keyword-only, so a call
+reads like the recipe's ``forward_kwargs`` mapping, and models can be swapped
+without positional bookkeeping. Both ``forward(boundary_meshes=...,
+prediction_points=..., global_data=...)`` (interior) and
+``forward(boundary_meshes=..., prediction_boundaries=..., global_data=...)``
+(surface) return a point-cloud ``Mesh``; see the class docstring of
+:class:`ISLA`.
 
-**Data layout.** Inside ``forward`` the tokens stay TensorDicts: each boundary
-condition's cells (centroid, normal, measure, and the invariants of its declared
-``cell_data`` fields with its vectors and tensors, in a block layout over every
-declared condition, so that the cells of all conditions, and the in-model
-draw's sample of them, are one token set with static widths) and the
-prediction points are TensorDicts concatenated into one token state over
-``(batch, token)`` (completed to a multiple of ``_TOKEN_ALIGNMENT`` tokens by
-padding tokens of no measure that nothing reads), the field inputs enter the invariants and the head's
-coefficients leave as the output fields through cached, schema-ordered
-:class:`~tensordict.PackLayout` objects, and the output ``Mesh`` is built from them.
+**Data layout.** Inside ``forward`` the tokens stay TensorDicts. Each boundary
+condition's cells hold their centroid, normal and measure, and the invariants of
+the condition's declared ``cell_data`` fields with its vectors and tensors. These
+are in a block layout over every declared condition, so the cells of all
+conditions, and the in-model draw's sample of them, are one token set with static
+widths. The boundary cells and the prediction points are concatenated into one
+token state over ``(batch, token)``, completed to a multiple of
+``_TOKEN_ALIGNMENT`` tokens by padding tokens of no measure that nothing reads.
+The field inputs enter the invariants, and the head's coefficients leave as the
+output fields, through cached, schema-ordered :class:`~tensordict.PackLayout`
+objects; the output ``Mesh`` is built from them. The token axis itself stays
+dense where the arithmetic needs it: every softmax over points spans all tokens
+at once (passive tokens excluded by ``log_w = -inf``), the slice anchors are
+einsums over that axis, the fused geometry kernel reads its ``(B, N, .)``
+strides, and the boundary read indexes the flattened boundary tokens. The slice
+blocks take plain tensors.
+
 The surface task's whole model, ``Mesh`` inputs and output included, compiles with
 ``model.compile(fullgraph=True, dynamic=True)`` into one graph for every boundary
 count, boundary inputs up to rank 2 (``test_isla_compile.py``). **Compile it with**
@@ -329,11 +332,7 @@ count, boundary inputs up to rank 2 (``test_isla_compile.py``). **Compile it wit
 Inductor's default options make the compiled model compute a different function
 wherever it runs the eager geometry region, without an error or a warning. The interior task
 does not: its boundary read sizes its pairs from the data and breaks a
-fullgraph trace, so it compiles with ``compile_blocks``. The token axis itself stays dense where the arithmetic
-needs it: every softmax over points spans all tokens at once (passive tokens
-excluded by ``log_w = -inf``), the slice anchors are einsums over that axis, the
-fused geometry kernel reads its ``(B, N, .)`` strides, and the boundary read
-indexes the flattened boundary tokens; the slice blocks take plain tensors.
+fullgraph trace, so it compiles with ``compile_blocks``.
 """
 
 import contextlib
@@ -426,11 +425,11 @@ _EVAL_START = 0.5
 #: reduction over more than 65,536 rows takes its aligned path only for a multiple
 #: of its 32-row tile.
 _TOKEN_ALIGNMENT = 32
-#: The default of ``query_chunk_pairs``, the most walk pairs (prediction point, boundary
-#: source) an interior task's :meth:`ISLA.forward` reads in one chunk of prediction points: above it the points
-#: run in chunks of consecutive points, each holding only its own pair lists and
-#: kernel basis, so the read's memory stays flat in the point count (and each chunk
-#: stays within the fast walk's array limit).
+#: The default of ``query_chunk_pairs``: the most walk pairs (prediction point,
+#: boundary source) an interior task's :meth:`ISLA.forward` reads in one chunk of
+#: prediction points. Above it the points run in chunks of consecutive points, each
+#: holding only its own pair lists and kernel basis, so the read's memory stays flat
+#: in the point count and each chunk stays within the fast walk's array limit.
 _QUERY_CHUNK_PAIRS = 2**28
 
 
@@ -568,16 +567,16 @@ class _CaseInputs(NamedTuple):
 class ISLA(Module):
     r"""ISLA (Invariant Slice Attention): invariant backbone, equivariant edges.
 
-    A soft-slice transformer for steady boundary-value problems whose attention
-    operates only on invariants of the per-point vector set and whose outputs of
-    any rank are re-assembled in an equivariant basis at the heads, so the
-    network is exactly covariant under rotations, reflections and translations
-    by construction (see the module docstring for the contracts). The full model
-    is exactly covariant, up to roundoff, when the boundary's canonical frame is
+    A soft-slice transformer for steady boundary-value problems. Its attention
+    operates only on invariants of the per-point vector set, and its heads
+    re-assemble outputs of any rank in an equivariant basis, so the network is
+    exactly covariant under rotations, reflections and translations by
+    construction (the module docstring gives the contracts). The full model is
+    exactly covariant, up to roundoff, when the boundary's canonical frame is
     unique and not close to a tie. At a tie (a symmetry that reverses a principal
     axis: a mirror plane, a two-fold axis, a centre of symmetry; or equal spread
-    along two principal axes) a surface task stays exact, and an interior task is
-    exact only with ``n_boundary_tokens`` at least the cell count,
+    along two principal axes) a surface task stays exact. An interior task is
+    then exact only with ``n_boundary_tokens`` at least the cell count,
     ``tree_read_theta=0`` and a closed boundary, since its draw, read and
     winding-number tree are laid out in that frame. Otherwise it is approximate
     (module docstring, *Where the covariance is exact*). Every argument is
@@ -589,23 +588,22 @@ class ISLA(Module):
 
     **Setting up a new problem.** ISLA learns the map from a boundary-value
     problem's boundary data to its solution, so its inputs must pose that problem
-    completely. What goes in differs from point-cloud models, and these are the
+    completely. Its inputs differ from a point-cloud model's. These are the
     usual ways a setup goes wrong:
 
     1. *Every condition, with its data.* Pass every part of the domain's
        boundary (inlets, outlets, walls, far field, tunnel walls, symmetry
-       planes) as a condition, and declare in ``boundary_schemas`` every value
+       planes) as a condition. Declare in ``boundary_schemas`` every value
        each one prescribes (an inlet's velocity and turbulence values, an
        outlet's pressure, a moving wall's velocity). ``forward`` accepts any
        subset of the declared conditions, so a pipeline that drops one runs
        without an error and trains on an underposed problem. If a dataset
        stores only the body, build the missing parts from its own documented
-       constants instead of leaving them out. The inputs must determine the
-       solution: a pressure defined up to a constant needs the condition that
-       fixes its level (an outlet's prescribed pressure). A field that is zero
-       in every training case contributes nothing and its weights get no
-       gradient, so a later fine-tune on cases where it varies starts from
-       untrained weights.
+       constants. The inputs must determine the solution: a pressure defined
+       up to a constant needs the condition that fixes its level (an outlet's
+       prescribed pressure). A field that is zero in every training case
+       contributes nothing and its weights get no gradient, so a later
+       fine-tune on cases where it varies starts from untrained weights.
     2. *A condition is a boundary-condition type.* Use one name per kind of
        condition (what is prescribed, and how), with the same partition in
        every case. Each declared condition has its own input layer and, with
@@ -615,8 +613,8 @@ class ISLA(Module):
        the model.
     3. *Cells at full resolution.* Each boundary is a ``Mesh[n_spatial_dims -
        1, n_spatial_dims]`` of cells, not a point cloud: the model reads the
-       cells' centroids, normals and measures. For an interior task pass every
-       cell and let ``n_boundary_tokens`` draw the tokens. Decimating or
+       cells' centroids, normals and measures. For an interior task, pass every
+       cell and let ``n_boundary_tokens`` draw the tokens: decimating or
        subsampling the boundary first changes the surface the prediction
        points measure their distance to, and the length unit. A surface task
        reads every cell it is given, so subsample a large surface in the data
@@ -627,10 +625,10 @@ class ISLA(Module):
        outputs live (into the fluid, for a flow). The interior task's signed
        distance is positive on the side the normals point to, and the input
        invariants read each vector input against the normal. Reorient in the data
-       pipeline (reverse the vertex order of a boundary's cells to flip its
-       normals), not in the stored data. The model does not check the
-       orientation: a boundary oriented the other way gives the opposite signed
-       distance without an error.
+       pipeline, not in the stored data: reverse the vertex order of a
+       boundary's cells to flip its normals. The model does not check the
+       orientation, so a boundary oriented the other way gives the opposite
+       signed distance without an error.
     5. *No derived geometry and no coordinates as fields.* The model computes
        every geometric quantity it uses (the length unit, the frame, each
        prediction point's signed distance and direction) from the boundary
@@ -646,12 +644,12 @@ class ISLA(Module):
        direction), a loaded face's traction the same way for a stress scale, a
        density global with ``defines: rho``. The length ``L`` is built in: the
        RMS pairwise distance of all the given boundaries, so it measures the
-       whole domain when its far field is given. Each input is then divided
-       by its units' scale and each output multiplied by its own, so the
-       model is covariant under similarity. A dimensional field without
-       ``units`` enters, or leaves, as raw numbers. The same scales of a case,
-       for preprocessing or for another model, come from
-       :func:`~physicsnemo.experimental.models.isla.case_scales`.
+       whole domain when its far field is given. Each input is divided by its
+       units' scale and each output multiplied by its own, so the model is
+       covariant under similarity. A dimensional field without ``units``
+       enters, or leaves, as raw numbers.
+       :func:`~physicsnemo.experimental.models.isla.case_scales` gives a case's
+       scales for preprocessing or for another model.
     8. *Global inputs.* A rank-0 global enters every token's seed as given
        (after its units and ``scale``, when declared), so pass it
        dimensionless and of order one: a standardized log Reynolds number,
@@ -665,11 +663,8 @@ class ISLA(Module):
         and returns a point-cloud ``Mesh``, not a ``(B, N, C)`` tensor: train
         with one case per GPU. An interior task's prediction points are
         independent of one another, so train on a random subset of each
-        case's points and predict any number of them in chunks
-        (``query_chunk_pairs``, :meth:`query_chunks`): each chunk computes its
-        own points' geometry, so the geometry's memory grows with the chunk, not
-        with the point count, while the geometry's boundary-side setup (the weld and
-        the search's trees) is repeated per chunk.
+        case's points, and predict any number of them in chunks
+        (``query_chunk_pairs``, :meth:`query_chunks`).
     11. *Targets.* With ``output_stats`` the outputs are standardized physical
         fields, ``(y - mean) / std``; without it, physical fields (when units
         are declared). Train against targets in the same form.
@@ -707,17 +702,17 @@ class ISLA(Module):
         no-slip wall: ``{}``). The names are fixed here, in canonical (sorted)
         order; a name is a non-empty string without ``"."``. ``forward`` takes any
         non-empty subset of them, each mesh carrying its own condition's fields.
-        Each condition has its own input layer (``boundary_conditions[name].seed``),
-        which maps the condition's seed ``[1, n.g_k, its fields' invariants, the
-        global scalars]`` to the token width ahead of the shared GELU and linear
-        layer (``embed``); its first column, on the constant, is the condition's
+        Each condition has its own input layer (``boundary_conditions[name].seed``).
+        It maps the condition's seed ``[1, n.g_k, its fields' invariants, the
+        global scalars]`` to the token width, ahead of the shared GELU and linear
+        layer (``embed``). Its first column, on the constant, is the condition's
         learned offset, so a condition's identity is in the parameters its tokens
         read even when it declares no field. A condition's rank-1 and rank-2
         inputs (and the vectors derived from its rank-2 inputs) reach the slice
         layers through its own linear maps onto shared vector and tensor channels,
-        as many as the widest condition has, where they contract with the
-        token-to-anchor direction (module docstring); the slice layers themselves
-        are shared by every condition. Declare every condition of the domain's
+        as many as the widest condition has. There they contract with the
+        token-to-anchor direction (module docstring); every condition shares the
+        slice layers themselves. Declare every condition of the domain's
         boundary and every value it prescribes, one name per condition type with
         the same partition in every case (*Setting up a new problem*, items 1 and
         2).
@@ -731,58 +726,54 @@ class ISLA(Module):
         order one; a rank-1 field's magnitude is dropped (*Setting up a new
         problem*, item 8).
     interior : bool, optional, default=False
-        The task structure. ``False``: a surface task, the outputs are predicted
+        The task structure. ``False``: a surface task. The outputs are predicted
         at the cells of the boundaries ``forward`` names in
         ``prediction_boundaries`` (every given boundary is read); ``forward`` takes
-        no ``prediction_points`` and the model has no prediction-point parameters.
-        ``True``: an interior task, the outputs are predicted at
-        ``prediction_points``, which enter the encoder as passive tokens
-        (the query-independent form): they carry no routing weight, pass through every
-        block with the same weights and read its slices at matched depth, and after every
-        block they also read every boundary cell (module docstring), so each
-        prediction depends on its own point and the boundary only. ``forward``
-        requires them. The boundary read breaks the whole-model fullgraph compile
-        (use ``compile_blocks``), and rank-2 boundary inputs are refused. The two
-        are different parameter sets (a parameter without a gradient stops DDP),
-        so the choice is made at construction.
+        no ``prediction_points``, and the model has no prediction-point parameters.
+        ``True``: an interior task. The outputs are predicted at the
+        ``prediction_points`` that ``forward`` requires, which enter the encoder
+        as passive tokens (the query-independent form; module docstring,
+        *Surface and interior tasks*), so each prediction depends on its own
+        point and the boundary only. The boundary read breaks the whole-model
+        fullgraph compile (use ``compile_blocks``), and rank-2 boundary inputs
+        are refused.
+        The two tasks have different parameter sets (a parameter without a
+        gradient stops DDP), so the choice is made at construction.
     n_boundary_tokens : int, optional, default=200000
         Interior task only: the number of boundary tokens per case. ``forward``
-        takes each named boundary at full resolution and draws its tokens from the
-        cells inside the model
-        (``_sampling.sample_boundary_cells``):
-        the budget is shared over the named boundaries by water filling (equal
-        shares, a boundary with fewer cells than its share kept whole and its
-        unused share given to the others), the cells are drawn with probability
-        proportional to their measure (capped at one) by systematic sampling along
-        the Morton order of their centroids, and each kept cell carries its
-        Horvitz-Thompson measure (its measure over its inclusion probability). The
-        Morton order is taken in the boundary's canonical frame, so the drawn
-        cells move with the case unless the boundary has a symmetry that reverses
-        a principal axis (a mirror plane, a two-fold axis, a centre of symmetry),
-        or equal spread along two principal axes (module docstring, *Where the
-        covariance is exact*). The token count is exactly ``min(total cells,
-        n_boundary_tokens)``; a boundary with all its cells kept is read as
-        given. In training the draw's start is uniform from the global torch RNG
-        (``torch.manual_seed`` reproduces it), in evaluation (``model.eval()``) it
-        is fixed, so inference is deterministic. So pass the boundaries undecimated and unsubsampled: the
-        draw is the subsampling. A surface task reads every cell it is given and
-        samples none: it takes only the default.
+        takes each named boundary at full resolution and draws its tokens from
+        the cells inside the model, each kept cell with its Horvitz-Thompson
+        measure (module docstring, *Boundary tokens of the interior task*). The
+        draw's Morton order is taken in the boundary's canonical frame, so the
+        drawn cells move with the case unless the boundary has a symmetry that
+        reverses a principal axis (a mirror plane, a two-fold axis, a centre of
+        symmetry), or equal spread along two principal axes (module docstring,
+        *Where the covariance is exact*). The token count
+        is exactly ``min(total cells, n_boundary_tokens)``; a boundary with all
+        its cells kept is read as given. In training the draw's start is uniform
+        from the global torch RNG (``torch.manual_seed`` reproduces it). In
+        evaluation (``model.eval()``) it is fixed, so inference is deterministic.
+        Pass the boundaries undecimated and unsubsampled: the draw is the
+        subsampling. A surface task reads every cell it is given and samples
+        none, so it takes only the default.
     tree_read_theta : float, optional, default=1.0
         Interior task only: the Barnes-Hut opening angle :math:`\theta` of the
         boundary read. A cluster of boundary cells is read as one virtual cell
         when its box diagonal is below :math:`\theta` times its distance from the
         point and the RMS chord of its normals about their mean is below
-        :math:`\theta`; a smaller angle reads more cells one by one, more exactly
-        and at more pairs per point, and 0 is the exact read (every cell of every
+        :math:`\theta`. A smaller angle reads more cells one by one, more exactly
+        and at more pairs per point; 0 is the exact read (every cell of every
         point). The orientation split of the read's forest already bounds the
-        chord, so the coherence test refuses no cluster above
-        :math:`\theta = \sqrt{2 (1 - 1/\sqrt{d})}` (0.92 in three dimensions, 0.77
-        in two), the default included. At :math:`\theta > 0` the read is piecewise
-        smooth: the output jumps where a cluster's admission changes, in the point
-        and in the boundary's vertices, so take derivatives of the output in space
-        or in shape at :math:`\theta = 0`. Read a model at the angle it was
-        trained at: a cluster's aggregate is what the kernel learns to read. A
-        finite number at least 0; a surface task takes only the default.
+        chord, so above :math:`\theta = \sqrt{2 (1 - 1/\sqrt{d})}` (0.92 in three
+        dimensions, 0.77 in two), the default included, the coherence test
+        rejects no cluster. At :math:`\theta > 0` the read is piecewise smooth:
+        the output jumps where a cluster's admission changes, in the point and in
+        the boundary's vertices. At any angle, the derivatives of the outputs in
+        the prediction points or in the boundary's vertices are partial: they
+        follow the points' own features and the token states, but not the read's
+        pair geometry, whose invariants take no input gradient. Read a model at the angle it was trained at:
+        a cluster's aggregate is what the kernel learns to read. A finite number
+        at least 0; a surface task takes only the default.
     tree_read_leaf_size : int, optional, default=4
         Interior task only: the boundary cells per leaf of the read's trees. At
         :math:`\theta > 0` a leaf that is not read as a cluster is read cell by
@@ -817,8 +808,11 @@ class ISLA(Module):
         Run every slice block through :func:`torch.compile`. The compiled function
         is the block's forward, built at the first forward pass, so parameter
         names, checkpoints and the eager path are unchanged; the fused geometry
-        kernel stays a custom-op leaf. Compiles once per distinct token count (an
-        interior task whose cases fill its token budget, with a fixed number of
+        kernel stays a custom-op leaf. In an interior task the boundary read's
+        LayerNorms and its key, value and query maps compile too (dynamic shapes,
+        one graph for every block), so float32 training gives gradients that
+        differ from eager at rounding level. Compiles once per distinct token count
+        (an interior task whose cases fill its token budget, with a fixed number of
         prediction points per step, compiles once); with a token count that
         changes every case, leave it off.
     n_spatial_dims : int, optional, default=3
@@ -830,24 +824,24 @@ class ISLA(Module):
         in three dimensions, perpendiculars in two; odd-parity outputs are refused
         for ``n_spatial_dims >= 4``). The fused Triton geometry kernel runs two and
         three dimensions; higher ones run the eager region. The interior task (its
-        exact boundary geometry) is implemented in two and three dimensions. A
-        two-dimensional problem is passed with ``n_spatial_dims=2`` (polyline
-        boundaries) rather than embedded with a zero third coordinate.
+        exact boundary geometry) is implemented in two and three dimensions. Pass
+        a two-dimensional problem with ``n_spatial_dims=2`` (polyline
+        boundaries), not embedded with a zero third coordinate.
     output_stats : Mapping[str, Mapping], optional, default=None
         ``{name: {"mean", "std"}}`` over declared outputs (the format of
         ``NormalizeMeshFields.stats``; ``type`` is ignored): each output, after its
         units are restored, is returned as ``(y - mean) / std``, so the model
         predicts a dataset's standardized physical targets. The mean of a field of
         rank 1 or more must be 0. ``None``: the outputs as the head gives them (in
-        physical units when declared). The units and the defined scales are
-        declared in the schemas: each field's mapping may carry ``units`` (``"L"``
-        and the defined scales' names to exponents), ``defines`` (a scale's name,
-        on a rank-1 field or a rank-0 global) and ``scale`` (an output's positive
-        constant :math:`c`: :math:`y = c \hat y \prod \text{scale}^{\text{exp}}`).
-        With any of them, or ``output_stats``, the head and the output assembly
-        run in the parameters' precision under autocast. A loss compares the
-        outputs with targets in the same form: standardized by the same stats when
-        they are given, physical otherwise.
+        physical units when declared). The schemas declare the units and the
+        defined scales (module docstring, *Scales*): a field's mapping may carry
+        ``units`` (``"L"`` and the defined scales' names to exponents),
+        ``defines`` (a scale's name, on a rank-1 field or a rank-0 global) and
+        ``scale`` (an output's positive constant :math:`c`: :math:`y = c \hat y
+        \prod \text{scale}^{\text{exp}}`). With any of them, or ``output_stats``,
+        the head and the output assembly run in the parameters' precision under
+        autocast. A loss compares the outputs with targets in the same form:
+        standardized by the same stats when they are given, physical otherwise.
 
     Forward
     -------
@@ -855,60 +849,62 @@ class ISLA(Module):
         The boundary, as ``Mesh[n_spatial_dims - 1, n_spatial_dims]`` objects keyed
         by boundary-condition name (a polyline in two dimensions, a surface in
         three): any non-empty subset of the names declared in
-        ``boundary_schemas``, in any order (an unknown name is a ``ValueError``; an
-        absent condition, like one with no cells, contributes no tokens). The
+        ``boundary_schemas``, in any order. An unknown name is a ``ValueError``;
+        an absent condition, like one with no cells, contributes no tokens. The
         subset is for a case that has no part of that kind (a domain without slip
-        walls); a condition the case has but the pipeline leaves out is not
+        walls). A condition the case has but the pipeline leaves out is not
         reported, and the model then solves a different problem. Every mesh's
         cell normals point the same way in every case, into the domain where the
-        outputs live (*Setting up a new problem*, item 4), and their floating
-        dtype is the parameters' (another is a ``ValueError``). Their cells are the
-        boundary tokens, the conditions in canonical (sorted) order, each
-        condition's cells in its mesh's order: a token's position is the cell
-        centroid, its normal the cell normal, its quadrature measure the cell's
-        effective measure (``cell_data["_effective_measure"]``) when present, else
-        the cell's geometric measure. Each condition's ``boundary_schemas`` fields
-        are read from its mesh's ``cell_data`` by their (possibly dotted) names;
-        other cell data are ignored. A surface task's tokens are every cell of
-        every given boundary, those of its prediction boundaries and those read as
-        conditions only (a tunnel's floor, walls, inlet and outlet). An interior
-        task takes the boundaries at full resolution: their cells are the surface
-        of the prediction points' geometry, and its tokens are
-        ``n_boundary_tokens`` of them drawn inside the model (module docstring),
-        each kept cell with its Horvitz-Thompson measure.
+        outputs live (*Setting up a new problem*, item 4). Their floating dtype
+        is the parameters' (another is a ``ValueError``). The cells are the
+        boundary tokens, the conditions in canonical (sorted) order and each
+        condition's cells in its mesh's order. A token's position is the cell
+        centroid, its normal the cell normal, and its quadrature measure the
+        cell's effective measure (``cell_data["_effective_measure"]``) when
+        present, else the cell's geometric measure. Each condition's
+        ``boundary_schemas`` fields are read from its mesh's ``cell_data`` by
+        their (possibly dotted) names; other cell data are ignored. A surface
+        task's tokens are every cell of every given boundary: those of its
+        prediction boundaries and those read as conditions only (a tunnel's
+        floor, walls, inlet and outlet). An interior task takes the boundaries at
+        full resolution: their cells are the surface of the prediction points'
+        geometry, and its tokens are ``n_boundary_tokens`` of them drawn inside
+        the model (module docstring), each kept cell with its Horvitz-Thompson
+        measure.
     prediction_points : Mesh or torch.Tensor, optional, default=None
         The interior task's prediction points (``interior=True``, required there):
         a point-cloud ``Mesh`` whose ``points`` are the prediction points (its
         ``point_data`` is not read, so features attached there are ignored), or a
         bare tensor of shape :math:`(N, d)`, in the boundary meshes' coordinates,
         of a floating dtype no wider than the parameters' (narrower points are
-        promoted; wider ones are a ``ValueError``). A rotation, reflection,
+        promoted to it, the returned Mesh's points included; wider ones are a
+        ``ValueError``). A rotation, reflection,
         translation or scaling applied to both transforms the outputs covariantly
-        (exactly where the module docstring's *Where the covariance is exact* says),
-        while one applied to the points alone poses another problem. Each point's prediction depends on that point and the
-        boundary only, so any subset of a case's points (a training sample, one
-        chunk of a large evaluation) gives the same values at those points, up to
-        summation order. The points enter the encoder as passive readers of the
-        boundary (the query-independent form); each one's built-in geometry, its signed
-        distance to the boundary surface (the cells of ``boundary_meshes``) and the direction
-        from it, is computed inside the model from the exact closest point on the
-        surface's cells (``exact_boundary_geometry``) and is never an input.
-        They run after the boundary side in chunks of consecutive points of at
-        most ``query_chunk_pairs`` walk pairs each, each chunk measuring its own
-        points' geometry. ``None`` for a surface task.
+        (exactly where the module docstring's *Where the covariance is exact*
+        says); one applied to the points alone poses another problem. Each
+        point's prediction depends on that point and the boundary only, so any
+        subset of a case's points (a training sample, one chunk of a large
+        evaluation) gives the same values at those points, up to summation order.
+        The points enter the encoder as passive readers of the boundary (the
+        query-independent form). Each one's signed distance to the boundary
+        surface (the cells of ``boundary_meshes``) and the direction from it are
+        computed inside the model, never taken as inputs (module docstring,
+        *Interior geometry*). The points run after the boundary side, in chunks
+        of at most ``query_chunk_pairs`` walk pairs each. ``None`` for a surface
+        task.
     prediction_boundaries : list[str] or tuple[str, ...], optional, default=None
         The surface task's output boundaries (``interior=False``, required there):
         a non-empty list or tuple of distinct names of given boundaries with
         cells, at whose cells the outputs are predicted (DrivAerML Surface:
         ``["vehicle"]``, its floor, walls, inlet and outlet read as conditions
         only; a surface whose conditions together carry the outputs names them
-        all). Their order does not matter. It owns no parameters: the head reads
-        the same tokens whichever boundaries carry the outputs, only the rows it
-        returns differ. The prediction is a quadrature over the cells given for
-        these boundaries (the request), so a request must cover the body. A larger
-        request, or the mean of several, lowers the error: the spread between
-        requests falls about as one over the square root of their cell count.
-        ``None`` for an interior task.
+        all). Their order does not matter. The argument owns no parameters: the
+        head reads the same tokens whichever boundaries carry the outputs, and
+        only the rows it returns differ. The prediction is a quadrature over the
+        cells given for these boundaries (the request), so a request must cover
+        the body. A larger request, or the mean of several, lowers the error: the
+        spread between requests falls about as one over the square root of their
+        cell count. ``None`` for an interior task.
     global_data : TensorDict or Mapping[str, torch.Tensor], optional, default=None
         The case's per-case fields, a TensorDict (or mapping) with the
         ``global_schema`` fields as leaves (a rank-0 field a scalar, a rank-1 field
@@ -931,11 +927,11 @@ class ISLA(Module):
         by ``output_stats`` when it is given. A field declared with rank :math:`r`
         and even parity transforms as a true rank-:math:`r` tensor under every
         orthogonal map :math:`R` of the inputs (:math:`T \to R^{\otimes r} T`;
-        rotations and reflections alike) and is invariant under translations, an
-        odd field picking up the extra sign :math:`\det R`, exactly where the
-        module docstring's *Where the covariance is exact* says and approximately
-        otherwise. Components in any frame
-        are only ever a view of such a field.
+        rotations and reflections alike) and is invariant under translations. An
+        odd field picks up the extra sign :math:`\det R`. Both hold exactly where
+        the module docstring's *Where the covariance is exact* says, and
+        approximately otherwise. Components in any frame are only ever a view of
+        such a field.
 
     Notes
     -----
@@ -1030,11 +1026,9 @@ class ISLA(Module):
         self._budget_eager_warned: list = []
         ### Whether an interior forward pass of this model has logged its chunks (once).
         self._forward_chunks_logged = False
-        ### The spatial dimension of the points. Every geometric quantity is built
-        ### for d dimensions; the head's basis and the coefficient count depend on
-        ### d (pseudovectors exist by the Levi-Civita construction: perpendiculars
-        ### in two dimensions, cross products in three), which is why d is a
-        ### constructor argument and forward checks the points.
+        ### The head's basis and coefficient count depend on the spatial dimension d
+        ### (pseudovectors by the Levi-Civita construction), so d is a constructor
+        ### argument and forward checks the points against it.
         if int(n_spatial_dims) < 2:
             raise ValueError(f"n_spatial_dims must be at least 2, got {n_spatial_dims!r}")
         self.n_spatial_dims = int(n_spatial_dims)
@@ -1137,24 +1131,20 @@ class ISLA(Module):
                         f"(interior=False) has none, so it takes the default ({default!r}); "
                         f"got {getattr(self, name)!r}"
                     )
-        ### Checkpoints store the constructor arguments as JSON. A FieldSchema
-        ### is a dict and serializes as it stands; recording the parsed schemas
-        ### keeps the metadata JSON-safe whatever container the caller passed
-        ### (a Hydra DictConfig, for instance).
-        ### The declarations are stored merged with their ISLA-local keys.
+        ### Checkpoints store the constructor arguments as JSON. Recording the parsed
+        ### schemas (a FieldSchema is a dict), merged with their ISLA-local keys, keeps
+        ### the metadata JSON-safe whatever container the caller passed (a Hydra
+        ### DictConfig, for instance).
         self._args["__args__"]["output_schema"] = merged(self.output_schema, out_extras) or None
         self._args["__args__"]["global_schema"] = merged(self.global_schema, g_extras) or None
         self._args["__args__"]["boundary_schemas"] = {
             name: merged(schema, b_extras[name]) for name, schema in self.boundary_schemas.items()
         }
         self._args["__args__"]["output_stats"] = self.output_stats
-        ### The problem's global data are zero or more global DIRECTIONS (each
-        ### enters as a unit direction: one seed term n.g_k per token, one
-        ### direction cosine rel.g_k per point-anchor pair, and the head basis
-        ### gains g_k with the spherical complements of (u, g_k)) and zero or more
-        ### global SCALARS (PDE parameters; appended to every token's seed). With
-        ### rank-1 boundary sources the derived direction g is the last direction;
-        ### a rank-0 global that defines a scale is consumed, not appended.
+        ### The global DIRECTIONS (rank 1) and SCALARS (rank 0; module docstring,
+        ### *Global inputs*). With rank-1 boundary sources the derived direction g is
+        ### the last direction; a rank-0 global that defines a scale is consumed, not
+        ### appended.
         self._global_vector_names = [
             n for n, s in self.global_schema.items() if s.rank == 1
         ]
@@ -1241,17 +1231,19 @@ class ISLA(Module):
             _RoutingLogits(hidden, n_slices, self.routing_temperature) if self._needs_frame else None
         )
         self.norm_out = nn.LayerNorm(hidden)
-        ### One linear head emits every output's invariant coefficients; each
-        ### output is contracted with tensor products of the token's basis vectors
-        ### (_OutputLayout / _assemble_output). True vectors: g_1..g_K, n, rhat,
-        ### e_th(rhat, n), e_th(rhat, g_k), m = 2K+3 in every dimension.
-        ### Pseudovectors by the Levi-Civita construction from the primaries
-        ### {g_k, n, rhat}: their perpendiculars in two dimensions (p = K + 2),
-        ### their pairwise cross products in three (p = C(K+2, 2)); a pseudovector
-        ### in d dimensions needs d - 1 vectors, so odd-parity outputs are refused
-        ### for d >= 4 until a dataset needs them. For K = 1 in 3-D and outputs
-        ### {scalar: 0, vector: 1} the head has width 1 + 5.
+        ### One linear head emits every output's invariant coefficients, which are
+        ### contracted with the token's basis vectors (_OutputLayout, _assemble_output;
+        ### module docstring, *Outputs*). True vectors: g_1..g_K, n, rhat,
+        ### e_th(rhat, n), e_th(rhat, g_k), so m = 2K+3. Pseudovectors: p = K + 2 in
+        ### two dimensions, C(K+2, 2) in three; for d >= 4, odd-parity outputs are
+        ### refused until a dataset needs them. For K = 1 in 3-D and outputs {scalar: 0, vector: 1} the head
+        ### has width 1 + 5.
         self._n_true_basis = 3 + 2 * K
+        odd_scalars = [n for n, sp in self.output_schema.items() if sp.rank == 0 and sp.parity == "odd"]
+        if odd_scalars:
+            raise NotImplementedError(
+                f"odd-parity rank-0 outputs {odd_scalars!r}: pseudoscalar outputs are not implemented"
+            )
         if self.n_spatial_dims == 3:
             self._n_pseudo_basis = (K + 2) * (K + 1) // 2
         elif self.n_spatial_dims == 2:
@@ -1283,12 +1275,10 @@ class ISLA(Module):
             if layout.index is not None:
                 self.register_buffer(f"_output_index_{i}", layout.index, persistent=False)
         self.head = nn.Linear(hidden, self._n_head_coeffs)
-        ### Prediction-point tokens (interior=True): the prediction points enter the
-        ### encoder as tokens, carrying the same {n_q, g_k} invariant seeds as the
-        ### boundary tokens plus the parameters of _QueryTokens. They are passive
-        ### (the query-independent form), with no routing weight. Outputs are returned for
-        ### these tokens only. Registered last, so the boundary-side parameter order is that of a
-        ### surface model; a surface model (interior=False) has none of them, so
+        ### Prediction-point tokens (interior=True): the same {n_q, g_k} invariant seeds
+        ### as the boundary tokens, through the parameters of _QueryTokens; passive (the
+        ### query-independent form). Registered after the boundary side, so its
+        ### parameter order is a surface model's. A surface model has none of them, so
         ### every parameter it owns takes part in every forward pass.
         self._n_query_features = 2  # the built-in distance channels
         self.qt = (
@@ -1296,18 +1286,17 @@ class ISLA(Module):
             if self.interior
             else None
         )
-        ### The interior task's boundary read (_tree_read.py): the passive prediction points of
-        ### the interior task also read every boundary cell after every block, through
-        ### a Barnes-Hut forest at tree_read_theta (0: the exact read) with
-        ### tree_read_leaf_size cells per leaf. Registered after everything else, so
-        ### every other model owns exactly the parameters it has without the read.
-        ### _tree_read_kernel names the implementation of the tree read, as _geo_kernel
-        ### does the geometry region's: "reference" (the per-face cluster trees,
-        ### GLOBE's walk, the kernel term a matmul read by _segment_softmax.py) or
-        ### "auto", where the forest build (_tree_build.py), the walk (_tree_walk.py)
-        ### and the read (_fused_read.py: the kernel term computed inside the read,
-        ### nothing per pair kept but the basis) each take their fast path where
-        ### their own requirements hold. reference_kernels sets it.
+        ### The interior task's boundary read (_tree_read.py): after every block the
+        ### prediction points read every boundary cell through a Barnes-Hut forest.
+        ### Registered after the blocks, the head and the prediction-point tokens, so
+        ### those keep their places.
+        ### _tree_read_kernel names the read's implementation, as _geo_kernel does the
+        ### geometry region's: "reference" (the per-face cluster trees, GLOBE's walk,
+        ### the kernel term a matmul read by _segment_softmax.py) or "auto", where the
+        ### forest build (_tree_build.py), the walk (_tree_walk.py) and the read
+        ### (_fused_read.py: the kernel term computed inside the read, nothing per pair
+        ### kept but the basis) each take their fast path where their own requirements
+        ### hold. reference_kernels sets it.
         self._tree_read_kernel = "auto"
         self.kernel_basis = None
         self.kernel_reads = None
@@ -1457,14 +1446,18 @@ class ISLA(Module):
         r"""Whether every region runs its reference path; ``False`` by default.
 
         Under ``False`` the geometry region of every slice layer, the search of the
-        prediction points' boundary geometry and each piece of the interior task's tree read
-        run their fast kernels where their requirements hold (CUDA and Triton among
-        them) and their reference paths otherwise, each choice logged once. Set it to
-        ``True`` to run every one on its reference path: the eager geometry region,
-        the reference search and the reference tree read. They compute the same
-        outputs up to summation order (module docstring, *Kernels*). An execution
-        choice, not a constructor argument: a checkpoint does not store it, and a
-        loaded model starts at ``False``.
+        prediction points' boundary geometry and each piece of the interior task's
+        tree read run their fast kernels where their requirements hold (CUDA and
+        Triton among them), and their reference paths otherwise. ``True`` runs every
+        one on its reference path: the eager geometry region, the reference search
+        and the reference tree read. Both compute the same outputs up to summation
+        order (module docstring, *Kernels*). A checkpoint does not store this
+        execution choice, and a loaded model starts at ``False``.
+
+        Returns
+        -------
+        bool
+            ``True`` when every region is set to its reference path.
         """
         return all(getattr(self, name) == path for name, path in _REFERENCE_KERNELS.items())
 
@@ -1603,6 +1596,11 @@ class ISLA(Module):
             self._block_forwards = [self._compile_block(block.forward) for block in self.blocks]
         return self._block_forwards
 
+    def _reads_compiled(self) -> bool:
+        """Whether the boundary reads run their projections compiled (``compile_blocks``
+        outside a whole-model compile)."""
+        return self.compile_blocks and not torch.compiler.is_compiling()
+
     def _block_read_callables(self):
         r"""The slice blocks' passive reads (:meth:`_SliceBlock.read`), compiled as
         :meth:`_block_callables` compiles their forwards."""
@@ -1667,6 +1665,16 @@ class ISLA(Module):
         is passed as its options (``torch._inductor.list_mode_options``) and the
         option is added to ``options`` unless they set it; another backend gets the
         arguments as given.
+
+        Parameters
+        ----------
+        *args, **kwargs
+            The arguments of ``torch.compile``, handled as above.
+
+        Returns
+        -------
+        None
+            The model is compiled in place.
         """
         from torch._dynamo.backends.registry import get_default_backend
 
@@ -2023,17 +2031,17 @@ class ISLA(Module):
     ) -> Mesh:
         r"""Predict the declared output fields for one case.
 
-        Both tasks read the whole boundary in ``boundary_meshes``; where the outputs
-        are is the second argument: ``prediction_points`` for an interior task,
-        ``prediction_boundaries`` for a surface task (exactly one of them, as the
-        task requires). The inputs pose one boundary-value problem, so they should
+        Both tasks read the whole boundary in ``boundary_meshes``. The outputs are
+        at ``prediction_points`` for an interior task and at
+        ``prediction_boundaries`` for a surface task; pass exactly the one the task
+        requires. The inputs pose one boundary-value problem, so they should
         determine its solution: every condition with its prescribed values, the
         boundaries at full resolution and oriented alike (class docstring,
         *Setting up a new problem*). The input checks run in eager mode only;
         under :func:`torch.compile` a malformed case is not refused.
 
-        The inputs and the output are documented in the class docstring's
-        *Forward* and *Outputs* sections.
+        The class docstring's *Forward* and *Outputs* sections document the inputs
+        and the output.
         """
         c = self._case_inputs(boundary_meshes, prediction_points, global_data, prediction_boundaries)
         if c.query is None:
@@ -2073,24 +2081,49 @@ class ISLA(Module):
         r"""The interior task's ``forward`` in chunks of prediction points, for a training
         step that holds the activations of one chunk of points at a time.
 
-        Runs the boundary side of the forward pass once, from the same arguments:
-        the case's inputs (the token draw included, which consumes the global RNG
-        as ``forward`` does), the boundary tokens through every block and the
-        forest (each chunk walks it for its own points). What the prediction points read of each block
-        (its prototypes, anchors and slice states, the boundary read's keys and
-        values) and the head frame's prototypes and anchors become leaves that
-        accumulate gradients. The result ``chunks``, a :class:`QueryChunks`, is then called as
-        ``chunks(start, stop)``: the output Mesh of ``prediction_points[start:stop]``,
-        equal to those rows of ``forward`` up to summation order (each point
-        reads exactly what it reads among all of them), differentiable in the
-        parameters and the leaves. After the chunks' backward passes,
-        ``chunks.backward()`` carries the leaves' gradients through the boundary side
-        once, so the parameters' gradients are those of the unchunked step whose
-        loss is the sum of the chunks' (``chunks.n_points`` points in all).
-        Interior task only: a surface model has no prediction points to chunk.
+        It takes ``forward``'s arguments and runs the boundary side of the forward
+        pass once: the case's inputs (the token draw included, which consumes the
+        global RNG as ``forward`` does), the boundary tokens through every block,
+        and the forest, which each chunk walks for its own points. What the
+        prediction points read of each block (its prototypes, anchors and slice
+        states, and the boundary read's keys and values) and the head frame's
+        prototypes and anchors become leaves that accumulate gradients.
+
+        Call the result ``chunks``, a :class:`QueryChunks`, as
+        ``chunks(start, stop)`` for the output Mesh of
+        ``prediction_points[start:stop]``. It equals those rows of ``forward`` up
+        to summation order (each point reads exactly what it reads among all of
+        them), and is differentiable in the parameters and the leaves. After the
+        chunks' backward passes, ``chunks.backward()`` carries the leaves'
+        gradients through the boundary side once. The parameters' gradients are
+        then those of the unchunked step whose loss is the sum of the chunks'
+        (``chunks.n_points`` points in all).
+
         Each chunk computes its own points' geometry (their signed distance and
-        direction), so the geometry's memory grows with the chunk, not with all the points;
-        the geometry's boundary-side setup is repeated per chunk.
+        direction), so the geometry's memory grows with the chunk, not with all
+        the points. The geometry's boundary-side setup (the weld and the search's
+        trees) is repeated per chunk. Interior task only: a surface model has no
+        prediction points to chunk.
+
+        Parameters
+        ----------
+        boundary_meshes : Mapping[str, Mesh]
+            The boundary, as in ``forward`` (class docstring, *Forward*).
+        prediction_points : Mesh or torch.Tensor
+            The prediction points, a point-cloud ``Mesh`` or a tensor of shape
+            :math:`(N, d)`, as in ``forward``.
+        global_data : TensorDict or Mapping[str, torch.Tensor], optional, default=None
+            The case's per-case fields, as in ``forward``.
+
+        Returns
+        -------
+        QueryChunks
+            The boundary side's result, called per chunk of prediction points.
+
+        Raises
+        ------
+        ValueError
+            If the model is a surface model (``interior=False``).
         """
         if not self.interior:
             raise ValueError(
@@ -2161,11 +2194,8 @@ class ISLA(Module):
         like = meshes[0].points
         global_td = self._select_global_data(global_data, like.device)
         global_rows = self._global_rows(global_td, like)
-        ### The length unit, the measure-weighted RMS pairwise distance of the given
-        ### boundaries at full resolution, each cell with its own second moment (the
-        ### parallel-axis term), so it is exact for the piecewise-flat surface: the same
-        ### for every draw of the tokens and every subdivision of the cells. With
-        ### declared scales, the case's other scales (_case_scales).
+        ### The length unit (_gauge), from the full-resolution boundary before the draw;
+        ### with declared scales, the case's other scales (_case_scales).
         gauge = self._gauge(meshes, measures)
         scales = self._case_scales(names, meshes, measures, global_rows, gauge, tests) if self._scaled else None
         g_unit, g_scalars = self._global_fields(global_rows, like, scales)
@@ -2221,7 +2251,7 @@ class ISLA(Module):
             out_points = query["points"]
             ### The boundary surface the points' geometry is measured from (each
             ### chunk's, QueryChunks._fields): the union of the named meshes' cells
-            ### at full resolution, at the points' precision.
+            ### at full resolution, at the parameters' precision.
             q_points = query["points"]
             with torch.autocast(q_points.device.type, enabled=False):
                 offsets = [0]
@@ -2269,11 +2299,10 @@ class ISLA(Module):
             query = query[None]
         return _CaseInputs(boundary, query, surface, g_unit, g_scalars, gauge, scales, out_points, global_td, out_rows)
 
-    @staticmethod
-    def _point_set(pts) -> TensorDict:
+    def _point_set(self, pts) -> TensorDict:
         r"""An interior point set's tokens: the points of a point-cloud Mesh or a bare
-        tensor."""
-        points = pts.points if isinstance(pts, Mesh) else pts
+        tensor, promoted to the parameters' dtype."""
+        points = (pts.points if isinstance(pts, Mesh) else pts).to(self.head.weight.dtype)
         return TensorDict(points=points, batch_size=points.shape[:1])
 
     def _log_shift(self, boundary: TensorDict, dtype: torch.dtype) -> torch.Tensor | None:
@@ -2406,13 +2435,9 @@ class ISLA(Module):
         K, dim = self._n_global_vectors, self.n_spatial_dims
         g_hat = g_unit[:, None].expand(b, n, K, dim)
 
-        ### Frame: no origin; the one length unit is the measure-weighted RMS
-        ### pairwise distance, computed through the variance identity
-        ### sum_ij w_i w_j |x_i-x_j|^2 = 2 sum_i w_i |x_i - c|^2 with c the
-        ### weighted mean (used only inside this scalar; the frame keeps no
-        ### centre). Normalized weights make it converge under refinement where
-        ### the total measure diverges, and make it invariant to a weight rescale.
-        ### gauge is the full-resolution boundary's (_gauge, exact for every draw).
+        ### Frame: no origin. Positions enter in units of gauge, the full-resolution
+        ### boundary's measure-weighted RMS pairwise distance (_gauge, the same for
+        ### every draw).
         normals = boundary["normals"]
         n_hat = normals / normals.norm(dim=-1, keepdim=True).clamp_min(_EPS)
 
@@ -2472,13 +2497,9 @@ class ISLA(Module):
         ``(B, Q, 1)`` in frame units and built-in channels ``(B, Q, 2)``, from the
         boundary surface ``surface`` (``(points, cells)``, :class:`_CaseInputs`) of
         their one case."""
-        ### The query's geometry from the boundary surface: the signed distance
-        ### to it (the built-in channels s and asinh(s / 1e-6)) and the gradient
-        ### of the signed distance, sign(d) u with sign(0) = +1 (the token's
-        ### "normal" in every invariant), from the exact closest point. Both are
-        ### continuous through the surface, so a point on it (d zero or a rounding
-        ### error of either sign) gets the code of its neighbours on either side (the
-        ### boundary read's log(r / |d|) is floored instead: module docstring).
+        ### The built-in channels s and asinh(s / 1e-6), and the token's "normal"
+        ### sign(d) u with sign(0) = +1, the gradient of the signed distance: both
+        ### continuous through the surface (module docstring, *Interior geometry*).
         q_points = query["points"][0]
         with torch.autocast(q_points.device.type, enabled=False):
             dist, u = exact_boundary_geometry(q_points, *surface, kernel=self._resolve_geometry_kernel(q_points))
@@ -2596,9 +2617,9 @@ class QueryChunks:
         tokens, self._gauge, self._geo_kernel = model._boundary_tokens(boundary, g_unit, inputs.gauge)
         log_shift = model._log_shift(boundary, tokens["log_w"].dtype)
         self._like, self._log_w = boundary["points"], tokens["log_w"]
-        ### The forest now, each chunk's points walked by the chunk with their geometry:
-        ### the lists and the geometry held are one chunk's, and the fast walk's array
-        ### limit applies to a chunk's pairs.
+        ### The forest now; each chunk walks its own points with their geometry, so the
+        ### pair lists and geometry held are one chunk's, and the fast walk's array
+        ### limit applies per chunk.
         self._walk = model._tree_read_walk(
             tokens,
             query["points"] / self._gauge,
@@ -2606,6 +2627,18 @@ class QueryChunks:
             boundary.get("normal_tol", None),
             conditions=boundary.get("condition", None),
         )
+        ### Every other boundary-side tensor the chunks read is a leaf too, so a chunk's
+        ### backward pass stops there and backward() carries the inputs' gradients (the
+        ### boundary points', the global data's) through the boundary side once. The
+        ### prediction points stay in the caller's graph, so a chunk's outputs can be
+        ### differentiated in space.
+        if detach:
+            self._gauge, self._like, self._g_unit = map(self._leaf, (self._gauge, self._like, g_unit))
+            if self._g_scalars is not None:
+                self._g_scalars = self._leaf(self._g_scalars)
+            self._surface = (self._leaf(self._surface[0]), self._surface[1])
+            if self._scales is not None:
+                self._scales = {k: v if v is None else self._leaf(v) for k, v in self._scales.items()}
         ### The blocks' log weights take the shift (the forest took the raw ones); each
         ### chunk's read takes the cells' and the conditions' shifts as leaves.
         self._log_shift = self._condition_shift = None
@@ -2627,14 +2660,21 @@ class QueryChunks:
             )
             self._slices.append(tuple(self._leaf(t) for t in slices))
             h_b = h[:, :n_cells].reshape(-1, h.shape[-1])
-            self._sources.append(self._leaf(model.kernel_reads[i].sources(h_b, self._walk)))
+            kv = model.kernel_reads[i].sources(h_b, self._walk, model._reads_compiled())
+            self._sources.append(self._leaf(kv))
         self._frame = (
             tuple(self._leaf(t) for t in model._frame_anchors(h, log_w, r)) if model._needs_frame else None
         )
 
     @property
     def n_points(self) -> int:
-        r"""The number of prediction points, :math:`Q`."""
+        r"""The number of prediction points, :math:`Q`.
+
+        Returns
+        -------
+        int
+            :math:`Q`.
+        """
         return int(self._query.shape[1])
 
     @functools.cached_property
@@ -2735,7 +2775,7 @@ class QueryChunks:
                 h, self._slices[i], q_tokens["r"], q_tokens["n_hat"], q_tokens["g_hat"], _EPS, vecs, tens,
                 geo_kernel=self._geo_kernel,
             )  # fmt: skip
-            delta = m.kernel_reads[i].read(self._sources[i], h.reshape(-1, h.shape[-1]), pairs)
+            delta = m.kernel_reads[i].read(self._sources[i], h.reshape(-1, h.shape[-1]), pairs, m._reads_compiled())
             h = h + delta.view_as(h)
         q_tokens.set("h", h)
         return m._redimensionalize(m._head(q_tokens, self._frame), self._scales)
@@ -2747,6 +2787,11 @@ class QueryChunks:
         leaves through the boundary side once, so the parameters' gradients are
         those of the unchunked step whose loss is the sum of the chunks'. Releases
         the boundary side's graph; call it once, after every chunk's backward pass.
+
+        Returns
+        -------
+        None
+            The gradients accumulate in the parameters' ``.grad``.
         """
         roots = [(t, leaf.grad) for t, leaf in zip(self._roots, self._leaves) if leaf.grad is not None]
         self._roots, self._leaves = [], []

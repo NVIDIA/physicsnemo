@@ -22,9 +22,9 @@ r"""Release-readiness tests for ISLA (MODELS_IMPLEMENTATION.md MOD-008a/b/c).
 - MOD-008b: forward non-regression against golden outputs stored in ``data/``: the
   two small float32 configurations (``isla_default_v1.pth``,
   ``isla_dtt_v1.pth``), and in ``isla_release_v2.pth`` a float64 configuration per
-  task at 1e-12, a rich surface model with scales, ISLA-DTT in two dimensions, the
-  in-model token draw over about 2,000 cells, and ``query_chunks`` (outputs and
-  gradients); and the backbone golden.
+  task at 1e-12, a rich surface model with scales, the interior task in two
+  dimensions, the in-model token draw over about 2,000 cells, and ``query_chunks``
+  (outputs and gradients); and the backbone golden.
 - MOD-008c: committed reference checkpoints of both tasks (``isla_default_v1.mdlus``,
   ``isla_dtt_v1.mdlus``) through ``Module.from_checkpoint`` (attributes and
   forward), a checkpoint round trip over schemas, and the refusal of another version
@@ -44,6 +44,7 @@ backbone changes by decision (a forward hook on ``norm_out`` under
 ``_release_cases.WRITERS`` writes the files of this test.
 """
 
+import dataclasses
 import inspect
 import io
 import json
@@ -383,6 +384,14 @@ KNOB_DEFAULTS = dict(
     mlp_ratio=4,
     routing_temperature=10.0,
 )
+#: Every knob away from its default, which the interior round trip sets.
+KNOBS = dict(
+    tree_read_theta=0.5,
+    tree_read_leaf_size=8,
+    query_chunk_pairs=1000,
+    mlp_ratio=2,
+    routing_temperature=5.0,
+)
 
 
 def test_isla_knobs_have_their_defaults_and_are_validated():
@@ -391,6 +400,7 @@ def test_isla_knobs_have_their_defaults_and_are_validated():
     only their defaults (as it does ``n_boundary_tokens``'); theta 0 is allowed."""
     params = inspect.signature(ISLA.__init__).parameters
     assert {k: params[k].default for k in KNOB_DEFAULTS} == KNOB_DEFAULTS
+    assert all(KNOBS[k] != KNOB_DEFAULTS[k] for k in KNOB_DEFAULTS)
     small = dict(hidden=16, n_layers=1, n_slices=8, **IO)
     bad = dict(
         tree_read_theta=(-0.5, float("nan"), float("inf"), True, "1"),
@@ -466,7 +476,7 @@ def test_isla_forward_non_regression_v2(device, config, monkeypatch):
 
 def test_isla_query_chunks_non_regression(device, monkeypatch):
     """``query_chunks`` (every public method has a golden): the outputs of three
-    ranges of ISLA-DTT's points, its pair counts (exact), and every parameter's
+    ranges of the interior model's points, its pair counts (exact), and every parameter's
     gradient after the chunks' backward passes and ``chunks.backward()`` (each as a
     projection on a fixed random direction, within the float64 bound of
     :data:`V2_TOL` of the largest sum of magnitudes of a projection's terms).
@@ -488,14 +498,12 @@ def test_isla_query_chunks_non_regression(device, monkeypatch):
 
 def test_isla_backbone_matches_the_recorded_backbone():
     """With no per-token inputs, the pre-head token state (``norm_out`` output) of
-    the surface model is the one recorded when the backbone was last changed by
-    decision (the slice sublayer's normalized reads, H-RESID arm A2), for the same
-    parameters and inputs. ``data/isla_backbone_v1.pth``
-    was recorded with a forward hook on ``norm_out`` (seed 0 parameters, seed 1234
-    inputs, as here) on an x86 CPU, through ``forward``. Compared at float32 tolerance: the same
-    graph gives bitwise-identical values on the recording architecture and differs
-    at the last bits across CPU architectures (BLAS reduction order), which is not a
-    property of the model. Regenerate (only when the backbone changes by decision):
+    the surface model is the recorded one, for the same parameters and inputs.
+    ``data/isla_backbone_v1.pth`` was recorded with a forward hook on ``norm_out``
+    (seed 0 parameters, seed 1234 inputs, as here) on an x86 CPU, through
+    ``forward``. Compared at float32 tolerance: the values are bitwise on the
+    recording architecture and differ in the last bits across CPU architectures
+    (BLAS reduction order). Regenerate only when the backbone changes by decision:
     ``python -m test.experimental.models.isla._release_cases
     isla_backbone_v1.pth``."""
     ref = _load_reference("isla_backbone_v1.pth", "default")
@@ -585,8 +593,9 @@ def test_isla_reference_checkpoint_matches_golden(device, file_name):
 
 #: The schemas a checkpoint must keep (each a model case of ``_model_cases.py``):
 #: outputs of every rank, symmetry and parity with two global directions; dotted
-#: names of fields, globals and outputs; ISLA-DTT; a model with scales and
-#: output_stats; and ISLA-DTT in two dimensions.
+#: names of fields, globals and outputs; the interior task with every knob away from
+#: its default; a model with scales and output_stats; and the interior task in two
+#: dimensions.
 _HEADS_OUTPUTS = {
     "s": {"rank": 0},
     "v": {"rank": 1},
@@ -633,7 +642,9 @@ ROUND_TRIPS = {
         {"wall": lambda: C._soup_cells(48, 3, 92)},
         prediction_boundaries=("wall",),
     ),
-    "interior": C._MODEL_SPECS["dtt"](D),
+    "interior": dataclasses.replace(
+        C._MODEL_SPECS["dtt"](D), cfg={**C._MODEL_SPECS["dtt"](D).cfg, **KNOBS}
+    ),
     "scaled": C._MODEL_SPECS["rich_surface"](D),
     "two_dimensional": C._MODEL_SPECS["dtt_2d"](D),
 }
@@ -692,50 +703,6 @@ def test_isla_checkpoint_round_trip(tmp_path, schema):
         a, b = outputs(loaded(**kw)), outputs(model(**kw))
     assert a.keys() == b.keys()
     assert all(torch.equal(a[k], b[k]) for k in a), schema
-
-
-def test_isla_checkpoint_keeps_the_knobs(tmp_path):
-    """The knobs are saved constructor arguments: a model with every knob away from its
-    default round-trips through ``save`` and ``Module.from_checkpoint`` with each knob
-    stored and restored, and its outputs bitwise (on the CPU)."""
-    knobs = dict(
-        tree_read_theta=0.5,
-        tree_read_leaf_size=8,
-        query_chunk_pairs=1000,
-        mlp_ratio=2,
-        routing_temperature=5.0,
-    )
-    assert all(knobs[k] != KNOB_DEFAULTS[k] for k in KNOB_DEFAULTS)
-    model = _instantiate_model(**CONFIGS["dtt"], **knobs)
-    path = tmp_path / "isla_knobs.mdlus"
-    model.save(path)
-    stored = _stored_args(path)
-    assert {k: stored[k] for k in knobs} == knobs
-    loaded = Module.from_checkpoint(str(path)).eval()
-    loaded._geo_kernel = model._geo_kernel
-    assert {k: getattr(loaded, k) for k in knobs} == knobs
-    assert _comparable(loaded) == _comparable(model)
-    kw = _make_inputs("cpu", query=True)
-    with torch.no_grad():
-        a, b = outputs(loaded(**kw)), outputs(model(**kw))
-    assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
-
-
-@pytest.mark.parametrize("file_name", list(CHECKPOINTS))
-def test_isla_checkpoint_without_the_knobs_loads_at_their_defaults(file_name):
-    """The committed reference checkpoints store none of the knobs; they load at the
-    knobs' defaults, with the parameters of a fresh model of their configuration name
-    for name and shape. Their outputs are
-    ``test_isla_reference_checkpoint_matches_golden``'s."""
-    path = DATA_DIR / file_name
-    if not path.exists():
-        pytest.fail(f"{path} is missing: regenerate it with `{REGENERATE} {file_name}`")
-    assert not set(KNOB_DEFAULTS) & set(_stored_args(path))
-    model = Module.from_checkpoint(str(path))
-    assert {k: getattr(model, k) for k in KNOB_DEFAULTS} == KNOB_DEFAULTS
-    cfg, _ = CHECKPOINTS[file_name]
-    shapes = {k: v.shape for k, v in ISLA(**cfg).state_dict().items()}
-    assert {k: v.shape for k, v in model.state_dict().items()} == shapes
 
 
 #: A version other than this model's, of a checkpoint's metadata; the state-dict

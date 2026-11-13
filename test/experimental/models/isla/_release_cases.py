@@ -25,6 +25,7 @@ Regenerate reference files on the CPU with::
 Regenerate only what a change is meant to move, and say so in the commit.
 """
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -48,7 +49,7 @@ IO = dict(
 )
 
 #: One small configuration in its two forms: a surface task and an interior task
-#: (the constructor's ``interior`` flag), which is ISLA-DTT.
+#: (the constructor's ``interior`` flag).
 CONFIGS = {
     "default": dict(hidden=32, n_layers=2, n_slices=8, **IO),
     "dtt": dict(hidden=32, n_layers=2, n_slices=8, interior=True, **IO),
@@ -100,7 +101,7 @@ def _make_inputs(device, query: bool = False, seed: int = 1234) -> dict:
 
 
 #: The committed reference checkpoints: the file, its configuration and the seed of
-#: its parameters. ISLA-DTT's is narrower (hidden 16) to keep ``data/`` within its
+#: its parameters. The interior model's is narrower (hidden 16) to keep ``data/`` within its
 #: budget.
 CHECKPOINTS = {
     "isla_default_v1.mdlus": (CONFIGS["default"], 7),
@@ -116,10 +117,10 @@ def _forward_golden(config: str) -> dict:
 
 
 #: The reference outputs of ``isla_release_v2.pth``: a model case of
-#: ``_model_cases.py`` (its
-#: configuration, inputs from correctly rounded operations, the same bits on every
-#: platform, and random parameters) and its dtype. In evaluation mode; the draw at
-#: its fixed start, at the default tree-read angle.
+#: ``_model_cases.py`` (its configuration, inputs from correctly rounded operations,
+#: the same bits on every platform, and random parameters) and its dtype, with the
+#: meshes of :data:`V2_MESHES`. In evaluation mode; the draw at its fixed start, at
+#: the default tree-read angle.
 RELEASE_V2 = "isla_release_v2.pth"
 V2_CONFIGS = {
     "surface_f64": ("surface", D),
@@ -129,10 +130,24 @@ V2_CONFIGS = {
     "dtt_draw_f32": ("dtt_draw", F),  # the in-model draw
 }
 
+#: The release cases' curved meshes, from the exact builders of ``_model_cases.py``
+#: (the shared builders' float32 icosphere and circle change with the CPU; the shell's
+#: points are exact).
+V2_MESHES = {
+    "dtt": {"wall": lambda: C._exact_sphere_cells(2)},
+    "dtt_2d": {"wall": C._exact_circle_cells},
+    "dtt_draw": {
+        "wall": lambda: C._exact_sphere_cells(3),
+        "farfield": lambda: C._shell_cells(3, (4.0, 3.0, 2.5)),
+    },
+}
+
 
 def _v2_case(name: str, device: str):
     case, dtype = V2_CONFIGS[name]
     spec = C._MODEL_SPECS[case](dtype)
+    if case in V2_MESHES:
+        spec = dataclasses.replace(spec, meshes=V2_MESHES[case])
     variant = "reference" if device == "cpu" else "auto"
     return C._model_setup(spec, C._model_build(spec)(), device, variant), dtype
 
@@ -143,7 +158,7 @@ def _v2_outputs(name: str, device: str) -> dict:
         return outputs(model(**kw))
 
 
-#: query_chunks' golden: ISLA-DTT in float64 over three ranges of its 60 points.
+#: query_chunks' golden: the interior model in float64 over three ranges of its 60 points.
 CHUNKS = ((0, 20), (20, 45), (45, 60))
 
 

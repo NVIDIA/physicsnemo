@@ -137,8 +137,8 @@ def test_zero_area_flag(dtype):
 def test_zero_area_cells_distance(case, dtype, device):
     """On a soup with zero-area cells, isolated, the distance is the brute force's
     to their segments and points, within the rounding of its precision, at queries
-    on them, near them and far; nothing is non-finite; and the fast search gives
-    the reference's outputs bitwise."""
+    on them, near them and far; nothing is non-finite; and on CUDA the fast search
+    gives the reference's outputs bitwise (off CUDA it runs the reference's code)."""
     g = torch.Generator().manual_seed(CASES.index(case))
     deg = _zero_area_cells(g, 12, case)
     tri = torch.cat([deg, _lattice(g, 60, 3, 3)])
@@ -156,7 +156,7 @@ def test_zero_area_cells_distance(case, dtype, device):
         torch.arange(216, device=device).reshape(72, 3),
     )
     out = {}
-    for kernel in ("reference", "fast"):
+    for kernel in ("reference", "fast") if device == "cuda" else ("reference",):
         qq, pp = q.clone().requires_grad_(), points.clone().requires_grad_()
         d, u = exact_boundary_geometry(qq, pp, cells, kernel=kernel)
         (d.sum() + u.sum()).backward()
@@ -168,7 +168,7 @@ def test_zero_area_cells_distance(case, dtype, device):
     assert (
         (d.abs().double().cpu() - exact).abs() <= 8 * torch.finfo(dtype).eps / 2 * scale
     ).all()
-    for a, b in zip(out["reference"], out["fast"]):
+    for a, b in zip(out["reference"], out.get("fast", ())):
         assert torch.equal(a, b)
 
 

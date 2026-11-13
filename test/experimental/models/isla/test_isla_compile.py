@@ -18,15 +18,17 @@
 
 The compiled model (Mesh inputs and output included) must match the eager model,
 outputs and gradients, and a case with other boundary counts must reuse the graph
-rather than recompile. Every whole model compiled here is a surface task: the surface task has one
-boundary mesh; the inputs and scales tasks have two boundary meshes, so their token
-axis is a sum of two independent counts, and predict on one of them. The inputs
-task has a rank-2 boundary input and a rank-0 one. The interior task (ISLA-DTT) does
-not compile as one graph: its boundary read sizes its pairs from the data and
-compiles per block (``compile_blocks``) instead. Its in-model boundary draw does: the
-last tests compile the interior model's case inputs (``ISLA._case_inputs``: the draw)
-and a chunk's geometry (``ISLA._query_geometry``) with ``fullgraph=True`` and dynamic
-shapes.
+rather than recompile. Every whole model compiled here is a surface task. The
+``global_source`` case has one boundary mesh and takes its scales from a global
+input; the ``inputs`` and ``scales`` cases have two, so their token axis is a sum of
+two independent counts, and predict on one of them. The ``inputs`` case has a rank-2
+boundary input and a rank-0 one.
+
+The interior task does not compile as one graph: its boundary read sizes its pairs
+from the data, so it compiles per block (``compile_blocks``) instead. Its in-model
+boundary draw does compile as one graph: the last tests compile the interior model's
+case inputs (``ISLA._case_inputs``: the draw) and a chunk's geometry
+(``ISLA._query_geometry``) with ``fullgraph=True`` and dynamic shapes.
 """
 
 import copy
@@ -69,7 +71,7 @@ def _model(task: str) -> ISLA:
         }
     elif (
         task == "global_source"
-    ):  # ISLA's own scales from a global source (AirfRANS's U_inf)
+    ):  # ISLA's own scales from a global source (a free-stream velocity)
         return ISLA(
             output_schema={
                 "p": {"rank": 0},
@@ -266,7 +268,7 @@ BUDGET_SIZES = [
 
 
 def _budget_model() -> ISLA:
-    """An interior model (ISLA-DTT) whose n_boundary_tokens (60) lies between the cell
+    """An interior model whose n_boundary_tokens (60) lies between the cell
     counts of BUDGET_SIZES, in evaluation (the draw's fixed start)."""
     torch.manual_seed(0)
     return ISLA(
@@ -299,9 +301,8 @@ def _drawn(fn, case) -> dict:
 def test_the_in_model_boundary_draw_compiles_once_across_the_budget():
     """The interior model's case inputs (the in-model draw) compiled with one graph,
     in evaluation (the fixed start), give the eager draw, whether the cells are
-    sampled down to the budget or all kept. In
-    training (a start from the global RNG inside the graph) they compile once more and
-    then reuse that graph."""
+    sampled down to the budget or all kept. In training (a start from the global RNG
+    inside the graph) they compile once more and then reuse that graph."""
     torch._dynamo.reset()
     model = _budget_model()
     eager = copy.deepcopy(model)  # never called under compile: no shared module state
@@ -420,7 +421,8 @@ def test_the_in_model_draw_compiles_under_max_autotune_at_full_resolution():
     """A ``max-autotune-no-cudagraphs`` compile of an interior model's case inputs at
     1.4 million boundary cells: the draw's sums over every cell are long enough for
     Inductor's split scan, whose kernel can fail in this compile; the draw runs them
-    eagerly (the library's ``physicsnemo::mesh_cumsum``). The compiled draw gives the eager one."""
+    eagerly (the library's ``physicsnemo::mesh_cumsum``). The compiled draw gives the
+    eager one."""
     torch._dynamo.reset()
     torch.manual_seed(0)
     model = (

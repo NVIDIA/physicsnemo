@@ -35,7 +35,14 @@ from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from test.experimental.models.isla._geometry_cases import _exact_d2, _quad_diagonals
+from test.experimental.models.isla._geometry_cases import (
+    FAST_DEVICES,
+    KERNEL_DEVICES,
+    _bitwise,
+    _exact_d2,
+    _quad_diagonals,
+    _renumbered,
+)
 from test.experimental.models.isla._marks import requires_cuda
 from test.experimental.models.isla._meshes import orthogonal
 
@@ -261,42 +268,16 @@ def _numbered():
             p[c[:40, :2]].mean(1),
         ]
     ).float()
-    perm = torch.randperm(p.shape[0], generator=g)
-    inv = torch.empty_like(perm)
-    inv[perm] = torch.arange(p.shape[0])
-    c2 = inv[c][torch.randperm(c.shape[0], generator=g)].roll(1, -1)
-    return q, p.float(), c, p[perm].float(), c2
-
-
-@pytest.mark.parametrize("device", _DEVICES)
-def test_the_outputs_do_not_depend_on_the_numbering(device):
-    """Permuting the vertices and the cells and rotating each cell's vertex list
-    leaves d and u bitwise (the centred frame's origin is a function of the set of
-    cells)."""
-    q, p, c, p2, c2 = (x.to(device) for x in _numbered())
-    d, u = exact_boundary_geometry(q, p, c)
-    d2, u2 = exact_boundary_geometry(q, p2, c2)
-    assert torch.equal(d, d2) and torch.equal(u, u2)
-
-
-def _renumbered(p, c, seed: int = 0):
-    """The surface with its vertices and its cells permuted, each triangle's vertex
-    list rotated (a segment's order is kept: reversing it flips its normal)."""
-    g = torch.Generator().manual_seed(seed)
-    perm = torch.randperm(p.shape[0], generator=g)
-    inv = torch.empty_like(perm)
-    inv[perm] = torch.arange(p.shape[0])
-    c2 = inv[c][torch.randperm(c.shape[0], generator=g)]
-    return p[perm], c2.roll(1, -1) if c.shape[1] == 3 else c2
+    p = p.float()
+    return q, p, c, *_renumbered(p, c, seed=4)
 
 
 def _ellipse():
     """A float32 polyline of 4000 segments on an ellipse of semi-axes 1 and 0.12,
     posed, and its vertices: on its flat sides consecutive normals are about 2e-4
-    apart, segments about 1.6e-3 long against a storage rounding of about 5e-8,
-    so many are not certified distinct in float32 (taking one of them, renumbering moved u at
-    528 of the 4000 vertices, by up to 6e-4, and float32 u differed from float64's
-    at 1044, by up to 3e-4; with 3000 segments every pair is certified)."""
+    apart, segments about 1.6e-3 long against a storage rounding of about 5e-8, so
+    many are not certified distinct in float32 (with 3000 segments every pair is
+    certified)."""
     n = 4000
     t = torch.arange(n, dtype=D) * 2 * torch.pi / n
     p = torch.stack([torch.cos(t), 0.12 * torch.sin(t)], -1)
@@ -308,8 +289,7 @@ def _off_the_wall():
     """Float64 queries 1e-3 off the posed torus of :func:`_quad_diagonals` along the
     normal at its quad diagonals' midpoints, on either side (closest points on edges,
     where the cells sharing one tie exactly for the least distance), and at Gaussian
-    offsets (sigma 1e-3) from its vertices (taking the least cell index, renumbering
-    moved d and u at 35 of the 3456 queries, by rounding)."""
+    offsets (sigma 1e-3) from its vertices."""
     q, p, c = _quad_diagonals("renumbering")
     q, p = q.double(), p.double()
     tri = p[c[: q.shape[0]]]
@@ -321,18 +301,22 @@ def _off_the_wall():
     return torch.cat([q + 1e-3 * n, q - 1e-3 * n, near]), p, c
 
 
-@pytest.mark.parametrize("kernel", ["reference", "fast"])
-@pytest.mark.parametrize("device", _DEVICES)
-@pytest.mark.parametrize("case", ["ellipse", "diagonals", "off the wall"])
+@pytest.mark.parametrize("kernel, device", KERNEL_DEVICES)
+@pytest.mark.parametrize("case", ["numbered", "ellipse", "diagonals", "off the wall"])
 def test_exact_distance_ties_do_not_depend_on_the_numbering(case, device, kernel):
-    """Where cells tie exactly for the least distance (sharing the closest point)
-    and their directions are not certified distinct: on the surface at the fine
-    ellipse's vertices and the torus's quad diagonals, and off it at the torus's
-    edge and vertex closest points, renumbering the vertices and reordering the
-    cells leave d and u bitwise under either kernel (the closest cell is chosen by
-    the cells' positions, and on the surface u is the least-norm point of every
-    different normal)."""
-    build = {"ellipse": _ellipse, "off the wall": _off_the_wall}
+    """Permuting the vertices and the cells and rotating each triangle's vertex list
+    leave d and u bitwise under either kernel: on a posed icosphere (the centred
+    frame's origin is a function of the set of cells), and where cells tie exactly
+    for the least distance and their directions are not certified distinct (on the
+    surface at the fine ellipse's vertices and the torus's quad diagonals, off it at
+    the torus's edge and vertex closest points). The closest cell is chosen by the
+    cells' positions, and on the surface u is the least-norm point of every
+    different normal."""
+    build = {
+        "numbered": lambda: _numbered()[:3],
+        "ellipse": _ellipse,
+        "off the wall": _off_the_wall,
+    }
     q, p, c = build[case]() if case in build else _quad_diagonals("renumbering")
     p2, c2 = _renumbered(p, c)
     q, p, c, p2, c2 = (x.to(device) for x in (q, p, c, p2, c2))
@@ -371,7 +355,7 @@ def _band_cases():
     yield "off the wall", *_off_the_wall()
 
 
-@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("device", FAST_DEVICES)
 @pytest.mark.parametrize("case", [c[0] for c in _band_cases()])
 def test_the_fast_search_equals_the_reference_bitwise(case, device):
     """On the cases above, d, u and their gradients in the queries and the
@@ -393,4 +377,4 @@ def test_the_fast_search_equals_the_reference_bitwise(case, device):
     finally:
         torch.set_num_threads(threads)
     for name, a, b in zip(("d", "u", "dq", "dp"), *out):
-        assert torch.equal(a.view(torch.uint8), b.view(torch.uint8)), name
+        assert _bitwise(a, b), name

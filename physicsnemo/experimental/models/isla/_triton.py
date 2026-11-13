@@ -16,15 +16,14 @@
 
 """Triton, the optional dependency of ISLA's CUDA kernels, loaded in one place.
 
-Triton ships with the CUDA wheels of torch and is absent on CPU-only installs, so ISLA
-treats it as a locally optional import (``CODING_STANDARDS/EXTERNAL_IMPORTS.md``,
+Triton ships with the CUDA wheels of torch and is absent on CPU-only installs. ISLA
+therefore treats it as a locally optional import (``CODING_STANDARDS/EXTERNAL_IMPORTS.md``,
 *Locally Optional Imports*): every Triton kernel has a torch reference path, which the
-model runs when ``HAS_TRITON`` is False. ``HAS_TRITON`` is a soft version check
-(:func:`~physicsnemo.core.version_check.check_version_spec`, at least
-:data:`TRITON_MIN_VERSION`; :func:`triton_available`); when it holds, ``triton``,
-``triton.language`` (``tl``) and its ``libdevice`` are imported here, and the modules
-with ``@triton.jit`` kernels take them from this module and define their kernels only
-then.
+model runs when ``HAS_TRITON`` is False. ``HAS_TRITON`` is a soft version check for at
+least :data:`TRITON_MIN_VERSION` (:func:`triton_available`, through
+:func:`~physicsnemo.core.version_check.check_version_spec`). When it holds, this module
+imports ``triton``, ``triton.language`` (``tl``) and its ``libdevice``. The modules
+with ``@triton.jit`` kernels take them from here, and define their kernels only then.
 """
 
 import importlib

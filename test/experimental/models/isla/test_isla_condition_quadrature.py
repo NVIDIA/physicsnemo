@@ -14,14 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Per-condition quadrature: with more than one declared condition every
-boundary token's log weight is log a_i - log A_k + beta_k, A_k the full-resolution
-measure of its condition and beta_k a learned log share (``condition_log_shares.beta``,
-zeros at construction, after every other parameter): in the blocks, the head frame
-and ISLA-DTT's per-pair log m (a node's, whose cells are of one condition, that
-condition's shift), while the read's forest keeps the raw measures. A
-model of one declared condition has no shares and no shift. On CPU the read is the
-eager one; on CUDA the fused read differentiates log m too.
+"""Per-condition quadrature. With more than one declared condition, every boundary
+token's log weight is log a_i - log A_k + beta_k, where A_k is the full-resolution
+measure of its condition and beta_k a learned log share
+(``condition_log_shares.beta``, zero at construction, after every other parameter).
+The shift applies in the blocks, the head frame and the interior task's per-pair
+log m (a node's cells are of one condition, so it takes that condition's shift); the
+read's forest keeps the raw measures. A model of one declared condition has no
+shares and no shift. On CPU the read is the eager one; on CUDA the fused read
+differentiates log m too.
 """
 
 import math
@@ -43,7 +44,7 @@ GD = {"g": torch.tensor([0.8, 0.6])}
 
 
 def _model(conditions=("airfoil", "freestream"), n_boundary_tokens=150, **kw):
-    """A small ISLA-DTT; its reads' weights randomized (their output projection starts
+    """A small interior model; its reads' weights randomized (their output projection starts
     at zero, so the read would start as no update)."""
     torch.manual_seed(0)
     m = ISLA(
@@ -187,6 +188,8 @@ def test_each_condition_s_total_weight_is_its_share(budget, split, monkeypatch):
 
 
 def test_a_uniform_rescale_leaves_every_log_weight_unchanged():
+    """Scaling the whole case by any factor leaves every token's log weight unchanged:
+    log a_i - log A_k cancels the scale, and the shares do not see it."""
     m = _model()
     with torch.no_grad():
         m.condition_log_shares.beta.copy_(torch.tensor([0.4, -0.2]))
@@ -232,6 +235,9 @@ def test_one_given_condition_with_zero_shares_is_the_unshifted_function(
 
 
 def test_the_shares_gradient_is_finite_and_nonzero_through_the_read_too(monkeypatch):
+    """The shares receive a finite, nonzero gradient, and so does the boundary read's
+    part of it alone (the full gradient minus the one with the read's shift
+    detached)."""
     m = _model().train()
 
     def step():
@@ -265,6 +271,8 @@ def test_the_shares_gradient_is_finite_and_nonzero_through_the_read_too(monkeypa
 
 
 def test_an_absent_condition_s_share_gets_a_zero_gradient():
+    """A declared condition absent from the case still has a gradient on its share,
+    exactly zero, so DDP finds every parameter used."""
     m = _model().train()
     out = m(
         boundary_meshes={"airfoil": _meshes()["airfoil"]},
