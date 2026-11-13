@@ -478,6 +478,23 @@ class TestWithCells:
         assert torch.equal(cached[0], centroids[0])
         torch.testing.assert_close(cached[1], mesh.points[[0, 2, 3]].mean(dim=0))
 
+    @pytest.mark.parametrize("dtype", [torch.uint16, torch.uint32, torch.uint64])
+    def test_reordering_unsigned_cells_keeps_measures_and_centroids(self, dtype):
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+
+        mesh = Mesh(
+            points=torch.rand(3, 3, generator=torch.Generator().manual_seed(0)),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        set_cell_measures(mesh, torch.tensor([1.5]))
+        centroids = mesh.cell_centroids
+
+        updated = mesh.with_cells(mesh.cells[:, [0, 2, 1]].to(dtype))
+
+        assert updated.cells.dtype == torch.int64
+        assert torch.equal(cell_measures(updated), torch.tensor([1.5]))
+        assert torch.equal(updated._cache["cell", "centroids"], centroids)
+
     def test_reordering_writes_no_cache_when_points_require_grad(self):
         from physicsnemo.mesh.calculus.measure import set_cell_measures
 
