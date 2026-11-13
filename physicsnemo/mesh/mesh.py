@@ -2172,8 +2172,8 @@ class Mesh(
         )
         unchanged = None
         if centroids is not None or EFFECTIVE_MEASURE_KEY in self.cell_data:
-            # Use the normalized cells: PyTorch cannot compare uint16, uint32
-            # or uint64 with int64.
+            # Use the normalized cells: PyTorch compares uint16, uint32 and
+            # uint64 only with their own dtype.
             sorted_cells = result.cells.sort(dim=1).values
             unchanged = (sorted_cells == self.cells.sort(dim=1).values).all(dim=1)
         if centroids is not None:
