@@ -50,6 +50,8 @@ Spec value semantics:
 - ``{literal: <value>}`` gives ``<value>`` as it is, for an argument that
   is a constant of the model config rather than data of the case (for
   example a list of boundary names, which would otherwise read as paths).
+  It matches only when ``literal`` is the dict's only key: with another key
+  beside it, as in ``{literal: x, note: y}``, ``x`` reads as a path.
 
 Targets are extracted separately by :func:`extract_targets` from the
 DomainMesh's ``interior.point_data`` by default, or from explicit

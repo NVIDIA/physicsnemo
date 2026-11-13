@@ -62,9 +62,10 @@ from physicsnemo.mesh import DomainMesh, Mesh
 class MeshReaderWithGlobalData(MeshReader):
     r"""MeshReader that merges an external tensordict into each Mesh's ``global_data``.
 
-    Identical to :class:`MeshReader` except for the
-    ``merge_global_data_from`` parameter, which names a path
-    *relative to each matched sample* pointing to a saved
+    Like :class:`MeshReader`, with two more parameters. With
+    ``domain_boundaries`` it returns a :class:`~physicsnemo.mesh.DomainMesh`
+    instead of a :class:`Mesh` (see below). ``merge_global_data_from`` names
+    a path *relative to each matched sample* pointing to a saved
     ``TensorDict`` directory whose keys should be merged into the
     loaded :class:`Mesh`'s ``global_data``.  If a key appears in
     both the boundary's ``global_data`` and the external one, a
@@ -97,20 +98,29 @@ class MeshReaderWithGlobalData(MeshReader):
         ``meta.json`` plus ``*.memmap`` files).  When ``None``
         (default) this class behaves exactly like
         :class:`MeshReader`.
-    domain_boundaries : sequence of str
-        Names of other boundaries stored beside the matched surface
-        (siblings of its directory, ``.../boundaries/<name>``), loaded
-        whole; the chain's ``SubsampleMesh`` then caps each at its
-        ``n_cells`` like the surface.  With any name, the sample is a
-        :class:`~physicsnemo.mesh.DomainMesh` whose interior is the
-        surface, whose boundaries are these meshes and whose
-        ``global_data`` is the case's, so every transform of the chain
-        (rotation, translation, centering, scaling) moves them with the
-        surface.  End such a chain with :class:`SurfaceMeshToDomainMesh`.
-        Empty (default): the sample is a ``Mesh``, as before.  Not
-        supported with domain parallelism (``ValueError``).
+    domain_boundaries : sequence of str, default ()
+        Names of other boundaries stored beside the matched surface, as
+        siblings of its directory (``.../boundaries/<name>``). Each is
+        loaded whole. The chain's ``SubsampleMesh`` then caps each at its
+        ``n_cells``, like the surface. With any name, the sample is a
+        :class:`~physicsnemo.mesh.DomainMesh`. Its interior is the surface,
+        its boundaries are these meshes, and its ``global_data`` is the
+        case's. Every transform of the chain (rotation, translation,
+        centering, scaling) then moves them with the surface. End such a
+        chain with :class:`SurfaceMeshToDomainMesh`. When empty, the sample
+        is a ``Mesh``, as before.
     **kwargs
         Forwarded to :class:`MeshReader`.
+
+    Raises
+    ------
+    ValueError
+        If ``domain_boundaries`` names a boundary twice, or is set with
+        domain parallelism. At load time, if a ``global_data`` key is both
+        on the sample and in the ``merge_global_data_from`` tensordict.
+    FileNotFoundError
+        At load time, if the ``merge_global_data_from`` path or a boundary
+        of ``domain_boundaries`` is missing.
     """
 
     def __init__(
@@ -217,10 +227,16 @@ class SurfaceMeshToDomainMesh(MeshToDomainMesh):
     On a bare :class:`Mesh` it is :class:`MeshToDomainMesh`. On the
     :class:`DomainMesh` that :class:`MeshReaderWithGlobalData` returns with
     ``domain_boundaries``, whose interior is the surface, it applies
-    :class:`MeshToDomainMesh` to the surface (the interior becomes its cell
-    centroids with the targets, the surface the boundary ``boundary_name``) and
-    keeps the other boundaries and the domain-level ``global_data``. A domain
-    boundary named ``boundary_name`` is refused.
+    :class:`MeshToDomainMesh` to the surface (the interior becomes the points
+    that ``interior_points`` selects, with the targets, and the surface the
+    boundary ``boundary_name``) and keeps the other boundaries and the
+    domain-level ``global_data``.
+
+    Raises
+    ------
+    ValueError
+        If the :class:`DomainMesh` already has a boundary named
+        ``boundary_name``.
     """
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:  # type: ignore[override]
