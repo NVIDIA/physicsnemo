@@ -60,11 +60,12 @@ from datasets import _apply_dataset_reader_overrides
 from hydra import compose, initialize_config_dir
 from loss import LossCalculator
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import normalize_output_to_tensordict
+from output_normalize import normalize_output_to_tensordict, resolve_output_layout
 from tensordict import TensorDict
-from utils import field_dim
+from utils import field_dim, resolve_field_weights
 
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -477,6 +478,13 @@ _MESH_INPUT_RECIPES: list[tuple[str, str, str, str, list[str]]] = [
     ("globe_volume", "globe_volume", "drivaer_ml_volume", "volume", []),
     ("isla_surface", "isla_surface", "drivaer_ml_surface", "surface", _ISLA_SMALL),
     ("isla_volume", "isla_volume", "drivaer_ml_volume", "volume", _ISLA_SMALL),
+    (
+        "isla_volume_joint",
+        "isla_volume_joint",
+        "drivaer_ml_volume",
+        "volume",
+        _ISLA_SMALL,
+    ),
 ]
 
 
@@ -519,18 +527,40 @@ def test_mesh_input_config_synthetic_e2e(
         for i, name in enumerate(read)
         if name not in ds.boundary_names
     }
+    task = OmegaConf.select(train_cfg, "extra_task")
+    if task is not None:
+        ### The model's extra prediction set, from a closed vehicle that
+        ### carries DrivAerML's stored wall fields.
+        vehicle = sphere_icosahedral.load(subdivisions=1)
+        n = vehicle.n_cells
+        extra["vehicle"] = vehicle.with_data(
+            cell_data={
+                "pMeanTrim": torch.randn(n) * 100,
+                "wallShearStressMeanTrim": torch.randn(n, 3),
+            }
+        )
     if extra:
         ds = DomainMesh(
             interior=ds.interior,
             boundaries={**dict(ds.boundaries.items()), **extra},
             global_data=ds.global_data,
         )
+    target_sources = None
+    if task is not None:
+        for t_cfg in task.transforms:
+            ds = hydra.utils.instantiate(t_cfg).apply_to_domain(ds)
+        target_config = {**target_config, **OmegaConf.to_container(task.targets)}
+        target_sources = {
+            name: task.target_sources.get(name, f"interior.point_data.{name}")
+            for name in target_config
+        }
 
     forward_kwargs_spec = OmegaConf.to_container(train_cfg.forward_kwargs, resolve=True)
     collate = build_collate_fn(
         input_type="mesh",
         forward_kwargs_spec=forward_kwargs_spec,
         target_config=target_config,
+        target_sources=target_sources,
     )
     batch = collate([(ds, {})])
 
@@ -548,7 +578,13 @@ def test_mesh_input_config_synthetic_e2e(
 
     with torch.no_grad():
         output = model_inst(**batch["forward_kwargs"])
-    pred_td = _output_to_tensordict(output, target_config)
+    pred_td = normalize_output_to_tensordict(
+        output,
+        target_config,
+        "mesh",
+        targets=batch["targets"],
+        **resolve_output_layout(train_cfg),
+    )
 
     for name in target_config:
         assert name in pred_td.keys(), f"{name} missing from pred"
@@ -559,22 +595,39 @@ def test_mesh_input_config_synthetic_e2e(
             f"vs target={tuple(target_t.shape)}"
         )
 
-    field_weights = (
-        OmegaConf.to_container(
-            OmegaConf.select(
-                train_cfg, "training.field_weights", default=OmegaConf.create({})
-            ),
-            resolve=True,
-        )
-        or None
-    )
     lc = LossCalculator(
         target_config=target_config,
         loss_type=train_cfg.training.loss_type,
-        field_weights=field_weights,
+        field_weights=resolve_field_weights(train_cfg),
     )
     loss, _ = lc(pred_td, batch["targets"])
     assert torch.isfinite(loss), f"loss not finite: {float(loss)}"
+
+
+def test_isla_volume_joint_is_isla_volume_plus_the_wall_set() -> None:
+    """The joint config composes as isla_volume with only the wall-set keys
+    added or changed."""
+    base = OmegaConf.to_container(
+        _compose_train_cfg("isla_volume", "drivaer_ml_volume")
+    )
+    joint = OmegaConf.to_container(
+        _compose_train_cfg("isla_volume_joint", "drivaer_ml_volume")
+    )
+    wall_set = "boundaries.vehicle_points"
+    assert joint.pop("extra_task")["target_sources"] == {
+        "pressure_wall": f"{wall_set}.point_data.pressure_wall",
+        "wss": f"{wall_set}.point_data.wss",
+    }
+    assert joint.pop("output_sets") == {
+        "interior": {"velocity": "velocity", "pressure": "pressure", "nut": "nut"},
+        wall_set: {"pressure_wall": "pressure", "wss": "wss"},
+    }
+    assert joint["forward_kwargs"].pop("prediction_points") == {
+        "concat_point_sets": ["interior", wall_set]
+    }
+    base["forward_kwargs"].pop("prediction_points")
+    assert joint["model"]["output_schema"].pop("wss") == {"rank": 1}
+    assert joint == base
 
 
 ### ---------------------------------------------------------------------------

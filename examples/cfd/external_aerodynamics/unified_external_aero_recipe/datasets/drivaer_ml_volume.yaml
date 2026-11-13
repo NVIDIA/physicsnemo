@@ -51,6 +51,7 @@ pipeline:
       axes: ["z"]
       mode: axis_aligned
       transform_point_data: true
+      transform_cell_data: true      # the vehicle's wall shear
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
