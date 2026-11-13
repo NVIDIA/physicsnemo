@@ -1,0 +1,60 @@
+# @package _global_
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Select dataset=drivaer_ml_volume.
+input_type: tensors
+output_type: tensors
+compile: false
+precision: float32
+training:
+  loss_type: mse
+  optimizer:
+    lr: 1.0e-3
+  scheduler:
+    step_size: 100
+    gamma: 0.5
+dataloader:
+  num_workers: 2
+  prefetch_factor: 2
+  num_streams: 2
+dataset_reader_overrides:
+  # Keep the full vehicle surface as geometry while queries stay subsampled.
+  subsample_n_cells: null
+forward_kwargs:
+  geometry: boundaries.vehicle.cell_centroids
+  queries: interior.points
+  query_features:
+  - interior.point_data.sdf
+  - interior.point_data.sdf_normals
+model:
+  _target_: physicsnemo.experimental.models.smart.SMART
+  field: volume
+  out_dim: ${out_dim}
+  query_feature_channels: 4
+  # [12, 4.5, 3.25] m in L_ref units (DrivAerML L_ref = 5 m).
+  coordinate_scale: [2.4, 0.9, 0.65]
+  center_on_geometry: true
+  hidden_dim: 448
+  num_heads: 8
+  num_layers: 6
+  num_latents: 2048
+  geometry_subsample: 16384
+  share_weights: true
+  qk_normalization: true
+  qk_temperature_max: 4.0
+  eval_seed: 0
+  eval_chunk_size: 8192

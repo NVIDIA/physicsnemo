@@ -27,23 +27,46 @@ max_workers_preprocessing: 64   # Maximum parallel workers
 # │                 Training                  │
 # └───────────────────────────────────────────┘
 
-optimizer: adam                 # adam or muon (muon requires PyTorch >= 2.9)
-optimizer_weight_decay: 0.0001  # used when optimizer=muon (AdamW weight_decay for non-Muon params)
+optimizer: adam                 # adam, adamw, or muon (muon requires PyTorch >= 2.9)
+optimizer_weight_decay: 0.0001  # AdamW weight decay; also used by Muon's AdamW groups
+muon_min_dim: 0                 # Muon: 2-D parameters with a dimension below this stay on AdamW
+seed: 42                        # Base seed; distributed ranks use seed + rank
+reproducible_sampling: false    # Epoch-seeded sample order that does not depend on the rank count
+sampler_seed: 0                 # Seed of the reproducible sampler
+deterministic: false            # Deterministic cuDNN/cuBLAS kernels (slower)
+trainer_class: null             # Dotted path of a train.Trainer subclass (null: train.Trainer)
 
 num_time_steps: ???             # Required: set via experiment config
 num_training_samples: ???       # Required: set via experiment config
 num_validation_samples: 0       # 0 disables validation; override per experiment
 start_lr: 0.0001
 end_lr: 0.0000003
+# linear per-step warmup to start_lr over this many epochs before the cosine
+lr_warmup_epochs: 0
 epochs: 10000
 validation_freq: 10
 save_checkpoint_freq: 10
+early_stopping_patience: 0      # Validation evaluations; 0 disables early stopping
+early_stopping_min_delta: 0.0   # Required absolute validation-MSE improvement
+restore_rng: true               # Restore the checkpoint's RNG states on resume (false after a GPU-count change)
+data_startup_timeout_seconds: 3600  # Collective timeout while rank 0 prepares statistics and caches at startup
+
+# ┌───────────────────────────────────────────┐
+# │                   Loss                    │
+# └───────────────────────────────────────────┘
+
+loss: mse                       # mse or relative_l2
+loss_space: normalized          # normalized, or physical (millimetres over loss_scale_mm)
+loss_scale_mm: 10.0             # Scale of the physical loss
+auxiliary_loss_weight: 0.0      # Weight of the loss on a model's auxiliary prediction (0 disables it)
 
 # ┌───────────────────────────────────────────┐
 # │        Performance Optimization           │
 # └───────────────────────────────────────────┘
 
 amp: True
+amp_dtype: float16              # float16 or bfloat16
+manual_gradient_allreduce: false  # Average the gradients after backward instead of DDP's bucketed reduction
 num_dataloader_workers: 8
 
 # ┌───────────────────────────────────────────┐
@@ -52,3 +75,31 @@ num_dataloader_workers: 8
 
 ckpt_path: "./checkpoints"
 tensorboard_log_dir: ./tensorboard_logs
+load_epoch: null                # Checkpoint epoch to load from ckpt_path (null: the latest)
+warm_start_model: null          # .mdlus weights to start from when ckpt_path holds no training checkpoint
+
+# ┌───────────────────────────────────────────┐
+# │   Validation suite (px_yaris trainer,     │
+# │   evaluate_px_yaris.py, evaluate_biw.py)  │
+# └───────────────────────────────────────────┘
+
+validation_output_dir: null     # Where the evaluators write their records (they require it)
+evaluation_split: validation    # evaluate_px_yaris.py: the manifest split to score (validation or test)
+validation_node_errors: false   # Per-node RMSE map and per-region translational share
+validation_region_bounds: null  # Reference-x bounds (mm) of the per-region readouts (null: the suite's default)
+validation_penetration:         # Target-relative penetration metrics (penetration_metrics.py)
+  enabled: false
+  tolerance_mm: 0.5             # A node penetrates when its depth exceeds this
+  activation_distance_mm: 5.0   # Shell-clearance band of the contact search
+  reference_clearance_mm: 10.0  # Pairs closer than this in the initial configuration are structure
+  crossing_radius_mm: null      # Opt-in crossing sweep: lifts the crossing-depth ceiling to this radius (costly)
+  implementation: warp          # Contact search backend: warp or torch
+  max_pairs: 60000000           # Active-pair budget of the search
+  depth_thresholds_mm: [1, 2, 5]
+  histogram_bin_mm: 0.1
+  histogram_max_mm: 50.0
+  region_axis: 0
+  region_bounds_mm: null        # null: training.validation_region_bounds
+  wall_position_mm: null        # null: the datapipe's rigid wall, if any
+  wall_axis: 0
+  wall_sign: 1.0

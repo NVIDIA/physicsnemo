@@ -24,7 +24,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from vtp_reader import (
+from readers.vtp_reader import (
     load_vtp_file,
     extract_mesh_connectivity_from_polydata,
     build_edges_from_mesh_connectivity,

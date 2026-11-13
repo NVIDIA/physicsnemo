@@ -215,7 +215,14 @@ def _transfer_cell_measures(
             "Cannot transform nonzero effective measure on a zero-measure cell; supply replacement measures"
         )
     denominator = torch.where(old_areas != 0, old_areas, torch.ones_like(old_areas))
-    set_cell_measures(result, measures * (result.cell_areas / denominator))
+    # The measures follow the widest dtype involved; the area ratio can overflow
+    # float16, so compute in at least float32.
+    out_dtype = torch.promote_types(
+        torch.promote_types(measures.dtype, result.cell_areas.dtype), old_areas.dtype
+    )
+    dtype = torch.promote_types(out_dtype, torch.float32)
+    ratio = result.cell_areas.to(dtype) / denominator.to(dtype)
+    set_cell_measures(result, (measures.to(dtype) * ratio).to(out_dtype))
 
 
 def _require_preserved_point_measures(mesh: "Mesh") -> None:
@@ -244,8 +251,11 @@ def _transform_point_measures(
     dimension = point_measure_dimension(source)
     if bool(dimension == 0):
         return
+    # LU has no float16/bfloat16 kernels, and the factor can overflow float16:
+    # compute it in at least float32.
+    promoted = matrix.to(torch.promote_types(matrix.dtype, torch.float32))
     if matrix.shape[0] == matrix.shape[1] and bool(dimension == source.n_spatial_dims):
-        factor = matrix.det().abs()
+        factor = promoted.det().abs()
     else:
         from physicsnemo.mesh.transformations.geometric import _is_similarity_transform
 
@@ -255,6 +265,10 @@ def _transform_point_measures(
             raise ValueError(
                 "Anisotropic transformation of point measures requires support geometry; transform the source cells before constructing quadrature, or explicitly preserve reference measures"
             )
-        length_scale = (matrix.T @ matrix).diagonal().mean().clamp_min(0).sqrt()
+        length_scale = (promoted.T @ promoted).diagonal().mean().clamp_min(0).sqrt()
         factor = length_scale**dimension
-    result.point_data[EFFECTIVE_MEASURE_KEY] = point_measures(source) * factor
+    measures = point_measures(source)
+    dtype = torch.promote_types(measures.dtype, factor.dtype)
+    result.point_data[EFFECTIVE_MEASURE_KEY] = (
+        measures.to(dtype) * factor.to(dtype)
+    ).to(measures.dtype)

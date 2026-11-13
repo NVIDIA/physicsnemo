@@ -478,6 +478,10 @@ class Kernel(Module):
         If ``True``, applies ``torch.utils.checkpoint.checkpoint`` during
         training to trade compute for memory. Disable for small models or
         when profiling.
+    self_regularization_beta : float or None, optional, default=None
+        If not ``None``, bounds the output of the Pade network (see
+        :class:`~physicsnemo.nn.Pade`). Must be positive. Has no effect with
+        ``network_type="mlp"``.
 
     Forward
     -------
@@ -679,20 +683,21 @@ class Kernel(Module):
 
         return (
             ### Feature engineering: spatial vectors (n_targets, n_sources, 3, ...)
-            3                                                  # r = target - source
-            + 3 * n_vec * 2                                    # vectors + unit vectors
+            3  # r = target - source
+            + 3 * n_vec * 2  # vectors + unit vectors
             ### Feature engineering: scalars (n_targets, n_sources, ...)
-            + n_vec * 3                                        # magnitudes: squared, raw, log
-            + n_pairs * (1 + 2 * self.n_spherical_harmonics)   # cos_theta + harmonics + products
-            + self.network_in_features                         # concatenated MLP input
+            + n_vec * 3  # magnitudes: squared, raw, log
+            # cos_theta + harmonics + products
+            + n_pairs * (1 + 2 * self.n_spherical_harmonics)
+            + self.network_in_features  # concatenated MLP input
             ### MLP layers (sequential; peak is largest layer plus I/O)
             + self.network_in_features
             + sum(self.hidden_layer_sizes)
             + self.network_out_features
             ### Post-processing
-            + self.network_out_features                        # reshaped output
-            + 1                                                # far-field r_mag_sq
-            + self.n_spatial_dims * max(1, 2 * n_vec - 1)      # basis vectors
+            + self.network_out_features  # reshaped output
+            + 1  # far-field r_mag_sq
+            + self.n_spatial_dims * max(1, 2 * n_vec - 1)  # basis vectors
         )
 
     @cached_property
@@ -994,7 +999,10 @@ class Kernel(Module):
                     vectors_log_mag[..., :n_global_vectors],
                     vectors_log_mag[..., -1:],  # r
                     vectors_log_mag[..., n_global_vectors:-1],
-                    *(pair_log_mag * spherical_harmonics[i] for i in self._harmonic_order),
+                    *(
+                        pair_log_mag * spherical_harmonics[i]
+                        for i in self._harmonic_order
+                    ),
                 ],
                 dim=-1,
             )  # (*interaction_dims, self.network_in_features)
@@ -1398,11 +1406,14 @@ class BarnesHutKernel(Kernel):
             if dual_plan is None:
                 if target_tree is None:
                     target_tree = ClusterTree.from_points(
-                        target_points, leaf_size=self.leaf_size,
+                        target_points,
+                        leaf_size=self.leaf_size,
                     )
                 dual_plan = cluster_tree.find_dual_interaction_pairs(
-                    target_tree=target_tree, theta=theta,
-                    expand_far_targets=expand_far_targets, validate=False,
+                    target_tree=target_tree,
+                    theta=theta,
+                    expand_far_targets=expand_far_targets,
+                    validate=False,
                 )
 
         ### Pack the features once; every phase gathers from these tensors.
@@ -1420,13 +1431,11 @@ class BarnesHutKernel(Kernel):
             node_centroids, node_features = _aggregate_features(
                 cluster_tree, source_points, source_areas, source_features
             )
-            if (
-                target_centroids is None
-                and dual_plan.n_far_nodes + dual_plan.n_fn > 0
-            ):
+            if target_centroids is None and dual_plan.n_far_nodes + dual_plan.n_fn > 0:
                 if target_tree is None:
                     target_tree = ClusterTree.from_points(
-                        target_points, leaf_size=self.leaf_size,
+                        target_points,
+                        leaf_size=self.leaf_size,
                     )
                 target_centroids = _target_node_centroids(
                     cluster_tree, target_tree, target_points, node_centroids
@@ -1524,8 +1533,13 @@ class BarnesHutKernel(Kernel):
             logger.debug(
                 "BarnesHutKernel: %d near + %d nf + %d fn + %d far_node "
                 "(%d sources x %d targets = %d dense, %.2f%% near-field)",
-                n_near, n_nf, n_fn, n_far_nodes,
-                n_sources, n_targets, n_dense,
+                n_near,
+                n_nf,
+                n_fn,
+                n_far_nodes,
+                n_sources,
+                n_targets,
+                n_dense,
                 100.0 * n_near / max(n_dense, 1),
             )
             if target_centroids is None and n_far_nodes + n_fn > 0:
@@ -1589,13 +1603,20 @@ class BarnesHutKernel(Kernel):
                 # ~37x reduction in checkpoint-saved memory per branch.
                 with record_function("bh_kernel::near_chunk"):
                     chunk_result = self._maybe_checkpointed_evaluate(
-                        chunk_tgt_ids, chunk_src_ids,
-                        target_points, source_points, source_features,
-                        global_scalars, global_vectors, reference_length,
+                        chunk_tgt_ids,
+                        chunk_src_ids,
+                        target_points,
+                        source_points,
+                        source_features,
+                        global_scalars,
+                        global_vectors,
+                        reference_length,
                     )
 
                 with record_function("bh_kernel::near_scatter"):
-                    chunk_strengths = torch.index_select(source_strengths, 0, chunk_src_ids)
+                    chunk_strengths = torch.index_select(
+                        source_strengths, 0, chunk_src_ids
+                    )
                     self._weight_and_scatter(
                         chunk_result, chunk_strengths, chunk_tgt_ids, packed_buf
                     )
@@ -1612,9 +1633,14 @@ class BarnesHutKernel(Kernel):
             # only the node ID indices, not the gathered aggregate data.
             with record_function("bh_kernel::far_node_evaluate"):
                 far_result = self._maybe_checkpointed_evaluate(
-                    far_tgt_nids, far_src_nids,
-                    target_centroids, node_centroids, node_features,
-                    global_scalars, global_vectors, reference_length,
+                    far_tgt_nids,
+                    far_src_nids,
+                    target_centroids,
+                    node_centroids,
+                    node_features,
+                    global_scalars,
+                    global_vectors,
+                    reference_length,
                 )
 
             ### Broadcast node-level results to individual targets via
@@ -1623,8 +1649,11 @@ class BarnesHutKernel(Kernel):
             with record_function("bh_kernel::far_node_broadcast"):
                 far_strengths = torch.index_select(node_total_strength, 0, far_src_nids)
                 self._weight_and_scatter(
-                    far_result, far_strengths, dual_plan.far_broadcast_target_ids,
-                    packed_buf, broadcast_pair_ids=dual_plan.far_broadcast_pair_ids,
+                    far_result,
+                    far_strengths,
+                    dual_plan.far_broadcast_target_ids,
+                    packed_buf,
+                    broadcast_pair_ids=dual_plan.far_broadcast_pair_ids,
                 )
 
         # ==================================================================
@@ -1647,13 +1676,20 @@ class BarnesHutKernel(Kernel):
                 # but same scatter as Phase A (per-target, no broadcast).
                 with record_function("bh_kernel::nf_evaluate"):
                     nf_result = self._maybe_checkpointed_evaluate(
-                        nf_tgt_ids, nf_src_nids,
-                        target_points, node_centroids, node_features,
-                        global_scalars, global_vectors, reference_length,
+                        nf_tgt_ids,
+                        nf_src_nids,
+                        target_points,
+                        node_centroids,
+                        node_features,
+                        global_scalars,
+                        global_vectors,
+                        reference_length,
                     )
 
                 with record_function("bh_kernel::nf_scatter"):
-                    nf_strengths = torch.index_select(node_total_strength, 0, nf_src_nids)
+                    nf_strengths = torch.index_select(
+                        node_total_strength, 0, nf_src_nids
+                    )
                     self._weight_and_scatter(
                         nf_result, nf_strengths, nf_tgt_ids, packed_buf
                     )
@@ -1671,17 +1707,25 @@ class BarnesHutKernel(Kernel):
             # points and data (like Phase A).
             with record_function("bh_kernel::fn_evaluate"):
                 fn_result = self._maybe_checkpointed_evaluate(
-                    fn_tgt_nids, fn_src_ids,
-                    target_centroids, source_points, source_features,
-                    global_scalars, global_vectors, reference_length,
+                    fn_tgt_nids,
+                    fn_src_ids,
+                    target_centroids,
+                    source_points,
+                    source_features,
+                    global_scalars,
+                    global_vectors,
+                    reference_length,
                 )
 
             ### Broadcast to stage-1 survivors via the ragged mapping.
             with record_function("bh_kernel::fn_broadcast"):
                 fn_strengths = torch.index_select(source_strengths, 0, fn_src_ids)
                 self._weight_and_scatter(
-                    fn_result, fn_strengths, dual_plan.fn_expanded_target_ids,
-                    packed_buf, broadcast_pair_ids=dual_plan.fn_expanded_pair_ids,
+                    fn_result,
+                    fn_strengths,
+                    dual_plan.fn_expanded_target_ids,
+                    packed_buf,
+                    broadcast_pair_ids=dual_plan.fn_expanded_pair_ids,
                 )
 
         return packed_buf
@@ -1712,9 +1756,7 @@ class BarnesHutKernel(Kernel):
             The packed per-pair outputs of :meth:`_gather_and_evaluate`.
         """
         if self.use_gradient_checkpointing:
-            return checkpoint(
-                self._gather_and_evaluate, *args, use_reentrant=False
-            )
+            return checkpoint(self._gather_and_evaluate, *args, use_reentrant=False)
         return self._gather_and_evaluate(*args)
 
     @staticmethod
@@ -1952,7 +1994,9 @@ class BarnesHutKernel(Kernel):
             logger.debug(
                 "auto_chunk_count: %d pairs -> %d chunks of %d "
                 "(%.1f MB est. peak, %.1f MB budget / %.1f MB total %s)",
-                n_total_pairs, n_chunks, _ceil_div(n_total_pairs, n_chunks),
+                n_total_pairs,
+                n_chunks,
+                _ceil_div(n_total_pairs, n_chunks),
                 approx_peak_bytes / 1e6,
                 target_bytes / 1e6,
                 _device_total_memory_bytes(device) / 1e6,
@@ -2020,6 +2064,13 @@ class MultiscaleKernel(Module):
     use_gradient_checkpointing : bool, optional, default=True
         Forwarded to each :class:`Kernel` branch. See
         :class:`Kernel` for details.
+    leaf_size : int, optional, default=1
+        Maximum points per leaf node of the cluster trees that
+        :meth:`forward` builds when none are given (see
+        :class:`BarnesHutKernel`).
+    self_regularization_beta : float or None, optional, default=None
+        Forwarded to each :class:`Kernel` branch. See :class:`Kernel` for
+        details.
 
     Forward
     -------
@@ -2069,22 +2120,29 @@ class MultiscaleKernel(Module):
 
     Examples
     --------
+    >>> import torch
+    >>> from tensordict import TensorDict
     >>> kernel = MultiscaleKernel(
     ...     n_spatial_dims=2,
     ...     output_schema={"phi": {"rank": 0}, "u": {"rank": 1}},
     ...     reference_length_names=["viscous_length", "chord_length"],
     ...     source_schema={"normal": {"rank": 1}},
-    ...     hidden_layer_sizes=[64, 64],
+    ...     hidden_layer_sizes=[16],
     ... )
+    >>> n_sources, n_targets = 20, 30
+    >>> normals = torch.nn.functional.normalize(torch.randn(n_sources, 2), dim=-1)
     >>> result = kernel(
-    ...     source_points=boundary_face_centers,
-    ...     target_points=query_points,
+    ...     source_points=torch.randn(n_sources, 2),
+    ...     target_points=torch.randn(n_targets, 2),
     ...     reference_lengths={"viscous_length": torch.tensor(0.001),
     ...                        "chord_length": torch.tensor(1.0)},
     ...     source_data=TensorDict({"normal": normals}, batch_size=[n_sources]),
-    ...     source_strengths=TensorDict({"viscous_length": strengths_v,
-    ...                                  "chord_length": strengths_c}, ...),
+    ...     source_strengths=TensorDict({"viscous_length": torch.ones(n_sources),
+    ...                                  "chord_length": torch.ones(n_sources)},
+    ...                                 batch_size=[n_sources]),
     ... )
+    >>> result["phi"].shape, result["u"].shape
+    (torch.Size([30]), torch.Size([30, 2]))
     """
 
     def __init__(
@@ -2367,12 +2425,8 @@ class MultiscaleKernel(Module):
         ### Augment global_data with log-ratios of reference lengths.
         log_ratios = TensorDict(
             {
-                f"{k1}_{k2}": (
-                    reference_lengths[k1] / reference_lengths[k2]
-                ).log()
-                for k1, k2 in itertools.combinations(
-                    self.reference_length_names, 2
-                )
+                f"{k1}_{k2}": (reference_lengths[k1] / reference_lengths[k2]).log()
+                for k1, k2 in itertools.combinations(self.reference_length_names, 2)
             },
             device=device,
         )
@@ -2449,8 +2503,7 @@ class MultiscaleKernel(Module):
                 kernel = self.kernels[name]
                 branch_kwargs = dict(
                     reference_length=(
-                        reference_lengths[name]
-                        * torch.exp(self.log_scalefactors[name])
+                        reference_lengths[name] * torch.exp(self.log_scalefactors[name])
                     ),
                     source_points=source_points,
                     target_points=target_points,
