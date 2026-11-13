@@ -445,14 +445,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
   the requested rows instead of all-gathering the source; no host sync, and
   `torch.compile` safe.
-- The stream-based ring helpers `perform_ring_iteration_async` and
-  `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
-  `wait=False` and `finish_ring_iteration` for overlap.
 - Unified external aero recipe: when a dataset puts its targets at cell
   centroids, as the surface datasets do, the training loss and the metrics
   weight each target point by its cell's area (or volume), so they no longer
   depend on how finely the mesh resolves each region. Set
   `measure_weighted=false` to count every point alike, as before.
+- The stream-based ring helpers `perform_ring_iteration_async` and
+  `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
+  `wait=False` and `finish_ring_iteration` for overlap.
 
 ### Deprecated
 
