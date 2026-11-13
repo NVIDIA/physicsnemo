@@ -56,7 +56,11 @@ import hydra
 import pytest
 import torch
 from collate import build_collate_fn
-from datasets import _apply_dataset_reader_overrides
+from datasets import (
+    _apply_dataset_reader_overrides,
+    apply_model_config,
+    load_dataset_config,
+)
 from hydra import compose, initialize_config_dir
 from loss import LossCalculator
 from omegaconf import DictConfig, OmegaConf
@@ -722,6 +726,30 @@ def test_isla_volume_joint_is_isla_volume_plus_the_wall_set() -> None:
     base["forward_kwargs"].pop("prediction_points")
     assert joint["model"]["output_schema"].pop("wss") == {"rank": 1}
     assert joint == base
+
+
+@pytest.mark.parametrize(
+    "model, dataset",
+    [
+        ("isla_surface", "drivaer_ml_surface"),
+        ("isla_volume", "drivaer_ml_volume"),
+        ("isla_volume_joint", "drivaer_ml_volume"),
+    ],
+)
+def test_isla_configs_declare_the_reversed_vehicle(model: str, dataset: str) -> None:
+    """Each ISLA config reverses the vehicle, so the dataset as it reads it declares
+    outward normals and keeps DrivAerML's wall shear on the fluid side."""
+    cfg = _compose_train_cfg(model, dataset)
+    stored = load_dataset_config(_RECIPE_ROOT / "datasets" / f"{dataset}.yaml")
+    assert (stored.surface_normals_point, stored.wall_shear_acts_on) == (
+        "inward",
+        "fluid",
+    )
+    adapted = apply_model_config(stored, cfg)
+    assert (adapted.surface_normals_point, adapted.wall_shear_acts_on) == (
+        "outward",
+        "fluid",
+    )
 
 
 ### ---------------------------------------------------------------------------

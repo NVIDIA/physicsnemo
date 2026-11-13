@@ -839,9 +839,9 @@ the dataset files and the other models' samples stay as they are.
 
 ISLA needs every boundary's normals to point into the fluid. The curated
 files wind the vehicle with its normals into the body, so all three configs
-append `FlipBoundaryOrientation` for the vehicle. The surface config then
-declares `dataset_overrides: {surface_normals_point: outward}`, so the
-force coefficients keep their sign. All three use the `warmup_cosine` schedule,
+append `FlipBoundaryOrientation` for the vehicle. They then declare
+`dataset_overrides: {surface_normals_point: outward}`, so the force
+coefficients keep their sign. All three use the `warmup_cosine` schedule,
 a learning rate of 3.75e-4, and `compile: false` with the model's own
 per-block compile (`model.compile_blocks: true`). Its fast paths on CUDA
 need Triton.

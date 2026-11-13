@@ -40,12 +40,16 @@ dataset_reader_overrides:
   subsample_n_cells: null      # the boundaries are read whole
 # ISLA needs every boundary's normals to point into the fluid. The curated
 # files store the tunnel boundaries that way and the vehicle into the body,
-# so the vehicle is reversed. Remove this step if your files' vehicle already
-# points into the fluid.
+# so the vehicle is reversed. Remove this step (and `dataset_overrides`) if
+# your files' vehicle already points into the fluid.
 dataset_append_transforms:
   - _target_: ${dp:FlipBoundaryOrientation}
     boundaries: [vehicle]
     normal_fields: [normals]   # negated with the winding, if the files store it
+# After the flip the vehicle's normals point out of the body: tell the force
+# coefficients (src/forces.py).
+dataset_overrides:
+  surface_normals_point: outward
 
 training:
   optimizer:
