@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.FIGConvUNetOneShot
+_target_: models.rollout.FIGConvUNetOneShot
 _convert_: all
 
 # Input/output channels

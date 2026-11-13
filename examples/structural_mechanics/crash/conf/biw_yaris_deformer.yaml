@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DeFormer network on the body-in-white crash data (VTP, 26 frames, 127 training
+# and 8 validation cases): every future frame is predicted independently from
+# the initial mesh by the time-conditional DeFormer of the PX Yaris recipe
+# (px_yaris_deformer, conf/model/deformer_time_conditional.yaml) with the body-in-white settings
+# below: geodesic neighbourhoods on the structural edges, no activation
+# checkpointing (one forward per update fits without it), no fixed frame
+# interval. Loss: normalized MSE plus 0.1 x the same loss on the provisional
+# head. Muon/AdamW, cosine 2e-4 -> 1e-6 over 100 epochs, bf16 autocast,
+# validation every 5 epochs. evaluate_biw.py scores a checkpoint with the
+# PX Yaris validation suite.
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ./outputs/
+
+experiment_name: BIW-Yaris-DeFormer
+
+defaults:
+  - reader: vtp
+  - datapipe: graph
+  - model: deformer_time_conditional
+  - training: default
+  - inference: default
+  - _self_
+
+training:
+  raw_data_dir: ???
+  raw_data_dir_validation: ???
+  global_features_filepath: null
+  optimizer: muon
+  muon_min_dim: 9
+  amp: true
+  amp_dtype: bfloat16
+  manual_gradient_allreduce: true
+  seed: 42
+  reproducible_sampling: true
+  sampler_seed: 0
+  num_time_steps: 26
+  # The DeFormer protocol on this data holds 15 of the 150 runs out as a test set
+  # (Run1-5, Run51-55, Run101-105) that no script of this example scores, and
+  # splits the other 135 into these 127 training cases and the 8 validation
+  # cases shared with the one-shot siblings (Run14, 31, 48, 70, 86, 108, 125,
+  # 142). The siblings keep the example's original 135-case training split, so
+  # their training sets differ from this one and the numbers are not directly
+  # comparable.
+  num_training_samples: 127
+  num_validation_samples: 8
+  epochs: 100
+  start_lr: 2.0e-4
+  end_lr: 1.0e-6
+  validation_freq: 5
+  validation_region_bounds: [-3000.0, -1500.0]  # rear / middle / front of the body-in-white mesh
+  # read by evaluate_biw.py (training validation is the pooled MSE): node-error
+  # maps and the penetration metrics are on when a checkpoint is scored
+  validation_node_errors: true
+  validation_penetration:
+    enabled: true
+  save_checkpoint_freq: 5
+  early_stopping_patience: 0
+  auxiliary_loss_weight: 0.1
+
+inference:
+  raw_data_dir_test: ???
+
+datapipe:
+  static_features: [thickness]
+  dynamic_targets: []
+  global_features: null
+  sample_type: one_time_step
+  # static reference kNN neighbourhoods of the local attention (built once, cached);
+  # the model reads k and the metric from here
+  local_knn_k: 32
+  local_knn_metric: geodesic  # the VTP structural edges
+  local_knn_cache_dir: ${datapipe.stats_dir}/local_knn_cache
+
+model:
+  # dt stays null: the VTP datapipe has no frame interval
+  activation_checkpointing: false
+  activation_checkpointing_components: [blocks]
+  num_pre_processor_checkpoint_segments: 0
+  num_post_processor_checkpoint_segments: 0
