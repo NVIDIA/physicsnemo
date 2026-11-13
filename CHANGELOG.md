@@ -555,6 +555,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The container build compiles pyg-lib from source without the uv cache, so
   it no longer reuses a pyg-lib wheel built against an older PyTorch, which
   failed to load with an undefined symbol after a base image upgrade.
+- `Mesh.with_cells` and `fix_orientation` keep the effective measure and area
+  of each cell whose vertices are only reordered, as when flipping a winding,
+  instead of rescaling them by float32 roundoff or raising on zero-area cells.
 - `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
   its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
   `cleanup()` no longer raises after a failed initialization.

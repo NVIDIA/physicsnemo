@@ -2100,6 +2100,10 @@ class Mesh(
         The replacement must have exactly the same shape as the current cells.
         User data is preserved, while all caches are cleared by default because
         changing connectivity can invalidate cell, point, and topology caches.
+        A row that only reorders its own vertices is the same simplex, so it
+        keeps its effective measure bitwise. Outside tracing and autograd it
+        also keeps its cached centroid and, when the mesh has effective
+        measures, its cached area.
 
         Parameters
         ----------
@@ -2155,9 +2159,26 @@ class Mesh(
             cells=cells,
             keep=keep,
         )
-        from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+        from physicsnemo.mesh.calculus.measure import (
+            EFFECTIVE_MEASURE_KEY,
+            _transfer_cell_measures,
+        )
 
-        _transfer_cell_measures(self, result)
+        # Like _cached, leave the cache alone while tracing or under autograd.
+        centroids = (
+            None
+            if is_tracing() or self.points.requires_grad
+            else self._cache.get(("cell", "centroids"), None)
+        )
+        unchanged = None
+        if centroids is not None or EFFECTIVE_MEASURE_KEY in self.cell_data:
+            sorted_cells = cells.sort(dim=1).values
+            unchanged = (sorted_cells == self.cells.sort(dim=1).values).all(dim=1)
+        if centroids is not None:
+            result._cache["cell", "centroids"] = torch.where(
+                unchanged[:, None], centroids, result.cell_centroids
+            )
+        _transfer_cell_measures(self, result, unchanged=unchanged)
         return result
 
     def with_data(

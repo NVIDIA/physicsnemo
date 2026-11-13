@@ -465,6 +465,33 @@ class TestWithCells:
         with pytest.raises(TypeError, match="integer dtype"):
             mesh.with_cells(mesh.cells.to(torch.float32))
 
+    def test_reordered_rows_keep_cached_centroids(self):
+        mesh = Mesh(
+            points=torch.rand(4, 3, generator=torch.Generator().manual_seed(0)),
+            cells=torch.tensor([[0, 1, 2], [0, 1, 3]]),
+        )
+        centroids = mesh.cell_centroids
+
+        updated = mesh.with_cells(torch.tensor([[1, 2, 0], [0, 2, 3]]))
+
+        cached = updated._cache["cell", "centroids"]
+        assert torch.equal(cached[0], centroids[0])
+        torch.testing.assert_close(cached[1], mesh.points[[0, 2, 3]].mean(dim=0))
+
+    def test_reordering_writes_no_cache_when_points_require_grad(self):
+        from physicsnemo.mesh.calculus.measure import set_cell_measures
+
+        mesh = Mesh(
+            points=torch.rand(3, 3).requires_grad_(),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        set_cell_measures(mesh, torch.ones(1))
+        mesh._cache["cell", "centroids"] = torch.zeros(1, 3)
+
+        updated = mesh.with_cells(mesh.cells[:, [0, 2, 1]])
+
+        assert not updated._cache["cell"].keys()
+
     def test_result_containers_are_independent(self):
         mesh = self._cached_triangle()
 

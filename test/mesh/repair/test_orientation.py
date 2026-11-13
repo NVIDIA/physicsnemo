@@ -89,6 +89,28 @@ class TestRepairsWindings:
         }
         torch.testing.assert_close(oriented.cell_normals, two_spheres.cell_normals)
 
+    def test_keeps_effective_measures_and_areas_bitwise(self, device):
+        """Flips keep each cell's (area, measure) pair, even on a degenerate cell."""
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        sphere = sphere_icosahedral.load(subdivisions=2, device=device)
+        # Jittered points make float32 areas depend on the vertex order
+        g = torch.Generator().manual_seed(0)
+        jitter = 0.01 * torch.rand(sphere.points.shape, generator=g).to(device)
+        degenerate = torch.tensor([[0, 0, 1]], device=device)
+        sphere = Mesh(
+            points=sphere.points + jitter, cells=torch.cat([sphere.cells, degenerate])
+        )
+        scrambled = _reverse(sphere, _every_third(sphere.n_cells, device))
+        set_cell_measures(scrambled, torch.full((sphere.n_cells,), 0.5, device=device))
+
+        oriented, stats = fix_orientation(scrambled)
+
+        assert stats["n_cells_flipped"] > 0
+        assert torch.equal(cell_measures(oriented), cell_measures(scrambled))
+        assert torch.equal(oriented.cell_areas, scrambled.cell_areas)
+
     def test_sharp_creases(self, device):
         """Faces meeting at right angles are oriented by connectivity, not normals."""
         from physicsnemo.mesh.primitives.surfaces import cube_surface

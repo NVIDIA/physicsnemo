@@ -246,3 +246,81 @@ class TestWeightsUnderTransforms:
         torch.testing.assert_close(
             moved.integrate("f"), base_integral / 25.0, rtol=1e-5, atol=1e-7
         )
+
+    @staticmethod
+    def _flip(mesh: Mesh, order: tuple[int, ...] = (0, 2, 1)) -> Mesh:
+        return mesh.with_cells(mesh.cells[:, list(order)])
+
+    def test_winding_flip_keeps_subsampled_measures_and_areas_bitwise(self):
+        """A reordered row is the same simplex: its measure and area are kept."""
+        g = torch.Generator().manual_seed(0)
+        mesh = Mesh(
+            points=torch.rand(60, 3, generator=g),
+            cells=torch.randperm(60, generator=g).reshape(20, 3),
+        )
+        sub = mesh.slice_cells(torch.arange(0, 20, 2))
+        scale_measures(sub, 2.0)
+
+        flipped = self._flip(sub)
+
+        assert torch.equal(cell_measures(flipped), cell_measures(sub))
+        assert torch.equal(flipped._cache["cell", "areas"], sub.cell_areas)
+
+    @pytest.mark.parametrize("order", [[0, 2, 1], [1, 2, 0]], ids=["flip", "cyclic"])
+    def test_reordering_a_zero_area_cell_keeps_its_measure(self, order):
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        set_cell_measures(mesh, torch.tensor([1.5]))
+
+        reordered = self._flip(mesh, order)
+
+        assert torch.equal(cell_measures(reordered), torch.tensor([1.5]))
+
+    def test_winding_flip_of_slivers_keeps_measures_bitwise(self):
+        """Float32 areas of slivers depend on the vertex order; measures do not."""
+        g = torch.Generator().manual_seed(0)
+        base = torch.rand(200, 1, 3, generator=g)
+        direction = torch.rand(200, 1, 3, generator=g)
+        offsets = torch.tensor([0.0, 1.0, 2.0])[:, None] + 1e-4 * torch.rand(
+            200, 3, 1, generator=g
+        )
+        mesh = Mesh(
+            points=(base + offsets * direction).reshape(-1, 3),
+            cells=torch.arange(600).reshape(200, 3),
+        )
+        set_cell_measures(mesh, mesh.cell_areas * 3.0)
+        flipped_cells = mesh.cells[:, [0, 2, 1]]
+        assert not torch.equal(
+            Mesh(points=mesh.points, cells=flipped_cells).cell_areas, mesh.cell_areas
+        )
+
+        flipped = mesh.with_cells(flipped_cells)
+
+        assert torch.equal(cell_measures(flipped), cell_measures(mesh))
+
+    def test_changed_vertex_sets_still_follow_the_area_ratio(self):
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]]
+            ),
+            cells=torch.tensor([[0, 1, 2], [0, 2, 1]]),
+        )
+        set_cell_measures(mesh, torch.tensor([3.0, 5.0]))
+
+        updated = mesh.with_cells(torch.tensor([[0, 2, 1], [0, 3, 1]]))
+
+        assert torch.equal(cell_measures(updated), torch.tensor([3.0, 10.0]))
+
+    def test_changed_vertex_set_of_a_zero_area_cell_raises(self):
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            ),
+            cells=torch.tensor([[0, 1, 2], [0, 1, 3]]),
+        )
+        set_cell_measures(mesh, torch.tensor([1.0, 1.0]))
+
+        with pytest.raises(ValueError, match="zero-measure cell"):
+            mesh.with_cells(torch.tensor([[0, 1, 3], [0, 3, 1]]))
