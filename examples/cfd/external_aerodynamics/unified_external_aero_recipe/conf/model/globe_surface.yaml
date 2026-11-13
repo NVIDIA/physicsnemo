@@ -51,7 +51,7 @@ forward_kwargs:
     delta_turb: 0.015                         # nondim (= 0.075 m / 5 m)
 
 model:
-  _target_: physicsnemo.experimental.models.globe.GLOBE
+  _target_: physicsnemo.models.globe.GLOBE
   n_spatial_dims: 3
   output_schema:
     pressure: {rank: 0}        # scalar

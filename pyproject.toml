@@ -444,6 +444,9 @@ FNO = "physicsnemo.models.fno:FNO"
 # GeoTransolver
 GeoTransolver = "physicsnemo.models.geotransolver:GeoTransolver"
 
+# GLOBE
+GLOBE = "physicsnemo.models.globe:GLOBE"
+
 # GraphCast
 GraphCastNet = "physicsnemo.models.graphcast:GraphCastNet"
 
