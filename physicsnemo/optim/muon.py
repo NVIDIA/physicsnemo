@@ -156,17 +156,17 @@ class Muon(_TorchMuon):
         (treated as ``"original"``).
     cuda_graph : bool, optional
         Replay the step as one CUDA graph instead of launching its kernels one
-        by one from Python. The graph runs the same kernels as the uncompiled
-        step, so the result is the same bit for bit. It is captured at the
-        first step after the momentum buffers exist, and captured again when
-        the parameters with gradients, any hyperparameter (such as a
-        scheduler's learning rate) or the state tensors (after loading a state
-        dict) change. A capture costs more than an eager step, so a schedule
-        that changes the learning rate every step makes the step slower.
-        Needs CUDA parameters and float learning rates, and holds a copy of
-        the gradients and the graph's memory pool. Under ``torch.compile`` the
-        step runs outside the compiled region, so the graph replaces compiling
-        it. Default False.
+        by one from Python. The graph runs the same kernels as the eager step,
+        so the result is the same bit for bit. The first step runs eagerly and
+        creates the momentum buffers, and the next step captures the graph.
+        It is captured again when the parameters with gradients change, when
+        any hyperparameter changes (such as a scheduler's learning rate), and
+        after loading a state dict. A capture costs more than an eager step,
+        so a schedule that changes the learning rate every step makes the step
+        slower. Needs CUDA parameters and float learning rates, and holds a
+        copy of the gradients and the graph's memory pool. Under
+        ``torch.compile`` the step runs outside the compiled region, so the
+        graph replaces compiling it. Default False.
 
     Forward
     -------
@@ -269,10 +269,11 @@ class Muon(_TorchMuon):
     def _graph_step(self) -> None:
         """Replay the step as a CUDA graph, capturing it first if needed.
 
-        It runs eagerly while any parameter with a gradient has no momentum
-        buffer yet, so that no buffer is ever initialized inside a capture,
-        and inside a capture of the caller's own, which then captures the
-        plain step. Under ``torch.compile`` it runs outside the compiled region.
+        The eager step runs instead in two cases. One is while any parameter
+        with a gradient has no momentum buffer, so no buffer is created inside
+        a capture. The other is inside a capture the caller started, which then
+        records the eager step. Under ``torch.compile`` this method runs outside
+        the compiled region.
         """
         if torch.cuda.is_current_stream_capturing():
             return self._step()
@@ -315,7 +316,7 @@ class Muon(_TorchMuon):
                 for p, g in zip(params, graph_grads):
                     p.grad = g
                 # Other threads, such as a data loader's, may allocate or sync
-                # meanwhile; in the default "global" mode that would invalidate
+                # meanwhile. In the default "global" mode that would invalidate
                 # the capture. The outer stream context restores the current
                 # stream when a failed capture skips torch.cuda.graph's exit.
                 with (

@@ -58,9 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `GeoTransolver.forward_with_geometry_features` for predictions and detached
   geometry tokens in one pass, preserving the existing `forward` API.
 - `physicsnemo.optim.Muon` takes an optional `cuda_graph` flag that replays
-  its uncompiled step as one CUDA graph, bit for bit, which saves host time
-  when the step is launch-bound. The unified external-aero recipe exposes it
-  as `training.optimizer.muon_cuda_graph` (default off).
+  its eager step as one CUDA graph, bit for bit, saving host time. The
+  unified external-aero recipe exposes it as
+  `training.optimizer.muon_cuda_graph`, off by default.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - `MeshDataset(cache_host=True)` reads each sample once and serves repeats from
