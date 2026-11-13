@@ -49,6 +49,40 @@ def test_pad_token_sets_packs_lists(device):
     assert packed.global_token.shape == (2, 4)
 
 
+def test_pad_token_sets_keeps_per_set_mask(device):
+    """Tokens masked out in an input set stay masked out after packing."""
+    features = torch.randn(5, 4, device=device)
+    set_mask = torch.tensor([True, False, True, True, False], device=device)
+    ts1 = TokenSet(
+        features=features,
+        coords=torch.randn(5, 3, device=device),
+        mask=set_mask,
+    )
+    ts2 = TokenSet(
+        features=torch.randn(3, 4, device=device),
+        coords=torch.randn(3, 3, device=device),
+    )
+    packed = pad_token_sets([ts1, ts2])
+    assert torch.equal(packed.mask[0], set_mask)
+    assert torch.equal(
+        packed.mask[1],
+        torch.tensor([True, True, True, False, False], device=device),
+    )
+    # The synthesised global token averages only the valid features.
+    torch.testing.assert_close(packed.global_token[0], features[set_mask].mean(0))
+
+
+def test_pad_token_sets_bad_mask_shape_raises():
+    """A per-set mask whose length differs from the token count is rejected."""
+    ts = TokenSet(
+        features=torch.zeros(4, 2),
+        coords=torch.zeros(4, 3),
+        mask=torch.ones(3, dtype=torch.bool),
+    )
+    with pytest.raises(ValueError, match=r"Expected mask of shape \(4,\)"):
+        pad_token_sets([ts])
+
+
 def test_pad_token_sets_empty_raises():
     """Empty iterable is rejected."""
     with pytest.raises(ValueError, match="at least one TokenSet"):
@@ -88,6 +122,21 @@ def test_flatten_rank2_passthrough(device):
     x = torch.randn(10, 8, device=device)
     out = flatten_valid_token_features(x)
     assert out is x
+
+
+def test_flatten_rank2_with_mask(device):
+    """Rank-2 input with a mask returns only the masked-True rows."""
+    x = torch.randn(5, 8, device=device)
+    mask = torch.tensor([True, False, True, True, False], device=device)
+    out = flatten_valid_token_features(x, mask)
+    assert torch.equal(out, x[mask])
+
+
+def test_flatten_rank2_bad_mask_shape_raises():
+    """A rank-2 mask whose length differs from ``features.shape[0]`` is rejected."""
+    x = torch.zeros(5, 8)
+    with pytest.raises(ValueError, match=r"mask must match features.shape"):
+        flatten_valid_token_features(x, torch.ones(4, dtype=torch.bool))
 
 
 def test_flatten_rank3_no_mask(device):

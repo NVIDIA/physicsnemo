@@ -179,7 +179,8 @@ class QueryTokenDecoder(Module):
     dropout : float, optional
         Dropout used throughout. Default 0.0.
     query_chunk_size : int, optional
-        Chunk size for processing long query lists. Default 4096.
+        Chunk size for processing long query lists. Must be positive.
+        Default 4096.
     wall_velocity_gate_enabled : bool, optional
         Enable the wall-velocity gate. Default ``False``.
     wall_velocity_gate_alpha : float, optional
@@ -212,7 +213,7 @@ class QueryTokenDecoder(Module):
     ------
     ValueError
         If ``pressure_head_style`` or ``final_refinement_style`` is not
-        recognised.
+        recognised, or if ``query_chunk_size`` is not positive.
     """
 
     def __init__(
@@ -250,6 +251,11 @@ class QueryTokenDecoder(Module):
         self.use_sdf = bool(use_sdf)
         self.cond_dim = int(cond_dim)
         self.query_chunk_size = int(query_chunk_size)
+        if self.query_chunk_size < 1:
+            raise ValueError(
+                "query_chunk_size must be a positive integer, "
+                f"got {self.query_chunk_size}."
+            )
         self.wall_velocity_gate_enabled = bool(wall_velocity_gate_enabled)
         self.wall_velocity_gate_alpha = float(wall_velocity_gate_alpha)
         self.pressure_split_head_enabled = bool(pressure_split_head_enabled)
