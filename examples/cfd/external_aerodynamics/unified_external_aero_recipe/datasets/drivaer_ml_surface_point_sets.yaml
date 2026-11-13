@@ -14,8 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Single-branch ablation: only the selected field and anchor stream are loaded.
+# DrivAerML prediction point sets and fields; model geometry/anchors are configured separately.
 train_datadir: ${dataset_paths.drivaer_ml}
+# Stored DrivAerML normals point inward; OpenFOAM shear acts on the fluid.
+surface_normals_point: inward
+wall_shear_acts_on: fluid
 independent_validation: true
 validation_reader_overrides:
   point_sets:
@@ -27,40 +30,29 @@ pipeline:
     path: ${train_datadir}
     pattern: "run_*/domain_*.pdmsh"
     point_sets:
-      geometry:
-        source: vehicle
-        count: 65536
-        stream: 0
-      supernodes:
-        source: geometry
-        count: 16384
-        stream: 1
-      volume_anchors:
-        source: interior
-        count: 16384
-        stream: 3
       interior:
-        source: interior
+        source: vehicle
+        association: cell_centroids
         count: ${sampling_resolution}
-        stream: 5
+        stream: 4
         indices_from: null
+        retain_cells_as: vehicle
         fields:
-          UMeanTrim: velocity
           pMeanTrim: pressure
-          nutMeanTrim: nut
+          wallShearStressMeanTrim: wss
+  # Keep the native frame so query draws cannot shift geometry/anchors.
+  # No centering/augmentations: moments default to the file origin; augment=true is a no-op.
   transforms:
     - _target_: ${dp:NonDimensionalizeByMetadata}
       association: point_data
       fields:
-        velocity: velocity
         pressure: pressure
-        nut: identity
+        wss: stress
     - _target_: ${dp:NormalizeMeshFields}
       association: point_data
       fields:
-        nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
+        wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
 
 targets:
-  velocity: vector
   pressure: scalar
-  nut: scalar
+  wss: vector

@@ -68,9 +68,12 @@ COUNT_KEYS = {
 
 def make_reader(root, mode="joint", **counts):
     """Use the actual dataset selection schema with small test counts."""
-    cfg = OmegaConf.load(ROOT / "datasets" / f"drivaer_ml_ab_upt_{mode}.yaml")
+    cfg = OmegaConf.load(ROOT / "datasets" / f"drivaer_ml_{mode}_point_sets.yaml")
     cfg.train_datadir = str(root)
     cfg.sampling_resolution = 13
+    model_cfg = OmegaConf.load(ROOT / "conf" / "model" / f"ab_upt_{mode}.yaml")
+    model_cfg.sampling_resolution = 13
+    cfg = apply_model_config(cfg, model_cfg)
     specs = OmegaConf.to_container(cfg.pipeline.reader.point_sets, resolve=True)
     for name, spec in specs.items():
         spec["count"] = counts[
@@ -145,7 +148,7 @@ def pipeline(root, mode):
     """Compose actual model/dataset YAMLs with small point-set counts."""
     with initialize_config_dir(config_dir=str(ROOT / "conf"), version_base=None):
         cfg = compose(config_name="train", overrides=[f"model=ab_upt_{mode}"])
-    ds = OmegaConf.load(ROOT / "datasets" / f"drivaer_ml_ab_upt_{mode}.yaml")
+    ds = OmegaConf.load(ROOT / "datasets" / f"drivaer_ml_{mode}_point_sets.yaml")
     ds.train_datadir = str(root)
     ds.sampling_resolution = 13
     for name, spec in cfg.dataset_reader_overrides.point_sets.items():
@@ -306,7 +309,7 @@ def test_anchor_training_loaders_keep_independent_validation_queries(
     root, original = native_case
     cfg, ds, initial_dataset = pipeline(root, mode)
     initial_dataset.close()
-    cfg.dataset = f"drivaer_ml_ab_upt_{mode}"
+    cfg.dataset = f"drivaer_ml_{mode}_point_sets"
     anchor_queries(cfg.dataset_reader_overrides.point_sets, True)
     cfg.dataloader.prefetch_factor = 0
     cfg.dataloader.num_workers = 1

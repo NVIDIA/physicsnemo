@@ -305,7 +305,7 @@ Available models and datasets:
 | Group | Files |
 |---|---|
 | `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
-| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface`, `drivaer_ml_ab_upt_{surface,volume,joint}` |
+| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface`, `drivaer_ml_{surface,volume,joint}_point_sets` |
 
 Pick one of each on the CLI:
 
@@ -532,7 +532,7 @@ unified_external_aero_recipe/
                                #  by load_dataset_config, NOT by Hydra)
     dataset_paths.yaml         # local disk paths (edit me)
     drivaer_ml_{surface,volume}.yaml
-    drivaer_ml_ab_upt_{surface,volume,joint}.yaml
+    drivaer_ml_{surface,volume,joint}_point_sets.yaml
     highlift_{surface,volume}.yaml
     shift_suv_{estate,fastback}_surface.yaml
   src/
@@ -685,9 +685,9 @@ python src/train.py model=smart_surface dataset=drivaer_ml_surface
 python src/train.py model=smart_volume dataset=drivaer_ml_volume
 
 # AB-UPT: separate surface/volume jobs or joint training
-python src/train.py model=ab_upt_surface dataset=drivaer_ml_ab_upt_surface
-python src/train.py model=ab_upt_volume dataset=drivaer_ml_ab_upt_volume
-python src/train.py model=ab_upt_joint dataset=drivaer_ml_ab_upt_joint
+python src/train.py model=ab_upt_surface dataset=drivaer_ml_surface_point_sets
+python src/train.py model=ab_upt_volume dataset=drivaer_ml_volume_point_sets
+python src/train.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets
 
 # GLOBE (mesh-native)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
@@ -726,7 +726,7 @@ in chunks of 8,192.
 
 #### AB-UPT options
 
-Use the AB-UPT dataset templates shown in the gallery and set `drivaer_ml` in
+Use the DrivAerML point-set datasets shown in the gallery and set `drivaer_ml` in
 `datasets/dataset_paths.yaml` to the directory containing native
 `run_*/domain_*.pdmsh` files with a triangulated `vehicle` boundary and freestream metadata. Surface-only mode
 accepts an empty interior. Joint mode uses the shared `target_sources` and `output_groups` contract
@@ -739,7 +739,9 @@ volume targets are velocity, pressure, and eddy viscosity.
 `supernodes`, `surface_anchors`, `volume_anchors`, `surface_queries`, and
 `interior` independently. Single-branch queries use `interior`; joint surface
 queries use `surface_queries`. Validation samples stay fixed while training varies
-by epoch.
+by epoch. These point-set datasets retain the file coordinate frame and configure
+no augmentations, so `augment=true` has no effect and moments default to the file
+origin.
 
 Reuse the training run's model settings from `resolved_config.yaml` at inference.
 
@@ -753,7 +755,7 @@ for the volume branch. Validation and inference still decode independent queries
 Use `null` query counts for full fields with the configured anchor budgets:
 
 ```bash
-python src/infer.py model=ab_upt_joint dataset=drivaer_ml_ab_upt_joint \
+python src/infer.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets \
     checkpoint_path=/path/to/checkpoints run_id=YOUR_RUN_ID \
     dataset_reader_overrides.point_sets.surface_queries.count=null \
     dataset_reader_overrides.point_sets.interior.count=null rescale_geometry=true

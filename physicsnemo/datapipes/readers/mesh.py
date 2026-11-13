@@ -28,6 +28,7 @@ import glob as _glob
 import logging
 import operator
 from dataclasses import dataclass
+from graphlib import TopologicalSorter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Literal
 
@@ -77,19 +78,26 @@ def _sample_point_sets(
 ) -> DomainMesh:
     """Gather configured point sets without materializing complete memmap fields.
 
-    See ``DomainMeshReader.point_sets`` for the configuration contract. Sources
-    refer to original meshes unless a preceding output has that name. Shared
-    indices require the identical source mesh and association.
+    See ``DomainMeshReader.point_sets`` for the configuration contract. Original
+    source names take precedence over outputs. Draw dependencies first, and add
+    retained meshes after sampling so they cannot shadow the source geometry.
+    Shared indices require the identical source mesh and association.
     """
-    outputs = {}
-    selections = {}
+    originals = dict(domain.boundaries.items())
+    originals["interior"] = domain.interior
+    dependencies = {}
     for name, spec in specifications.items():
+        needed = set() if spec["source"] in originals else {spec["source"]}
+        if spec.get("indices_from") is not None:
+            needed.add(spec["indices_from"])
+        dependencies[name] = needed
+    outputs = {}
+    retained_outputs = {}
+    selections = {}
+    for name in TopologicalSorter(dependencies).static_order():
+        spec = specifications[name]
         source = spec["source"]
-        mesh = outputs.get(source)
-        if mesh is None:
-            mesh = (
-                domain.interior if source == "interior" else domain.boundaries[source]
-            )
+        mesh = originals[source] if source in originals else outputs[source]
         association = spec.get("association", "points")
         if association not in ("points", "cell_centroids"):
             raise ValueError(
@@ -138,6 +146,7 @@ def _sample_point_sets(
             if (
                 retained == "interior"
                 or retained in outputs
+                or retained in retained_outputs
                 or retained in specifications
             ):
                 raise ValueError("retain_cells_as must name a distinct output boundary")
@@ -153,7 +162,8 @@ def _sample_point_sets(
                 else cell_measures(selected)
             )
             set_cell_measures(selected, measures * (total / len(ids)))
-            outputs[retained] = selected
+            retained_outputs[retained] = selected
+    outputs.update(retained_outputs)
     interior = outputs.pop("interior", None)
     if interior is None:
         interior = Mesh(
@@ -1274,14 +1284,17 @@ class DomainMeshReader(_MeshReaderBase):
             Construct independently sampled point clouds before pinning or device
             transfer. Each key names an output boundary (``interior`` is reserved
             for the interior). Each specification contains ``source`` (an input
-            boundary, ``interior``, or a previously constructed point set),
-            ``association`` (``points`` or ``cell_centroids``), ``count`` (positive
-            integer or None for all), and an integer ``stream``. Optional
+            boundary, ``interior``, or another configured point set). Original
+            mesh names take precedence; dependencies are sampled first. Each
+            specification also contains ``association`` (``points`` or
+            ``cell_centroids``), ``count`` (positive integer or None for all),
+            and an integer ``stream``. Optional
             ``fields`` maps source field names to output point-data names.
-            ``indices_from`` reuses a preceding selection from the same source
+            ``indices_from`` reuses another set's selection from the same source
             and association, e.g. to supervise anchors. ``retain_cells_as`` keeps
             the selected cells as an additional boundary, with inverse-inclusion
-            integration measures. Other input meshes and fields are discarded.
+            integration measures, added after all sets are sampled. Other input
+            meshes and fields are discarded.
 
             Sampling is uniform without replacement and deterministic per
             reader seed, epoch, sample index, and stream, independent of access

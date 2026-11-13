@@ -23,9 +23,18 @@ sampling_resolution: 16384
 
 dataset_reader_overrides:
   point_sets:
-    geometry: {count: 65536}
-    supernodes: {count: 16384}
-    volume_anchors: {count: 16384}
+    geometry:
+      source: vehicle
+      count: 65536
+      stream: 0
+    supernodes:
+      source: geometry
+      count: 16384
+      stream: 1
+    volume_anchors:
+      source: interior
+      count: 16384
+      stream: 3
     interior: {count: "${sampling_resolution}"}
 
 forward_kwargs:

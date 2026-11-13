@@ -275,19 +275,23 @@ _TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
     _RecipeSpec(
         "ab_upt_surface",
         "ab_upt_surface",
-        "drivaer_ml_ab_upt_surface",
+        "drivaer_ml_surface_point_sets",
         "ab_upt_surface",
         [],
     ),
     _RecipeSpec(
         "ab_upt_volume",
         "ab_upt_volume",
-        "drivaer_ml_ab_upt_volume",
+        "drivaer_ml_volume_point_sets",
         "ab_upt_volume",
         [],
     ),
     _RecipeSpec(
-        "ab_upt_joint", "ab_upt_joint", "drivaer_ml_ab_upt_joint", "ab_upt_joint", []
+        "ab_upt_joint",
+        "ab_upt_joint",
+        "drivaer_ml_joint_point_sets",
+        "ab_upt_joint",
+        [],
     ),
     _RecipeSpec("smart_surface", "smart_surface", "drivaer_ml_surface", "surface", []),
     _RecipeSpec("smart_volume", "smart_volume", "drivaer_ml_volume", "volume", []),
