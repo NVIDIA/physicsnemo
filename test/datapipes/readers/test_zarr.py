@@ -445,6 +445,22 @@ class TestZarrReaderSingleGroupMode:
         assert data["targets"].shape == (10,)
         assert metadata["sample_index"] == 5
 
+    def test_single_group_mode_scalar_field(self, tmp_path):
+        """A per-sample scalar, stored as ``(n_samples,)``, reads as a 0-d tensor."""
+        zarr = pytest.importorskip("zarr")
+
+        path = tmp_path / "data.zarr"
+        root = zarr.open(path, mode="w")
+        root.create_array("inputs", data=np.random.randn(20, 64).astype(np.float32))
+        reynolds = np.arange(20, dtype=np.float32)
+        root.create_array("reynolds", data=reynolds)
+
+        data, _ = dp.ZarrReader(path)[5]
+
+        assert data["inputs"].shape == (64,)
+        assert data["reynolds"].shape == ()
+        assert data["reynolds"].item() == reynolds[5]
+
     def test_single_group_mode_metadata(self, single_zarr_group):
         """Test metadata in single group mode."""
         reader = dp.ZarrReader(single_zarr_group)

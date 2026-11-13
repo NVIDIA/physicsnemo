@@ -65,14 +65,53 @@ from tensordict import TensorDict
 pytest.importorskip("tensorboard")
 
 import train  # noqa: E402  -- monkeypatch module globals in focused tests
+from loss import LossCalculator  # noqa: E402
+from metrics import MetricCalculator  # noqa: E402
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
     _reduce_and_average,
     _run_epoch,
+    _skip_nan,
     _walk_batch_for_logging,
+    forward_pass,
 )
 
 from physicsnemo.mesh import Mesh  # noqa: E402  -- after the importorskip guard
+
+### ---------------------------------------------------------------------------
+### forward_pass: the batch's target_measure reaches the loss and the metrics
+### ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "measure_weighted,expected_mse,expected_mae", [(True, 1.0, 0.5), (False, 2.0, 1.0)]
+)
+def test_forward_pass_weights_loss_and_metrics_by_target_measure(
+    measure_weighted, expected_mse, expected_mae
+):
+    """The erroneous point holds a quarter of the measure: weighted MSE is 1 and
+    MAE 0.5, against 2 and 1 per point."""
+    predictions = torch.tensor([[[1.0], [3.0]]], requires_grad=True)
+    target_config = {"pressure": "scalar"}
+    batch = {
+        "forward_kwargs": {"input": predictions},
+        "targets": TensorDict({"pressure": torch.ones(1, 2)}, batch_size=[1, 2]),
+        "target_measure": torch.tensor([[3.0, 1.0]]),
+    }
+    loss, _, metrics = forward_pass(
+        batch,
+        torch.nn.Identity(),
+        "float32",
+        LossCalculator(target_config, "mse", measure_weighted=measure_weighted),
+        MetricCalculator(
+            target_config, metrics=["mae"], measure_weighted=measure_weighted
+        ),
+        output_type="tensors",
+        target_config=target_config,
+    )
+    assert loss.item() == pytest.approx(expected_mse)
+    assert metrics["pressure_mae"].item() == pytest.approx(expected_mae)
+
 
 ### ---------------------------------------------------------------------------
 ### _walk_batch_for_logging
@@ -250,6 +289,30 @@ class TestReduceAndAverage:
         assert loss == pytest.approx(4.0)
         assert losses == {} and metrics == {}
 
+    def test_metric_counts_skip_nan_metrics(self):
+        """With counts, a NaN metric (no finite target) is left out of its mean."""
+        steps = [
+            TensorDict({"a_l2": torch.tensor(1.0), "b_l2": torch.tensor(b)})
+            for b in (2.0, float("nan"), 4.0)
+        ]
+        parts = [_skip_nan(m) for m in steps]
+        sums = parts[0][0] + parts[1][0] + parts[2][0]
+        counts = parts[0][1] + parts[1][1] + parts[2][1]
+        _, _, means = _reduce_and_average(
+            torch.tensor(0.0), TensorDict(), sums, 3, device="cpu", metric_counts=counts
+        )
+        assert means == pytest.approx({"a_l2": 1.0, "b_l2": 3.0})
+        ### One step whose field has no finite target: NaN, not 0.
+        _, _, step = _reduce_and_average(
+            torch.tensor(0.0),
+            TensorDict(),
+            parts[1][0],
+            1,
+            device="cpu",
+            metric_counts=parts[1][1],
+        )
+        assert step["a_l2"] == 1.0 and step["b_l2"] != step["b_l2"]
+
     def test_zero_local_count_avoids_zero_division(self):
         """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""
         loss, losses, metrics = _reduce_and_average(
@@ -257,6 +320,33 @@ class TestReduceAndAverage:
         )
         assert loss == pytest.approx(7.0)
         assert losses == {} and metrics == {}
+
+    def test_val_epoch_skips_a_field_without_finite_targets(self):
+        """A batch whose field is all NaN leaves that field's epoch metric alone."""
+        targets = {"a": "scalar", "b": "scalar"}
+
+        def batch(b: float) -> dict:
+            values = {"a": torch.ones(1, 4), "b": torch.full((1, 4), b)}
+            return {
+                "forward_kwargs": {"input": torch.zeros(1, 4, 2)},
+                "targets": TensorDict(values, batch_size=[1, 4]),
+            }
+
+        _, averages = _run_epoch(
+            [batch(2.0), batch(float("nan"))],
+            torch.nn.Identity(),
+            LossCalculator(targets, mask_nonfinite_targets=True),
+            MetricCalculator(targets, metrics=["mae"], mask_nonfinite_targets=True),
+            SimpleNamespace(info=lambda *_: None),
+            0,
+            OmegaConf.create({"precision": "float32", "profile": False}),
+            SimpleNamespace(rank=0, device="cpu"),
+            mode="val",
+            output_type="tensors",
+            target_config=targets,
+        )
+        assert averages["b_mae"] == pytest.approx(2.0)
+        assert averages["a_mae"] == pytest.approx(1.0)
 
 
 ### ---------------------------------------------------------------------------
@@ -315,7 +405,15 @@ def _hold_readbacks(monkeypatch, landed=lambda step: False):
 
 
 def _run_test_epoch(
-    monkeypatch, loader, device, *, mode, profile=False, reference=True, writer=None
+    monkeypatch,
+    loader,
+    device,
+    *,
+    mode,
+    profile=False,
+    reference=True,
+    writer=None,
+    mask=False,
 ):
     """Run one :func:`train._run_epoch` with a one-weight model and SGD.
 
@@ -323,7 +421,8 @@ def _run_test_epoch(
     metric values; returns ``(jsonl records, expected per-step records)``,
     where the expected values come from the per-step blocking readback
     (``_reduce_and_average`` with ``n_samples=1``, main's per-step path).
-    ``reference=False`` skips that readback, which syncs.
+    ``reference=False`` skips that readback, which syncs. ``mask=True`` turns
+    on ``mask_nonfinite_targets`` and adds a metric that is NaN on odd steps.
     """
     model = torch.nn.Linear(1, 1, bias=False).to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
@@ -334,9 +433,15 @@ def _run_test_epoch(
         loss = (model.weight.sum() - batch["k"]) ** 2 / 3
         values = TensorDict({"loss/test": loss.detach() * 7})
         metrics = TensorDict({"test_l2": loss.detach().sqrt()})
+        if mask:
+            odd = batch["k"] % 2
+            metrics["odd_l2"] = loss.detach() + (float("nan") if odd else 0.0)
         if reference:
+            kept, counts = _skip_nan(metrics) if mask else (metrics, None)
             expected.append(
-                _reduce_and_average(loss.detach(), values, metrics, 1, device=device)
+                _reduce_and_average(
+                    loss.detach(), values, kept, 1, device=device, metric_counts=counts
+                )
             )
         return loss, values, metrics
 
@@ -353,7 +458,7 @@ def _run_test_epoch(
         loader,
         model,
         None,
-        None,
+        SimpleNamespace(mask_nonfinite_targets=mask),
         SimpleNamespace(info=lambda *args, **kwargs: None),
         0,
         cfg,
@@ -377,21 +482,27 @@ def _check_steps(records, expected, mode, n_steps):
     for r, (loss, losses, metrics) in zip(steps, expected, strict=True):
         assert r["loss"] == loss
         assert {k: r[k] for k in losses} == losses
-        assert {k: r[k] for k in metrics} == metrics
+        assert {k: r[k] for k in metrics} == pytest.approx(
+            metrics, rel=0, abs=0, nan_ok=True
+        )
     assert records[-1]["phase"] == f"{mode}_summary"
 
 
+@pytest.mark.parametrize("mask", [False, True])
 @pytest.mark.parametrize("device", _DEVICES)
 @pytest.mark.parametrize("mode", ["train", "val"])
 def test_every_step_logged_once_in_order_with_blocking_values(
-    monkeypatch, device, mode
+    monkeypatch, device, mode, mask
 ):
     """Each of 10 steps is logged once, in order, with the per-step blocking
     readback's loss, losses and metrics, bitwise (single process, so the
     all-reduce is the identity on both paths). On CUDA the records log as
-    their copies land, and the epoch's end drains the rest."""
+    their copies land, and the epoch's end drains the rest. With masked
+    targets, a step whose field has no finite target logs NaN for it."""
     loader = [{"k": float(k)} for k in range(10)]
-    records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
+    records, expected = _run_test_epoch(
+        monkeypatch, loader, device, mode=mode, mask=mask
+    )
     _check_steps(records, expected, mode, 10)
 
 

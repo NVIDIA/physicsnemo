@@ -60,12 +60,12 @@ from utilities import (
 
 from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
-from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.experimental.utils import (
     disable_autotune_printing,
     prefetch_map,
     silence_compile_logs_on_non_zero_ranks,
 )
+from physicsnemo.models.globe import GLOBE
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -296,6 +296,11 @@ def main(
     # on each key, so the default limit of 8 is exhausted mid-forward and
     # remaining code falls back to eager.
     torch._dynamo.config.cache_size_limit = 64
+
+    # Dynamo in PyTorch 2.13 and 2.14 can fail to compile the Padé networks inside
+    # GLOBE's checkpointed kernels, for example with theta > 0, unless floats are
+    # specialized (pytorch/pytorch#193194, fixed in 2.15).
+    torch._dynamo.config.specialize_float = True
 
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:

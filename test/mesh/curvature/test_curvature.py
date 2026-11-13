@@ -513,6 +513,64 @@ class TestCurvatureEdgeCases:
 
         torch.testing.assert_close(points_gradient(True), points_gradient(False))
 
+    @pytest.mark.parametrize(
+        "curvature", [gaussian_curvature_vertices, mean_curvature_vertices]
+    )
+    def test_gradient_after_no_grad_cell_areas_read(self, curvature, device):
+        """Cell areas read under no_grad leave the curvature gradient unchanged.
+
+        Squashing the sphere makes obtuse triangles, whose dual volumes use the
+        cell areas.
+        """
+        sphere = create_sphere_mesh(subdivisions=1, device=device)
+        squash = torch.tensor([1.0, 1.0, 0.3], dtype=torch.float64, device=device)
+        squashed = sphere.points.to(torch.float64) * squash
+        weights = torch.linspace(
+            -1.0, 1.0, sphere.n_points, dtype=torch.float64, device=device
+        )
+
+        def points_gradient(read_areas_under_no_grad_first: bool) -> torch.Tensor:
+            points = squashed.clone().requires_grad_()
+            mesh = Mesh(points=points, cells=sphere.cells)
+            if read_areas_under_no_grad_first:
+                with torch.no_grad():
+                    mesh.cell_areas
+            (curvature(mesh) * weights).sum().backward()
+            return points.grad
+
+        cell_points = squashed[sphere.cells]  # (n_cells, 3, 3)
+        edges_out = cell_points.roll(-1, dims=1) - cell_points
+        edges_in = cell_points.roll(1, dims=1) - cell_points
+        assert ((edges_out * edges_in).sum(-1) < 0).any()  # some obtuse angle
+        torch.testing.assert_close(points_gradient(True), points_gradient(False))
+
+    @pytest.mark.parametrize(
+        "curvature", [gaussian_curvature_vertices, mean_curvature_vertices]
+    )
+    def test_second_backward_on_same_mesh(self, curvature, device):
+        """Two differentiable calls on one Mesh give the same gradient."""
+        sphere = create_sphere_mesh(subdivisions=1, device=device)
+        points = sphere.points.to(torch.float64, copy=True).requires_grad_()
+        mesh = Mesh(points=points, cells=sphere.cells)
+
+        curvature(mesh).sum().backward()
+        first = points.grad.clone()
+        points.grad = None
+        curvature(mesh).sum().backward()
+
+        torch.testing.assert_close(points.grad, first)
+
+    def test_cache_filled_only_without_grad(self, device):
+        """Points without gradients fill the cache; points with them do not."""
+        sphere = create_sphere_mesh(subdivisions=1, device=device)
+        for requires_grad in (False, True):
+            points = sphere.points.clone().requires_grad_(requires_grad)
+            mesh = Mesh(points=points, cells=sphere.cells)
+            gaussian_curvature_vertices(mesh)
+            for key in [("cell", "areas"), ("point", "dual_volumes_0")]:
+                cached = mesh._cache.get(key, None)
+                assert (cached is None) == requires_grad
+
 
 ### Test Dimension Coverage
 

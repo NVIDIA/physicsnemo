@@ -19,6 +19,8 @@ API Reference
    api_diffusion
    api/physicsnemo.distributed.rst
    api/physicsnemo.domain_parallel.rst
+   api/physicsnemo.experimental.uq.conformal.rst
+   api/physicsnemo.experimental.uq.ood.rst
    api/physicsnemo.metrics.rst
    api/physicsnemo.nn.rst
    api/physicsnemo.optim.rst

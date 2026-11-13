@@ -31,6 +31,7 @@ from tensordict import TensorDict
 from physicsnemo.mesh import DomainMesh, Mesh
 
 from forward_kwargs import (
+    extract_target_measure,
     extract_targets,
     resolve_forward_kwargs,
     resolve_spec,
@@ -419,3 +420,7 @@ class TestExtractTargets:
         result = extract_targets(simple_domain, {"pressure": "scalar"})
         assert isinstance(result, TensorDict)
         assert set(result.keys()) == {"pressure"}
+
+    def test_native_point_cloud_has_no_target_measure(self, simple_domain):
+        """Without a stored measure, every target point counts alike."""
+        assert extract_target_measure(simple_domain) is None

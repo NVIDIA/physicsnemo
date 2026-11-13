@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Reference model config for U-Net. Use as the starting configuration for new model
+# projects where a U-Net is preferred over DiT.
+
+
+# Model conditions
+regression_conditions: ["background", "invariant"] # list consisting of "background", "invariant"
+diffusion_conditions: ["regression", "background", "invariant"] # list consisting of "regression", "background", "invariant"
+
+# Model hyperparameters
+architecture: unet
+hyperparameters:
+  additive_pos_embed: True
+  channel_mult: [1, 2, 2]  # differs from SongUNet default
+# Example overrides for architecture hyperparameters (uncomment to customize)
+#  num_blocks: 2
+#  model_channels: 128
+#  attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention
+#  bottleneck_attention: false
+#  checkpoint_level: 0
+#  additive_pos_embed: false # Whether or not to add an additive position embed after the first conv in the U-Net
+
+# Pretrained regression model
+regression_weights: null # Path to the pretrained regression checkpoint, required if "regression" is in diffusion_conditions.
+                         # Regression training saves it as <training.rundir>/checkpoints_regression/StormCastUNet.0.<step>.mdlus

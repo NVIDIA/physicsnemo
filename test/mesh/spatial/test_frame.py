@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the canonical frame of a weighted point cloud (``spatial._frame``)."""
+"""Tests for the canonical frame of a weighted point cloud (``physicsnemo.mesh.spatial``)."""
 
 import pytest
 import torch
 
-from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
+from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
 
 D = torch.float64
 

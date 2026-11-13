@@ -137,6 +137,11 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     Move everything to GPU:
 
     >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
+
+    References
+    ----------
+    - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI
+      <https://arxiv.org/abs/2610.39072>`__
     """
 
     interior: Mesh
@@ -373,6 +378,54 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
         return moved.apply(_cast)
 
+    def save(
+        self,
+        prefix: str | Path | None = None,
+        copy_existing: bool = True,
+        **kwargs: Any,
+    ) -> Self:
+        """Save the domain mesh to disk as memory-mapped tensors.
+
+        Writes ``interior``, all ``boundaries``, and ``global_data``
+        to a directory tree of ``.memmap`` files.  Wraps the tensorclass
+        ``save()`` method.
+
+        This is the recommended serialization method. Compared to
+        ``torch.save`` (pickle-based), memmap serialization is
+        faster (parallel I/O across files), safer (no arbitrary code
+        execution on load), and supports partial loading.
+
+        Parameters
+        ----------
+        prefix : str, Path, or None
+            Directory path where the memory-mapped files will be
+            written.  If ``None``, the domain mesh is written into its own
+            directory if it is already memory-mapped there, as after
+            :meth:`load`, and otherwise into anonymous shared memory,
+            with no files.
+        copy_existing : bool, default=True
+            Copy tensors that are memory-mapped to another file, such as
+            those of a domain mesh read with :meth:`load`. If ``False``,
+            ``save`` raises a ``RuntimeError`` for such a tensor, as the
+            tensorclass method does.
+        **kwargs : Any
+            Keyword arguments of the tensorclass ``save()`` method, such as
+            ``num_threads`` (threads for parallel I/O, 0 = sequential),
+            ``return_early``, and ``share_non_tensor``.
+
+        Returns
+        -------
+        DomainMesh
+            A new DomainMesh backed by the on-disk memory-mapped
+            storage.
+
+        Examples
+        --------
+        >>> dm.save("/path/to/domain_mesh")  # doctest: +SKIP
+        >>> reloaded = DomainMesh.load("/path/to/domain_mesh")  # doctest: +SKIP
+        """
+        return super().save(prefix, copy_existing, **kwargs)
+
     if TYPE_CHECKING:
         # Type stubs for methods that TensorClass adds to the class.
         def clone(self) -> Self:
@@ -380,54 +433,6 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
             All tensors are copied (independent storage); the clone can
             be modified without affecting the original.
-            """
-            ...
-
-        def save(
-            self,
-            prefix: str | Path | None = None,
-            copy_existing: bool = False,
-            *,
-            num_threads: int = 0,
-            return_early: bool = False,
-            share_non_tensor: bool = False,
-        ) -> Self:
-            """Save the domain mesh to disk as memory-mapped tensors.
-
-            Writes ``interior``, all ``boundaries``, and ``global_data``
-            to a directory tree of ``.memmap`` files.  Proxy for the
-            tensorclass ``memmap()`` method.
-
-            This is the recommended serialization method. Compared to
-            ``torch.save`` (pickle-based), memmap serialization is
-            faster (parallel I/O across files), safer (no arbitrary code
-            execution on load), and supports partial loading.
-
-            Parameters
-            ----------
-            prefix : str, Path, or None
-                Directory path where the memory-mapped files will be
-                written.  If ``None``, a temporary directory is used.
-            copy_existing : bool
-                If ``True``, copy tensors that are already memory-mapped
-                to the new location.
-            num_threads : int
-                Number of threads for parallel I/O (0 = sequential).
-            return_early : bool
-                If ``True``, return before all data is flushed to disk.
-            share_non_tensor : bool
-                If ``True``, share non-tensor data across processes.
-
-            Returns
-            -------
-            DomainMesh
-                A new DomainMesh backed by the on-disk memory-mapped
-                storage.
-
-            Examples
-            --------
-            >>> dm.save("/path/to/domain_mesh")  # doctest: +SKIP
-            >>> reloaded = DomainMesh.load("/path/to/domain_mesh")  # doctest: +SKIP
             """
             ...
 
@@ -490,6 +495,17 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         """
         return self.apply_to_meshes(lambda m: m.translate(offset=offset))
 
+    def _widest_points_dtype(self) -> torch.dtype:
+        """Widest points dtype of the components, to build shared matrices in.
+
+        Each component casts the matrix to its own points dtype, which loses
+        no precision from a matrix built in this dtype.
+        """
+        dtype = self.interior.points.dtype
+        for name in self.boundary_names:
+            dtype = torch.promote_types(dtype, self.boundaries[name].points.dtype)
+        return dtype
+
     def rotate(
         self,
         angle: float,
@@ -541,7 +557,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
         if center is not None:
             c = to_device(
-                center, self.interior.points.device, self.interior.points.dtype
+                center, self.interior.points.device, self._widest_points_dtype()
             )
             return (
                 self.translate(-c)
@@ -562,7 +578,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             axis=axis,
             n_spatial_dims=self.interior.n_spatial_dims,
             device=self.interior.points.device,
-            dtype=self.interior.points.dtype,
+            dtype=self._widest_points_dtype(),
             assume_valid_axis=assume_valid_axis,
         )
         return self.transform(
@@ -620,7 +636,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
         if center is not None:
             c = to_device(
-                center, self.interior.points.device, self.interior.points.dtype
+                center, self.interior.points.device, self._widest_points_dtype()
             )
             return (
                 self.translate(-c)
@@ -639,11 +655,17 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             factor=factor,
             n_spatial_dims=self.interior.n_spatial_dims,
             device=self.interior.points.device,
-            dtype=self.interior.points.dtype,
+            dtype=self._widest_points_dtype(),
         )
-        is_invertible, is_similarity = _scale_assumptions(
-            factor, self.interior.n_spatial_dims
-        )
+        # Each mesh applies M in its own points dtype: assume only what holds in
+        # all of them (for tensor factors, the dtype changes nothing)
+        is_invertible, is_similarity = True, True
+        for mesh in (self.interior, *(self.boundaries[k] for k in self.boundary_names)):
+            invertible, similarity = _scale_assumptions(
+                factor, self.interior.n_spatial_dims, mesh.points.dtype
+            )
+            is_invertible = is_invertible and invertible
+            is_similarity = is_similarity and similarity
         return self.transform(
             matrix=M,
             transform_point_data=transform_point_data,
@@ -673,7 +695,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         Parameters
         ----------
         matrix : torch.Tensor
-            Transformation matrix, shape :math:`(S', S)`.
+            Transformation matrix, shape :math:`(S', S)`. Each mesh applies
+            it in the dtype of its own points.
         transform_point_data : bool or TensorDict
             Controls transformation of ``point_data`` fields. ``True``
             transforms all compatible fields; a ``TensorDict`` (or
@@ -695,7 +718,9 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         """
         result = self.apply_to_meshes(
             lambda m: m.transform(
-                matrix=matrix,
+                # Components may differ in float dtype (float64 interior, float32
+                # boundaries): give each the matrix in its own dtype.
+                matrix=matrix.to(m.points.dtype),
                 transform_point_data=transform_point_data,
                 transform_cell_data=transform_cell_data,
                 transform_global_data=transform_global_data,

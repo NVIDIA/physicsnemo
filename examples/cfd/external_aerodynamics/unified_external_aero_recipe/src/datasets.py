@@ -39,9 +39,10 @@ import json
 import logging
 import math
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import hydra
 import torch
@@ -52,6 +53,9 @@ import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
 from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 from physicsnemo.distributed import DistributedManager
+
+if TYPE_CHECKING:
+    from torch.distributed.device_mesh import DeviceMesh
 
 ### Make this folder importable by its bare module names (`nondim`, `sdf`)
 ### regardless of whether the caller invoked `python src/train.py` (which
@@ -69,6 +73,7 @@ import nondim  # noqa: F401, E402  (registers NonDimensionalizeByMetadata)
 import sdf  # noqa: F401, E402  (registers ComputeSDFFromBoundary, DropBoundary)
 from collate import build_collate_fn  # noqa: E402
 from metrics import MetricName  # noqa: E402
+from output_normalize import check_output_sets  # noqa: E402
 from utils import FieldType, field_dim, resolve_dict  # noqa: E402
 
 ### Module-level logger used for warnings emitted from helpers below
@@ -93,6 +98,30 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
     return OmegaConf.merge({"dataset_paths": paths}, cfg)
 
 
+def apply_model_config(dataset_cfg: DictConfig, recipe_cfg: DictConfig) -> DictConfig:
+    """A dataset config as the recipe config's model reads it.
+
+    Applies the model config's ``dataset_reader_overrides``, then appends its
+    ``dataset_append_transforms`` and, last, its ``extra_task.transforms`` to
+    ``pipeline.transforms`` (so steps one model needs leave the dataset files
+    and the other models' samples as they are). ``extra_task.targets`` and
+    ``extra_task.target_sources`` join the dataset's; ``train.py`` reads
+    ``extra_task.field_weights``. Without these keys the config is unchanged.
+    """
+    dataset_cfg = _apply_dataset_reader_overrides(dataset_cfg, recipe_cfg)
+    task = OmegaConf.select(recipe_cfg, "extra_task", default=None) or {}
+    appends = OmegaConf.select(recipe_cfg, "dataset_append_transforms", default=None)
+    shared = (
+        _share_normalizer_constants(t, dataset_cfg) for t in task.get("transforms", [])
+    )
+    extra = [*(appends or []), *shared]
+    updates = {k: task[k] for k in ("targets", "target_sources") if k in task}
+    if extra:
+        own = dataset_cfg.pipeline.get("transforms") or []
+        updates["pipeline"] = {"transforms": [*own, *extra]}
+    return OmegaConf.merge(dataset_cfg, updates) if updates else dataset_cfg
+
+
 def _apply_dataset_reader_overrides(
     dataset_cfg: DictConfig, recipe_cfg: DictConfig
 ) -> DictConfig:
@@ -100,6 +129,61 @@ def _apply_dataset_reader_overrides(
     reader_overrides = OmegaConf.select(
         recipe_cfg, "dataset_reader_overrides", default=None
     )
+    if not reader_overrides:
+        return dataset_cfg
+    return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
+
+
+def check_target_sources(target_sources: dict[str, str]) -> None:
+    """Raise unless every path has the form ``<mesh path>.point_data.<field>``."""
+    for name, path in target_sources.items():
+        mesh, sep, field = str(path).partition(".point_data.")
+        if not (mesh and sep and field):
+            raise ValueError(
+                f"target_sources[{name!r}] is {path!r}, not of the form "
+                f"'<mesh path>.point_data.<field>'"
+            )
+
+
+def _share_normalizer_constants(
+    t_cfg: DictConfig, dataset_cfg: DictConfig
+) -> DictConfig:
+    """Fill the named fields of an ``extra_task`` ``NormalizeMeshFields`` entry.
+
+    A field whose value is a string (``{surface_p: pressure}``) takes the
+    constants the dataset's own first ``NormalizeMeshFields`` holds under that
+    name, so an extra set's field is standardized exactly like the target it is
+    compared with.
+    """
+    if not str(t_cfg.get("_target_", "")).endswith(".NormalizeMeshFields"):
+        return t_cfg
+    names = {f: n for f, n in (t_cfg.get("fields") or {}).items() if isinstance(n, str)}
+    own_cfg = next(
+        (
+            t
+            for t in dataset_cfg.pipeline.get("transforms") or []
+            if str(t.get("_target_", "")).endswith(".NormalizeMeshFields")
+        ),
+        {},
+    )
+    if names and own_cfg.get("stats_file"):
+        raise ValueError(
+            "extra_task shares normalization constants only with a dataset "
+            "NormalizeMeshFields that lists its fields inline, not a stats_file"
+        )
+    own = own_cfg.get("fields") or {}
+    missing = sorted(set(names.values()) - set(own))
+    if missing:
+        raise ValueError(
+            f"extra_task reuses the normalization constants of {missing!r}, which "
+            f"the dataset's NormalizeMeshFields does not hold"
+        )
+    return OmegaConf.merge(t_cfg, {"fields": {f: own[n] for f, n in names.items()}})
+
+
+def _validation_dataset_config(dataset_cfg: DictConfig) -> DictConfig:
+    """Apply validation reader settings after shared recipe overrides."""
+    reader_overrides = dataset_cfg.get("validation_reader_overrides", None)
     if not reader_overrides:
         return dataset_cfg
     return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
@@ -171,19 +255,60 @@ def _maybe_inject_targets(t_cfg: DictConfig, target_names: list[str]) -> DictCon
     return t_cfg
 
 
+class ChainedNormalizer:
+    """Several :class:`NormalizeMeshFields` of one pipeline, inverted as one.
+
+    ``inverse_td`` undoes each in reverse pipeline order; ``stats`` merges
+    their stats, and setting it hands each normalizer back its own fields.
+    """
+
+    def __init__(self, normalizers: list[NormalizeMeshFields]) -> None:
+        counts = Counter(k for n in normalizers for k in n.stats)
+        repeated = sorted(k for k, c in counts.items() if c > 1)
+        if repeated:
+            raise ValueError(
+                f"Several NormalizeMeshFields normalize {repeated!r}; each field "
+                f"may be normalized once"
+            )
+        self.normalizers = normalizers
+
+    def inverse_td(self, td: Any) -> Any:
+        """Undo every normalizer, last applied first."""
+        for normalizer in reversed(self.normalizers):
+            td = normalizer.inverse_td(td)
+        return td
+
+    @property
+    def stats(self) -> dict[str, dict]:
+        """The merged statistics of every normalizer."""
+        return {k: v for n in self.normalizers for k, v in n.stats.items()}
+
+    @stats.setter
+    def stats(self, stats: dict[str, dict]) -> None:
+        """Hand each normalizer its own fields of *stats*."""
+        for n in self.normalizers:
+            n.stats = {k: stats[k] for k in n.stats if k in stats}
+
+
 def find_normalizer(
     datasets: list[MeshDataset],
-) -> NormalizeMeshFields | None:
-    """Return the first :class:`NormalizeMeshFields` found across *datasets* pipelines.
+) -> NormalizeMeshFields | ChainedNormalizer | None:
+    """Return the normalization of the first of *datasets* that has one.
 
-    Used at checkpoint-save time to persist normalization stats alongside
-    the model weights so inference can re-apply the inverse. Returns
-    ``None`` when no dataset has a ``NormalizeMeshFields`` transform.
+    That is its :class:`NormalizeMeshFields`, or a :class:`ChainedNormalizer`
+    of all of them when its pipeline has several (e.g. one an ``extra_task``
+    adds). Used at checkpoint-save time to persist normalization stats
+    alongside the model weights so inference can re-apply the inverse.
+    Returns ``None`` when no dataset has a ``NormalizeMeshFields`` transform.
     """
     for ds in datasets:
-        for t in getattr(ds, "transforms", []):
-            if isinstance(t, NormalizeMeshFields):
-                return t
+        found = [
+            t
+            for t in getattr(ds, "transforms", [])
+            if isinstance(t, NormalizeMeshFields)
+        ]
+        if found:
+            return found[0] if len(found) == 1 else ChainedNormalizer(found)
     return None
 
 
@@ -330,6 +455,8 @@ def build_dataset(
     device: str | torch.device | None = "auto",
     num_workers: int = 1,
     pin_memory: bool = False,
+    domain_parallel: dict | None = None,
+    device_mesh: "DeviceMesh | None" = None,
 ) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
@@ -358,6 +485,12 @@ def build_dataset(
             prefetch pool.
         pin_memory: If True, the reader places tensors in pinned
             (page-locked) memory for faster async CPU-to-GPU transfers.
+        domain_parallel: Optional domain-parallel reading policy dict
+            (see :class:`physicsnemo.datapipes.readers.base.Reader`);
+            requires *device_mesh*. The reader then reads each rank's
+            share and the dataset assembles ShardTensor-backed meshes.
+        device_mesh: Runtime 1-D DeviceMesh for domain-parallel reading
+            (the ``domain`` axis of the training mesh); never config.
 
     Returns:
         Configured ``MeshDataset`` ready to be wrapped in a DataLoader.
@@ -365,16 +498,26 @@ def build_dataset(
     if base_dir is None:
         base_dir = Path(__file__).resolve().parent.parent
 
-    reader = hydra.utils.instantiate(cfg.pipeline.reader, pin_memory=pin_memory)
+    ### The domain-parallel policy is already a plain dict (see
+    ### ``_domain_parallel_from_cfg``), so both branches instantiate the same way.
+    reader_kwargs: dict[str, Any] = {"pin_memory": pin_memory}
+    if domain_parallel is not None:
+        reader_kwargs.update(domain_parallel=domain_parallel, device_mesh=device_mesh)
+    reader = hydra.utils.instantiate(cfg.pipeline.reader, **reader_kwargs)
     resolved = []
 
-    target_names = list(
-        OmegaConf.to_container(
-            OmegaConf.select(cfg, "targets", default=OmegaConf.create({})),
-            resolve=True,
-        )
-        or {}
-    )
+    ### Only targets on the interior (the default) come from MeshToDomainMesh,
+    ### under their source field names.
+    sources = resolve_dict(cfg, "target_sources") or {}
+    paths = [
+        sources.get(n, f"interior.point_data.{n}")
+        for n in resolve_dict(cfg, "targets") or {}
+    ]
+    target_names = [
+        p.removeprefix("interior.point_data.")
+        for p in paths
+        if p.startswith("interior.point_data.")
+    ]
 
     if "transforms" in cfg.pipeline and cfg.pipeline.transforms:
         for t in cfg.pipeline.transforms:
@@ -622,6 +765,8 @@ def _build_manifest_val_dataset(
     device: str | torch.device | None,
     num_workers: int,
     pin_memory: bool,
+    domain_parallel: dict | None = None,
+    device_mesh: "DeviceMesh | None" = None,
 ) -> MeshDataset | None:
     """Build a dedicated un-augmented validation dataset for manifest mode.
 
@@ -635,23 +780,36 @@ def _build_manifest_val_dataset(
     dataset built with ``augment=False`` over the same ``train_datadir``.
     Its reader globs the same sorted paths, so manifest indices resolved
     against the train reader address the same samples here. When *augment*
-    is ``False`` the train and val transform chains are identical, so this
-    returns ``None`` and the caller lets validation share the train dataset
-    (avoiding a redundant second reader).
+    is ``False`` and neither validation option below is set, the train and
+    val transform chains are identical, so this returns ``None`` and the caller
+    lets validation share the train dataset (avoiding a redundant second reader).
+
+    ``independent_validation`` or ``validation_reader_overrides`` also requests
+    a separate reader, isolating sampling state and applying validation settings.
     """
-    if not augment:
+    # Stochastic anchor readers require separate epoch state even without
+    # augmentation; their validation reader stays at epoch zero.
+    if (
+        not augment
+        and not ds_yaml.get("independent_validation", False)
+        and not ds_yaml.get("validation_reader_overrides", None)
+    ):
         return None
     return build_dataset(
-        ds_yaml,
+        _validation_dataset_config(ds_yaml),
         augment=False,
         device=device,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        domain_parallel=domain_parallel,
+        device_mesh=device_mesh,
     )
 
 
 def _build_collate(
-    cfg: DictConfig, target_config: dict[str, FieldType]
+    cfg: DictConfig,
+    target_config: dict[str, FieldType],
+    target_sources: dict[str, str] | None = None,
 ) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
     """Build the per-sample collate from the model YAML's I/O contract."""
     if not target_config:
@@ -672,6 +830,7 @@ def _build_collate(
         input_type=input_type,
         forward_kwargs_spec=forward_kwargs_spec,
         target_config=target_config,
+        target_sources=target_sources,
     )
 
 
@@ -690,6 +849,7 @@ def _build_directory_samplers(
     *,
     use_distributed: bool,
     sampler_seed: int,
+    data_parallel_mesh: "DeviceMesh | None" = None,
 ) -> tuple[Sampler | None, Sampler | None]:
     """Per-split :class:`DistributedSampler` pair for **directory-mode** datasets.
 
@@ -698,14 +858,24 @@ def _build_directory_samplers(
     single dataset across splits and uses :func:`_build_manifest_samplers`
     instead. Returns ``(None, None)`` on a single rank, where torch's
     default sequential sampler is sufficient.
+
+    Under domain parallelism, samples are distributed over the ``ddp``
+    axis only (*data_parallel_mesh*): every rank in a domain group must receive
+    the same sample index, since each holds one shard of that sample.
     """
     if not use_distributed:
         return None, None
+    replica_kwargs = {}
+    if data_parallel_mesh is not None:
+        replica_kwargs = {
+            "num_replicas": data_parallel_mesh.size(),
+            "rank": data_parallel_mesh.get_local_rank(),
+        }
     train_sampler = torch.utils.data.distributed.DistributedSampler(
-        train_dataset, shuffle=True, drop_last=True, seed=sampler_seed
+        train_dataset, shuffle=True, drop_last=True, seed=sampler_seed, **replica_kwargs
     )
     val_sampler = torch.utils.data.distributed.DistributedSampler(
-        val_dataset, shuffle=False, drop_last=False
+        val_dataset, shuffle=False, drop_last=False, **replica_kwargs
     )
     return train_sampler, val_sampler
 
@@ -716,11 +886,21 @@ def _build_manifest_samplers(
     *,
     dist_manager: DistributedManager,
     sampler_seed: int,
+    data_parallel_mesh: "DeviceMesh | None" = None,
 ) -> tuple[ManifestSampler, ManifestSampler]:
-    """ManifestSamplers over global dataset indices, with optional sharding."""
-    use_distributed = dist_manager.world_size > 1
-    rank = dist_manager.rank if use_distributed else 0
-    world_size = dist_manager.world_size if use_distributed else 1
+    """ManifestSamplers over global dataset indices, with optional sharding.
+
+    Under domain parallelism, indices are sharded over the ``ddp`` axis
+    only (*data_parallel_mesh*): every rank in a domain group must receive the same
+    sample index, since each holds one shard of that sample.
+    """
+    if data_parallel_mesh is not None:
+        rank = data_parallel_mesh.get_local_rank()
+        world_size = data_parallel_mesh.size()
+    elif dist_manager.world_size > 1:
+        rank, world_size = dist_manager.rank, dist_manager.world_size
+    else:
+        rank, world_size = 0, 1
 
     train_sampler = ManifestSampler(
         train_indices,
@@ -741,8 +921,26 @@ def _build_manifest_samplers(
     return train_sampler, val_sampler
 
 
+def _domain_parallel_from_cfg(cfg: DictConfig) -> dict[str, Any]:
+    """The reader-facing ``domain_parallel`` dict from ``cfg.domain_parallelism``.
+
+    Everything in the block except ``domain_size`` (a launch-topology knob
+    consumed by ``train.py``) is handed to the readers unchanged, so the
+    datapipes' own validation sees exactly what the user wrote.
+    """
+    block = OmegaConf.to_container(
+        cfg.get("domain_parallelism", OmegaConf.create({})), resolve=True
+    )
+    policy = dict(block or {})
+    policy.pop("domain_size", None)
+    return policy
+
+
 def build_dataloaders(
     cfg: DictConfig,
+    *,
+    domain_parallel_mesh: "DeviceMesh | None" = None,
+    data_parallel_mesh: "DeviceMesh | None" = None,
 ) -> tuple[DataLoader, DataLoader, "NormalizeMeshFields | None", dict[str, Any]]:
     """Build train and val dataloaders from the chosen dataset(s).
 
@@ -767,7 +965,8 @@ def build_dataloaders(
     indices. Augmentations are training-only: when ``cfg.augment`` is set,
     validation uses a separate un-augmented dataset over the same
     directory (mirroring directory mode); otherwise it shares the train
-    dataset.
+    dataset, unless ``independent_validation`` or ``validation_reader_overrides``
+    is set.
 
     Multiple datasets may use either split strategy. Each dataset's local
     train and validation indices are shifted by its cumulative offset in
@@ -800,6 +999,12 @@ def build_dataloaders(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sampler_seed = cfg.training.get("seed", 0) or 0
 
+    ### Domain parallelism: declarative reading policy from cfg, paired
+    ### with the runtime device mesh injected by the caller. None when off.
+    domain_parallel = (
+        _domain_parallel_from_cfg(cfg) if domain_parallel_mesh is not None else None
+    )
+
     ### The primary dataset is `cfg.dataset` (a single string); extras
     ### combine via MultiDataset. The same `train_split`/`val_split`
     ### apply to every chosen dataset; when they are set,
@@ -817,6 +1022,7 @@ def build_dataloaders(
     train_offset = 0
     val_offset = 0
     using_manifests = False
+    first_target_sources: dict[str, str] | None = None
     first_targets: dict[str, str] | None = None
     first_metrics: list[str] | None = None
 
@@ -840,7 +1046,7 @@ def build_dataloaders(
             ds_yaml = OmegaConf.merge(
                 ds_yaml, {"sampling_resolution": sampling_resolution}
             )
-        ds_yaml = _apply_dataset_reader_overrides(ds_yaml, cfg)
+        ds_yaml = apply_model_config(ds_yaml, cfg)
 
         train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
         if train_datadir and not Path(str(train_datadir)).exists():
@@ -863,9 +1069,25 @@ def build_dataloaders(
             OmegaConf.select(ds_yaml, "metrics", default=OmegaConf.create([])),
             resolve=True,
         )
+        ### Targets live at interior.point_data.<name> unless the dataset (or
+        ### the model's extra_task) names other point sets in target_sources;
+        ### then every target gets a path, defaulting to the interior.
+        ds_sources = resolve_dict(ds_yaml, "target_sources")
+        if ds_sources is not None:
+            check_target_sources(ds_sources)
+            ds_sources = {
+                n: ds_sources.get(n, f"interior.point_data.{n}") for n in ds_targets
+            }
         if first_targets is None:
             first_targets, first_metrics = ds_targets, ds_metrics
+            first_target_sources = ds_sources
         else:
+            if ds_sources != first_target_sources:
+                raise ValueError(
+                    f"Dataset {ds_name!r} declares target_sources={ds_sources!r}, "
+                    f"which does not match the first dataset's "
+                    f"{first_target_sources!r}."
+                )
             validate_dataset_consistency(
                 ds_name,
                 ds_targets,
@@ -897,6 +1119,8 @@ def build_dataloaders(
             device=device,
             num_workers=num_workers,
             pin_memory=pin_memory,
+            domain_parallel=domain_parallel,
+            device_mesh=domain_parallel_mesh,
         )
         train_datasets.append(dataset)
 
@@ -927,15 +1151,17 @@ def build_dataloaders(
 
             ### Augmentations are training-only: when enabled, give
             ### validation its own un-augmented dataset over the same
-            ### directory so eval is never augmented. Otherwise this entry
-            ### shares its training dataset, preserving the same local index
-            ### space without constructing another reader.
+            ### directory so eval is never augmented. Otherwise, unless validation
+            ### options are set, this entry shares its training dataset, preserving
+            ### the same local index space without constructing another reader.
             manifest_val_dataset = _build_manifest_val_dataset(
                 ds_yaml,
                 augment=augment,
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                domain_parallel=domain_parallel,
+                device_mesh=domain_parallel_mesh,
             )
             val_dataset = (
                 manifest_val_dataset if manifest_val_dataset is not None else dataset
@@ -951,14 +1177,23 @@ def build_dataloaders(
         combined_train_indices.extend(range(train_offset, train_offset + len(dataset)))
         train_offset += len(dataset)
         val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
+        val_yaml = None
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
+        elif ds_yaml.get("independent_validation", False) or ds_yaml.get(
+            "validation_reader_overrides", None
+        ):
+            # Keep validation sampling fixed even when the fallback uses train cases.
+            val_yaml = ds_yaml
+        if val_yaml is not None:
             val_dataset = build_dataset(
-                val_yaml,
+                _validation_dataset_config(val_yaml),
                 augment=False,
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                domain_parallel=domain_parallel,
+                device_mesh=domain_parallel_mesh,
             )
             val_datasets.append(val_dataset)
             combined_val_indices.extend(
@@ -981,10 +1216,15 @@ def build_dataloaders(
     out_dim_total = sum(
         field_dim(cast(FieldType, ftype)) for ftype in (first_targets or {}).values()
     )
+    output_sets = resolve_dict(cfg, "output_sets")
+    if output_sets:
+        check_output_sets(
+            output_sets, first_target_sources, resolve_dict(cfg, "forward_kwargs")
+        )
     OmegaConf.update(cfg, "out_dim", out_dim_total, force_add=True)
 
     normalizer = find_normalizer(train_datasets)
-    collate_fn = _build_collate(cfg, first_targets or {})
+    collate_fn = _build_collate(cfg, first_targets or {}, first_target_sources)
     train_dataset = _combine_datasets(train_datasets)
 
     if using_manifests:
@@ -997,6 +1237,7 @@ def build_dataloaders(
             combined_val_indices,
             dist_manager=dist_manager,
             sampler_seed=sampler_seed,
+            data_parallel_mesh=data_parallel_mesh,
         )
     else:
         ### Directory mode: separate datasets per split, with per-rank
@@ -1007,6 +1248,7 @@ def build_dataloaders(
             val_dataset,
             use_distributed=use_distributed,
             sampler_seed=sampler_seed,
+            data_parallel_mesh=data_parallel_mesh,
         )
 
     ### Shared loader knobs; the two splits differ only in dataset / shuffle /
@@ -1040,5 +1282,6 @@ def build_dataloaders(
     ### contract.
     dataset_info = {
         "targets": first_targets or {},
+        "target_sources": first_target_sources,
     }
     return train_loader, val_loader, normalizer, dataset_info
