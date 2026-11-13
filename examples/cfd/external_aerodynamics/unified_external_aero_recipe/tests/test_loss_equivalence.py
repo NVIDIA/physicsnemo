@@ -16,7 +16,7 @@
 
 """Numerical correctness for ``LossCalculator``.
 
-These tests pin two things:
+These tests pin three things:
 
 1. The total produced by ``LossCalculator`` for a flat-tensor input
    matches an explicit per-field reference formula
@@ -25,6 +25,8 @@ These tests pin two things:
    when ``field_weights`` is ``None`` (or all 1.0).
 2. ``field_weights`` correctly multiplies each per-field loss before
    summation; unknown field names raise.
+3. A ``target_measure`` weights each mean over target points, unless
+   ``measure_weighted=False``.
 """
 
 from __future__ import annotations
@@ -304,6 +306,94 @@ class TestFieldWeights:
                 loss_type="huber",
                 field_weights={"not_a_field": 2.0},
             )
+
+
+### ---------------------------------------------------------------------------
+### Measure weighting
+### ---------------------------------------------------------------------------
+
+
+def _weighted_reference(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    measure: torch.Tensor,
+    loss_type: str,
+) -> torch.Tensor:
+    """Hand-written measure-weighted loss of one ``(1, N)`` or ``(1, N, D)`` field."""
+    if pred.ndim == measure.ndim + 1:  # vector: per component, summed
+        return sum(
+            _weighted_reference(pred[..., i], target[..., i], measure, loss_type)
+            for i in range(pred.shape[-1])
+        )
+    if loss_type == "huber":
+        error = F.huber_loss(pred, target, reduction="none", delta=DEFAULT_HUBER_DELTA)
+    else:
+        error = (pred - target) ** 2
+    if loss_type == "relative_mse":
+        return (measure * error).sum() / (measure * target**2).sum()
+    return (measure * error).sum() / measure.sum()
+
+
+class TestMeasureWeighting:
+    """``target_measure`` weights every mean over target points."""
+
+    target_config = {"pressure": "scalar", "wss": "vector"}
+
+    @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
+    def test_matches_hand_computed_weighted_mean(self, loss_type):
+        """Each per-field loss is the measure-weighted reference, scalar and vector."""
+        pred, target = _random_fields()
+        measure = torch.rand(1, 40) * 5 + 0.1
+        lc = LossCalculator(self.target_config, loss_type=loss_type)
+        _, ldict = lc(pred, target, measure)
+        for name in self.target_config:
+            expected = _weighted_reference(pred[name], target[name], measure, loss_type)
+            torch.testing.assert_close(ldict[f"loss/{name}"], expected)
+
+    def test_coarse_region_counts_by_area_not_point_count(self):
+        """Two regions of equal area: one coarse cell with error 1, nine fine
+        cells with no error. The per-point mean is 0.1; the measure-weighted
+        mean is 0.5, the error's share of the area."""
+        target = _make_td({"pressure": torch.zeros(1, 10)})
+        pred = _make_td({"pressure": torch.tensor([[1.0] + [0.0] * 9])})
+        measure = torch.tensor([[0.5] + [0.5 / 9] * 9])
+        lc = LossCalculator({"pressure": "scalar"}, loss_type="mse")
+        per_point, _ = lc(pred, target)
+        weighted, _ = lc(pred, target, measure)
+        assert per_point.item() == pytest.approx(0.1)
+        assert weighted.item() == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
+    def test_switched_off_ignores_the_measure_bitwise(self, loss_type):
+        """``measure_weighted=False`` gives the unweighted result bit for bit."""
+        pred, target = _random_fields()
+        measure = torch.rand(1, 40) * 5 + 0.1
+        lc = LossCalculator(
+            self.target_config, loss_type=loss_type, measure_weighted=False
+        )
+        assert "measure_weighted=False" in repr(lc)
+        total, ldict = lc(pred, target, measure)
+        ref_total, ref_dict = lc(pred, target)
+        assert torch.equal(total, ref_total)
+        for key in ref_dict.keys():
+            assert torch.equal(ldict[key], ref_dict[key])
+
+    @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
+    def test_equal_measures_match_unweighted(self, loss_type):
+        """Equal measures on every point reproduce the per-point mean."""
+        pred, target = _random_fields()
+        lc = LossCalculator(self.target_config, loss_type=loss_type)
+        _, ldict = lc(pred, target, torch.full((1, 40), 0.25))
+        _, ref_dict = lc(pred, target)
+        for key in ref_dict.keys():
+            torch.testing.assert_close(ldict[key], ref_dict[key])
+
+    def test_misaligned_measure_raises(self):
+        """A measure with the wrong number of points raises."""
+        pred, target = _random_fields()
+        lc = LossCalculator(self.target_config)
+        with pytest.raises(ValueError, match="one value per target point"):
+            lc(pred, target, torch.ones(1, 39))
 
 
 ### ---------------------------------------------------------------------------

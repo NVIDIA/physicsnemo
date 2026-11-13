@@ -138,6 +138,24 @@ def test_volume_dataset_reader_boundary_policy(
         assert train_cfg.forward_kwargs.boundary_meshes.vehicle == "boundaries.vehicle"
 
 
+@pytest.mark.parametrize("config_name", ["train", "infer"])
+def test_measure_weighted_defaults_on_and_command_line_turns_it_off(
+    config_name: str,
+) -> None:
+    """``base.yaml`` sets ``measure_weighted: true`` for both entry points, and
+    ``measure_weighted=false`` on the command line overrides it."""
+    with initialize_config_dir(
+        config_dir=str(_RECIPE_ROOT / "conf"), version_base=None
+    ):
+        select = ["model=transolver_surface", "dataset=drivaer_ml_surface"]
+        default = compose(config_name=config_name, overrides=select)
+        off = compose(
+            config_name=config_name, overrides=[*select, "measure_weighted=false"]
+        )
+    assert default.measure_weighted is True
+    assert off.measure_weighted is False
+
+
 ### ---------------------------------------------------------------------------
 ### Synthetic DomainMesh builders
 ### ---------------------------------------------------------------------------
