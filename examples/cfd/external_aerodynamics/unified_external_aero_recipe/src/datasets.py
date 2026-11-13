@@ -102,8 +102,9 @@ def apply_model_config(dataset_cfg: DictConfig, recipe_cfg: DictConfig) -> DictC
     """A dataset config as the recipe config's model reads it.
 
     Applies the model config's ``dataset_reader_overrides`` and
-    ``dataset_overrides`` (merged into the dataset config's top-level keys,
-    for example a surface convention its appended transforms change), then
+    ``dataset_overrides`` (merged into the dataset config with
+    ``OmegaConf.merge``, which merges nested keys and replaces lists, for
+    example a surface convention its appended transforms change), then
     appends its ``dataset_append_transforms`` and, last, its
     ``extra_task.transforms`` to ``pipeline.transforms`` (so steps one model
     needs leave the dataset files and the other models' samples as they are).

@@ -537,6 +537,9 @@ unified_external_aero_recipe/
                                #  optimizer base, training fundamentals)
     train.yaml                 # the training entry point
     infer.yaml                 # the inference entry point (companion)
+    scheduler/                 # learning-rate schedules (Hydra group)
+      step_lr.yaml             # the default
+      warmup_cosine.yaml
     model/                     # model templates (Hydra group)
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
@@ -544,6 +547,7 @@ unified_external_aero_recipe/
       ab_upt_{surface,volume,joint}.yaml
       smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
+      isla_{surface,volume,volume_joint}.yaml
       domino_{surface,volume}.yaml
   datasets/                    # one file per dataset (loaded at runtime
                                #  by load_dataset_config, NOT by Hydra)
@@ -568,7 +572,8 @@ unified_external_aero_recipe/
 | Metrics list | `train.yaml` (`metrics`) |
 | Multi-dataset orchestration | `train.yaml` (`extra_datasets`) + Python in `datasets.build_dataloaders` |
 | Model + forward_kwargs | `conf/model/<name>.yaml` |
-| Training schedule (lr, scheduler, num_epochs, compile) | `train.yaml` |
+| Training schedule (lr, num_epochs, compile) | `train.yaml`, overridden by a model template that sets it |
+| Learning-rate scheduler | `conf/scheduler/<name>.yaml`, picked in `train.yaml`'s defaults or a model template's |
 
 ### `conf/train.yaml`
 
@@ -642,17 +647,18 @@ Notes on the composition:
   its contents merge at the global root rather than under the group
   name. This lets one model file declare `model:` AND
   `input_type` / `output_type` / `forward_kwargs:` together.
-- `_self_` is the LAST entry in `train.yaml`'s `defaults:` so any inline
-  `model:` / `training:` / `dataloader:` overrides win over the model
-  template values.
+- `_self_` comes before `model` in `train.yaml`'s `defaults:`, so a model
+  template's values win over `train.yaml`'s (for example ISLA's learning
+  rate of 3.75e-4). CLI overrides win over both.
 - Forward kwargs live alongside the model in the same template because
   they are a property of the model class's forward signature, not an
   independent dimension.
 - Model templates may declare `dataset_reader_overrides`; `build_dataloaders`
   merges those keys into each selected dataset's reader config. Their
-  `dataset_overrides` merge into the dataset config's top-level keys, for
-  training and inference (for example a force convention that an appended
-  transform changes). Volume datasets
+  `dataset_overrides` merge into the dataset config with `OmegaConf.merge`
+  (nested keys merge and lists are replaced), for training and inference
+  (for example a force convention that an appended transform changes).
+  Volume datasets
   preserve in-file boundaries by default; point-based volume templates opt into
   dropping them, while GLOBE keeps the lossless default it requires.
 - The model template's `out_dim: ${out_dim}` interpolation resolves
@@ -660,9 +666,10 @@ Notes on the composition:
   computes from the chosen dataset's `targets:` block (sum of channel
   counts via `field_dim()`). GLOBE templates declare per-target
   `output_schema` instead and don't touch `out_dim`.
-- `conf/infer.yaml` follows the same shape:
-  `defaults: - base, - model: ???, - _self_` with checkpoint /
-  output-path knobs in place of the training schedule. `base.yaml` is
+- `conf/infer.yaml` follows the same shape, with checkpoint / output-path
+  knobs in place of the training schedule. Its `defaults:` are `base`,
+  `scheduler@training.scheduler: step_lr` (for the model templates that
+  override it), `model: ???` and `_self_`. `base.yaml` is
   intentionally training-agnostic so both entry points can share it.
 
 ### Recipe Gallery
@@ -913,9 +920,11 @@ pipeline:
     # in interior.point_data; boundaries = {"vehicle": <surface Mesh with
     # non-target cell features kept>}. cell_data_targets are auto-injected
     # by the dataset builder from the `targets:` block below.
-    - _target_: ${dp:MeshToDomainMesh}
+    # SurfaceMeshToDomainMesh is MeshToDomainMesh on this Mesh, and also keeps
+    # the tunnel boundaries when a model config reads them
+    # (`dataset_reader_overrides: {domain_boundaries: [...]}`).
+    - _target_: ${dp:SurfaceMeshToDomainMesh}
       interior_points: cell_centroids
-      boundary_name: vehicle
 
 # Single source of truth for prediction field names + types.
 # `out_dim` is auto-derived from this block by build_dataloaders().
@@ -998,6 +1007,9 @@ dataset indices and handles distributed sampling across ranks.
    datasets only; volume datasets already produce a `DomainMesh`
    natively via `DomainMeshReader`). The dataset builder will
    auto-inject `cell_data_targets` from the YAML's `targets:` block.
+   A surface dataset that a model config may read with `domain_boundaries`
+   must end with `SurfaceMeshToDomainMesh` instead: `MeshToDomainMesh`
+   returns a `DomainMesh` unchanged, so the surface would stay its interior.
 8. For surface data with pressure and wall shear stress, declare the
    conventions that the integrated force coefficients need:
    - `surface_normals_point: inward` when the surface is wound so that
