@@ -305,7 +305,7 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume}`, `domino_{surface,volume}` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume,volume_joint}`, `domino_{surface,volume}` |
 | `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
 
 Pick one of each on the CLI:
@@ -717,6 +717,7 @@ python src/train.py model=geotransolver_volume_highlift dataset=highlift_volume 
 # ISLA (mesh-native, experimental; see the ISLA section below)
 python src/train.py model=isla_surface dataset=drivaer_ml_surface
 python src/train.py model=isla_volume dataset=drivaer_ml_volume
+python src/train.py model=isla_volume_joint dataset=drivaer_ml_volume
 
 # DoMINO (DRAFT, doesn't run end-to-end)
 python src/train.py model=domino_surface dataset=drivaer_ml_surface \
@@ -758,6 +759,23 @@ the dataset files and the other models' samples stay as they are.
   one 80 GB GPU: 62 GiB at 0.5 s per step on a GB300. The research setting,
   `sampling_resolution=200000 model.n_boundary_tokens=200000`, needs about
   215 GiB, for example one GB300.
+- `isla_volume_joint` trains the interior task jointly with the vehicle's
+  wall pressure and wall shear stress, as a second prediction set (see
+  [Training on several prediction sets](#training-on-several-prediction-sets)):
+
+  ```bash
+  python src/train.py model=isla_volume_joint dataset=drivaer_ml_volume
+  ```
+
+  Its `BoundaryCellsToPoints` draws as many of the vehicle's cells per
+  case as there are interior points, and puts a point just off each one,
+  on the fluid side, with the cell's stored fields as targets. One model
+  predicts at the interior and the wall points in one call. Its defaults
+  fit one 80 GB GPU: under an 80 GB cap they trained at 74 GiB peak
+  reserved and 0.65 s per step on a GB300. The research setting,
+  `sampling_resolution=200000 model.n_boundary_tokens=200000`, needs about
+  234 GiB. Inference reports no integrated forces for this config, since
+  the force code integrates only at the vehicle's cell centroids.
 
 ISLA needs every boundary's normals to point into the fluid. The curated
 files wind the vehicle with its normals into the body, so both configs
