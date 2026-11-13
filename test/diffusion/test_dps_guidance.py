@@ -678,10 +678,12 @@ class TestCompileSingleGuidance:
 class TestCompileMultiGuidance:
     """torch.compile tests for DPSScorePredictor with multiple guidances."""
 
+    # Use torch's config.patch, not monkeypatch: monkeypatch's undo deletes the
+    # attribute, which hides donated_buffer and breaks later torch.compile calls.
+    @_functorch_config.patch(donated_buffer=False)
     def test_compile(
         self,
         device,
-        monkeypatch,
         multi_config,
         multi_desc,
         spatial_name,
@@ -690,7 +692,6 @@ class TestCompileMultiGuidance:
         predictor_kwargs,
     ):
         torch._dynamo.config.error_on_recompile = True
-        monkeypatch.setattr(_functorch_config, "donated_buffer", False)
 
         guidances = _make_multi_guidance(
             multi_config,

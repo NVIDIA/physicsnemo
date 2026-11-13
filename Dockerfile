@@ -118,6 +118,13 @@ RUN --mount=type=bind,source=docker/install-container-dependencies.sh,target=/tm
 # torch-sparse is a native extension and must not use an isolated build with a
 # different PyTorch ABI. Only pyproject.toml participates in this layer's
 # bind-mount cache checksum.
+#
+# Keep the CUDA Python stack on the base image's CUDA version. The cu13 extra
+# pulls cuda-core through RAPIDS/numba-cuda, and cuda-core declares its
+# cuda-bindings floor only in its cu13 extra, so without the constraints below
+# uv can install a cuda-core/cuda-toolkit for a newer CUDA than the base's
+# cuda-bindings (cuda-core then fails at import). The constraints are derived
+# from the base image, so they follow it when the base CUDA version changes.
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     cd /tmp && \
@@ -126,14 +133,20 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
         --no-binary torch-sparse \
         --no-build-isolation \
         "torch-sparse>=0.6.18" && \
+    python -c 'import importlib.metadata as m; v = m.version("cuda-bindings"); print(f"cuda-bindings=={v}"); print("cuda-toolkit==" + ".".join(v.split(".")[:2]) + ".*"); print("torch==" + m.version("torch"))' \
+        > /tmp/base-cuda-constraints.txt && \
+    cat /tmp/base-cuda-constraints.txt && \
     uv pip install -r pyproject.toml \
+        --constraint /etc/pip/constraint.txt \
+        --constraint /tmp/base-cuda-constraints.txt \
         --extra cu13 \
         --extra utils-extras \
         --extra mesh-extras \
         --extra datapipes-extras \
         --extra gnns \
-        --extra sym && \
-    python -c 'import torch, torch_cluster, torch_scatter, torch_sparse; import natten.libnatten; print("Native extension ABI check passed:", torch.__version__)'
+        --extra sym \
+        "cuda-core[cu13]" && \
+    python -c 'import torch, torch_cluster, torch_scatter, torch_sparse; import natten.libnatten; import cuda.core; print("Native extension ABI check passed:", torch.__version__)'
 
 # Branch the release builder after dependency installation. The CI stage below
 # branches directly from dependencies and therefore never installs PhysicsNeMo.
