@@ -414,6 +414,7 @@ def _run_test_epoch(
     reference=True,
     writer=None,
     mask=False,
+    real_forward=False,
 ):
     """Run one :func:`train._run_epoch` with a one-weight model and SGD.
 
@@ -423,6 +424,8 @@ def _run_test_epoch(
     (``_reduce_and_average`` with ``n_samples=1``, main's per-step path).
     ``reference=False`` skips that readback, which syncs. ``mask=True`` turns
     on ``mask_nonfinite_targets`` and adds a metric that is NaN on odd steps.
+    ``real_forward=True`` runs the real ``forward_pass``, ``LossCalculator`` and
+    ``MetricCalculator`` on the loader's collated batches instead.
     """
     model = torch.nn.Linear(1, 1, bias=False).to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
@@ -445,7 +448,14 @@ def _run_test_epoch(
             )
         return loss, values, metrics
 
-    monkeypatch.setattr(train, "forward_pass", forward)
+    targets = {"pressure": "scalar"}
+    if real_forward:
+        loss_calculator = LossCalculator(targets, mask_nonfinite_targets=mask)
+        metric_calculator = MetricCalculator(targets, mask_nonfinite_targets=mask)
+    else:
+        monkeypatch.setattr(train, "forward_pass", forward)
+        loss_calculator = None
+        metric_calculator = SimpleNamespace(mask_nonfinite_targets=mask)
     records = []
     cfg = OmegaConf.create(
         {
@@ -457,15 +467,15 @@ def _run_test_epoch(
     _run_epoch(
         loader,
         model,
-        None,
-        SimpleNamespace(mask_nonfinite_targets=mask),
+        loss_calculator,
+        metric_calculator,
         SimpleNamespace(info=lambda *args, **kwargs: None),
         0,
         cfg,
         SimpleNamespace(rank=0, world_size=1, device=torch.device(device)),
         mode=mode,
         output_type="tensors",
-        target_config={"pressure": "scalar"},
+        target_config=targets,
         optimizer=optimizer,
         scheduler=scheduler,
         writer=writer,
@@ -578,7 +588,8 @@ def test_train_steps_do_not_sync_with_the_device(monkeypatch):
     """From the first batch to the loader's end, no step syncs the host with
     the device: torch's sync debug mode raises on any flagged sync, and
     explicit event, stream and device waits (which it does not flag) are
-    counted. Only the epoch-end drain may wait."""
+    counted. Only the epoch-end drain may wait. The steps run the real
+    ``forward_pass``, loss and metrics, weighted by area, with masked targets."""
     waits = []
     in_steps = False
     for owner, name in (
@@ -608,13 +619,29 @@ def test_train_steps_do_not_sync_with_the_device(monkeypatch):
             torch.cuda.set_sync_debug_mode("error")
             try:
                 for k in range(12):
-                    yield {"k": float(k)}
+                    pressure = torch.randn(1, 64, device="cuda")
+                    pressure[:, : k % 3 * 32] = float("nan")  # all NaN when k % 3 == 2
+                    yield {
+                        "forward_kwargs": {
+                            "input": torch.randn(1, 64, 1, device="cuda")
+                        },
+                        "targets": TensorDict(
+                            {"pressure": pressure}, batch_size=[1, 64]
+                        ),
+                        "target_measure": torch.rand(1, 64, device="cuda"),
+                    }
             finally:
                 torch.cuda.set_sync_debug_mode(previous)
                 in_steps = False
 
     records, _ = _run_test_epoch(
-        monkeypatch, Loader(), "cuda", mode="train", reference=False
+        monkeypatch,
+        Loader(),
+        "cuda",
+        mode="train",
+        reference=False,
+        mask=True,
+        real_forward=True,
     )
     assert waits == []
     steps = [r["global_step"] for r in records if r["phase"] == "train_step"]
@@ -646,12 +673,21 @@ def _readback_rank(rank, port):
     try:
         loss = torch.tensor(1.37 * (rank + 1))
         losses = TensorDict({"loss/test": loss * 7})
-        metrics = TensorDict({"test_l2": loss.sqrt()})
-        host_values, _ = train._start_step_readback(loss, losses, metrics, device="cpu")
-        expected = _reduce_and_average(loss, losses, metrics, 1, device="cpu")
+        ### rank0_l2 has a finite target on rank 0 only, so its mean is rank 0's.
+        nan = torch.tensor(float("nan"))
+        metrics, counts = _skip_nan(
+            TensorDict({"test_l2": loss.sqrt(), "rank0_l2": loss if rank == 0 else nan})
+        )
+        host_values, _ = train._start_step_readback(
+            loss, losses, metrics, device="cpu", metric_counts=counts
+        )
+        expected = _reduce_and_average(
+            loss, losses, metrics, 1, device="cpu", metric_counts=counts
+        )
         assert host_values["loss"].item() == expected[0]
         assert {k: v.item() for k, v in host_values["losses"].items()} == expected[1]
         assert {k: v.item() for k, v in host_values["metrics"].items()} == expected[2]
+        assert expected[2]["rank0_l2"] == pytest.approx(1.37)
     finally:
         dist.destroy_process_group()
 
@@ -665,7 +701,8 @@ def _readback_rank(rank, port):
 def test_step_readback_is_the_all_rank_mean():
     """Across two CPU ranks with different values, each step's readback is
     the all-rank mean, equal to the blocking per-step readback
-    (``_reduce_and_average`` with ``n_samples=1``)."""
+    (``_reduce_and_average`` with ``n_samples=1``). A metric whose target is
+    finite on one rank only averages over that rank."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
