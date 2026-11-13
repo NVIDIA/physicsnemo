@@ -177,6 +177,26 @@ class TestTriangleAreas:
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(result, torch.tensor([0.5], dtype=torch.float64))
 
+    @pytest.mark.parametrize(
+        "vertices",
+        [
+            [[0.0, 0.0], [300.0, 0.0], [0.0, 300.0]],
+            [[0.0, 0.0, 0.0], [300.0, 0.0, 0.0], [0.0, 300.0, 0.0]],
+            [[0.0, 0.0, 0.0], [60.0, 0.0, 0.0], [0.0, 60.0, 0.0], [0.0, 0.0, 60.0]],
+        ],
+        ids=["triangle_2d", "triangle_3d", "tetrahedron_3d"],
+    )
+    def test_float16_intermediates_do_not_overflow(self, device, vertices):
+        """Regression (#2248): float16 measures that fit in float16 are finite,
+        though the determinant or cross product behind them (9e4, 2.16e5) does
+        not fit, since they are computed in at least float32."""
+        vecs = _relative_vectors(vertices).to(device)
+        result = compute_cell_areas(vecs.half())
+        assert result.dtype == torch.float16
+        torch.testing.assert_close(
+            result, compute_cell_areas(vecs).half(), rtol=0, atol=0
+        )
+
 
 ### Branch 3: _tetrahedron_volumes_3d (n=3, d=3, scalar triple product) ###
 
