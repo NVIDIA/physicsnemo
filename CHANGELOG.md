@@ -133,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reflections and translations of the problem exactly, up to roundoff, except
   on some symmetric or nearly symmetric boundaries described on its
   documentation page.
+- `physicsnemo.mesh.spatial` exports `canonical_frame`, the principal-axis frame
+  that a weighted point set carries with it, and `frame_coordinates`, the
+  points' coordinates in that frame.
 - Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
   `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
   `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports

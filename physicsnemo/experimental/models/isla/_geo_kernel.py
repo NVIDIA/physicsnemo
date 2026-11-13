@@ -32,10 +32,15 @@ points by all ``S`` slices, and write no (B,N,S,.) intermediate. The forward rea
 pre-logits once and writes the routing bias, the mix and the (B,N,geo) pooled
 invariants once. The backward rebuilds the invariants inside the tile from the
 (B,N,3) and (B,S,3) geometry, reads the incoming gradients once and writes the
-pre-logit gradient once. Everything else the region touches is O(B N) or O(B S). The
-per-slice sums over points (the gradients of the anchors and of the Linear) are
-stored as per-tile partial sums that torch reduces, so the result is deterministic
-(no atomics).
+pre-logit gradient once. Besides those (B,N,S) inputs and outputs, the region touches
+O(B N) and O(B S) tensors but for one kind. The per-slice sums over points (the
+gradients of the anchors, of their mean normals and of the Linear) are stored as
+per-tile partial sums that torch reduces, so the result is deterministic (no
+atomics). The two anchor partials are (B, N / BLOCK_N, S, 3) each, with ``BLOCK_N``
+of 1 to 4 points (:func:`_bwd_block`), so they grow as N S: at 1,024 slices and
+200,000 tokens in float32 each is 2.3 GiB. A program that sums several tiles into
+one partial, as ``_fused_basis._basis_bwd_kernel`` does, would bound them; that
+changes the backward's summation order and is left to a follow-up.
 
 The kernels round as the eager region does under autocast: the invariants and the
 Linear's operands to bfloat16 where autocast runs the Linear and the pooling GEMM in
@@ -357,6 +362,33 @@ if HAS_TRITON:
         BLOCK_N: tl.constexpr,
         BLOCK_S: tl.constexpr,
     ):
+        """The backward of one tile of ``BLOCK_N`` points by every slice of one case
+        (grid ``(n_tiles, B)``). It rebuilds the forward tile (:func:`_region_tile`),
+        then runs back through the pooling, the softmax over slices, the routing Linear
+        and the invariants. It writes the pre-logits' gradient; the per-point gradients
+        of ``r``, ``n_hat`` and the per-point vectors ``d``, each only when its
+        ``NEED_*`` flag is set; and per tile the partial sums over its points of the
+        gradients of the anchors ``z`` and their mean normals ``m`` (``gz_part``,
+        ``gm_part``), of the Linear's weights and of its bias, which the launcher sums.
+
+        The invariants by their column in the Linear's weights and in ``pooled``, with
+        ``rel = r - z_s``, ``rel_hat = rel / max(|rel|, eps)`` and the ``K`` global
+        directions first among the ``T`` per-point vectors ``d_j``:
+
+        - 0: ``max(|rel|, eps)`` (``g0``); 1: its log (``g1``);
+        - 2 to 1 + K: ``rel_hat . d_j`` of the global directions (``g2``, then
+          ``g2b``, ``g2c`` and ``g2d`` at ``IDX_E``, ``IDX_F`` and ``IDX_G``);
+        - 2 + K: ``rel_hat . n`` (``g3``); 3 + K: ``rel_hat . m_s`` (``g4``);
+          4 + K: ``n . m_s`` (``g5``);
+        - 5 + K onwards: ``rel_hat . d_j`` of the token's rank-1 inputs (the later
+          ones of ``g2b`` to ``g2d``).
+
+        An invariant added to ``_blocks._relational_invariants`` (and
+        ``_blocks._geo_width``) goes in the same column into :func:`_region_tile` (its
+        value and its weight), both kernels' stores of ``pooled`` and of the weight
+        gradient, this kernel's ``gmix`` and ``gg`` terms and its chain rule into
+        ``rel_hat``, ``n_hat``, ``m`` or ``d``, and :func:`_check`.
+        """
         pid_n = tl.program_id(0).to(tl.int64)  # int64 offsets, as in the forward
         pid_b = tl.program_id(1).to(tl.int64)
         offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)

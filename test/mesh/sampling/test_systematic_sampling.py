@@ -580,6 +580,69 @@ def test_the_grouped_cell_lines_are_each_group_s_cell_line_bitwise(device):
     assert torch.equal(order, torch.cat(orders))
 
 
+def _frozen_pps_inclusion_probabilities(measures, n_samples):
+    """``_pps_inclusion_probabilities`` as it was before it took groups."""
+    share = torch.as_tensor(n_samples, dtype=torch.float64, device=measures.device)
+    n = measures.shape[0]
+    a, order = measures.sort(descending=True, stable=True)
+    tail = _cumsum(a.flip(0)).flip(0)
+    rank = torch.arange(n, device=a.device, dtype=a.dtype)
+    uncapped = (share - rank) * a < tail
+    m = torch.where(uncapped, torch.arange(n, device=a.device), n).amin()
+    tail_m = tail.gather(0, m.clamp_max(n - 1).reshape(1))[0]
+    c = (share - m) / tail_m.clamp_min(torch.finfo(a.dtype).tiny)
+    pi = torch.where(rank < m, 1.0, (c * a).clamp(max=1.0))
+    n_pos = (a > 0).sum()
+    pi = torch.where(share >= n_pos, (a > 0).to(pi.dtype), pi)
+    return torch.empty_like(pi).scatter_(0, order, pi)
+
+
+def _frozen_cell_line(measures, centroids, share, frame):
+    """``_cell_line`` as it was before it called ``_cell_lines``."""
+    pi = _frozen_pps_inclusion_probabilities(measures, share)
+    zero = measures == 0
+    n_cells = measures.shape[0]
+    n_pos = n_cells - zero.sum()
+    pi = torch.where(
+        zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
+    )
+    xyz = frame_coordinates(centroids, frame)
+    inside = (~zero | zero.all())[:, None]
+    lo = torch.where(inside, xyz, torch.inf).amin(0)
+    hi = torch.where(inside, xyz, -torch.inf).amax(0)
+    code = _compute_morton_codes(xyz.clamp(lo, hi), isotropic=True)
+    return pi, code.argsort(stable=True)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_the_cell_line_is_its_ungrouped_form_bitwise(dtype, device):
+    """``_cell_line``, one group of ``_cell_lines``, and the one-group
+    ``_pps_inclusion_probabilities`` give the bits of their ungrouped forms (frozen
+    above): with zero-measure cells, of zero measure only, a share above the
+    positive cells, kept whole, a single cell, and tiny measures."""
+    sizes = [500, 40, 3000, 1, 1, 7, 12, 2000]
+    measures, centroids = _groups(sizes, device=device)
+    measures[0][::7] = 0.0
+    measures[3][:] = 0.0
+    measures[5][:] = 0.0
+    measures[6][:5] = 0.0
+    measures[7][:] = 10.0 ** -torch.arange(2000, device=device, dtype=D).fmod(300)
+    frame = canonical_frame(torch.cat(centroids), torch.cat(measures))
+    for a, x in zip(measures, centroids):
+        a, x = a.to(dtype), x.to(dtype)
+        n = a.shape[0]
+        for s in {1.0, 0.5 * n, n / 3, n - 0.25, float(n)}:
+            share = torch.tensor(s, dtype=D, device=device)
+            p, o = _cell_line(a, x, share, frame.to(dtype))
+            ref_p, ref_o = _frozen_cell_line(a, x, share, frame.to(dtype))
+            assert p.dtype == ref_p.dtype
+            assert torch.equal(p.view(torch.int8), ref_p.view(torch.int8))
+            assert torch.equal(o, ref_o)
+            ref = _frozen_pps_inclusion_probabilities(a, s)
+            pi = _pps_inclusion_probabilities(a, s)
+            assert torch.equal(pi.view(torch.int8), ref.view(torch.int8))
+
+
 def test_the_mesh_draw_keeps_min_cells_and_samples(device):
     """min(n_cells, n_samples) cells; a mesh with at most n_samples cells is kept
     whole with its measures as weights; an empty mesh gives empty tensors; the start

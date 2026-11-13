@@ -30,7 +30,7 @@ import torch
 
 from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.geometry import compute_cell_normals
 from test.experimental.models.isla._geometry_cases import (
     _capped_cube,
     _exact_d2,
@@ -265,8 +265,10 @@ def test_switch_on_ordinary_cell_changes_nothing_visible(dtype, device, monkeypa
     """On a large cell of ordinary shape (rho about 0.4, as DrivAerML's tunnel floor)
     the guard covers on-wall queries, and the switch to the accurate point fires
     where the two points differ by rounding alone. The search's internal weights then
-    differ by an ulp or two, but d, u and their gradients in the queries and the
-    vertices are bitwise those of the unswitched path."""
+    differ by an ulp or two, but d, u and their gradients in the queries are bitwise
+    those of the unswitched path. So is the gradient in the vertices, but on the wall:
+    there it is the plane distance's, which reads the weights, and agrees to the
+    rounding of its sum over 4,000 queries (64 ulps of the largest)."""
     p0 = torch.tensor(
         [[0.2, -0.6, -0.0171], [1.1, -0.4, -0.0171], [0.5, 0.3, -0.0171]],
         dtype=dtype,
@@ -301,5 +303,8 @@ def test_switch_on_ordinary_cell_changes_nothing_visible(dtype, device, monkeypa
     monkeypatch.setattr(geometry, "_SWITCH_UNITS", float("inf"))
     unswitched = run()
     assert bool((weights[0] != weights[1]).any(-1).any())
-    for a, b_ in zip(switched, unswitched):
+    for a, b_ in zip(switched[:3], unswitched[:3]):
         assert torch.equal(a, b_)
+    gp, gp_ref = switched[3], unswitched[3]
+    ulps = 64 * torch.finfo(dtype).eps * float(gp_ref.abs().max())
+    assert torch.allclose(gp, gp_ref, rtol=0, atol=ulps)

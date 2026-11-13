@@ -33,8 +33,8 @@ from jaxtyping import Float, Int
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.experimental.models.isla import _geometry_fast as geometry_fast
 from physicsnemo.experimental.models.isla._tree_walk import WARP_MAX_ELEMENTS
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
+from physicsnemo.mesh.geometry import compute_cell_normals
+from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
@@ -655,7 +655,11 @@ def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     g)``), and otherwise 0. ``c`` comes in a canonical order, so the result is a
     function of the set. The work is chunked over the rows. Where one row's subsets
     and directions overflow a chunk (a vertex shared by hundreds of cells), it runs
-    one row at a time over chunks of its subsets, with the same result."""
+    one row at a time over chunks of its subsets, with the same result. The work
+    grows as ``K**(d + 1)``: a query tied with hundreds of cells (on the axis of a
+    faceted tube, at a sphere's centre) takes seconds. An active-set solver (Wolfe's)
+    over every tied row at once, certified as here, would remove that term; it is a
+    follow-up."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
@@ -2343,7 +2347,9 @@ def exact_boundary_geometry(
     a point of the surface. It takes :math:`d = 0`, and :math:`u` follows the same
     rule with the unit normals of the cells that hold it in place of the directions
     (below): the cell's normal inside a cell, and the least-norm point of the hull of
-    the normals of the cells sharing an edge or a vertex.
+    the normals of the cells sharing an edge or a vertex. Its :math:`d` has the
+    gradient of the distance along :math:`u`: :math:`u` in the query, as beside the
+    surface inside a cell.
 
     Coincident vertices are welded first, so a surface stored as pieces or as a
     triangle soup has the connectivity of the surface it describes. A cell of zero
@@ -2419,9 +2425,11 @@ def exact_boundary_geometry(
     u = torch.where(slide[:, None], _StraightThrough.apply(u, slide_u), u)
     u = torch.where(on_wall[:, None], face_n, u)
     u = torch.where(tied[:, None], tie_u, u)
+    ### (on the wall the distance along u, exactly zero, keeps its gradient: u)
+    along = (diff * u).sum(-1)
     d = torch.where(
         on_wall,
-        torch.zeros_like(dist),
+        along - along.detach(),
         sign * torch.where(tied, tie_dist, torch.where(on_cell, plane.abs(), dist)),
     )
     return d, u

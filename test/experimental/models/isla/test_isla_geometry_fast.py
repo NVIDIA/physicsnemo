@@ -30,7 +30,7 @@ from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla import _geometry_fast as geometry_fast
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.geometry import compute_cell_normals
 from physicsnemo.mesh.primitives.surfaces import cube_surface
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from test.experimental.models.isla._forced import ran

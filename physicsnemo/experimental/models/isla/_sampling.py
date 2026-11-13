@@ -82,7 +82,7 @@ import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.sampling.systematic_sampling import _cell_lines, _systematic_sample
-from physicsnemo.mesh.spatial._frame import canonical_frame
+from physicsnemo.mesh.spatial import canonical_frame
 
 
 def water_fill(

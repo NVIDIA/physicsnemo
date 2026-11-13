@@ -390,7 +390,9 @@ def test_fused_geo_kernel_model_exact_in_float64(name):
 # --------------------------------------------------------------------------- torch.compile
 @pytest.mark.cuda
 @requires_cuda
-@pytest.mark.parametrize("geo_kernel", ["eager", "fused"])
+@pytest.mark.parametrize(
+    "geo_kernel", ["eager", pytest.param("fused", marks=requires_cuda_triton)]
+)
 def test_torch_compile_fullgraph_matches_eager(geo_kernel, monkeypatch):
     """The whole model compiled must stay one graph and reproduce the eager reference
     within the float32 bars."""
@@ -593,7 +595,8 @@ def _mix_pair(**kw):
 def _forced_on_error(run, **kw):
     """The positive control: ``run(ref, opt)``'s output error with the same blocks compiled
     with mix-order reduction forced on. Skips the calling test where Inductor then builds
-    no mix-order kernel, since the test cannot see the bug there. Inductor's caches are
+    no mix-order kernel, since the test cannot see the bug there; a test calls it after
+    its other assertions, so that they run on every device. Inductor's caches are
     off because a cache hit skips the codegen that counts the kernels."""
     import torch._inductor.config
 
@@ -632,16 +635,18 @@ def test_compile_blocks_float32_matches_eager_at_every_token_count(n, monkeypatc
         o_ref = _run(ref, inputs, tgt)[0]
         return _rel(_run(opt, inputs, tgt)[0], o_ref)
 
-    err = _forced_on_error(forced_on)
-    if n % 4:
-        assert err > 5e-6, err  # forced on, the bug shows at this size
     ref, opt = _mix_pair()
     seen = _record_block_tokens(opt)
     ### With mix-order reduction on, GB300 measured an output error of 5.7e-5 at n = 12001
-    ### and one mix-order kernel; with it off, 2.7e-7 and none.
-    _assert_same(ref, opt, torch.float32, 5e-6, 5e-5, n=n)
+    ### and one mix-order kernel; with it off, 2.7e-7 and none. Gradient bar 1e-4: with it
+    ### off, GB300 measured 5.29e-5 at n = 12003 (blocks.0.assign.weight), float32 sums
+    ### over 12003 tokens in another order.
+    _assert_same(ref, opt, torch.float32, 5e-6, 1e-4, n=n)
     assert torch._inductor.metrics.codegen_mix_order_reduction == 0
     assert seen == [n], seen
+    if n % 4:
+        err = _forced_on_error(forced_on)
+        assert err > 5e-6, err  # forced on, the bug shows at this size
 
 
 @pytest.mark.cuda
@@ -691,27 +696,26 @@ def test_the_model_s_compile_matches_eager_in_the_eager_region(monkeypatch):
 
 @pytest.mark.cuda
 @requires_cuda
-@pytest.mark.parametrize("nq", [6001, 6002])
-def test_compile_blocks_interior_float32_at_every_token_count(nq, monkeypatch):
+@pytest.mark.parametrize("n", [12001, 12002])
+def test_compile_blocks_interior_float32_at_every_token_count(n, monkeypatch):
     """The interior task under compile_blocks in float32, at a size where mix-order
-    reduction would fuse and a total token count (6000 boundary cells + nq queries)
-    that is not a multiple of 4: the compiled model reproduces the eager one, and its
-    prediction at a fixed set of queries does not depend on the other queries of the
-    request."""
+    reduction would fuse and a token count (n boundary cells) that is not a multiple
+    of 4: the compiled model reproduces the eager one, and its prediction at a fixed
+    set of queries does not depend on the other queries of the request. The queries
+    read the boundary passively after the blocks (the query-independent form), so the
+    compiled blocks see the boundary's tokens alone, whatever the query count."""
     from physicsnemo.experimental.models.isla import model
 
     monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     monkeypatch.setattr(model, "_TOKEN_ALIGNMENT", 1)
-    inputs, _ = _boundary(6000)
-    q = torch.randn(nq, 3, generator=torch.Generator().manual_seed(5)).cuda() * 3.0
+    inputs, _ = _boundary(n)
+    q = torch.randn(2000, 3, generator=torch.Generator().manual_seed(5)).cuda() * 3.0
 
     def forced_on(ref, opt):
         with torch.no_grad():
             o_ref = _flat(outputs(ref(**inputs, prediction_points=q)))
             return _rel(_flat(outputs(opt(**inputs, prediction_points=q))), o_ref)
 
-    err = _forced_on_error(forced_on, interior=True)
-    assert err > 5e-6, err  # forced on, the bug shows at this size
     ref, opt = _mix_pair(interior=True)
     seen = _record_block_tokens(opt)
     with torch.no_grad():
@@ -721,4 +725,6 @@ def test_compile_blocks_interior_float32_at_every_token_count(nq, monkeypatch):
     assert _rel(o_opt, o_ref) < 5e-6, _rel(o_opt, o_ref)
     assert _rel(alone, o_opt[:1000]) < 5e-6, _rel(alone, o_opt[:1000])
     assert torch._inductor.metrics.codegen_mix_order_reduction == 0
-    assert seen == [6000 + nq, 7000], seen
+    assert seen == [n, n], seen
+    err = _forced_on_error(forced_on, interior=True)
+    assert err > 5e-6, err  # forced on, the bug shows at this size

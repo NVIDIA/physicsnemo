@@ -1275,13 +1275,14 @@ def test_least_norm_point_without_a_certified_candidate(k, dim):
     assert ((x - exact).norm(dim=-1) <= (2 * gap.clamp_min(0)).sqrt() + 1e-12).all()
 
 
-### (68 s on a shared, loaded CPU; the library's copy took 24 s: the single pass's
-### 166,650 subsets times 100 directions, and the chunked pass's 167 chunks per row)
-@pytest.mark.slow
-def test_least_norm_point_of_many_directions_in_chunks(monkeypatch):
-    """A hub vertex of hundreds of cells whose normals differ by rounding ties them
+### K = 100 is slow (68 s on a shared, loaded CPU; the library's copy took 24 s: the
+### single pass's 166,650 subsets times 100 directions, and the chunked pass's 167
+### chunks per row); K = 20 runs the same chunked branch in the default tier.
+@pytest.mark.parametrize("k", [20, pytest.param(100, marks=pytest.mark.slow)])
+def test_least_norm_point_of_many_directions_in_chunks(k, monkeypatch):
+    """A hub vertex of many cells whose normals differ by rounding ties them
     all: K directions give C(K, 3) triples, each compared with all K, more than one
-    pass holds. Rows of K = 100 unit directions (a cap, the same read from float32,
+    pass holds. Rows of K unit directions (a cap, the same read from float32,
     one spread by rounding only, and a sphere, around the origin) are taken one at a
     time over chunks of their subsets, each chunk within the budget, and give
     bitwise the single pass's result."""
@@ -1289,15 +1290,15 @@ def test_least_norm_point_of_many_directions_in_chunks(monkeypatch):
     rows = []
     for spread, f32 in ((1e-3, False), (1e-3, True), (1e-7, False), (3.0, False)):
         c = torch.tensor([0.0, 0.0, 1.0], dtype=D) + spread * torch.randn(
-            100, 3, dtype=D, generator=g
+            k, 3, dtype=D, generator=g
         )
         c = torch.nn.functional.normalize(c, dim=-1)
         rows.append(torch.unique(c.float().double() if f32 else c, dim=0))
     c = torch.stack(rows)
-    assert c.shape == (4, 100, 3)
+    assert c.shape == (4, k, 3)
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
     single = torch.cat([geometry._min_norm_points(row[None]) for row in c])
-    budget = 1000 * 100
+    budget = 10 * k * k  # 10 K subsets a chunk
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 8 * budget)
     sizes, candidates = [], geometry._hull_candidates
 

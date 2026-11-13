@@ -38,6 +38,15 @@ reference's. The forest is built and walked outside autocast, in its inputs' pre
 inputs, the dtype of each step of the test is read from torch's dispatch. The kernels
 then compute in float32 and round to bfloat16 or float16 where torch's kernels do:
 each elementwise result, and a sum once, after accumulating in float32.
+
+The opening test and the two passes follow the library's Warp walk
+(:mod:`physicsnemo.mesh.spatial._point_walk_warp`), whose helpers share their names
+(``_low``, ``_gap_sq``, ``_is_far``, ``_opening_dtypes``, ``_count_kernel``,
+``_fill_kernel``). That walk takes one tree per call; this one walks a whole forest
+in one launch (each point's tree group), writes one output stream ordered by point,
+and keeps its count pass for the fills of any range of points
+(:func:`walk_counts`). A change to the opening test must be made in both until the
+library's walk takes those as arguments and the forest calls it (a follow-up).
 """
 
 from typing import Any

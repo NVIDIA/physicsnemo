@@ -49,7 +49,7 @@ from physicsnemo.experimental.models.isla import _geo_kernel as geo_kernel
 from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla import _tree_read as tree_read
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.geometry import compute_cell_normals
 from test.experimental.models.isla._geometry_cases import _circle, _sphere
 from test.experimental.models.isla._kernel_cases import _SinkRead
 from test.experimental.models.isla._marks import DEVICES, requires_cuda_triton
@@ -142,6 +142,26 @@ def test_signed_distance_passes_gradcheck_in_every_region(dim, wrt, one_thread):
     mesh, regions = _regions(dim)
     q = torch.cat(list(regions.values()))
     p, c = mesh.points, mesh.cells
+    if wrt == "queries":
+        assert _check(lambda x: exact_boundary_geometry(x, p, c)[0], q)
+    else:
+        assert _check(lambda x: exact_boundary_geometry(q, x, c)[0], p)
+
+
+@pytest.mark.parametrize("wrt", ["queries", "vertices"])
+@pytest.mark.parametrize("dim", [2, 3])
+def test_signed_distance_keeps_its_gradient_on_the_wall(dim, wrt, one_thread):
+    """A query on the wall (a cell's centroid) takes d = 0 exactly, with the gradient
+    of the distance to the cell's plane: u, the cell's unit normal, in the query, as
+    beside the wall; gradcheck in float64 in the queries and the vertex positions."""
+    mesh = _circle(16) if dim == 2 else _sphere(1)
+    q, p, c = mesh.cell_centroids[::3], mesh.points, mesh.cells
+    x = q.clone().requires_grad_(True)
+    d, u = exact_boundary_geometry(x, p, c)
+    assert torch.equal(d, torch.zeros_like(d))
+    grad = torch.autograd.grad(d.sum(), x)[0]
+    assert torch.allclose(grad, u, rtol=0, atol=1e-12)
+    assert torch.allclose(u, mesh.cell_normals[::3], rtol=0, atol=1e-12)
     if wrt == "queries":
         assert _check(lambda x: exact_boundary_geometry(x, p, c)[0], q)
     else:
@@ -418,3 +438,93 @@ def test_the_eager_references_pass_gradcheck():
     assert torch.autograd.gradcheck(
         lambda x: tree_read.node_means(x, forest, omega), (x,), **GRADCHECK
     )
+
+
+# --------------------------------------------------------------------------- the whole model
+def _interior_model():
+    """An interior model at ``tree_read_theta=0`` in float64 with every parameter
+    shifted by seeded noise (some layers start at zero, the reads among them), an
+    ellipsoid's boundary and three prediction points outside it."""
+    from physicsnemo.experimental.models.isla import ISLA
+    from physicsnemo.mesh import Mesh
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+    s = sphere_icosahedral.load(subdivisions=2)
+    points = s.points.to(D) * torch.tensor([2.0, 1.0, 0.5], dtype=D)
+    model = ISLA(
+        output_schema={"p": {"rank": 0}},
+        boundary_schemas={"wall": {}},
+        hidden=32,
+        n_layers=2,
+        n_slices=8,
+        interior=True,
+        tree_read_theta=0.0,
+    ).to(D)
+    g = torch.Generator().manual_seed(1)
+    with torch.no_grad():
+        for p in model.parameters():
+            p.add_(0.2 * torch.randn(p.shape, generator=g, dtype=D))
+    x = torch.tensor([[3.1, 0.4, 0.3], [-0.5, 1.9, 0.2], [0.6, -0.3, 1.1]], dtype=D)
+    return model, {"wall": Mesh(points=points, cells=s.cells)}, x
+
+
+def _point_grad(model, meshes, x):
+    """The derivative of the summed output in the prediction points (each output
+    depends on its own point only, so row ``i`` is output ``i``'s gradient)."""
+    x = x.clone().requires_grad_(True)
+    p = model(boundary_meshes=meshes, prediction_points=x).point_data["p"]
+    return torch.autograd.grad(p.sum(), x)[0]
+
+
+def test_interior_outputs_point_derivative_matches_central_differences():
+    """The whole interior model at ``tree_read_theta=0`` in float64: the autograd
+    derivative of the outputs in the prediction points is the central difference's
+    (``h = 1e-5``: truncation and roundoff both near 1e-10 of the largest) to 1e-8
+    of the largest. The read's pair invariants carry their gradient; without it the
+    two differ by about 1e-2 of the largest."""
+    model, meshes, x0 = _interior_model()
+    auto = _point_grad(model, meshes, x0)
+    h, fd = 1e-5, torch.zeros_like(x0)
+    with torch.no_grad():
+        for i in range(x0.shape[1]):
+            e = torch.zeros(x0.shape[1], dtype=D)
+            e[i] = h
+            hi = model(boundary_meshes=meshes, prediction_points=x0 + e)
+            lo = model(boundary_meshes=meshes, prediction_points=x0 - e)
+            fd[:, i] = (hi.point_data["p"] - lo.point_data["p"]) / (2 * h)
+    assert float((auto - fd).abs().max()) <= 1e-8 * float(fd.abs().max())
+
+
+def test_tree_read_basis_passes_gradcheck_in_the_geometry():
+    """The tree read's kernel basis at ``theta=0`` (every pair a cell), float64 on
+    CPU, in the points' positions, directions and wall distances and in the cells'
+    positions and normals: its pair invariants carry their gradient when the geometry
+    requires one."""
+    from test.experimental.models.isla._meshes import cloud
+
+    g = torch.Generator().manual_seed(3)
+    pts, nrm, w, _ = cloud(30, seed=3)
+    q = cloud(8, seed=7, scale=(4.0,) * 3)[0]
+    basis = tree_read._KernelBasis(tree_read.kernel_geo_width(1, 0)).to(D)
+    g_unit = torch.nn.functional.normalize(
+        torch.randn(1, 1, 3, generator=g, dtype=D), dim=-1
+    )
+
+    def read(q_r, q_n, q_wall, b_r, b_n):
+        pairs = tree_read.tree_read_pairs(
+            basis, query_r=q_r[None], query_n=q_n[None], query_wall=q_wall[None], boundary_r=b_r[None],
+            boundary_n=b_n[None], boundary_vecs=None, log_frac=torch.log(w / w.sum())[None], g_unit=g_unit,
+            theta=0.0, eps=1e-12,
+        )  # fmt: skip
+        return pairs.basis
+
+    ins = (
+        q,
+        torch.nn.functional.normalize(q, dim=-1),
+        0.5 + torch.rand(8, generator=g, dtype=D),
+        pts,
+        nrm,
+    )
+    torch.manual_seed(0)  # the fast mode's random projections
+    ins = tuple(t.clone().requires_grad_(True) for t in ins)
+    assert torch.autograd.gradcheck(read, ins, fast_mode=True, **GRADCHECK)

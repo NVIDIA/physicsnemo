@@ -81,11 +81,13 @@ reflection, translation or rescale of the case then gives the same clusters and 
 same far-field list for every point, up to ties of that frame (equal variances, a
 symmetric axis), so the read is the same approximation in every pose. At
 :math:`\theta > 0` the read is piecewise smooth: the output jumps where a cluster's
-admission changes, as the point or the boundary's vertices move. At every
-:math:`\theta`, no gradient reaches the pair invariants (:func:`_chunked_basis_from_plan`),
-so the kernel basis takes no input gradient. Derivatives of the output with respect to
-the prediction points or the boundary's vertices are therefore partial: they leave out
-the read's pair geometry.
+admission changes, as the point or the boundary's vertices move, and a virtual cell's
+position and normal take no gradient. At :math:`\theta = 0` the read is smooth, and the
+read's own derivatives in the prediction points and in the boundary's cells are complete:
+the pair invariants take a gradient whenever the geometry requires one
+(:func:`_chunked_basis_from_plan`). The whole model's derivative in the boundary's
+vertices also passes through the slice blocks (see ``tree_read_theta`` in
+:class:`~physicsnemo.experimental.models.isla.model.ISLA`).
 
 Rounding. Rounding makes no discrete choice of the forest that an error bound can
 settle, and the caller's precision makes none. The forest is built and
@@ -133,7 +135,7 @@ from physicsnemo.experimental.models.isla._segment_softmax import (
 )
 from physicsnemo.experimental.models.isla._tree_build import forest_tables, resolve_tree_build
 from physicsnemo.experimental.models.isla._tree_walk import walk_counts, walk_fits, walk_pairs
-from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
+from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
@@ -304,11 +306,14 @@ def separation_diameter_sq(
     return wide.square().to(aabb_min.dtype)
 
 
-def _reference_tables(points, measure, normals, vecs, points_f, face, leaf_size: int, n_trees: int) -> dict:
+def _reference_tables(
+    points, measure, normals, vecs, points_f, face, leaf_size: int, n_trees: int, implementation: str | None = None
+) -> dict:
     """:func:`~._tree_build.forest_tables`' fields from the reference build: one GLOBE
     :class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree` per tree of ``face``
     (each cell's tree, of ``n_trees``), in tree order, its nodes and cells appended to
-    the forest's tables."""
+    the forest's tables. ``implementation`` is the trees' build (``"torch"`` for a
+    forced reference; ``None``: the library's choice)."""
     n, d = points.shape
     device = points.device
     trees, tree_cells, tree_index, cells, offsets = [], [], [], [], [0]
@@ -320,7 +325,9 @@ def _reference_tables(points, measure, normals, vecs, points_f, face, leaf_size:
         if sel.numel() == 0:
             continue
         tree_index.append(k)
-        tree = ClusterTree.from_points(points_f[sel], leaf_size=leaf_size, areas=measure[sel])
+        tree = ClusterTree.from_points(
+            points_f[sel], leaf_size=leaf_size, areas=measure[sel], implementation=implementation
+        )
         data = {"n": normals[sel]}
         if vecs is not None:
             data["u"] = vecs[sel]
@@ -355,7 +362,8 @@ def _reference_tables(points, measure, normals, vecs, points_f, face, leaf_size:
     position_leaf = torch.repeat_interleave(
         torch.arange(leaf_ids.shape[0], device=device), range_count[leaf_ids], output_size=n
     )
-    ### Internal nodes by depth from the roots; a node's children are one level deeper.
+    ### Internal nodes by depth from the roots, each depth in ascending id; a node's
+    ### children are one level deeper.
     node_offset = torch.tensor(offsets, device=device)
     frontier = node_offset[:-1]
     by_depth = []
@@ -365,7 +373,7 @@ def _reference_tables(points, measure, normals, vecs, points_f, face, leaf_size:
             break
         by_depth.append(internal)
         frontier = torch.cat([left[internal], right[internal]])
-    levels = [(nodes, left[nodes], right[nodes]) for nodes in reversed(by_depth)]
+    levels = [(nodes, left[nodes], right[nodes]) for nodes in (x.sort().values for x in reversed(by_depth))]
 
     def per_tree(diameter_sq: torch.Tensor) -> tuple[list[ClusterTree], list[torch.Tensor]]:
         """The face trees with their slices of the walk's node diameters ``(M,)``, and
@@ -549,7 +557,9 @@ class BoundaryForest:
         if resolve_tree_build(build, points) == "fast":
             tables = forest_tables(points, measure, normals, vecs, points_f, face, leaf_size=leaf_size, n_trees=n_trees)
         if tables is None:
-            tables = _reference_tables(points, measure, normals, vecs, points_f, face, leaf_size, n_trees)
+            ### A forced reference builds its trees by the library's torch code too.
+            implementation = "torch" if build == "reference" else None
+            tables = _reference_tables(points, measure, normals, vecs, points_f, face, leaf_size, n_trees, implementation)
         tree_group = tables.pop("tree_index") // (2 * d)
         ### The walk's node diameters (elementwise per node), on the whole table; the
         ### trees take their slices of it when they are made.
@@ -641,7 +651,11 @@ class BoundaryForest:
             a, b = int(self.node_offset[t]), int(self.node_offset[t + 1])
             pts = points_f if points_f.dim() == 2 else points_f[int(self.tree_group[t])]
             plan = tree.find_point_interaction_pairs(
-                pts, theta=theta, validate=False, source_admissible=self.coherent[a:b]
+                pts,
+                theta=theta,
+                validate=False,
+                source_admissible=self.coherent[a:b],
+                implementation="torch" if walk == "reference" else None,
             )
             qs += [plan.near_target_ids, plan.far_target_ids]
             ss += [self.tree_cells[t][plan.near_source_ids], self.n_cells + a + plan.far_source_node_ids]
@@ -659,7 +673,8 @@ def resolve_walk(walk: str, points: torch.Tensor, theta: float, forest: Boundary
     :mod:`~._tree_walk`, the same pairs in the same order). ``"auto"`` picks the fast
     walk for CUDA points when the forest's depth fits its stack, else the reference,
     and logs each choice once per device type. A forced name is kept (``"fast"`` runs
-    on CPU too). At ``theta = 0`` there is no walk (the plan is every pair), and the
+    on CPU too; a forced ``"reference"`` runs GLOBE's torch traversal, never its Warp
+    one, and :meth:`BoundaryForest.build` likewise builds its trees). At ``theta = 0`` there is no walk (the plan is every pair), and the
     reference's construction runs either way. Both walks run outside autocast, in the
     forest's precision, and the fast walk rounds as the reference's torch kernels
     do."""
@@ -821,8 +836,18 @@ class _KernelBasis(nn.Module):
         return self.net(inv)
 
 
-def _basis_of_pairs(basis: _KernelBasis, qi, si, q_off: int, s_off: int, geometry: dict) -> torch.Tensor:
-    with torch.no_grad():
+def geometry_requires_grad(geometry: dict) -> bool:
+    """Whether a gradient is to reach the pair invariants of one case's ``geometry``:
+    under gradient, when its points, directions, wall distances, sources or global
+    directions require one (its rank-1 inputs, from learned maps, do not decide)."""
+    keys = ("query_r", "query_n", "query_wall", "src_r", "src_n", "g_unit")
+    return torch.is_grad_enabled() and any(geometry[k] is not None and geometry[k].requires_grad for k in keys)
+
+
+def _basis_of_pairs(
+    basis: _KernelBasis, qi, si, q_off: int, s_off: int, geometry: dict, geo_grad: bool = False
+) -> torch.Tensor:
+    with torch.enable_grad() if geo_grad else torch.no_grad():
         inv = tree_pair_invariants(qi.long() - q_off, si.long() - s_off, **geometry)
     return basis(inv)
 
@@ -839,12 +864,15 @@ def _chunked_basis_from_plan(
 ) -> torch.Tensor:
     """The kernel basis ``(P, KERNEL_READ_BASIS)`` of one case's pairs, the plan's rows
     ``a:b``, in chunks of ``TREE_READ_PAIR_CHUNK`` pairs. The pair invariants are
-    geometry of the inputs, and no gradient reaches them. Under gradient each chunk's
+    geometry of the inputs: a gradient reaches them only when the geometry requires one
+    (:func:`geometry_requires_grad`). Under gradient each chunk's
     invariants and basis MLP are checkpointed: backward rebuilds them from the plan's
     indices (``q_off`` and ``s_off`` the case's first point and source), so the basis is
     all that is kept per pair. With ``weights`` (:func:`fused_basis.mlp_weights`) each
-    chunk is one fused kernel of the invariants and the MLP (:mod:`fused_basis`)."""
-    grad = torch.is_grad_enabled() and any(p.requires_grad for p in basis.parameters())
+    chunk is one fused kernel of the invariants and the MLP (:mod:`fused_basis`), whose
+    geometry takes no gradient."""
+    geo_grad = geometry_requires_grad(geometry)
+    grad = geo_grad or torch.is_grad_enabled() and any(p.requires_grad for p in basis.parameters())
     ### Without gradient the fused kernel takes every pair in one launch (a pair's basis is its own tile row's,
     ### whatever the chunk): no chunks to concatenate. Under gradient the chunks stay: each one's weight
     ### gradients are summed on their own and rounded.
@@ -855,7 +883,7 @@ def _chunked_basis_from_plan(
         if weights is not None:
             parts.append(fused_basis.fused_kernel_basis(weights, plan.qi[c:e], plan.bj[c:e], q_off, s_off, geometry))
             continue
-        args = (basis, plan.qi[c:e], plan.bj[c:e], q_off, s_off, geometry)
+        args = (basis, plan.qi[c:e], plan.bj[c:e], q_off, s_off, geometry, geo_grad)
         ### Kept in the MLP's own dtype (bfloat16 under autocast): the fused read consumes it in every block and its gradient
         ### accumulates over the blocks in that dtype; 2e8 to 7e8 rows at DrivAerML scale.
         parts.append(checkpoint(_basis_of_pairs, *args, use_reentrant=False) if grad else _basis_of_pairs(*args))
@@ -933,7 +961,8 @@ def tree_read_walk(
     Per case, the forest over the cells (:class:`BoundaryForest`, with the measure
     fractions as the measure) holds the nodes' virtual cells, and each point walks it
     at ``theta`` (:meth:`BoundaryForest.point_pairs`). The forest and the walk run
-    without gradient (a numerical device), and so do the pair invariants; the basis
+    without gradient (a numerical device). The pair invariants take a gradient when the
+    geometry requires one (:func:`geometry_requires_grad`), and the basis
     (:func:`walk_range_pairs`) carries gradients to the kernel MLP's weights.
 
     ``walk`` names the walk's implementation (:func:`resolve_walk`) and ``build`` the
@@ -1016,15 +1045,17 @@ def walk_points_range(
     stop: int,
     query_n: torch.Tensor | None = None,
     query_wall: torch.Tensor | None = None,
+    query_r: torch.Tensor | None = None,
 ) -> TreeReadWalk:
     """The walk of the points ``start`` to ``stop``, numbered from ``start``, of a walk
     made without its lists (``tree_read_walk(walk_points=False)``), with those points'
     geometry. Each forest is walked for those points alone, from the same coordinates
     in its frame. Each point's list is thus the one the walk of every point gives it,
     in the same order, and :func:`walk_range_pairs` of the result gives the pairs of
-    that range. The points' built-in direction and wall distance are the walk's rows,
-    or ``query_n`` ``(B, stop - start, d)`` and ``query_wall`` ``(B, stop - start)``
-    when given (for a walk made without them)."""
+    that range. The points' built-in direction, wall distance and positions are the
+    walk's rows, or ``query_n`` ``(B, stop - start, d)``, ``query_wall``
+    ``(B, stop - start)`` and ``query_r`` ``(B, stop - start, d)`` when given (for a
+    walk made without them, or positions in the caller's graph)."""
     ### The count pass of every point, when walk_pair_counts has run it: this range's rows.
     counts = walk.counts or [None] * len(walk.forests)
     with torch.no_grad():
@@ -1033,7 +1064,7 @@ def walk_points_range(
             n_t = int(f.node_offset.shape[0]) - 1
             rows = None if c is None else tuple(x[start * n_t : stop * n_t] for x in c)
             lists.append(f.frame_pairs(p[..., start:stop, :], walk=walk.walk, counts=rows))
-    given = {"query_r": None, "query_n": query_n, "query_wall": query_wall}
+    given = {"query_r": query_r, "query_n": query_n, "query_wall": query_wall}
     geometry = [
         {**g, **{k: g[k][start:stop] if v is None else v[i] for k, v in given.items()}}
         for i, g in enumerate(walk.geometry)
@@ -1113,7 +1144,12 @@ def walk_range_pairs(
     ### gives the reference.
     weights = None
     if walk.kernel == "fused":
-        reason = next(filter(None, (fused_basis.unsupported_reason(basis, item[-1]) for item in deferred)), None)
+        reasons = (
+            fused_basis.unsupported_reason(basis, item[-1])
+            or ("the geometry requires a gradient" if geometry_requires_grad(item[-1]) else None)
+            for item in deferred
+        )
+        reason = next(filter(None, reasons), None)
         weights = fused_basis.mlp_weights(basis) if deferred and reason is None else None
         if reason is not None and reason not in _BASIS_FALLBACKS_LOGGED:
             _BASIS_FALLBACKS_LOGGED.add(reason)
@@ -1249,4 +1285,3 @@ def _source_states(h_b, ln_w, ln_b, ln_eps: float, w_key, w_value, b_value):
 
 def _query_states(h_q, ln_w, ln_b, ln_eps: float, w_query):
     return F.linear(F.layer_norm(h_q, (h_q.shape[-1],), ln_w, ln_b, ln_eps), w_query)
-

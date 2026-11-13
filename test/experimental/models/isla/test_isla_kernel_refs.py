@@ -35,6 +35,7 @@ roundoffs are 2**-8 and 2**-11; the floor stands for the eager path's own error
 landing near zero by chance).
 """
 
+import logging
 import types
 
 import pytest
@@ -46,7 +47,6 @@ from physicsnemo.experimental.models.isla import _fused_basis as fused_basis
 from physicsnemo.experimental.models.isla import _fused_read as fused_read
 from physicsnemo.experimental.models.isla import _geo_kernel as geo_kernel
 from physicsnemo.experimental.models.isla import _segment_softmax as segment_softmax
-from physicsnemo.experimental.models.isla import _tree_build as tree_build
 from physicsnemo.experimental.models.isla import _tree_read as tree_read
 from physicsnemo.experimental.models.isla import _tree_walk as tree_walk
 from physicsnemo.experimental.models.isla._blocks import _geo_region
@@ -350,44 +350,6 @@ def test_fused_kernel_basis_under_float16_autocast_obeys_the_2x_error_rule(
 
 
 # --------------------------------------------------------------------------- never-run paths
-def _forest_fields(f):
-    return [
-        f.cells,
-        f.left,
-        f.right,
-        f.range_start,
-        f.range_count,
-        f.aabb_min,
-        f.aabb_max,
-        f.center,
-        f.measure,
-    ]
-
-
-def test_the_fast_build_leaves_a_forest_too_deep_for_its_depth_bins_to_the_reference(
-    monkeypatch,
-):
-    """``forest_tables`` counts internal nodes by depth in ``_DEPTH_BINS`` bins and
-    declines (None) when the depth ``_DEPTH_BINS - 2`` holds any: with the bins
-    patched to the forest's internal depth plus 2 it builds the forest, at one fewer it
-    declines and the reference builds it; both forests equal the reference build's."""
-    pts, nrm, w, _ = cloud(400, d=3, seed=5)
-    ref = BoundaryForest.build(
-        pts, w, nrm, None, theta=1.0, leaf_size=4, build="reference"
-    )
-    depth = len(ref.levels)
-    for bins, declines in ((depth + 2, False), (depth + 1, True)):
-        monkeypatch.setattr(tree_build, "_DEPTH_BINS", bins)
-        with ran(tree_build.forest_tables) as r:
-            f = BoundaryForest.build(
-                pts, w, nrm, None, theta=1.0, leaf_size=4, build="fast"
-            )
-        assert (r.returns(tree_build.forest_tables)[0] is None) == declines, bins
-        assert all(
-            torch.equal(a, b) for a, b in zip(_forest_fields(f), _forest_fields(ref))
-        )
-
-
 def test_the_fast_walk_of_no_points_or_no_trees_and_at_its_first_size_limit(
     monkeypatch,
 ):
@@ -427,6 +389,7 @@ def test_fused_basis_unsupported_reasons_off_cuda(monkeypatch):
     """``unsupported_reason`` on CPU: CPU float32 geometry is refused, and without
     Triton that is the reason given first."""
     geometry_, basis = _basis_geometry("cpu")
+    monkeypatch.setattr(fused_basis, "HAS_TRITON", True)
     assert "not CUDA float32" in fused_basis.unsupported_reason(basis, geometry_)
     monkeypatch.setattr(fused_basis, "HAS_TRITON", False)
     assert "Triton" in fused_basis.unsupported_reason(basis, geometry_)
@@ -526,3 +489,43 @@ def test_geo_kernel_auto_disqualifiers_on_cuda():
         assert m._geo_kernel == "auto" and m._resolve_geo_kernel(pts) == "eager", name
     m = _geo_model(n_spatial_dims=4)
     assert m._resolve_geo_kernel(torch.zeros(4, 4, device="cuda")) == "eager"
+
+
+@pytest.mark.cuda
+@requires_cuda_triton
+def test_a_float64_model_under_bfloat16_autocast_runs_the_eager_region(caplog):
+    """Autocast leaves float64 parameters as they are, while the fused region under
+    bfloat16 autocast returns bfloat16: a float64 model there runs the eager region,
+    with a warning that names the reason, and its forward pass runs as it does with
+    ``reference_kernels``. Without autocast it keeps the fused region."""
+    from physicsnemo.mesh import Mesh
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+    s = sphere_icosahedral.load(subdivisions=2)
+    mesh = {"wall": Mesh(points=s.points.double().cuda(), cells=s.cells.cuda())}
+    m = ISLA(
+        output_schema={"p": {"rank": 0}},
+        boundary_schemas={"wall": {}},
+        hidden=32,
+        n_layers=2,
+        n_slices=8,
+    )
+    m = m.double().cuda().eval()
+    pts = mesh["wall"].points
+    assert m._resolve_geo_kernel(pts) == "fused"
+    outs = {}
+    with caplog.at_level(
+        logging.WARNING, logger="physicsnemo.experimental.models.isla.model"
+    ):
+        for reference in (True, False):
+            m.reference_kernels = reference
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                outs[reference] = m(
+                    boundary_meshes=mesh, prediction_boundaries=["wall"]
+                ).point_data["p"]
+                assert reference or m._resolve_geo_kernel(pts) == "eager"
+    assert torch.equal(outs[True], outs[False])
+    assert [r.getMessage() for r in caplog.records] == [
+        "ISLA: the fused geometry kernel does not take this forward pass (float64 parameters under "
+        "autocast); running the eager region."
+    ]

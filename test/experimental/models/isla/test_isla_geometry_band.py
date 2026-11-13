@@ -33,7 +33,7 @@ import torch
 
 from physicsnemo.experimental.models.isla import _geometry as geometry
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.geometry import compute_cell_normals
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from test.experimental.models.isla._geometry_cases import (
     FAST_DEVICES,
