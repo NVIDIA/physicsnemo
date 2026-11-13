@@ -17,6 +17,7 @@ Here, you're able to train (and run inference with) the following models:
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
+- [AB-UPT](https://arxiv.org/abs/2502.09692v4) (experimental; surface, volume, or joint)
 
 We currently support the following datasets:
 - DrivaerML
@@ -65,7 +66,7 @@ python src/infer.py model=geotransolver_surface dataset=highlift_surface \
 ```
 
 For the canonical CLI invocations of every named recipe (FA variants,
-SMART, GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
+SMART, AB-UPT, GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
 [Recipe Gallery](#recipe-gallery) section below.
 
 ## Pipeline architecture
@@ -256,6 +257,7 @@ The `forward_kwargs:` spec syntax is intentionally minimal:
 | `[a, b, c]` | Each element resolved, then `torch.cat` along the last dim. Used for tensor-input models that want concatenated feature vectors (e.g. `[interior.points, boundaries.vehicle.cell_data.normals]`). |
 | `{a: ..., b: ...}` | Each value resolved, returned as a dict. Used for dict-valued kwargs (e.g. GLOBE's `boundary_meshes: {vehicle: boundaries.vehicle}` and `reference_lengths: {L_ref: 1.0, delta_turb: 0.015}`). |
 | `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Used by Transolver / FLARE-style models that need a per-sample feature (e.g. freestream velocity) broadcast across the per-element axis of another kwarg. |
+| `{concat_point_sets: [<mesh path>, ...]}` | One point-cloud `Mesh` of the listed point sets, merged in order: their points, and the `point_data` fields every set holds. Used by single-decoder models that predict several sets at once (see [Training on several prediction sets](#training-on-several-prediction-sets)). |
 
 For tensor-input models, scalars and 1-D vectors in `forward_kwargs`
 are padded up to ndim>=2 before the batch dim is added (so `U_inf`
@@ -263,10 +265,12 @@ shape `(3,)` becomes `(1, 1, 3)` and lines up with per-element features
 shaped `(1, N, C)`). For mesh-input models, no batch dim is added at
 all.
 
-**Targets always live at `interior.point_data.<name>` by contract.**
+**Targets live at `interior.point_data.<name>` by default.**
 The dataset YAML's `targets:` block declares the names + types; the
 recipe's dataset builder also auto-injects those names into the
 `MeshToDomainMesh` transform so you don't have to list them twice.
+Targets on other point sets are declared with `target_sources` (see
+[Training on several prediction sets](#training-on-several-prediction-sets)).
 
 Example (GeoTransolver surface):
 
@@ -300,8 +304,8 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}` |
-| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
+| `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface`, `drivaer_ml_{surface,volume,joint}_point_sets` |
 
 Pick one of each on the CLI:
 
@@ -334,6 +338,80 @@ per-field loss before summation (note: the logged `loss/<field>` values
 include the weight). Leave it unset by default: the surface dataset YAMLs
 already bring every target to unit scale via `NormalizeMeshFields`, so
 per-field losses are directly comparable without weighting.
+
+**`measure_weighted`** sets how much each target point counts. When a
+dataset puts its targets at cell centroids
+(`MeshToDomainMesh(interior_points=cell_centroids)`, as the surface
+dataset YAMLs do), each target point stands for one cell, and the
+transform stores that cell's measure (its area on a surface, its volume in
+a volume) beside the targets. By default (`measure_weighted: true` in
+`conf/base.yaml`) the loss and the metrics weight each point by this
+measure, so they approximate integrals over the domain and do not depend
+on how finely the mesh resolves each region. Datasets whose targets are
+points without cells carry no measure, and their points always count
+alike. To count every target point alike on every dataset, as earlier
+versions of the recipe did, pass `measure_weighted=false` on the command
+line (to `train.py` and `infer.py` alike).
+
+### Training on several prediction sets
+
+One sample may carry several prediction point sets, each with its own
+targets, such as the volume interior and a surface point set. The keys:
+
+- `target_sources: {<target>: <mesh path>.point_data.<field>}` (dataset YAML)
+  says where each target lives. Once any target has a source, the others
+  default to `interior.point_data.<name>`. Without it nothing changes. A path
+  of another form (such as a `cell_data` one) is an error at startup.
+- `dataset_append_transforms: [...]` (model YAML) appends transforms to every
+  chosen dataset's `pipeline.transforms`, for training and validation.
+- `extra_task: {transforms, targets, target_sources, field_weights}` (model
+  YAML) adds a prediction set to every chosen dataset: its transforms run
+  last, and its targets, sources and loss weights join the dataset's. In its
+  transforms, a `NormalizeMeshFields` field may name the dataset normalizer
+  field whose constants it reuses (`fields: {surface_p: pressure}`); give the
+  new field its own name, since `NormalizeMeshFields` applies to every mesh.
+- `output_groups` or `output_sets` (model YAML, not both) map the model
+  output onto the sets; see the examples below.
+- `training.mask_nonfinite_targets: true` leaves non-finite target elements
+  (NaN where a point lacks a field) out of the loss and metrics. A field with
+  no finite target in a sample adds 0 to the loss and gets NaN metrics, which
+  the epoch and inference means skip.
+
+Each target is scored on its own set's points, weighted by that set's measure
+when it stores one (see `measure_weighted` above). Inference applies the same
+model-config hooks, inverts every `NormalizeMeshFields` of the pipeline,
+integrates forces on the set holding a pressure and a shear target together
+when it sits at the `boundaries.vehicle` cell centroids, and writes `pred_*` /
+`true_*` onto each target's source mesh.
+
+A branch model returns one `(B, N_i, C_i)` tensor per group of targets:
+
+```yaml
+output_type: tensors
+forward_kwargs:
+  surface_points: boundaries.surface_queries.points
+  volume_points: interior.points
+output_groups:
+  - [surface.pressure, surface.wss]
+  - [volume.pressure, volume.velocity]
+```
+
+A single-decoder model predicts on one point-cloud `Mesh` of the sets' merged
+points and returns a `Mesh` (`output_type: mesh`). `output_sets` splits its
+`point_data` back: its keys are the sets, in merge order, each the source mesh
+of its targets, and its values map each target to the output field it reads.
+A `concat_point_sets` list of exactly the `output_sets` keys must list them in
+the same order, or training stops at startup.
+
+```yaml
+output_type: mesh
+forward_kwargs:
+  prediction_points:
+    concat_point_sets: [interior, boundaries.surface_queries]
+output_sets:
+  interior: {volume.pressure: pressure, volume.velocity: velocity}
+  boundaries.surface_queries: {surface.pressure: pressure, surface.wss: wss}
+```
 
 **`batch_size > 1`** is not supported by any model in the recipe today;
 the YAML field is reserved for future use, and the recipe raises
@@ -461,6 +539,7 @@ unified_external_aero_recipe/
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
       flare_{surface,volume}.yaml
+      ab_upt_{surface,volume,joint}.yaml
       smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
       domino_{surface,volume}.yaml
@@ -468,6 +547,7 @@ unified_external_aero_recipe/
                                #  by load_dataset_config, NOT by Hydra)
     dataset_paths.yaml         # local disk paths (edit me)
     drivaer_ml_{surface,volume}.yaml
+    drivaer_ml_{surface,volume,joint}_point_sets.yaml
     highlift_{surface,volume}.yaml
     shift_suv_{estate,fastback}_surface.yaml
   src/
@@ -619,6 +699,11 @@ python src/train.py model=flare_volume dataset=drivaer_ml_volume \
 python src/train.py model=smart_surface dataset=drivaer_ml_surface
 python src/train.py model=smart_volume dataset=drivaer_ml_volume
 
+# AB-UPT: separate surface/volume jobs or joint training
+python src/train.py model=ab_upt_surface dataset=drivaer_ml_surface_point_sets
+python src/train.py model=ab_upt_volume dataset=drivaer_ml_volume_point_sets
+python src/train.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets
+
 # GLOBE (mesh-native)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
 # 180 GB-class devices. First epoch includes ~90 s of torch.compile warmup.
@@ -653,6 +738,43 @@ Surface SMART uses the sampled query cells as geometry, while volume SMART retai
 the full vehicle surface and uses the standard STL-based SDF features. Each model
 samples up to 16,384 geometry points per encoder layer and decodes inference queries
 in chunks of 8,192.
+
+#### AB-UPT options
+
+Use the DrivAerML point-set datasets shown in the gallery and set `drivaer_ml` in
+`datasets/dataset_paths.yaml` to the directory containing native
+`run_*/domain_*.pdmsh` files with a triangulated `vehicle` boundary and freestream metadata. Surface-only mode
+accepts an empty interior. Joint mode uses the shared `target_sources` and `output_groups` contract
+(see [Training on several prediction sets](#training-on-several-prediction-sets)).
+It couples both branches; separate modes
+omit the inactive branch. Surface targets are pressure and wall shear stress;
+volume targets are velocity, pressure, and eddy viscosity.
+
+`dataset_reader_overrides.point_sets.<name>.count` controls `geometry`,
+`supernodes`, `surface_anchors`, `volume_anchors`, `surface_queries`, and
+`interior` independently. Single-branch queries use `interior`; joint surface
+queries use `surface_queries`. Validation samples stay fixed while training varies
+by epoch. These point-set datasets retain the file coordinate frame and configure
+no augmentations, so `augment=true` has no effect and moments default to the file
+origin.
+
+Reuse the training run's model settings from `resolved_config.yaml` at inference.
+
+For anchor supervision, set `+model.train_on_anchors=true` and
+`+dataset_reader_overrides.point_sets.surface_queries.indices_from=surface_anchors`
+for the surface branch in joint mode (`interior.indices_from=surface_anchors`
+in surface-only mode), and
+`+dataset_reader_overrides.point_sets.interior.indices_from=volume_anchors`
+for the volume branch. Validation and inference still decode independent queries.
+
+Use `null` query counts for full fields with the configured anchor budgets:
+
+```bash
+python src/infer.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets \
+    checkpoint_path=/path/to/checkpoints run_id=YOUR_RUN_ID \
+    dataset_reader_overrides.point_sets.surface_queries.count=null \
+    dataset_reader_overrides.point_sets.interior.count=null rescale_geometry=true
+```
 
 ### Dataset config anatomy
 

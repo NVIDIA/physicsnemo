@@ -47,7 +47,12 @@ from jaxtyping import Float
 from loss import LossCalculator
 from metrics import MetricCalculator, resolve_metrics
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import IOType, normalize_output_to_tensordict, require_output_type
+from output_normalize import (
+    IOType,
+    normalize_output_to_tensordict,
+    require_output_type,
+    resolve_output_layout,
+)
 from tabulate import tabulate
 from tensordict import TensorDict
 from torch.amp import GradScaler
@@ -61,7 +66,7 @@ from utils import (
     get_autocast_context,
     make_jsonl_logger,
     recursive_to_device,
-    resolve_dict,
+    resolve_field_weights,
     set_seed,
 )
 
@@ -122,6 +127,7 @@ def _reduce_and_average(
     n_samples: int,
     *,
     device: torch.device | str,
+    metric_counts: TensorDict | None = None,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
     """Collapse rank-local loss/metric *sums* into a global mean-of-means.
 
@@ -157,6 +163,8 @@ def _reduce_and_average(
             the step count because the recipe runs ``batch_size == 1``).
         device: The rank's collective/compute device (``dist_manager.device``),
             where the ``all_reduce`` runs.
+        metric_counts: Optional per-leaf count of the samples behind
+            ``metrics_td`` (see :func:`_skip_nan`), to average over instead.
 
     Returns:
         A ``(avg_loss, avg_losses, avg_metrics)`` tuple of Python floats:
@@ -190,13 +198,26 @@ def _reduce_and_average(
             "metrics": metrics_td / n,
         },
     )
+    if metric_counts is not None:
+        bundle["metric_counts"] = metric_counts / n
     ### Pull the reduced bundle host-side once; .item() off the CPU copy is then
     ### a free index, with no per-leaf device sync (AVG is a no-op single-process).
     reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device).cpu()
+    metrics = reduced["metrics"]
+    if metric_counts is not None:
+        metrics = metrics / reduced["metric_counts"]
     return (
         reduced["loss"].item(),
         {key: value.item() for key, value in reduced["losses"].items()},
-        {key: value.item() for key, value in reduced["metrics"].items()},
+        {key: value.item() for key, value in metrics.items()},
+    )
+
+
+def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
+    """Split *metrics* into NaN-free values and per-leaf counts of non-NaN ones."""
+    return (
+        metrics.apply(lambda v: torch.where(v.isnan(), 0.0, v)),
+        metrics.apply(lambda v: (~v.isnan()).float()),
     )
 
 
@@ -236,12 +257,14 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
+    output_layout: dict[str, Any] | None = None,
 ) -> tuple[Float[torch.Tensor, ""], TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
     Args:
         batch: ``{"forward_kwargs": ..., "targets": TensorDict}`` produced
-            by the collate function. ``"targets"`` is a TensorDict with
+            by the collate function, plus ``"target_measure"`` when the
+            dataset provides one. ``"targets"`` is a TensorDict with
             batch_size ``[N]`` (mesh-input mode) or ``[1, N]``
             (tensor-input mode).
         model: Model whose ``forward`` accepts the resolved
@@ -256,6 +279,8 @@ def forward_pass(
             output is unpacked into a TensorDict.
         target_config: ``{name: "scalar"|"vector"}``; used to split tensor
             outputs and validate Mesh outputs.
+        output_layout: The model's ``output_groups`` or ``output_sets``
+            (:func:`output_normalize.resolve_output_layout`), if any.
 
     Returns:
         ``(loss, loss_td, metric_td)``. The two TensorDicts are kept
@@ -273,15 +298,20 @@ def forward_pass(
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
-    pred_td = normalize_output_to_tensordict(output, target_config, output_type)
+    pred_td = normalize_output_to_tensordict(
+        output, target_config, output_type, targets=targets, **(output_layout or {})
+    )
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
     target_f32 = targets.float()
+    target_measure = batch.get("target_measure")
+    if target_measure is not None:
+        target_measure = target_measure.float()
 
-    loss, loss_td = loss_calculator(pred_f32, target_f32)
+    loss, loss_td = loss_calculator(pred_f32, target_f32, target_measure)
     with torch.no_grad():
-        metric_td = metric_calculator(pred_f32, target_f32)
+        metric_td = metric_calculator(pred_f32, target_f32, target_measure)
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
@@ -362,9 +392,11 @@ def _run_epoch(
     total_loss = torch.zeros((), dtype=torch.float64, device=dist_manager.device)
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
+    total_counts: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
+    output_layout = resolve_output_layout(cfg)
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
@@ -379,6 +411,7 @@ def _run_epoch(
                 metric_calculator,
                 output_type=output_type,
                 target_config=target_config,
+                output_layout=output_layout,
             )
 
             if is_train:
@@ -399,12 +432,19 @@ def _run_epoch(
             ### (the joint ``is None`` check exists to satisfy the type
             ### checker, which can't see the invariant from per-variable
             ### narrowing).
+            ### Masked targets: skip a field's NaN metrics (no finite target).
+            counts = None
+            if metric_calculator.mask_nonfinite_targets:
+                metrics, counts = _skip_nan(metrics)
             if total_losses_td is None or total_metrics_td is None:
                 total_losses_td = losses.clone()
                 total_metrics_td = metrics.clone()
+                total_counts = counts
             else:
                 total_losses_td.add_(losses)
                 total_metrics_td.add_(metrics)
+                if counts is not None:
+                    total_counts = total_counts + counts
             n_local += 1
 
             ### Detached scalar loss: accumulate the epoch sum on-device (no
@@ -429,7 +469,12 @@ def _run_epoch(
             ### keep the per-step collective deadlock-free (see
             ### ``_reduce_and_average``).
             step_loss, step_losses, step_metrics = _reduce_and_average(
-                loss_det, losses, metrics, 1, device=dist_manager.device
+                loss_det,
+                losses,
+                metrics,
+                1,
+                device=dist_manager.device,
+                metric_counts=counts,
             )
 
             ### Train mode includes Mem in the per-step line; val drops it
@@ -524,6 +569,7 @@ def _run_epoch(
         total_metrics_td,
         n_local,
         device=dist_manager.device,
+        metric_counts=total_counts,
     )
 
     logger.info(
@@ -928,18 +974,25 @@ def main(cfg: DictConfig) -> None:
     ### source. Falls back to the recipe's default set when unset.
     metrics_list = resolve_metrics(cfg)
 
-    field_weights = resolve_dict(cfg, "training.field_weights")
+    field_weights = resolve_field_weights(cfg)
+    measure_weighted = bool(cfg.get("measure_weighted", True))
+    mask_nonfinite_targets = bool(cfg.training.get("mask_nonfinite_targets", False))
 
     metric_calculator = MetricCalculator(
         target_config=target_config,
         metrics=metrics_list,
+        measure_weighted=measure_weighted,
+        mask_nonfinite_targets=mask_nonfinite_targets,
     )
     loss_calculator = LossCalculator(
         target_config=target_config,
         loss_type=cfg.training.get("loss_type", "huber"),
         field_weights=field_weights,
+        measure_weighted=measure_weighted,
+        mask_nonfinite_targets=mask_nonfinite_targets,
     )
     output_type = require_output_type(cfg)
+    resolve_output_layout(cfg)  # fail fast on a bad layout, before epoch 1
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
     logger.info(

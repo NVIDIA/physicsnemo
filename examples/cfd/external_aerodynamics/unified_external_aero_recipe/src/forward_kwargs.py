@@ -42,9 +42,15 @@ Spec value semantics:
   the resolved value of ``<other_kwarg>``; this is how a per-sample tensor
   (e.g. a freestream vector) gets broadcast across the per-cell axis of a
   per-element kwarg.
+- ``{concat_point_sets: [<mesh path>, ...]}`` merges several point sets, in
+  order, into one point-cloud ``Mesh`` (points, plus the ``point_data``
+  fields every set holds), the single prediction set of a model that
+  predicts every set at once (see ``output_sets`` in
+  :mod:`output_normalize`).
 
 Targets are extracted separately by :func:`extract_targets` from the
-DomainMesh's ``interior.point_data``, by convention.
+DomainMesh's ``interior.point_data`` by default, or from explicit
+``target_sources`` paths for fields on other, independently sized meshes.
 """
 
 from __future__ import annotations
@@ -57,6 +63,7 @@ from utils import FieldType
 
 from physicsnemo.datapipes.keys import as_nested_key, format_leaf_keys
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, point_measures
 
 ### ---------------------------------------------------------------------------
 ### Path walking
@@ -177,6 +184,8 @@ def resolve_spec(spec: Any, source: Any) -> Any:
         return torch.cat(resolved, dim=-1)
 
     if isinstance(spec, dict):
+        if "concat_point_sets" in spec:
+            return _concat_point_sets(spec, source)
         if _is_modifier_spec(spec):
             raise ValueError(
                 f"Modifier specs ({spec!r}) must be resolved via "
@@ -189,6 +198,19 @@ def resolve_spec(spec: Any, source: Any) -> Any:
 
     ### Pass through anything else unchanged (already-resolved tensors etc.).
     return spec
+
+
+def _concat_point_sets(spec: dict[str, Any], source: Any) -> Mesh:
+    """Resolve a ``{concat_point_sets: [...]}`` spec (see module docstring)."""
+    if set(spec) != {"concat_point_sets"}:
+        raise ValueError(f"concat_point_sets takes no other keys, got {spec!r}")
+    meshes = [walk_path(source, path) for path in spec["concat_point_sets"]]
+    leaves = [set(m.point_data.keys(True, True)) for m in meshes]
+    shared = sorted(set.intersection(*leaves), key=str)
+    return Mesh(
+        points=torch.cat([m.points for m in meshes]),
+        point_data=torch.cat([m.point_data.select(*shared) for m in meshes]),
+    )
 
 
 def _apply_modifier(
@@ -289,6 +311,7 @@ def resolve_forward_kwargs(
 def extract_targets(
     domain: DomainMesh | Mesh,
     target_config: dict[str, FieldType],
+    target_sources: dict[str, str] | None = None,
 ) -> TensorDict:
     """Pull target tensors from a DomainMesh's ``interior.point_data`` by name.
 
@@ -304,16 +327,32 @@ def extract_targets(
         target_config: ``{name: type}`` mapping. Only the keys are used;
             types are validated upstream by `LossCalculator` /
             `MetricCalculator`.
+        target_sources: Optional ``{name: path}`` into the domain (e.g.
+            ``"boundaries.surface_queries.point_data.pressure"``), one per
+            target, so targets may live on point sets of different sizes.
 
     Returns:
         TensorDict with exactly the keys in ``target_config`` and the same
         ``batch_size`` / device as the source ``point_data``. Iteration order
-        matches the order of ``target_config``.
+        matches the order of ``target_config``. With ``target_sources``, the
+        root ``batch_size`` is empty and each leaf keeps its own size.
 
     Raises:
         KeyError: If a name in ``target_config`` is not present in
             ``interior.point_data``.
     """
+    if target_sources is not None:
+        if set(target_sources) != set(target_config):
+            raise ValueError("target_sources keys must exactly match the targets")
+        result = TensorDict({}, batch_size=[])
+        for name in target_config:
+            value = walk_path(domain, target_sources[name])
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(
+                    f"Target {name!r} at {target_sources[name]!r} is not a tensor"
+                )
+            result.set(as_nested_key(name), value)
+        return result
     if isinstance(domain, DomainMesh):
         source_td: TensorDict = domain.interior.point_data
         location = "interior.point_data"
@@ -331,3 +370,28 @@ def extract_targets(
             f"(available: {format_leaf_keys(source_td)!r})."
         )
     return source_td.select(*keys)
+
+
+def extract_target_measure(
+    domain: DomainMesh | Mesh,
+    target_sources: dict[str, str] | None = None,
+) -> torch.Tensor | TensorDict | None:
+    """Return the per-point measure of the target points, or ``None``.
+
+    Targets at cell centroids carry each source cell's measure (its area on
+    a surface, its volume in a volume) in ``interior.point_data``; see
+    ``MeshToDomainMesh(interior_points="cell_centroids")``. A native point
+    cloud has no measure, so its points count alike. With *target_sources*
+    (see :func:`extract_targets`), each target takes the measure of its own
+    point set: a TensorDict keyed like the targets, which leaves out the
+    targets whose set stores none.
+    """
+    if target_sources is not None:
+        measures = TensorDict({}, batch_size=[])
+        for name, path in target_sources.items():
+            mesh = walk_path(domain, path.partition(".point_data.")[0])
+            if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+                measures.set(as_nested_key(name), point_measures(mesh))
+        return None if measures.is_empty() else measures
+    mesh = domain.interior if isinstance(domain, DomainMesh) else domain
+    return point_measures(mesh) if EFFECTIVE_MEASURE_KEY in mesh.point_data else None

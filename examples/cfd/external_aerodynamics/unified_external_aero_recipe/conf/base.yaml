@@ -28,12 +28,23 @@ profile: false
 augment: false
 benchmark_io: false
 
+# -- Loss and metric weighting -------------------------------------------------
+# Weight each target point by its cell's measure (area on a surface, volume
+# in a volume) in the training loss and the metrics, so they approximate
+# integrals over the domain. Applies only when the dataset carries the
+# measure, that is when its targets sit at cell centroids; native point
+# clouds are unaffected. `false` counts every target point alike.
+measure_weighted: true
+
 # -- Training fundamentals (the constants every loop needs, regardless
 #     of schedule) -----------------------------------------------------------
 training:
   seed: 42
   save_interval: 25
   loss_type: "huber"
+  # Leave non-finite target elements (points of a set that lack a field)
+  # out of the loss and metrics.
+  mask_nonfinite_targets: false
   batch_size: 1
   scheduler_update_mode: "epoch"
   optimizer:

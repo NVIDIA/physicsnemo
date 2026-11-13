@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: datapipe.CrashGraphDataset
+_target_: datapipes.datapipe.CrashGraphDataset
 _convert_: all
 data_dir: ${training.raw_data_dir}
 global_features_filepath: ${training.global_features_filepath}
@@ -27,3 +27,17 @@ dynamic_features: []
 dynamic_targets: []    # Override per experiment (e.g. [effective_plastic_strain, stress_vm])
 global_features: null  # Override per experiment (e.g. [velocity_x, thickness_scale])
 stats_dir: stats        # Directory for normalization statistics
+
+# Shell contact topology on the graph (needs reader.include_contact_topology=true):
+# the facets, nodal thickness and exclusions of the contact search used by the
+# contact-aware models and the penetration metrics
+contact_surface: false
+contact_surface_exclusion: incidence  # incidence or one_ring
+# Analytic rigid wall plane (x = position, physical units) for the wall clamp
+# and the wall penetration metrics; null for none
+rigid_wall_position: null
+# Static reference kNN neighbourhoods for kNN attention (DeFormer);
+# null keeps the graph exactly as the MeshGraphNet recipes use it
+local_knn_k: null
+local_knn_metric: geodesic  # geodesic or euclidean
+local_knn_cache_dir: null
