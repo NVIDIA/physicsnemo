@@ -154,6 +154,13 @@ All source code files should start with this paragraph:
 # limitations under the License.
 ```
 
+Do not add this header to a file that is copied or adapted from a third-party
+project. Keep the upstream copyright and license notice at the top of the file
+unchanged. If you modify the file, add the NVIDIA header directly below the
+upstream notice, and add the file to
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Start such a file with
+`# ignore_header_test` so the license check skips it.
+
 ### Signing Your Work
 
 - We require that all contributors "sign-off" on their commits. This certifies that the
