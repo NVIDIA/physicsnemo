@@ -1009,7 +1009,8 @@ dataset indices and handles distributed sampling across ranks.
    auto-inject `cell_data_targets` from the YAML's `targets:` block.
    A surface dataset that a model config may read with `domain_boundaries`
    must end with `SurfaceMeshToDomainMesh` instead: `MeshToDomainMesh`
-   returns a `DomainMesh` unchanged, so the surface would stay its interior.
+   returns a `DomainMesh` unchanged, so the sample would keep the surface
+   as its interior.
 8. For surface data with pressure and wall shear stress, declare the
    conventions that the integrated force coefficients need:
    - `surface_normals_point: inward` when the surface is wound so that
