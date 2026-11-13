@@ -299,7 +299,7 @@ class LossCalculator:
         self,
         pred: TensorDict,
         target: TensorDict,
-        target_measure: torch.Tensor | None = None,
+        target_measure: torch.Tensor | TensorDict | None = None,
     ) -> tuple[torch.Tensor, TensorDict]:
         """Compute per-field losses and a (weighted) total.
 
@@ -310,8 +310,10 @@ class LossCalculator:
                 kernels reduce over them.
             target: TensorDict of the same structure as ``pred``.
             target_measure: Optional per-point measure, shape ``(..., N)``,
-                aligned with the target points. Ignored when the calculator
-                was built with ``measure_weighted=False``.
+                aligned with the target points, or a TensorDict keyed like
+                ``target`` with one per field (a field it lacks counts every
+                point alike). Ignored when the calculator was built with
+                ``measure_weighted=False``.
 
         Returns:
             ``(total_loss, loss_td)``. ``loss_td`` is a 0-D ``TensorDict`` keyed
@@ -343,16 +345,17 @@ class LossCalculator:
                 ### Caller may pass scalar fields as (..., 1) or (...);
                 ### normalize to a single shape so the loss is shape-agnostic.
                 p, t = align_scalar_shapes(p, t)
-            measure = align_target_measure(target_measure, p, field_type)
+            measure = align_target_measure(target_measure, key, p, field_type)
             if self.mask_nonfinite_targets:
-                p, t, fraction = mask_nonfinite(p, t, field_type)
+                p, t, fraction = mask_nonfinite(p, t, field_type, measure)
             if field_type == "scalar":
                 field_loss = _scalar_loss(p, t, self.loss_type, self.delta, measure)
             else:  # vector
                 field_loss = _vector_loss(p, t, self.loss_type, self.delta, measure)
             ### Masked elements add 0 to every sum; a mean also needs the
-            ### valid count, while a relative MSE (a sum ratio) does not. A
-            ### field with no valid element has loss 0, kept by the clamp.
+            ### valid count (the valid share of the measure, when weighted),
+            ### while a relative MSE (a sum ratio) does not. A field with no
+            ### valid element has loss 0, kept by the clamp.
             if self.mask_nonfinite_targets and self.loss_type != "relative_mse":
                 field_loss = field_loss / fraction.clamp_min(
                     torch.finfo(fraction.dtype).tiny

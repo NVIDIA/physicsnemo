@@ -39,7 +39,11 @@ from datasets import (
     find_normalizer,
 )
 from forces import ForceContext, surface_force_fields
-from forward_kwargs import extract_targets, resolve_forward_kwargs
+from forward_kwargs import (
+    extract_target_measure,
+    extract_targets,
+    resolve_forward_kwargs,
+)
 from infer import attach_and_save, build_redim_field_types, redimensionalize
 from loss import LossCalculator
 from metrics import MetricCalculator
@@ -55,6 +59,7 @@ from utils import by_source_fields, resolve_field_weights
 
 from physicsnemo.datapipes.transforms.mesh import MeshTransform, NormalizeMeshFields
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import set_point_measures
 
 N_VOLUME, N_SURFACE = 10, 6
 TARGETS = {
@@ -168,6 +173,38 @@ class TestTargetSources:
         assert targets.batch_size == torch.Size(lead)
         assert targets["volume", "pressure"].shape == (*lead, N_VOLUME)
         assert targets["surface", "wss"].shape == (*lead, N_SURFACE, 3)
+
+    @pytest.mark.parametrize("input_type", ["mesh", "tensors"])
+    def test_each_target_takes_its_own_sets_measure(self, input_type):
+        """Targets on a set that stores a measure are weighted by it; the
+        others count every point alike."""
+        domain = _domain()
+        areas = torch.rand(N_SURFACE) + 0.1
+        set_point_measures(domain.boundaries["surface_queries"], areas, dimension=2)
+        collate = build_collate_fn(
+            input_type, {"points": "interior.points"}, TARGETS, SOURCES
+        )
+        batch = collate([(domain, {})])
+        lead = (1,) if input_type == "tensors" else ()
+        measure = batch["target_measure"]
+        assert set(measure.keys(True, True)) == {
+            ("surface", "pressure"),
+            ("surface", "wss"),
+        }
+        torch.testing.assert_close(measure["surface", "wss"], areas.reshape(*lead, -1))
+
+        targets = batch["targets"]
+        _, losses = LossCalculator(TARGETS, loss_type="mse")(
+            targets.apply(torch.zeros_like), targets, measure
+        )
+        sp, vp = targets["surface", "pressure"], targets["volume", "pressure"]
+        torch.testing.assert_close(
+            losses["loss/surface.pressure"], (areas * sp**2).sum() / areas.sum()
+        )
+        torch.testing.assert_close(losses["loss/volume.pressure"], (vp**2).mean())
+        ### No set stores a measure: the batch carries none.
+        assert extract_target_measure(_domain(), SOURCES) is None
+        assert "target_measure" not in collate([(_domain(), {})])
 
 
 class TestOutputGroups:
@@ -525,9 +562,11 @@ class TestExtraTask:
             ChainedNormalizer([NormalizeMeshFields(fields=stats)] * 2)
 
 
+@pytest.mark.parametrize("weighted", [False, True])
 @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
-def test_masked_union_set_equals_split_sets(loss_type):
-    """A NaN-padded union set with masking scores like the two sets apart."""
+def test_masked_union_set_equals_split_sets(loss_type, weighted):
+    """A NaN-padded union set with masking scores like the two sets apart,
+    with or without each set's measure."""
     torch.manual_seed(0)
     n_a, n_b = 7, 5
     target_config = {"a": "scalar", "b": "vector"}
@@ -551,20 +590,27 @@ def test_masked_union_set_equals_split_sets(loss_type):
         },
         batch_size=[n_a + n_b],
     )
+    ### Per-field measures apart; one shared measure on the union.
+    split_measure = union_measure = None
+    if weighted:
+        split_measure = TensorDict({"a": torch.rand(n_a), "b": torch.rand(n_b)}) + 0.1
+        union_measure = torch.cat([split_measure["a"], split_measure["b"]])
     split_loss, split_td = LossCalculator(target_config, loss_type=loss_type)(
-        split_pred, split_true
+        split_pred, split_true, split_measure
     )
     masked = LossCalculator(
         target_config, loss_type=loss_type, mask_nonfinite_targets=True
     )
-    union_loss, union_td = masked(union_pred, union_true)
+    union_loss, union_td = masked(union_pred, union_true, union_measure)
     torch.testing.assert_close(union_loss, split_loss)
     for key in split_td.keys():
         torch.testing.assert_close(union_td[key], split_td[key])
 
-    split_metrics = MetricCalculator(target_config)(split_pred, split_true)
+    split_metrics = MetricCalculator(target_config)(
+        split_pred, split_true, split_measure
+    )
     union_metrics = MetricCalculator(target_config, mask_nonfinite_targets=True)(
-        union_pred, union_true
+        union_pred, union_true, union_measure
     )
     for key in split_metrics.keys():
         torch.testing.assert_close(union_metrics[key], split_metrics[key])
@@ -572,10 +618,10 @@ def test_masked_union_set_equals_split_sets(loss_type):
     ### A field with no finite target adds 0 to the loss, and has NaN metrics.
     empty = union_true.clone()
     empty["a"] = torch.full_like(empty["a"], nan)
-    _, empty_td = masked(union_pred, empty)
+    _, empty_td = masked(union_pred, empty, union_measure)
     assert empty_td["loss/a"] == 0
     empty_metrics = MetricCalculator(target_config, mask_nonfinite_targets=True)(
-        union_pred, empty
+        union_pred, empty, union_measure
     )
     assert all(empty_metrics[k].isnan() for k in empty_metrics.keys() if "a_" in k)
     torch.testing.assert_close(empty_metrics["b_l2"], split_metrics["b_l2"])

@@ -50,7 +50,7 @@ from utils import (
     validate_field_coverage,
 )
 
-from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.datapipes.keys import NestedKey, as_nested_key
 
 ### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
 MetricName: TypeAlias = Literal["mae", "l1", "l2"]
@@ -118,12 +118,13 @@ def _relative_l2(
 
 
 def _point_weights(
-    target_measure: torch.Tensor | None,
+    target_measure: torch.Tensor | TensorDict | None,
+    key: NestedKey,
     reference: torch.Tensor,
     field_type: FieldType,
 ) -> torch.Tensor | None:
     """Mean-one per-point weights for one field, or ``None`` without a measure."""
-    measure = align_target_measure(target_measure, reference, field_type)
+    measure = align_target_measure(target_measure, key, reference, field_type)
     return None if measure is None else normalize_target_measure(measure)
 
 
@@ -289,7 +290,7 @@ class MetricCalculator:
         self,
         pred: TensorDict,
         target: TensorDict,
-        target_measure: torch.Tensor | None = None,
+        target_measure: torch.Tensor | TensorDict | None = None,
     ) -> TensorDict:
         """Compute per-field metrics over a TensorDict pred / target pair.
 
@@ -297,8 +298,10 @@ class MetricCalculator:
             pred: TensorDict of predictions, one leaf per target field.
             target: TensorDict of the same structure as ``pred``.
             target_measure: Optional per-point measure, shape ``(..., N)``,
-                aligned with the target points. Ignored when the calculator
-                was built with ``measure_weighted=False``.
+                aligned with the target points, or a TensorDict keyed like
+                ``target`` with one per field (a field it lacks counts every
+                point alike). Ignored when the calculator was built with
+                ``measure_weighted=False``.
 
         Returns:
             0-D ``TensorDict`` (``batch_size=[]``) keyed by
@@ -326,10 +329,10 @@ class MetricCalculator:
                 p, t = pred[key], target[key]
                 if field_type == "scalar":
                     p, t = align_scalar_shapes(p, t)
-                weights = _point_weights(target_measure, p, field_type)
+                weights = _point_weights(target_measure, key, p, field_type)
                 fraction = None
                 if self.mask_nonfinite_targets:
-                    p, t, fraction = mask_nonfinite(p, t, field_type)
+                    p, t, fraction = mask_nonfinite(p, t, field_type, weights)
                 if field_type == "scalar":
                     out.update(
                         self._metrics_for_tensor(p, t, (name,), weights, fraction)

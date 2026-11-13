@@ -28,6 +28,9 @@ these keys:
 - ``"target_measure"`` : per-point measure of the targets, shaped like a
                           scalar target. Present only when the dataset puts
                           its targets at cell centroids, which stores it.
+                          With ``target_sources``, a `TensorDict` keyed
+                          like the targets, one per target whose point set
+                          stores it.
 
 Two `input_type`s are supported:
 
@@ -161,7 +164,7 @@ def build_collate_fn(
 
         forward_kwargs = resolve_forward_kwargs(forward_kwargs_spec, domain)
         targets = extract_targets(domain, target_config, target_sources)
-        target_measure = extract_target_measure(domain)
+        target_measure = extract_target_measure(domain, target_sources)
 
         if add_batch_dim:
             ### forward_kwargs values get padded up to ndim>=2 first (so 1-D

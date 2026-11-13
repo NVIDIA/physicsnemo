@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from torch.amp import autocast
 
-from physicsnemo.datapipes.keys import as_nested_key, rename_keys
+from physicsnemo.datapipes.keys import NestedKey, as_nested_key, rename_keys
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer, Muon
@@ -226,17 +226,22 @@ def align_scalar_shapes(
 
 
 def align_target_measure(
-    target_measure: torch.Tensor | None,
+    target_measure: torch.Tensor | TensorDict | None,
+    key: NestedKey,
     reference: torch.Tensor,
     field_type: FieldType,
 ) -> torch.Tensor | None:
-    """Check and cast a per-point measure for one target field.
+    """Check and cast the per-point measure of the target field *key*.
 
-    Scalar fields have shape ``(..., N)`` and vector fields ``(..., N, D)``;
-    in both cases the measure must have exactly one value per target point,
-    shape ``(..., N)``. Requiring an exact shape keeps a stale or reordered
-    measure from silently broadcasting across a field.
+    *target_measure* is one measure for every field, or a TensorDict keyed
+    like the targets with one measure per field; a field it lacks counts
+    every point alike. Scalar fields have shape ``(..., N)`` and vector fields
+    ``(..., N, D)``; in both cases the measure must have exactly one value per
+    target point, shape ``(..., N)``. Requiring an exact shape keeps a stale or
+    reordered measure from silently broadcasting across a field.
     """
+    if isinstance(target_measure, TensorDict):
+        target_measure = target_measure[key] if key in target_measure else None
     if target_measure is None:
         return None
     expected_shape = reference.shape if field_type == "scalar" else reference.shape[:-1]
@@ -264,17 +269,27 @@ def normalize_target_measure(target_measure: torch.Tensor) -> torch.Tensor:
 
 
 def mask_nonfinite(
-    p: torch.Tensor, t: torch.Tensor, field_type: FieldType
+    p: torch.Tensor,
+    t: torch.Tensor,
+    field_type: FieldType,
+    weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Zero *p* and *t* where the target is not finite (any component, for vectors).
 
     Returns ``(p, t, valid_fraction)``: sums then cover the valid elements only,
     and a mean divided by ``valid_fraction`` is their mean (0 / 0 if none is valid).
+    With per-point *weights* (``(..., N)``, such as a target measure), the
+    fraction is the valid points' share of the weights, so a weighted mean
+    divided by it is the weighted mean of the valid elements.
     """
     valid = torch.isfinite(t)
     if field_type == "vector":
         valid = valid.all(dim=-1, keepdim=True)
-    fraction = valid.sum() / valid.numel()
+    if weights is None:
+        fraction = valid.sum() / valid.numel()
+    else:
+        point_valid = valid.squeeze(-1) if field_type == "vector" else valid
+        fraction = torch.mean(normalize_target_measure(weights) * point_valid)
     return torch.where(valid, p, 0.0), torch.where(valid, t, 0.0), fraction
 
 

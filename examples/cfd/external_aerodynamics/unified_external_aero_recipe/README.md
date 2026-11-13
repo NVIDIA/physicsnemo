@@ -376,7 +376,8 @@ targets, such as the volume interior and a surface point set. The keys:
   no finite target in a sample adds 0 to the loss and gets NaN metrics, which
   the epoch and inference means skip.
 
-Each target is scored on its own set's points. Inference applies the same
+Each target is scored on its own set's points, weighted by that set's measure
+when it stores one (see `measure_weighted` above). Inference applies the same
 model-config hooks, inverts every `NormalizeMeshFields` of the pipeline,
 integrates forces on the set holding a pressure and a shear target together
 when it sits at the `boundaries.vehicle` cell centroids, and writes `pred_*` /
