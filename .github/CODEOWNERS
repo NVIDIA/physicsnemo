@@ -85,6 +85,7 @@ docs/api/models/fnos.rst @megnvidia @ktangsali
 docs/api/models/fully_connected.rst @megnvidia @peterdsharpe
 docs/api/models/globe.rst @megnvidia @peterdsharpe
 docs/api/models/gnns.rst @megnvidia @mnabian
+docs/api/models/isla.rst @megnvidia @peterdsharpe
 docs/api/models/modules.rst @megnvidia @coreyjadams @CharlelieLrt @ktangsali @peterdsharpe
 docs/api/models/operators.rst @megnvidia  @coreyjadams @peterdsharpe
 docs/api/models/recurrent.rst @megnvidia @ktangsali
@@ -338,6 +339,7 @@ physicsnemo/experimental/
 physicsnemo/experimental/datapipes/healda/ @pzharrington
 physicsnemo/experimental/models/aerojepa/ @mnabian
 physicsnemo/experimental/models/globe/ @peterdsharpe
+physicsnemo/experimental/models/isla/ @peterdsharpe
 physicsnemo/experimental/models/smart/ @mnabian
 physicsnemo/experimental/peft/ @mnabian
 physicsnemo/experimental/uq/conformal/ @melo-gonzo
@@ -516,6 +518,7 @@ test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
 test/experimental/models/aerojepa/ @mnabian
+test/experimental/models/isla/ @peterdsharpe
 test/experimental/models/smart/ @mnabian
 test/experimental/peft/ @mnabian
 test/experimental/uq/conformal/ @melo-gonzo

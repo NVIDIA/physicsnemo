@@ -126,6 +126,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `physicsnemo.experimental.models.isla.ISLA` (Invariant Slice Attention),
+  an experimental mesh-native surrogate for steady boundary-value problems that
+  takes the boundary as named meshes, and `case_scales`, which gives other
+  models ISLA's length and field scales. ISLA's outputs follow rotations,
+  reflections and translations of the problem exactly, up to roundoff, except
+  on some symmetric or nearly symmetric boundaries described on its
+  documentation page.
+- `physicsnemo.mesh.spatial` exports `canonical_frame`, the principal-axis frame
+  that a weighted point set carries with it, and `frame_coordinates`, the
+  points' coordinates in that frame.
+- `ClusterTree.find_point_interaction_pairs` takes targets of shape `(R, M, D)`
+  with `root_rows`, the row each root's tree reads, so one call walks a forest
+  whose trees each use their own coordinates.
 - Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
   `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
   `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports

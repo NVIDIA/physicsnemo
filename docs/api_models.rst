@@ -21,4 +21,5 @@ PhysicsNeMo Models
    api/models/flare.rst
    api/models/geotransolver.rst
    api/models/globe.rst
+   api/models/isla.rst
    api/models/weather.rst
