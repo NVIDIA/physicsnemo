@@ -754,10 +754,10 @@ the dataset files and the other models' samples stay as they are.
   It reads every boundary whole (`subsample_n_cells: null`) and draws its
   own boundary tokens. It computes its own signed distances, so it ignores
   the dataset's `sdf` inputs.
-  Its defaults (200,000 interior points and 200,000 boundary tokens) needed
-  about 215 GiB of GPU memory on one GB300. For 80 GB cards, use
-  `sampling_resolution=50000 model.n_boundary_tokens=100000`, which needed
-  62 GiB at 0.5 s per step there.
+  Its defaults (50,000 interior points and 100,000 boundary tokens) fit
+  one 80 GB GPU: 62 GiB at 0.5 s per step on a GB300. The research setting,
+  `sampling_resolution=200000 model.n_boundary_tokens=200000`, needs about
+  215 GiB, for example one GB300.
 
 ISLA needs every boundary's normals to point into the fluid. The curated
 files wind the vehicle with its normals into the body, so both configs

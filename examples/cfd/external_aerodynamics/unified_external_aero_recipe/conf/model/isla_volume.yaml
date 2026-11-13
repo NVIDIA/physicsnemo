@@ -34,6 +34,7 @@ defaults:
 
 input_type: mesh
 output_type: mesh
+sampling_resolution: 50000     # interior points per case, sized with n_boundary_tokens for an 80 GB GPU
 
 dataset_reader_overrides:
   subsample_n_cells: null      # the boundaries are read whole
@@ -78,7 +79,7 @@ model:
   global_schema:
     U_inf: {rank: 1}             # the freestream velocity; the model reads its direction
   interior: true                 # predict at prediction_points
-  n_boundary_tokens: 200000      # boundary tokens drawn per case
+  n_boundary_tokens: 100000      # boundary tokens drawn per case
   hidden: 512
   n_layers: 12
   n_slices: 128
