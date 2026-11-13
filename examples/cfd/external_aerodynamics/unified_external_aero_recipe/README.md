@@ -965,6 +965,12 @@ per-epoch alike -- are global all-rank means (reduced across ranks with a
 single fused `all_reduce`), not rank-0's shard. Only rank 0 writes the
 TensorBoard / JSONL files; no external tracker required.
 
+The training loop does not wait for the GPU to read back each step's values:
+a step's console line, TensorBoard scalars and JSONL record are written once
+its values reach the host, usually about one step later. `step_time_s` is the
+host's time for the step, including any wait for the GPU inside it, so compare
+speed by the epoch's wall time per step.
+
 ## Source modules
 
 | Module | Purpose |

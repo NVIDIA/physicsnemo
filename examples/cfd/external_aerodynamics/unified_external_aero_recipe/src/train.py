@@ -390,11 +390,13 @@ def _run_epoch(
     Train and val share the same per-batch loop (``forward_pass`` +
     metric accumulation + per-step console log + per-epoch summary).
     Train mode additionally runs the backward / optimizer / scheduler
-    step and emits per-step TensorBoard + JSONL entries (``phase: "step"``);
-    val mode wraps the loop in ``torch.no_grad()``, skips TensorBoard
-    per-step logging, and emits a lighter-weight JSONL record per step
-    (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
-    and ``step_time_s``.
+    step and emits per-step TensorBoard + JSONL entries (``phase:
+    "train_step"``); val mode wraps the loop in ``torch.no_grad()``, skips
+    TensorBoard per-step logging, and emits a lighter-weight JSONL record per
+    step (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
+    and ``step_time_s``. Each step's records are logged once its values reach
+    the host (:func:`_start_step_readback`), so logging never makes a step
+    wait for the GPU.
 
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
