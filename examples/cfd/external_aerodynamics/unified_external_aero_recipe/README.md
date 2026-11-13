@@ -742,7 +742,7 @@ in chunks of 8,192.
 ISLA is mesh-native, on GLOBE's contract (`input_type: mesh`). It reads
 the whole boundary of the flow domain: the vehicle and the tunnel's `inlet`,
 `outlet`, `slip` and `no_slip` boundaries that each DrivAerML case file
-stores. Both configs adapt the dataset's samples from the model config, so
+stores. The configs adapt the dataset's samples from the model config, so
 the dataset files and the other models' samples stay as they are.
 
 - `isla_surface` predicts pressure and wall shear stress at the vehicle's
@@ -758,7 +758,7 @@ the dataset files and the other models' samples stay as they are.
   Its defaults (50,000 interior points and 100,000 boundary tokens) fit
   one 80 GB GPU: 62 GiB at 0.5 s per step on a GB300. The research setting,
   `sampling_resolution=200000 model.n_boundary_tokens=200000`, needs about
-  215 GiB, for example one GB300.
+  215 GiB, which fits one GB300 (288 GB).
 - `isla_volume_joint` trains the interior task jointly with the vehicle's
   wall pressure and wall shear stress, as a second prediction set (see
   [Training on several prediction sets](#training-on-several-prediction-sets)):
@@ -778,10 +778,10 @@ the dataset files and the other models' samples stay as they are.
   the force code integrates only at the vehicle's cell centroids.
 
 ISLA needs every boundary's normals to point into the fluid. The curated
-files wind the vehicle with its normals into the body, so both configs
+files wind the vehicle with its normals into the body, so all three configs
 append `FlipBoundaryOrientation` for the vehicle. The surface config then
 declares `dataset_overrides: {surface_normals_point: outward}`, so the
-force coefficients keep their sign. Both use the `warmup_cosine` schedule,
+force coefficients keep their sign. All three use the `warmup_cosine` schedule,
 a learning rate of 3.75e-4, and `compile: false` with the model's own
 per-block compile (`model.compile_blocks: true`). Its fast paths on CUDA
 need Triton.
