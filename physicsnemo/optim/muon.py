@@ -156,16 +156,17 @@ class Muon(_TorchMuon):
         (treated as ``"original"``).
     cuda_graph : bool, optional
         Replay the step as one CUDA graph instead of launching its kernels one
-        by one from Python. The graph runs the same kernels, so the result is
-        the same bit for bit. It is captured at the first step after the
-        momentum buffers exist, and captured again when the parameters with
-        gradients, any hyperparameter (such as a scheduler's learning rate) or
-        the state tensors (after loading a state dict) change, so a schedule
-        that changes the learning rate every step recaptures every step and
-        gains nothing. Needs CUDA parameters and float learning rates, and
-        holds a copy of the gradients and the graph's memory pool. Under
-        ``torch.compile`` the step runs outside the compiled region, so the
-        graph replaces compiling it. Default False.
+        by one from Python. The graph runs the same kernels as the uncompiled
+        step, so the result is the same bit for bit. It is captured at the
+        first step after the momentum buffers exist, and captured again when
+        the parameters with gradients, any hyperparameter (such as a
+        scheduler's learning rate) or the state tensors (after loading a state
+        dict) change. A capture costs more than an eager step, so a schedule
+        that changes the learning rate every step makes the step slower.
+        Needs CUDA parameters and float learning rates, and holds a copy of
+        the gradients and the graph's memory pool. Under ``torch.compile`` the
+        step runs outside the compiled region, so the graph replaces compiling
+        it. Default False.
 
     Forward
     -------
@@ -229,7 +230,7 @@ class Muon(_TorchMuon):
         ):
             raise ValueError("Muon(cuda_graph=True) needs every parameter on CUDA")
         self.cuda_graph = cuda_graph
-        self._graph = self._graph_key = self._graph_grads = None
+        self._graph = self._graph_key = self._graph_grads = self._graph_stream = None
 
     def __getstate__(self) -> dict:
         return {**super().__getstate__(), "cuda_graph": self.cuda_graph}
@@ -238,6 +239,7 @@ class Muon(_TorchMuon):
         super().__setstate__(state)
         # load_state_dict also lands here, with a state lacking cuda_graph.
         self.__dict__.setdefault("cuda_graph", False)
+        self.__dict__.setdefault("_graph_stream", None)
         # A graph cannot be copied, so a copy captures its own.
         self._graph = self._graph_key = self._graph_grads = None
 
@@ -268,9 +270,12 @@ class Muon(_TorchMuon):
         """Replay the step as a CUDA graph, capturing it first if needed.
 
         It runs eagerly while any parameter with a gradient has no momentum
-        buffer yet, so that no buffer is ever initialized inside a capture.
-        Under ``torch.compile`` it runs outside the compiled region.
+        buffer yet, so that no buffer is ever initialized inside a capture,
+        and inside a capture of the caller's own, which then captures the
+        plain step. Under ``torch.compile`` it runs outside the compiled region.
         """
+        if torch.cuda.is_current_stream_capturing():
+            return self._step()
         params = [
             p for g in self.param_groups for p in g["params"] if p.grad is not None
         ]
@@ -298,17 +303,26 @@ class Muon(_TorchMuon):
             # before every replay.
             grads = [p.grad for p in params]
             graph_grads = [g.clone() for g in grads]
+            # One capture stream for all captures: torch hands out its 32
+            # pooled streams in turn, so a new stream per capture would soon
+            # be one that another thread, such as a data loader's, is using.
+            device = params[0].device
+            if self._graph_stream is None or self._graph_stream.device != device:
+                self._graph_stream = torch.cuda.Stream(device)
+            stream = self._graph_stream
             graph = torch.cuda.CUDAGraph()
             try:
                 for p, g in zip(params, graph_grads):
                     p.grad = g
                 # Other threads, such as a data loader's, may allocate or sync
                 # meanwhile; in the default "global" mode that would invalidate
-                # the capture.
-                with torch.cuda.graph(
-                    graph,
-                    stream=torch.cuda.Stream(params[0].device),
-                    capture_error_mode="thread_local",
+                # the capture. The outer stream context restores the current
+                # stream when a failed capture skips torch.cuda.graph's exit.
+                with (
+                    torch.cuda.stream(stream),
+                    torch.cuda.graph(
+                        graph, stream=stream, capture_error_mode="thread_local"
+                    ),
                 ):
                     self._step()
             except Exception as e:

@@ -284,8 +284,10 @@ def _loader_cuda_work(stop, ready, iterations, errors):
 
 @_requires_cuda
 def test_cuda_graph_capture_with_loader_thread():
-    """CUDA work in another thread, as a data loader does, does not invalidate
-    the capture; every step recaptures (a new lr) and matches eager bit for bit."""
+    """CUDA work in another thread, as a data loader does, neither invalidates
+    the capture nor lands in it; every step recaptures (a new lr) and matches
+    eager bit for bit. The 40 captures outnumber torch's 32 pooled streams, so
+    a new stream per capture would reach the loader's stream."""
     eager_params = _make_params(_GRAPH_SHAPES, "cuda", seed=10)
     graph_params = [torch.nn.Parameter(p.detach().clone()) for p in eager_params]
     eager_opt = Muon(eager_params, lr=0.02)
@@ -297,23 +299,24 @@ def test_cuda_graph_capture_with_loader_thread():
     thread.start()
     try:
         assert ready.wait(timeout=60), errors
-        before, graphs = len(iterations), []
-        for step in range(6):
+        before, previous_graph = len(iterations), None
+        for step in range(41):
             for opt in (eager_opt, graph_opt):
                 opt.param_groups[0]["lr"] = 0.02 / (1 + step)
             _set_grads(eager_params, seed=500 + step)
             _set_grads(graph_params, seed=500 + step)
             eager_opt.step()
             graph_opt.step()
-            graphs.append(graph_opt._graph)
+            # Step 0 runs eagerly; every later step captures a new graph.
+            assert (graph_opt._graph is None) == (step == 0)
+            assert step == 0 or graph_opt._graph is not previous_graph
+            previous_graph = graph_opt._graph
         during = len(iterations) - before
     finally:
         stop.set()
         thread.join()
     assert not errors
     assert during > 0
-    assert graphs[0] is None and None not in graphs[1:]
-    assert len({id(g) for g in graphs[1:]}) == 5
     for pe, pg in zip(eager_params, graph_params):
         assert torch.equal(pe, pg)
 
@@ -321,7 +324,7 @@ def test_cuda_graph_capture_with_loader_thread():
 @_requires_cuda
 def test_cuda_graph_capture_failure(monkeypatch):
     """A host sync inside the step fails the capture with a RuntimeError and
-    leaves the user's gradients in place."""
+    leaves the user's gradients and current stream in place."""
     import physicsnemo.optim.muon as muon_module
 
     params = _make_params(_GRAPH_SHAPES, "cuda", seed=6)
@@ -338,10 +341,35 @@ def test_cuda_graph_capture_failure(monkeypatch):
     monkeypatch.setattr(muon_module, "_batched_newton_schulz", syncing_newton_schulz)
     _set_grads(params, seed=1)
     grads = [p.grad for p in params]
+    stream = torch.cuda.current_stream()
     with pytest.raises(RuntimeError, match="cuda_graph=False"):
         opt.step()
+    assert torch.cuda.current_stream() == stream
     assert all(p.grad is g for p, g in zip(params, grads))
     assert opt._graph is None
+
+
+@_requires_cuda
+def test_cuda_graph_step_inside_user_capture():
+    """Inside a capture of the caller's own, the plain step runs, so the
+    caller's graph captures it; its replay matches the eager step bit for bit."""
+    eager_params = _make_params(_GRAPH_SHAPES[:5], "cuda", seed=11)
+    graph_params = [torch.nn.Parameter(p.detach().clone()) for p in eager_params]
+    eager_opt = Muon(eager_params, lr=0.02)
+    graph_opt = Muon(graph_params, lr=0.02, cuda_graph=True)
+    for step in range(3):  # the second step captures Muon's own graph
+        _set_grads(eager_params, seed=600 + step)
+        _set_grads(graph_params, seed=600 + step)
+        eager_opt.step()
+        if step < 2:
+            graph_opt.step()
+            continue
+        user_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(user_graph):
+            graph_opt.step()
+        user_graph.replay()
+    for pe, pg in zip(eager_params, graph_params):
+        assert torch.equal(pe, pg)
 
 
 @_requires_cuda
