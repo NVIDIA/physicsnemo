@@ -994,7 +994,7 @@ class FlipBoundaryOrientation(MeshTransform):
                 "FlipBoundaryOrientation needs cells of at least 2 vertices"
             )
         cells = torch.cat((mesh.cells[:, :-2], mesh.cells[:, -2:].flip(1)), dim=1)
-        cell_data = mesh.cell_data.clone()
+        cell_data = mesh.cell_data.copy()  # only the negated fields get new tensors
         for key in self.normal_fields:
             if key in cell_data.keys(include_nested=True):
                 cell_data[key] = -cell_data[key]

@@ -179,10 +179,16 @@ def test_surface_mesh_to_domain_mesh_keeps_the_other_boundaries():
         to_domain.apply_to_domain(clash)
 
 
-def _surface_sample(ds_cfg, root: Path, seed: int = 0) -> DomainMesh:
+def _surface_sample(
+    ds_cfg, root: Path, seed: int = 0, sampling_resolution: int = 10
+) -> DomainMesh:
     """The first augmented sample of ``drivaer_ml_surface.yaml``-shaped ``ds_cfg``."""
     ds_cfg = OmegaConf.merge(
-        ds_cfg, {"dataset_paths": {"drivaer_ml": str(root)}, "sampling_resolution": 10}
+        ds_cfg,
+        {
+            "dataset_paths": {"drivaer_ml": str(root)},
+            "sampling_resolution": sampling_resolution,
+        },
     )
     dataset = build_dataset(ds_cfg, augment=True, device=None, num_workers=1)
     try:
@@ -223,7 +229,7 @@ def test_surface_dataset_samples_are_unchanged_by_the_terminal_step(tmp_path):
 def test_model_config_adds_the_flipped_tunnel_to_the_surface_samples(tmp_path):
     """isla_surface.yaml's dataset keys add the tunnel, moved with the vehicle by
     the dataset's transforms, reverse the vehicle and declare its new orientation."""
-    write_surface_case(tmp_path)
+    source = write_surface_case(tmp_path)
     plain = load_dataset_config(_RECIPE_ROOT / "datasets" / "drivaer_ml_surface.yaml")
     model = OmegaConf.load(_RECIPE_ROOT / "conf" / "model" / "isla_surface.yaml")
     adapted = apply_model_config(plain, model)
@@ -231,16 +237,29 @@ def test_model_config_adds_the_flipped_tunnel_to_the_surface_samples(tmp_path):
         "inward",
         "outward",
     )
-    theirs, ours = _surface_sample(plain, tmp_path), _surface_sample(adapted, tmp_path)
+    ### Above the vehicle's 30 cells, so it keeps its stored points in order.
+    theirs, ours = (
+        _surface_sample(cfg, tmp_path, sampling_resolution=100)
+        for cfg in (plain, adapted)
+    )
     assert set(ours.boundary_names) == {"vehicle", *DOMAIN_BOUNDARIES}
     vehicle, stored = ours.boundaries["vehicle"], theirs.boundaries["vehicle"]
     assert torch.equal(vehicle.points, stored.points)
     assert torch.equal(vehicle.cells, stored.cells[:, [0, 2, 1]])
     assert torch.equal(vehicle.cell_data["normals"], -stored.cell_data["normals"])
     assert torch.equal(ours.interior.points, theirs.interior.points)
-    ### The tunnel moved with the vehicle: the same rigid motion and scaling.
-    raw = tunnel_boundaries()["inlet"].points
-    moved = ours.boundaries["inlet"].points
+    for key, value in stored.global_data.items(include_nested=True, leaves_only=True):
+        assert torch.equal(vehicle.global_data[key], value)
+    ### The tunnel moved with the vehicle: the same rigid motion and scaling, so
+    ### every distance between their points shrank by 1 / L_ref.
+    raw = torch.cat(
+        [source.boundaries[name].points for name in ("vehicle", *DOMAIN_BOUNDARIES)]
+    )
+    moved = torch.cat(
+        [ours.boundaries[name].points for name in ("vehicle", *DOMAIN_BOUNDARIES)]
+    )
+    exact = "donot_use_mm_for_euclid_dist"
     torch.testing.assert_close(
-        torch.cdist(moved, moved), torch.cdist(raw, raw) / 5.0
-    )  # scaled by 1 / L_ref
+        torch.cdist(moved, moved, compute_mode=exact),
+        torch.cdist(raw, raw, compute_mode=exact) / 5.0,
+    )

@@ -54,6 +54,8 @@ class TestFlipBoundaryOrientation:
         for key in ("p", "_effective_measure"):
             assert torch.equal(out.cell_data[key], mesh.cell_data[key])
         assert torch.equal(out.points, mesh.points)
+        ### The input keeps its own stored normals.
+        torch.testing.assert_close(mesh.cell_data["normals"], mesh.cell_normals)
 
     def test_flip_twice_is_identity(self):
         """Reversing twice restores the cells and the stored normals exactly."""

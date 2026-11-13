@@ -204,11 +204,7 @@ class MeshReaderWithGlobalData(MeshReader):
         if self.pin_memory:
             boundaries = {name: b.pin_memory() for name, b in boundaries.items()}
         domain = DomainMesh(
-            interior=mesh.with_data(
-                global_data=TensorDict({}, batch_size=[], device=mesh.points.device)
-            ),
-            boundaries=boundaries,
-            global_data=mesh.global_data,
+            interior=mesh, boundaries=boundaries, global_data=mesh.global_data
         )
         metadata["boundary_names"] = domain.boundary_names
         return domain, metadata
