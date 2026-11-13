@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `physicsnemo.mesh.io.from_vtu` memory-maps an uncompressed appended-raw
+  `.vtu` file of one simplex cell type as a lazy `Mesh`, with no VTK or
+  PyVista at read time. `MeshReader` loads `.vtu` samples through it when
+  its `pattern` matches them, so cell and point subsampling read only the
+  rows they touch, as for `.pmsh`.
 - Unified external aero recipe: adds AB-UPT surface, volume, and joint
   configurations calling the library model directly, configurable independent
   point-set sampling in `DomainMeshReader`, and grouped tensor outputs for

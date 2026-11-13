@@ -973,7 +973,9 @@ class MeshReader(_MeshReaderBase):
     Read single-mesh samples from directories of physicsnemo mesh files.
 
     Each sample is one Mesh. Returns (Mesh, metadata) per index.
-    Uses Mesh.load(path) for physicsnemo mesh format (.pmsh).
+    Uses Mesh.load(path) for physicsnemo mesh format (.pmsh), from_zarr for
+    zarr stores, and from_vtu for uncompressed ``.vtu`` files (lazily
+    memory-mapped, like .pmsh) when ``pattern`` matches them.
     """
 
     def __init__(
@@ -997,6 +999,7 @@ class MeshReader(_MeshReaderBase):
             Root directory containing mesh files (e.g. .pmsh directories).
         pattern : str, optional
             Glob pattern for mesh paths under ``path``. Default matches ``**/*.pmsh``.
+            Matches may also be zarr stores or uncompressed ``.vtu`` files.
         pin_memory : bool, default=False
             If True, place tensors in pinned (page-locked) memory for faster
             async CPU→GPU transfers.
@@ -1080,6 +1083,11 @@ class MeshReader(_MeshReaderBase):
                     self._index_generator(index),
                 )
             return from_zarr(mesh_path)
+        if mesh_path.suffix.lower() == ".vtu":
+            from physicsnemo.mesh.io import from_vtu
+
+            # Also a copy-on-write map; the subsample below slices it lazily.
+            return from_vtu(mesh_path)
         # mode="r": copy-on-write maps, so in-place edits of a sample never
         # reach the dataset files, and readers on Lustre take no write locks.
         return Mesh.load(mesh_path, mode="r")
