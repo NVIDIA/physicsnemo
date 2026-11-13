@@ -392,7 +392,12 @@ def case_scales(
     A model needs these scales to make a case's fields dimensionless. They depend
     only on the posed problem: the boundary and the fields that define a scale.
     Another model, or a preprocessing step that makes its inputs dimensionless,
-    gets from this function the numbers ISLA uses.
+    gets from this function the numbers ISLA uses. It is as experimental as ISLA,
+    and moves with it out of ``physicsnemo.experimental``: until then a recipe, a
+    script or an experimental model can import it, but ``physicsnemo.models``,
+    ``physicsnemo.datapipes`` and ``physicsnemo.mesh`` cannot, since the layer
+    contract of ``.importlinter`` keeps them from importing
+    ``physicsnemo.experimental``.
 
     Parameters
     ----------

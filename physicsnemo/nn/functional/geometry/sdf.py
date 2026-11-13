@@ -290,6 +290,7 @@ def _setup_signed_distance_field_context(
     ctx.save_for_backward(mesh_vertices, mesh_indices, input_points, sdf, hit_faces)
 
 
+# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 def _closest_point_weights(
     query: Float[torch.Tensor, "n_queries 3"],
     tri: Float[torch.Tensor, "n_queries 3 3"],

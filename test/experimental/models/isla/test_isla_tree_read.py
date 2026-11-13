@@ -81,7 +81,11 @@ from test.experimental.models.isla._kernel_cases import (
     _to,
     _two_x,
 )
-from test.experimental.models.isla._marks import requires_cuda, requires_cuda_triton
+from test.experimental.models.isla._marks import (
+    DEVICES,
+    requires_cuda,
+    requires_cuda_triton,
+)
 from test.experimental.models.isla._meshes import (
     cloud,
     orthogonal,
@@ -1672,56 +1676,14 @@ def test_tree_read_kernel_is_the_tree_reads_one_execution_attribute(monkeypatch)
             _run(m, mesh, drv, q)
 
 
-def test_fast_forest_build_refuses_what_it_cannot_build(monkeypatch):
+def test_fast_forest_build_refuses_what_it_cannot_build():
     """A forced "fast" build refuses a dimension it has no Morton code for ("auto"
-    picks the reference there), and from its cell limit (Warp's int32 thread ids) on
-    it leaves the forest to the reference build."""
+    picks the reference there)."""
     import physicsnemo.experimental.models.isla._tree_build as tree_build
 
     with pytest.raises(ValueError, match="does not take 4-D points"):
         tree_build.resolve_tree_build("fast", torch.zeros(4, 4))
     assert tree_build.resolve_tree_build("auto", torch.zeros(4, 4)) == "reference"
-    tables = []
-
-    def spy(*args, **kwargs):
-        tables.append(tree_build.forest_tables(*args, **kwargs))
-        return tables[-1]
-
-    monkeypatch.setattr(tree_read, "forest_tables", spy)
-    pts, nrm, w, _ = cloud(300, d=3, seed=5, dtype=torch.float32)
-    for limit in (301, 300):
-        monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", limit)
-        forests = [
-            BoundaryForest.build(pts, w, nrm, None, theta=1.0, leaf_size=4, build=b)
-            for b in ("reference", "fast")
-        ]
-        assert not _forest_differences(*forests)
-    assert tables[0] is not None and tables[1] is None
-
-
-def test_fast_forest_build_leaves_nodes_past_warps_limit_to_the_reference(monkeypatch):
-    """The fill pass writes one entry per node into each of its Warp arrays, and a
-    forest of N cells has up to 2 N - 1 nodes (leaf size 1): where the nodes reach
-    Warp's element limit though the cells do not, the fast build declines and the
-    reference build makes the forest."""
-    import physicsnemo.experimental.models.isla._tree_build as tree_build
-
-    tables = []
-
-    def spy(*args, **kwargs):
-        tables.append(tree_build.forest_tables(*args, **kwargs))
-        return tables[-1]
-
-    monkeypatch.setattr(tree_read, "forest_tables", spy)
-    pts, nrm, w, _ = cloud(300, d=3, seed=5, dtype=torch.float32)
-    kw = dict(theta=1.0, leaf_size=1)
-    ref = BoundaryForest.build(pts, w, nrm, None, build="reference", **kw)
-    assert ref.n_nodes > 300 + 1
-    for limit, declines in ((ref.n_nodes + 1, False), (ref.n_nodes, True)):
-        monkeypatch.setattr(tree_walk, "WARP_MAX_ELEMENTS", limit)
-        fast = BoundaryForest.build(pts, w, nrm, None, build="fast", **kw)
-        assert not _forest_differences(ref, fast)
-        assert (tables[-1] is None) == declines, limit
 
 
 @pytest.mark.parametrize(
@@ -2504,6 +2466,23 @@ def test_query_chunks_read_the_forest_with_the_normals_error_bounds(monkeypatch)
     assert all(torch.equal(a, b) for a, b in zip(lists_f[:2], lists_c[:2]))
 
 
+def test_query_chunks_of_an_empty_range_are_empty_fields():
+    """An empty range of prediction points (a caller's own chunking can make one) has
+    empty output fields of every rank, as a scalar output does."""
+    m = _tree(3, TREE_READ_THETA)
+    mesh, drv, q = _case(n=50, nq=20)
+    with torch.no_grad():
+        chunks = m.query_chunks(
+            boundary_meshes={"wall": mesh},
+            prediction_points=points_mesh(q),
+            global_data={"g": drv},
+        )
+        empty = chunks(5, 5)
+    assert empty.n_points == 0
+    assert empty.point_data["p"].shape == (0,)
+    assert empty.point_data["v"].shape == (0, 3)
+
+
 def test_query_chunks_need_an_interior_model():
     """A surface model has no prediction points to chunk."""
     m = ISLA(
@@ -2873,6 +2852,60 @@ def test_fused_basis_backward_computes_pytorchs_gelu_on_every_input(dtype):
 
 @pytest.mark.cuda
 @requires_cuda_triton
+def test_tree_read_pairs_fused_takes_the_reference_basis_when_the_geometry_requires_grad(
+    monkeypatch,
+):
+    """On CUDA ``tree_read_pairs(kernel="fused")`` with prediction points that require
+    a gradient builds the basis on the reference path, whose pair invariants carry
+    it: the reference's basis and its gradient in the points, bitwise and nonzero,
+    and the fused basis kernel is not called."""
+    from physicsnemo.experimental.models.isla import _fused_basis as fused_basis
+
+    calls = []
+    real = fused_basis.fused_kernel_basis
+
+    def spy(*args):
+        calls.append(1)
+        return real(*args)
+
+    monkeypatch.setattr(fused_basis, "fused_kernel_basis", spy)
+    torch.manual_seed(0)
+    dev = torch.device("cuda")
+    pts, nrm, w, g = (t.float().to(dev) for t in cloud(500, seed=3))
+    q = cloud(150, seed=7, scale=(4.0,) * 3)[0].float().to(dev)
+    kw = dict(
+        query_n=torch.nn.functional.normalize(q, dim=-1)[None],
+        query_wall=0.1 + torch.rand(1, 150, device=dev),
+        boundary_r=pts[None],
+        boundary_n=nrm[None],
+        boundary_vecs=None,
+        log_frac=torch.log(w / w.sum())[None],
+        g_unit=torch.nn.functional.normalize(g, dim=-1)[None, None],
+        theta=0.5,
+        eps=1e-12,
+    )
+    basis = _KernelBasis(kernel_geo_width(1, 0)).to(dev)
+    out = []
+    for kernel in ("reference", "fused"):
+        q_r = q[None].clone().requires_grad_(True)
+        pairs = tree_read_pairs(basis, kernel=kernel, query_r=q_r, **kw)
+        seed = torch.randn(
+            pairs.basis.shape, device=dev, generator=torch.Generator(dev).manual_seed(2)
+        )
+        out.append(
+            (pairs.basis, torch.autograd.grad((pairs.basis * seed).sum(), q_r)[0])
+        )
+    assert not calls
+    (ref, g_ref), (fus, g_fus) = out
+    assert (
+        torch.equal(ref, fus)
+        and torch.equal(g_ref, g_fus)
+        and bool(g_ref.abs().max() > 0)
+    )
+
+
+@pytest.mark.cuda
+@requires_cuda_triton
 def test_tree_read_pairs_fused_on_cuda_builds_the_basis_in_the_fused_kernel(
     monkeypatch,
 ):
@@ -2927,3 +2960,35 @@ def test_tree_read_pairs_fused_on_cuda_builds_the_basis_in_the_fused_kernel(
     assert torch.equal(ref.plan.qi.long(), fus.plan.qi.long())
     assert torch.equal(ref.plan.bj.long(), fus.plan.bj.long())
     assert torch.allclose(fus.basis, ref.basis, rtol=1e-5, atol=1e-5 * scale)
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_a_forced_reference_runs_the_cluster_trees_torch_code(device, monkeypatch):
+    """With ``build="reference"`` and ``walk="reference"`` (as ``reference_kernels``
+    sets them) the forest's cluster trees are built and walked by the library's torch
+    implementation on every device, Warp's included; under ``"auto"`` the library
+    picks."""
+    from physicsnemo.mesh.spatial import cluster_tree
+
+    seen = []
+    for name in ("_resolve_build", "_resolve_walk"):
+        real = getattr(cluster_tree, name)
+
+        def spy(implementation, *args, _real=real, _name=name):
+            seen.append((_name, implementation, _real(implementation, *args)))
+            return seen[-1][-1]
+
+        monkeypatch.setattr(cluster_tree, name, spy)
+    pts, nrm, w, _ = (t.to(device) for t in cloud(300, seed=3))
+    q = cloud(40, seed=7, scale=(4.0,) * 3)[0].to(device)
+    for kind in ("reference", "auto"):
+        seen.clear()
+        forest = BoundaryForest.build(
+            pts, w / w.sum(), nrm, None, theta=0.5, build=kind
+        )
+        forest.point_pairs(q, walk=kind)
+        if kind == "reference":
+            assert {s[0] for s in seen} == {"_resolve_build", "_resolve_walk"}
+            assert all(s[1:] == ("torch", "torch") for s in seen), seen
+        else:
+            assert all(s[1] is None for s in seen), seen

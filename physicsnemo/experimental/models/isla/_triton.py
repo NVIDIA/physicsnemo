@@ -35,6 +35,9 @@ from physicsnemo.core import version_check
 
 #: The oldest Triton ISLA's kernels are tested on.
 TRITON_MIN_VERSION = "3.7.1"
+### Follow-up: HealDA guards Triton with version_check.OptionalImport, which imports on first
+### use and checks no version, while these kernels are defined at import and need the floor
+### above. One guard for both needs OptionalImport to take a minimum version.
 
 
 def triton_available(min_version: str = TRITON_MIN_VERSION) -> bool:

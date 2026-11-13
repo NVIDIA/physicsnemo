@@ -535,8 +535,8 @@ def fused_kernel_basis(
     ``weights`` come from :func:`mlp_weights`; ``qi`` and ``si`` are the pairs' points and
     sources in the plan's numbering (int32 or int64); ``q_off`` and ``s_off`` are the
     case's first point and source. Differentiable in ``weights`` (the geometry gets no
-    gradient, as in the reference); requires :func:`unsupported_reason` to return
-    ``None``."""
+    gradient: the tree read takes the reference basis when it requires one); requires
+    :func:`unsupported_reason` to return ``None``."""
     geo, pb = _geometry_args(geometry)
     return _FusedBasis.apply(qi, si, int(q_off), int(s_off), float(geometry["eps"]), pb, *geo, *weights)
 

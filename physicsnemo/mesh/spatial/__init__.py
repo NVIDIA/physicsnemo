@@ -22,8 +22,11 @@ This module provides data structures and algorithms for fast spatial queries:
 - ClusterTree for dual-tree Barnes-Hut acceleration of kernel/attention operators
 - Signed distance field (:func:`signed_distance_field`) over a triangle
   surface mesh, backed by NVIDIA Warp mesh queries (CPU and CUDA)
+- A canonical frame of a weighted point cloud (:func:`canonical_frame`), and
+  coordinates in it (:func:`frame_coordinates`), the same in every pose of the cloud
 """
 
+from physicsnemo.mesh.spatial._frame import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import BVH
 from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
@@ -37,5 +40,7 @@ __all__ = [
     "ClusterTree",
     "DualInteractionPlan",
     "SourceAggregates",
+    "canonical_frame",
+    "frame_coordinates",
     "signed_distance_field",
 ]

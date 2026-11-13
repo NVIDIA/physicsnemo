@@ -281,13 +281,14 @@ input instead.
 same arithmetic. The eager PyTorch region rebuilds its intermediates in backward
 instead of storing them. The fused one is one Triton kernel per direction that
 never materializes the (B, N, S, .) tensor. It requires CUDA, float32 or float64
-geometry, autocast off or in bfloat16, at most three spatial dimensions, at most
-1024 slices, and at most four per-point vectors, counting the global directions
-(none counts as one) and the token's rank-1 inputs together. It also requires no
-rank-2 inputs, since it does not implement their per-token contractions
-(rho^T T rho). At the first forward pass the model picks the fused kernel when
-the inputs are on CUDA, Triton is importable and these constraints hold, and the
-eager region otherwise, logging the choice once. The search of the prediction
+geometry, autocast off or in bfloat16 (then with float32 parameters), at most
+three spatial dimensions, at most 1024 slices, and at most four per-point
+vectors, counting the global directions (none counts as one) and the token's
+rank-1 inputs together. It also requires no rank-2 inputs, since it does not
+implement their per-token contractions (rho^T T rho). At the first forward pass
+the model picks the fused kernel when the inputs are on CUDA, Triton is
+importable and these constraints hold, and the eager region otherwise, logging
+the choice once (on CUDA, a warning with its reason). The search of the prediction
 points' boundary geometry likewise runs a fast implementation on CUDA when Triton
 is importable, and its reference otherwise; the two give the same outputs
 bitwise. Each piece of the interior task's tree read (the forest build, the walk,
@@ -430,6 +431,9 @@ _TOKEN_ALIGNMENT = 32
 #: prediction points. Above it the points run in chunks of consecutive points, each
 #: holding only its own pair lists and kernel basis, so the read's memory stays flat
 #: in the point count and each chunk stays within the fast walk's array limit.
+#: Follow-up: the default is not tied to the device's memory (the docstring gives
+#: the cost per pair); one derived from it would avoid a first out-of-memory error.
+#: A surface forward has no such control: every cell goes through each block at once.
 _QUERY_CHUNK_PAIRS = 2**28
 
 
@@ -525,18 +529,82 @@ def _real_knob(name: str, value, positive: bool) -> float:
     return float(value)
 
 
+def _token_count(name: str, value) -> int:
+    """A positive integer (an integral float included), as an int (a ValueError naming
+    it otherwise)."""
+    if isinstance(value, bool) or int(value) != value or value < 1:
+        raise ValueError(f"{name} must be a positive integer; got {value!r}")
+    return int(value)
+
+
+def _checked_knob(name: str, check, doc: str) -> property:
+    """A knob the forward pass reads, as a property whose every assignment, the
+    constructor's and a later one, is checked by ``check(name, value)``."""
+    attr = f"_{name}"
+    return property(lambda self: getattr(self, attr), lambda self, value: setattr(self, attr, check(name, value)), doc=doc)
+
+
 def _refuse_earlier_state_dict(module, state_dict, prefix, local_metadata, *args) -> None:
     """A load_state_dict pre-hook: a state dict whose state-dict version (torch's
     ``nn.Module._version``, recorded in its metadata) is not ``ISLA._version`` is
     refused on every loading path (``Module.load``, ``load_checkpoint``,
     ``load_state_dict``), not only ``Module.from_checkpoint``, which checks the
-    recorded checkpoint version. ISLA keeps no upgrade path."""
+    recorded checkpoint version. ISLA keeps no upgrade path. A state dict without
+    metadata (a copy into a plain ``dict`` drops it, and so does
+    ``torch.distributed.checkpoint``'s full state dict) loads with a warning that
+    nothing was checked."""
     version = local_metadata.get("version")
-    if version is not None and version != type(module)._version:
+    if version is None:
+        logger.warning(
+            "ISLA: this state dict has no metadata (torch's state_dict()._metadata, which a copy into a "
+            "plain dict or torch.distributed.checkpoint's full state dict drops), so neither its "
+            "state-dict version nor its fields' order is checked"
+        )
+    elif version != type(module)._version:
         raise RuntimeError(
             f"this ISLA state dict has state-dict version {version}; ISLA "
             f"{module.__model_checkpoint_version__} loads version {type(module)._version} only (no upgrade path)"
         )
+
+
+def _field_order(module) -> dict[str, list[str]]:
+    """The declared fields' names in the orders the trained weights follow, one list
+    per set of columns: the output schema's (the head's), and the global schema's and
+    each boundary condition's of each rank (the condition names themselves are sorted)."""
+    order = {
+        "output_schema": list(module.output_schema),
+        "global_schema rank-1": list(module._global_vector_names),
+        "global_schema rank-0": list(module._global_scalar_names),
+    }
+    for name, schema in module.boundary_schemas.items():
+        for rank in range(module.MAX_INPUT_RANK + 1):
+            order[f"boundary_schemas[{name!r}] rank-{rank}"] = [k for k, s in schema.items() if s.rank == rank]
+    return {group: names for group, names in order.items() if names}
+
+
+def _record_field_order(module, state_dict, prefix, local_metadata) -> None:
+    """A state_dict post-hook: the declared fields' order (:func:`_field_order`) in the
+    state dict's metadata, beside its version, for :func:`_refuse_reordered_fields`."""
+    local_metadata["fields"] = _field_order(module)
+
+
+def _refuse_reordered_fields(module, state_dict, prefix, local_metadata, *args) -> None:
+    """A load_state_dict pre-hook: a state dict whose metadata records a field of this
+    model at another place in its schema is refused, since its weights would load
+    into another field's columns without a shape mismatch. A renamed field, or a
+    state dict without the record (an earlier save, or no metadata, as from a plain
+    ``dict`` or ``torch.distributed.checkpoint``), is not checked."""
+    stored = local_metadata.get("fields")
+    if stored is None:
+        return
+    for group, names in _field_order(module).items():
+        saved = stored.get(group, [])
+        if any(n in saved and saved.index(n) != i for i, n in enumerate(names)):
+            raise RuntimeError(
+                f"this ISLA state dict was saved with the {group} fields in the order {saved!r} and this "
+                f"model declares {names!r}: the weights follow the declaration order, so they would load "
+                "into the wrong fields; declare the fields in the saved order"
+            )
 
 
 class _CaseInputs(NamedTuple):
@@ -691,9 +759,11 @@ class ISLA(Module):
         pseudovectors (:math:`(K+2)(K+1)/2` in three dimensions, :math:`K + 2` in
         two) the counts per field are 1 at rank 0; :math:`m` (even) or :math:`p`
         (odd) at rank 1; :math:`m^2 + 1` (even, the identity included) or
-        :math:`m(m+1)/2 + 1` (even symmetric), :math:`2pm` or :math:`pm` (odd) at
-        rank 2. For :math:`K = 1` (:math:`m = 5, p = 3`) a vector costs 5, a
-        symmetric rank-2 tensor 16 and a pseudovector 3.
+        :math:`m(m+1)/2 + 1` (even symmetric), :math:`2pm` (odd; :math:`2pm + 1`
+        in two dimensions, where the Levi-Civita symbol is an odd rank-2 tensor)
+        or :math:`pm` (odd symmetric) at rank 2. For :math:`K = 1`
+        (:math:`m = 5, p = 3`) a vector costs 5, a symmetric rank-2 tensor 16
+        and a pseudovector 3.
     boundary_schemas : Mapping[str, FieldSchemaLike]
         The boundary conditions by name, each with the per-cell fields it carries:
         a rank spec per field with ranks 0 to 2 and even parity (an inlet's
@@ -768,12 +838,14 @@ class ISLA(Module):
         dimensions, 0.77 in two), the default included, the coherence test
         rejects no cluster. At :math:`\theta > 0` the read is piecewise smooth:
         the output jumps where a cluster's admission changes, in the point and in
-        the boundary's vertices. At any angle, the derivatives of the outputs in
-        the prediction points or in the boundary's vertices are partial: they
-        follow the points' own features and the token states, but not the read's
-        pair geometry, whose invariants take no input gradient. Read a model at the angle it was trained at:
-        a cluster's aggregate is what the kernel learns to read. A finite number
-        at least 0; a surface task takes only the default.
+        the boundary's vertices, and a cluster's position and normal take no
+        gradient. At 0 the read is smooth, and the model's derivatives in the
+        prediction points are complete. Its derivatives in the boundary's
+        vertices also pass through each slice's mean normal, which can be near
+        zero on a closed boundary whose cells carry no fields, and are then not
+        reliable. Read a model at the angle it was trained at: a cluster's
+        aggregate is what the kernel learns to read. A finite number at least 0;
+        a surface task takes only the default.
     tree_read_leaf_size : int, optional, default=4
         Interior task only: the boundary cells per leaf of the read's trees. At
         :math:`\theta > 0` a leaf that is not read as a cluster is read cell by
@@ -786,8 +858,15 @@ class ISLA(Module):
         points run in chunks of consecutive points, each holding only its own
         pairs, so a smaller value lowers the peak memory of a large point set at
         the cost of more, smaller launches; the outputs are the same up to
-        summation order. :meth:`query_chunks` takes its chunks from the caller. A
-        positive integer; a surface task takes only the default.
+        summation order. A chunk's peak memory grows linearly in its pairs and its
+        points: at ``hidden=256`` in float32 about 0.3 GiB per million pairs where
+        each point reads many sources and about 1.5 GiB where each reads ten, so the
+        default can need tens of GiB; lower it to fit the device.
+        :meth:`query_chunks` takes its chunks from the caller. A positive integer;
+        a surface task takes only the default. This knob, ``n_boundary_tokens``
+        and ``tree_read_theta`` may also be set after construction, where their
+        ranges are checked as here (a value set so is not saved with the model;
+        pass it to ``Module.from_checkpoint``'s ``override_args`` instead).
     hidden : int, optional, default=512
         Token width of the slice blocks.
     n_layers : int, optional, default=12
@@ -881,7 +960,9 @@ class ISLA(Module):
         ``ValueError``). A rotation, reflection,
         translation or scaling applied to both transforms the outputs covariantly
         (exactly where the module docstring's *Where the covariance is exact*
-        says); one applied to the points alone poses another problem. Each
+        says), provided a reflection also reverses each boundary cell's vertex
+        order, since that order sets the cell's normal; one applied to the points
+        alone poses another problem. Each
         point's prediction depends on that point and the boundary only, so any
         subset of a case's points (a training sample, one chunk of a large
         evaluation) gives the same values at those points, up to summation order.
@@ -927,7 +1008,9 @@ class ISLA(Module):
         by ``output_stats`` when it is given. A field declared with rank :math:`r`
         and even parity transforms as a true rank-:math:`r` tensor under every
         orthogonal map :math:`R` of the inputs (:math:`T \to R^{\otimes r} T`;
-        rotations and reflections alike) and is invariant under translations. An
+        rotations and reflections alike, a reflected boundary keeping its normals'
+        side by reversing its cells' vertex order) and is invariant under
+        translations. An
         odd field picks up the extra sign :math:`\det R`. Both hold exactly where
         the module docstring's *Where the covariance is exact* says, and
         approximately otherwise. Components in any frame are only ever a view of
@@ -993,6 +1076,19 @@ class ISLA(Module):
     #: every state dict's metadata), so a state dict of another version is refused on
     #: load (:func:`_refuse_earlier_state_dict`).
     _version = 16
+
+    #: The knobs the forward pass reads (the docstring), checked on every assignment as
+    #: the constructor checks them, and overridable in ``Module.from_checkpoint``.
+    n_boundary_tokens = _checked_knob("n_boundary_tokens", _token_count, "The interior task's boundary tokens per case.")
+    tree_read_theta = _checked_knob(
+        "tree_read_theta",
+        lambda name, value: _real_knob(name, value, positive=False),
+        "The boundary read's Barnes-Hut opening angle.",
+    )
+    query_chunk_pairs = _checked_knob(
+        "query_chunk_pairs", _integer_knob, "The most walk pairs a chunk of prediction points reads in forward."
+    )
+    _overridable_args = {"n_boundary_tokens", "tree_read_theta", "query_chunk_pairs"}
 
     def __init__(
         self,
@@ -1103,20 +1199,18 @@ class ISLA(Module):
                 "the interior task's built-in geometry (the exact distance to the boundary "
                 f"surface) is implemented in two and three dimensions; got n_spatial_dims={self.n_spatial_dims}"
             )
-        if isinstance(n_boundary_tokens, bool) or int(n_boundary_tokens) != n_boundary_tokens or n_boundary_tokens < 1:
-            raise ValueError(f"n_boundary_tokens must be a positive integer; got {n_boundary_tokens!r}")
+        self.n_boundary_tokens = n_boundary_tokens
         if not self.interior and n_boundary_tokens != _BOUNDARY_TOKENS:
             raise ValueError(
                 "n_boundary_tokens is the interior task's budget of boundary tokens; a surface "
                 "task (interior=False) reads every boundary cell it is given and samples "
                 f"none, so it takes the default ({_BOUNDARY_TOKENS}); got {n_boundary_tokens!r}"
             )
-        self.n_boundary_tokens = int(n_boundary_tokens)
         ### The tunable knobs (the docstring). The boundary read's are the interior
         ### task's, so a surface task takes their defaults, as it does n_boundary_tokens'.
-        self.tree_read_theta = _real_knob("tree_read_theta", tree_read_theta, positive=False)
+        self.tree_read_theta = tree_read_theta
         self.tree_read_leaf_size = _integer_knob("tree_read_leaf_size", tree_read_leaf_size)
-        self.query_chunk_pairs = _integer_knob("query_chunk_pairs", query_chunk_pairs)
+        self.query_chunk_pairs = query_chunk_pairs
         self.mlp_ratio = _integer_knob("mlp_ratio", mlp_ratio)
         self.routing_temperature = _real_knob("routing_temperature", routing_temperature, positive=True)
         if not self.interior:
@@ -1322,6 +1416,10 @@ class ISLA(Module):
         ### A state dict of another version fails with its version named on every
         ### loading path, not with a list of missing and unexpected keys.
         self.register_load_state_dict_pre_hook(_refuse_earlier_state_dict)
+        ### The weights follow the schemas' declaration order, so a state dict records it
+        ### and loads only where the fields it shares with the model keep their places.
+        self.register_state_dict_post_hook(_record_field_order)
+        self.register_load_state_dict_pre_hook(_refuse_reordered_fields)
         ### The trailing widths k of the per-token tensors: every small width (the
         ### input features, frames and vector stacks) and every layer's (see
         ### _hint_token_axis).
@@ -1472,63 +1570,56 @@ class ISLA(Module):
         r"""The geometry-kernel implementation this forward pass will use.
 
         ``"eager"`` or ``"fused"`` when the ``_geo_kernel`` attribute forces it;
-        under the default (``"auto"``) the fused kernel when ``points`` is on CUDA, Triton is
-        importable, CUDA autocast is off or in bfloat16 (the fused kernel's only
-        autocast dtype), the model has at most three spatial dimensions, at most four
-        per-point vectors (global directions, none counted as one, plus rank-1 token
-        inputs), at most 1024 slices and no rank-2 inputs, else the eager region. The
-        decision is cached per device and autocast dtype and logged once.
+        under the default (``"auto"``) the fused kernel where
+        :meth:`_geo_kernel_unsupported` finds no reason against it, else the eager
+        region. The decision is cached per device, autocast dtype and parameter
+        dtype, and logged once; on CUDA the eager region is a warning with its reason.
         """
         if self._kernel_choice("_geo_kernel") != "auto":
             return self._geo_kernel
         dev = points.device.type
         amp = torch.get_autocast_dtype(dev) if torch.is_autocast_enabled(dev) else None
-        key = (dev, points.device.index, amp)
+        key = (dev, points.device.index, amp, self.head.weight.dtype)
         cached = getattr(self, "_geo_kernel_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
-        from physicsnemo.experimental.models.isla._geo_kernel import (
-            HAS_TRITON,
-            MAX_DIRECTIONS,
-            MAX_SLICES,
-        )
-        has_token_inputs = bool(self._n_block_vecs or self._n_block_tens)
-        ok = (
-            points.is_cuda
-            and HAS_TRITON
-            and amp in (None, torch.bfloat16)
-            and self.n_spatial_dims <= 3
-            and max(self._n_global_vectors, 1) + self._n_block_vecs <= MAX_DIRECTIONS
-            and self.n_slices <= MAX_SLICES
-            and not self._n_block_tens
-        )
-        chosen = "fused" if ok else "eager"
+        reason = self._geo_kernel_unsupported(points, amp)
+        chosen = "eager" if reason else "fused"
         if torch.compiler.is_compiling():
             ### Inside a traced region: no cache write and no logging (a logger
             ### call breaks fullgraph=True, a module write adds a recompile guard).
             return chosen
         self._geo_kernel_cache = (key, chosen)
-        logger.info(
-            "ISLA geometry region resolved to %r on %s (cuda=%s, triton=%s, autocast=%s, global_vectors=%d, slices=%d, "
-            "token_vector_inputs=%s)",
-            chosen,
-            points.device,
-            points.is_cuda,
-            HAS_TRITON,
-            amp,
-            self._n_global_vectors,
-            self.n_slices,
-            has_token_inputs,
-        )
-        if points.is_cuda and HAS_TRITON and amp in (None, torch.bfloat16) and has_token_inputs and chosen == "eager":
-            logger.warning(
-                "ISLA: the fused geometry kernel does not take this model's boundary inputs (rank-2 "
-                "inputs, more than %d per-point vectors, more than %d slices or more than three "
-                "spatial dimensions); running the eager region.",
-                MAX_DIRECTIONS,
-                MAX_SLICES,
-            )
+        logger.info("ISLA geometry region resolved to %r on %s (%s)", chosen, points.device, reason or "supported")
+        if points.is_cuda and reason:
+            logger.warning("ISLA: the fused geometry kernel does not take this forward pass (%s); running the eager region.", reason)
         return chosen
+
+    def _geo_kernel_unsupported(self, points: torch.Tensor, amp: torch.dtype | None) -> str | None:
+        r"""Why the fused geometry kernel cannot run this forward pass, ``None`` when it
+        can: it needs ``points`` on CUDA, Triton, CUDA autocast off or in bfloat16 (its
+        only autocast dtype, and then float32 parameters: autocast leaves float64 ones
+        as they are), at most three spatial dimensions, at most four per-point vectors
+        (global directions, none counted as one, plus rank-1 token inputs), at most
+        1024 slices and no rank-2 inputs. ``amp`` is the autocast dtype or ``None``."""
+        from physicsnemo.experimental.models.isla._geo_kernel import (
+            HAS_TRITON,
+            MAX_DIRECTIONS,
+            MAX_SLICES,
+        )
+
+        vectors = max(self._n_global_vectors, 1) + self._n_block_vecs
+        reasons = (
+            (not points.is_cuda, f"the points are on {points.device.type}, not CUDA"),
+            (not HAS_TRITON, "Triton is not importable"),
+            (amp not in (None, torch.bfloat16), f"{amp} autocast (the kernel's only autocast dtype is bfloat16)"),
+            (amp is not None and self.head.weight.dtype == torch.float64, "float64 parameters under autocast"),
+            (self.n_spatial_dims > 3, f"{self.n_spatial_dims} spatial dimensions (at most 3)"),
+            (vectors > MAX_DIRECTIONS, f"{vectors} per-point vectors (at most {MAX_DIRECTIONS})"),
+            (self.n_slices > MAX_SLICES, f"{self.n_slices} slices (at most {MAX_SLICES})"),
+            (bool(self._n_block_tens), "rank-2 boundary inputs"),
+        )
+        return next((why for unsupported, why in reasons if unsupported), None)
 
     def _resolve_tree_read_kernel(self, points: torch.Tensor) -> str:
         r"""The interior task's boundary read implementation this forward pass will use.
@@ -1654,8 +1745,8 @@ class ISLA(Module):
         **Use this, not** ``torch.compile(model)``. On torch 2.13 Inductor's
         default ``triton.mix_order_reduction`` (pytorch/pytorch#195845) makes the slice
         blocks compute a different function from the eager model wherever they run
-        the eager geometry region (``_resolve_geo_kernel``: on CUDA with rank-2
-        boundary inputs, more than four per-point vectors or float16 autocast, or with
+        the eager geometry region (on CUDA wherever ``_geo_kernel_unsupported`` gives a
+        reason, such as rank-2 boundary inputs or float16 autocast, or with
         ``model.reference_kernels = True``), and nothing warns: the model cannot see the options it is compiled with.
         ``torch.compile(model, options={"triton.mix_order_reduction": False, ...})`` is
         the same as this.
@@ -1699,12 +1790,12 @@ class ISLA(Module):
             if not torch.compiler.is_compiling():
                 if not isinstance(t, torch.Tensor) or t.numel() % width:
                     raise ValueError(
-                        f"global_inputs[{name!r}]: expected {width} values per case, got "
+                        f"global_data[{name!r}]: expected {width} values per case, got "
                         f"{tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__}"
                     )
                 if t.numel() != width:
                     raise ValueError(
-                        f"global_inputs[{name!r}] gives {t.numel() // width} rows for a batch of 1"
+                        f"global_data[{name!r}] gives {t.numel() // width} rows for a batch of 1"
                     )
             rows.set(FieldSchema.key(name), t.reshape(1, *shape).to(like.dtype))
         return rows
@@ -1968,9 +2059,10 @@ class ISLA(Module):
         ``promoted`` in any dtype that promotes to it (narrower points are promoted)."""
         want = self.head.weight.dtype
         if (torch.promote_types(dtype, want) if promoted else dtype) != want:
+            slower = ", which on CUDA runs the slower reference boundary read" if self.interior and dtype == torch.float64 else ""
             raise ValueError(
                 f"{label} has {dtype} points and this model's parameters are {want}: "
-                f"cast the input (.to({want})) or the model (model.to({dtype}))"
+                f"cast the input (.to({want})) or the model (model.to({dtype}){slower})"
             )
 
     def _validate_point_set(self, pts, label: str) -> None:
@@ -2097,7 +2189,11 @@ class ISLA(Module):
         chunks' backward passes, ``chunks.backward()`` carries the leaves'
         gradients through the boundary side once. The parameters' gradients are
         then those of the unchunked step whose loss is the sum of the chunks'
-        (``chunks.n_points`` points in all).
+        (``chunks.n_points`` points in all), and so are the boundary points' and
+        the global data's where they require gradients. The prediction points stay
+        in the caller's graph, so a chunk's backward pass frees any graph upstream
+        of them: pass them as a leaf, or call each chunk's backward with
+        ``retain_graph=True`` when that graph must survive.
 
         Each chunk computes its own points' geometry (their signed distance and
         direction), so the geometry's memory grows with the chunk, not with all
@@ -2611,6 +2707,11 @@ class QueryChunks:
         ### graph, so one backward pass reaches the parameters.
         self._detach = detach
         self._model, self._query, self._g_unit, self._g_scalars = model, query, g_unit, inputs.g_scalars
+        ### Follow-up: each chunk's geometry (_query_geometry) rebuilds the boundary side
+        ### of the search (the weld, the zero-area filter, the cell tree, its slabs and
+        ### the winding tree) inside the search's custom ops. Building it once needs a
+        ### setup op that returns those records and a query op that reads them, with
+        ### the slab choice made independent of each chunk's point count.
         self._surface = inputs.surface
         self._scales, self._out_points, self._global_td = inputs.scales, inputs.out_points, inputs.global_td
         self._roots, self._leaves = [], []
@@ -2639,6 +2740,12 @@ class QueryChunks:
             self._surface = (self._leaf(self._surface[0]), self._surface[1])
             if self._scales is not None:
                 self._scales = {k: v if v is None else self._leaf(v) for k, v in self._scales.items()}
+            ### The read's sources too: their pair invariants take a gradient when the geometry requires one.
+            sources = ("src_r", "src_n", "src_vecs", "g_unit")
+            self._walk.geometry = [
+                {k: self._leaf(v) if k in sources and v is not None else v for k, v in g.items()}
+                for g in self._walk.geometry
+            ]
         ### The blocks' log weights take the shift (the forest took the raw ones); each
         ### chunk's read takes the cells' and the conditions' shifts as leaves.
         self._log_shift = self._condition_shift = None
@@ -2764,7 +2871,7 @@ class QueryChunks:
         )
         pairs = walk_range_pairs(
             m.kernel_basis,
-            walk_points_range(self._walk, start, stop, q_tokens["n_hat"], q_wall),
+            walk_points_range(self._walk, start, stop, q_tokens["n_hat"], q_wall, q_tokens["r"]),
             log_shift=self._log_shift,
             condition_shift=self._condition_shift,
         )

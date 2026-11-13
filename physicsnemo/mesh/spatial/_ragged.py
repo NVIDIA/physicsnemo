@@ -20,6 +20,7 @@ import torch
 from jaxtyping import Int
 
 
+# Also imported by physicsnemo.experimental.models.isla: a rename must update it.
 def _ragged_arange(
     starts: Int[torch.Tensor, " n_segments"],
     counts: Int[torch.Tensor, " n_segments"],

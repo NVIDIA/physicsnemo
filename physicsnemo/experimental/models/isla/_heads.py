@@ -154,10 +154,11 @@ def _assemble_output(coeffs, layout: _OutputLayout, true_vecs, pseudo_vecs, inde
     c_free = coeffs[..., : layout.n_free]
     c_full = torch.cat([c_free, c_free.new_zeros(b, n, 1)], dim=-1)[..., index]
     x = c_full  # (B, N, n_vec**r), indices (j1, ..., jr) row-major
+    ### (explicit sizes: a -1 is ambiguous for an empty range of points)
     for _ in range(r):
-        x = x.reshape(b, n, layout.n_vec, -1)  # split j1 from the rest
+        x = x.reshape(b, n, layout.n_vec, x.shape[-1] // layout.n_vec)  # split j1 from the rest
         x = torch.einsum("bnjR,bnja->bnRa", x, u)  # (B, N, rest, d)
-        x = x.reshape(b, n, -1)  # (rest, a1) flattened: j2 leads again
+        x = x.flatten(2)  # (rest, a1) flattened: j2 leads again
     out = x.reshape(b, n, *layout.spec.shape(layout.dim))
     if layout.iso:
         iso = torch.stack(layout.iso).to(device=out.device, dtype=out.dtype)

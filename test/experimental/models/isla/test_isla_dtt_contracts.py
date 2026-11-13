@@ -37,7 +37,7 @@ from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.experimental.models.isla._tree_read import TREE_READ_THETA
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from test.experimental.models.isla._marks import requires_cuda, requires_cuda_triton
+from test.experimental.models.isla._marks import requires_cuda_triton
 from test.experimental.models.isla._meshes import (
     cloud,
     law,
@@ -279,6 +279,55 @@ def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data
         assert torch.allclose(got, ref, rtol=0, atol=1e-12 * float(ref.abs().max()))
 
 
+def test_query_chunks_carry_the_prediction_points_gradient_through_the_read():
+    """At ``theta=0``, with a boundary vector field (rank-1 sources of the read, from a
+    learned map) and prediction points requiring gradients: three chunks' backward
+    passes and QueryChunks.backward give the points and every parameter the gradients
+    of one forward pass, to 1e-12 of the largest (float64), and the points' gradient
+    is the central difference's (``h = 1e-5``) to 1e-7 of the largest. The read's pair
+    invariants carry the points' gradient, and their sources are leaves, so no
+    chunk's backward frees another's graph."""
+    m = _model(theta=0.0, boundary_schemas={"wall": {"u": {"rank": 1}}})
+    pts, nrm, w, drv = cloud(200, seed=4)
+    u = torch.randn(200, 3, generator=torch.Generator().manual_seed(5), dtype=D)
+    mesh = soup(pts, nrm, w, cell_data={"u": u})
+    q = pts[:60] + 0.3 * nrm[:60]
+    kw = {"boundary_meshes": {"wall": mesh}, "global_data": {"g": drv}}
+
+    def loss(out):
+        return sum(v.square().sum() for v in outputs(out).values())
+
+    def grads(chunked):
+        m.zero_grad()
+        x = q.clone().requires_grad_()
+        if chunked:
+            chunks = m.query_chunks(prediction_points=points_mesh(x), **kw)
+            for a, b in ((0, 20), (20, 40), (40, chunks.n_points)):
+                loss(chunks(a, b)).backward()
+            chunks.backward()
+        else:
+            loss(m(prediction_points=points_mesh(x), **kw)).backward()
+        return [x.grad] + [p.grad for p in m.parameters()]
+
+    ref = grads(chunked=False)
+    for got, want in zip(grads(chunked=True), ref):
+        assert (got is None) == (want is None)
+        if want is not None:
+            assert torch.allclose(
+                got, want, rtol=0, atol=1e-12 * float(want.abs().max())
+            )
+    h, fd = 1e-5, torch.zeros(2, 3, dtype=D)
+    with torch.no_grad():
+        for i in range(2):
+            for j in range(3):
+                e = torch.zeros_like(q)
+                e[i, j] = h
+                hi = loss(m(prediction_points=points_mesh(q + e), **kw))
+                lo = loss(m(prediction_points=points_mesh(q - e), **kw))
+                fd[i, j] = (hi - lo) / (2 * h)
+    assert torch.allclose(ref[0][:2], fd, rtol=0, atol=1e-7 * float(fd.abs().max()))
+
+
 def test_query_chunks_outputs_differentiate_in_space():
     """A chunk's outputs stay in the graph of the caller's prediction points: their
     derivative in the points (as a PDE-residual loss takes it) is that of one forward
@@ -486,7 +535,7 @@ def test_a_float16_autocast_forward_is_finite(device):
 
 
 @pytest.mark.cuda
-@requires_cuda
+@requires_cuda_triton  # the bitwise comparison needs the Triton kernels' fixed order
 def test_mixed_devices_are_refused_and_global_data_follows_the_boundary():
     """Documented behaviour, as it is: inputs on another device than the model are
     refused, by torch's own device check deep in the forward pass (ISLA's validation

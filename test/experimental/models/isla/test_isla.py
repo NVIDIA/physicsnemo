@@ -453,6 +453,19 @@ def test_the_class_defaults():
     assert any(n.startswith("kernel_reads.") for n, _ in mi.named_parameters())
 
 
+def test_the_docs_page_quick_start_runs():
+    """The quick start of ISLA's docs page, a surface and an interior task, runs as a
+    doctest (skipped in a tree without the docs)."""
+    import doctest
+    from pathlib import Path
+
+    page = Path(__file__).parents[4] / "docs" / "api" / "models" / "isla.rst"
+    if not page.exists():
+        pytest.skip(f"no {page}")
+    result = doctest.testfile(str(page), module_relative=False)
+    assert result.attempted and not result.failed, result
+
+
 def test_constructor_and_forward_are_keyword_only():
     """Every constructor argument and every forward input is keyword-only
     (inputs read as the recipe's forward_kwargs mapping and models can be
@@ -647,7 +660,7 @@ def test_inputs_of_another_dtype_than_the_parameters_are_refused():
     dtype: float32 points into a float64 model, and float16 or bfloat16 points into
     a float32 model, give exactly the outputs and points of the same values passed
     in the parameters' dtype. Float32 inputs to a float32 model under bfloat16
-    autocast run."""
+    autocast run. Casting an interior model to float64 is named as the slower path."""
     pts, nrm, w, drv = cloud(20, dtype=torch.float32)
     good = soup(pts, nrm, w)
     surface = _isla(hidden=32, n_layers=1, n_slices=8)
@@ -660,12 +673,16 @@ def test_inputs_of_another_dtype_than_the_parameters_are_refused():
             ValueError,
             match="boundary_meshes\\['wall'\\] has torch.float64 points and this "
             "model's parameters are torch.float32: cast the input",
-        ):
+        ) as refused:
             model(
                 boundary_meshes={"wall": good.to(torch.float64)},
                 global_data={"g": drv},
                 **where,
             )
+        ### (the hint: a float64 interior model reads the boundary on the reference path)
+        assert (
+            "slower reference boundary read" in str(refused.value)
+        ) == model.interior
         with torch.autocast("cpu", dtype=torch.bfloat16):
             model(boundary_meshes={"wall": good}, global_data={"g": drv}, **where)
     for q in (pts[:3].double(), points_mesh(pts[:3].double())):

@@ -331,7 +331,10 @@ def _expected_attributes(config: str) -> dict:
 
 
 def _public_attributes(model) -> dict:
-    return {k: v for k, v in vars(model).items() if not k.startswith("_")}
+    """``vars`` of the model without its private names, with the knobs it holds as
+    checked properties (``ISLA._overridable_args``)."""
+    knobs = {k: getattr(model, k) for k in ISLA._overridable_args}
+    return {**{k: v for k, v in vars(model).items() if not k.startswith("_")}, **knobs}
 
 
 def test_the_custom_configuration_sets_every_argument():
@@ -423,6 +426,39 @@ def test_isla_knobs_have_their_defaults_and_are_validated():
     assert m.tree_read_theta == 0.0 and isinstance(m.tree_read_theta, float)
     surface = ISLA(**small, mlp_ratio=2, routing_temperature=0.5)
     assert (surface.mlp_ratio, surface.routing_temperature) == (2, 0.5)
+
+
+def test_isla_forward_knobs_are_checked_on_assignment_and_overridable(tmp_path):
+    """The knobs the forward pass reads (``n_boundary_tokens``, ``tree_read_theta``,
+    ``query_chunk_pairs``) refuse on assignment the values the constructor refuses,
+    with its message, and ``Module.from_checkpoint`` overrides them through the
+    constructor's checks."""
+    m = ISLA(hidden=16, n_layers=1, n_slices=8, interior=True, **IO)
+    bad = dict(
+        n_boundary_tokens=(0, 2.5, True),
+        tree_read_theta=(-1.0, float("nan"), True),
+        query_chunk_pairs=(0, 1.5, False),
+    )
+    for name, values in bad.items():
+        for value in values:
+            with pytest.raises(ValueError, match=f"^{name} must be a"):
+                setattr(m, name, value)
+    m.tree_read_theta, m.query_chunk_pairs, m.n_boundary_tokens = 0, 2**20, 1000.0
+    assert (m.tree_read_theta, m.query_chunk_pairs, m.n_boundary_tokens) == (
+        0.0,
+        2**20,
+        1000,
+    )
+    assert isinstance(m.tree_read_theta, float) and isinstance(m.n_boundary_tokens, int)
+    path = tmp_path / "isla.mdlus"
+    m.save(str(path))
+    over = dict(n_boundary_tokens=500, tree_read_theta=0.5, query_chunk_pairs=2**10)
+    loaded = Module.from_checkpoint(str(path), override_args=over)
+    assert {k: getattr(loaded, k) for k in over} == over
+    with pytest.raises(
+        ValueError, match="^query_chunk_pairs must be a positive integer"
+    ):
+        Module.from_checkpoint(str(path), override_args={"query_chunk_pairs": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +810,84 @@ def test_isla_checkpoint_of_another_version_is_refused(tmp_path, file_name, othe
         torch.nn.ModuleDict({"module": fresh}).load_state_dict(wrapped)
     fresh.load(str(src))  # the current checkpoint loads
     _assert_dict_close(fresh.state_dict(), sd, atol=0.0, rtol=0.0)
+
+
+def test_isla_state_dict_of_reordered_fields_is_refused(tmp_path):
+    """The weights follow the schemas' declaration order, so a state dict records it:
+    one loads into a model that declares the same output fields, or global or boundary
+    fields of one rank, in another order only with a RuntimeError naming the saved
+    order (``load_state_dict`` and ``Module.load``). Renamed fields, fields of
+    different ranks interleaved otherwise, and the order as saved load."""
+    small = dict(hidden=16, n_layers=1, n_slices=4)
+    s, v = {"rank": 0}, {"rank": 1}
+    out, glob, bnd = (
+        {"p": s, "q": s},
+        {"a": v, "b": v, "c": s},
+        {"t": s, "u": s, "w": v},
+    )
+
+    def model(output_schema=out, global_schema=glob, wall=bnd):
+        return ISLA(
+            output_schema=output_schema,
+            global_schema=global_schema,
+            boundary_schemas={"wall": wall},
+            **small,
+        )
+
+    saved = model()
+    sd = saved.state_dict()
+    assert sd._metadata[""]["fields"] == {
+        "output_schema": ["p", "q"],
+        "global_schema rank-1": ["a", "b"],
+        "global_schema rank-0": ["c"],
+        "boundary_schemas['wall'] rank-0": ["t", "u"],
+        "boundary_schemas['wall'] rank-1": ["w"],
+    }
+    swapped = {
+        "output_schema": ({"q": s, "p": s}, "output_schema"),
+        "global_schema": ({"b": v, "a": v, "c": s}, "global_schema rank-1"),
+        "wall": ({"u": s, "t": s, "w": v}, "boundary_schemas['wall'] rank-0"),
+    }
+    for arg, (schema, group) in swapped.items():
+        stored = sd._metadata[""]["fields"][group]
+        with pytest.raises(
+            RuntimeError, match=re.escape(f"the {group} fields in the order {stored!r}")
+        ):
+            model(**{arg: schema}).load_state_dict(sd)
+    path = tmp_path / "isla.mdlus"
+    saved.save(str(path))
+    with pytest.raises(RuntimeError, match="would load into the wrong fields"):
+        model(output_schema=swapped["output_schema"][0]).load(str(path))
+    model(output_schema={"pressure": s, "q": s}).load_state_dict(sd)
+    model(
+        global_schema={"c": s, "a": v, "b": v}, wall={"w": v, "t": s, "u": s}
+    ).load_state_dict(sd)
+    model().load(str(path))
+
+
+def test_isla_state_dict_without_metadata_loads_with_a_warning(caplog):
+    """A state dict copied into a plain ``dict`` has lost torch's metadata, so its
+    state-dict version and its fields' order cannot be checked: it loads, with a
+    warning that says so."""
+    kw = dict(
+        output_schema={"p": {"rank": 0}},
+        boundary_schemas={"wall": {}},
+        hidden=16,
+        n_layers=1,
+        n_slices=4,
+    )
+    sd = ISLA(**kw).state_dict()
+    with caplog.at_level(
+        logging.WARNING, logger="physicsnemo.experimental.models.isla.model"
+    ):
+        ISLA(**kw).load_state_dict(sd)
+        assert not caplog.records
+        ISLA(**kw).load_state_dict(dict(sd))
+    assert [r.getMessage() for r in caplog.records] == [
+        "ISLA: this state dict has no metadata (torch's state_dict()._metadata, which a copy into a "
+        "plain dict or torch.distributed.checkpoint's full state dict drops), so neither its "
+        "state-dict version nor its fields' order is checked"
+    ]
 
 
 def test_isla_unknown_constructor_argument_is_a_type_error():

@@ -1,5 +1,5 @@
-ISLA
-====
+ISLA (Experimental)
+===================
 
 ISLA (Invariant Slice Attention) is a measure-aware slice-attention surrogate
 for steady boundary-value problems. It is :math:`E(d)`-equivariant for any
@@ -65,22 +65,29 @@ Quick Start
 
 A surface task predicts at the cells of named boundaries. The model reads
 other boundaries only as conditions. The class defaults are ``hidden=512``,
-``n_layers=12``, and ``n_slices=128``:
+``n_layers=12``, and ``n_slices=128``. This example uses a smaller model, a
+sphere as the body, and a plane below it as the floor:
 
-.. code-block:: python
-
-    model = ISLA(
-        output_schema={"pressure": {"rank": 0}, "wss": {"rank": 1}},  # a scalar and a vector field
-        boundary_schemas={"vehicle": {}, "floor": {}, "inlet": {}},  # conditions without per-cell fields
-        global_schema={"U_inf_dir": {"rank": 1}},  # one global direction
-    )
-    out = model(
-        boundary_meshes={"vehicle": surface, "floor": floor, "inlet": inlet},  # Mesh[2, 3] each
-        prediction_boundaries=["vehicle"],          # the outputs live on the vehicle
-        global_data={"U_inf_dir": direction},       # (3,)
-    )
-    out.point_data["pressure"]                      # (N,), one per vehicle cell
-    out.point_data["wss"]                           # (N, 3)
+>>> import torch
+>>> from physicsnemo.experimental.models.isla import ISLA
+>>> from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral
+>>> body = sphere_icosahedral.load(subdivisions=1)  # Mesh[2, 3], 80 triangles
+>>> floor = plane.load(size=4.0, subdivisions=4).translate([0.0, 0.0, -1.5])
+>>> model = ISLA(
+...     output_schema={"pressure": {"rank": 0}, "wss": {"rank": 1}},  # a scalar and a vector field
+...     boundary_schemas={"body": {}, "floor": {}},  # conditions without per-cell fields
+...     global_schema={"U_inf_dir": {"rank": 1}},  # one global direction
+...     hidden=32,
+...     n_layers=2,
+...     n_slices=8,
+... )
+>>> out = model(
+...     boundary_meshes={"body": body, "floor": floor},
+...     prediction_boundaries=["body"],  # the outputs live on the body
+...     global_data={"U_inf_dir": torch.tensor([1.0, 0.0, 0.0])},
+... )
+>>> out.point_data["pressure"].shape, out.point_data["wss"].shape  # one row per body cell
+(torch.Size([80]), torch.Size([80, 3]))
 
 To build an interior task, set ``interior=True`` and provide
 ``prediction_points`` instead of ``prediction_boundaries``. Set
@@ -88,7 +95,26 @@ To build an interior task, set ``interior=True`` and provide
 ``(N, n_spatial_dims)`` tensor. Provide ``boundary_meshes`` at full resolution.
 During the forward pass, the model draws ``n_boundary_tokens`` boundary tokens
 from their cells. Each prediction depends only on its point and the boundary,
-so you can process a large request in chunks.
+so you can process a large request in chunks. This example predicts a pressure
+and a velocity at points around the same body:
+
+>>> model = ISLA(
+...     output_schema={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
+...     boundary_schemas={"body": {}, "floor": {}},
+...     global_schema={"U_inf_dir": {"rank": 1}},
+...     interior=True,
+...     hidden=32,
+...     n_layers=2,
+...     n_slices=8,
+... )
+>>> points = 1.25 * torch.nn.functional.normalize(torch.randn(100, 3), dim=-1)  # (N, 3), in the fluid around the body
+>>> out = model(
+...     boundary_meshes={"body": body, "floor": floor},
+...     prediction_points=points,
+...     global_data={"U_inf_dir": torch.tensor([1.0, 0.0, 0.0])},
+... )
+>>> out.point_data["pressure"].shape, out.point_data["velocity"].shape
+(torch.Size([100]), torch.Size([100, 3]))
 
 The unified external-aerodynamics recipe
 (``examples/cfd/external_aerodynamics/unified_external_aero_recipe``) trains
