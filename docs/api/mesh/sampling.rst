@@ -6,7 +6,8 @@ Sampling and Interpolation
 ``physicsnemo.mesh.sampling`` draws random points on the cells of a mesh and
 interpolates mesh data at query points. Both jobs are also ``Mesh`` methods,
 :meth:`~physicsnemo.mesh.mesh.Mesh.sample_random_points_on_cells` and
-:meth:`~physicsnemo.mesh.mesh.Mesh.sample_data_at_points`.
+:meth:`~physicsnemo.mesh.mesh.Mesh.sample_data_at_points`. It also draws cells
+in proportion to their measure.
 
 :bdg-success:`GPU` :bdg-info:`autograd` :bdg-secondary:`any dimension`
 
@@ -62,6 +63,15 @@ interpolates mesh data at query points. Both jobs are also ``Mesh`` methods,
       ``find_nearest_cells(mesh, queries)`` gives the cell with the nearest
       centroid.
 
+   .. grid-item-card:: Systematic Cell Sample
+      :link: physicsnemo.mesh.sampling.sample_cells_systematic
+      :link-type: any
+      :shadow: md
+      :class-card: sd-card-hover
+
+      ``sample_cells_systematic(mesh, n)`` draws ``n`` cells in proportion to
+      their measure, with weights for unbiased sums.
+
 Example
 -------
 
@@ -111,6 +121,36 @@ it once and pass it as ``bvh``.
    centroid of its nearest cell. This helps on surfaces, where query points
    seldom lie exactly on a cell.
 
+Sampling Cells by Measure
+-------------------------
+
+:func:`sample_cells_systematic` draws a fixed number of distinct cells, each
+with probability proportional to its measure (capped at one), and returns
+their `Horvitz-Thompson
+<https://en.wikipedia.org/wiki/Horvitz%E2%80%93Thompson_estimator>`_ weights,
+so a weighted sum over the sample is an unbiased estimate of the sum over the
+mesh:
+
+.. code:: python
+
+    from physicsnemo.mesh.calculus import set_cell_measures
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    from physicsnemo.mesh.sampling import sample_cells_systematic
+
+    mesh = sphere_icosahedral.load(subdivisions=4)  # 5,120 triangles
+    cells, weights = sample_cells_systematic(mesh, 500)
+    print(weights.sum(), mesh.cell_areas.sum())  # close: an unbiased estimate
+
+    # The sample as a mesh: store the weights as its cell measures, so that its
+    # integrals estimate the whole mesh's (else each cell counts its own area)
+    sample = mesh.slice_cells(cells)
+    set_cell_measures(sample, weights)
+
+The draw is systematic sampling along the Morton order of the cell centroids
+in the mesh's own principal axes, so the sample is spread over the mesh and
+is the same in every pose of the mesh. It is bitwise the same from run to
+run, on CPU and on CUDA, and compiles to one graph with ``torch.compile``.
+
 Choosing a Function
 -------------------
 
@@ -135,6 +175,7 @@ Summary
    :nosignatures:
 
    sample_random_points_on_cells
+   sample_cells_systematic
    sample_data_at_points
    find_containing_cells
    find_all_containing_cells
@@ -156,6 +197,8 @@ API Reference
 -------------
 
 .. autofunction:: sample_random_points_on_cells
+
+.. autofunction:: sample_cells_systematic
 
 .. autofunction:: sample_data_at_points
 

@@ -34,6 +34,21 @@ from torch.distributed.tensor.placement_types import (
 from physicsnemo.distributed.utils import compute_split_shapes
 
 
+def _is_symbolic(spec: "ShardTensorSpec") -> bool:
+    r"""Whether the spec's global shape or stride holds a SymInt."""
+    meta = spec.tensor_meta
+    return meta is not None and any(
+        type(d) is not int for d in (*meta.shape, *meta.stride)
+    )
+
+
+def _same_dims(a, b) -> bool:
+    r"""Equal dims without SymInt arithmetic: ints by value, SymInts by identity."""
+    return len(a) == len(b) and all(
+        x is y or (type(x) is int and type(y) is int and x == y) for x, y in zip(a, b)
+    )
+
+
 @dataclass(kw_only=True)
 class ShardTensorSpec(DTensorSpec):
     r"""A distributed tensor specification that tracks sharding information.
@@ -98,8 +113,24 @@ class ShardTensorSpec(DTensorSpec):
             hash_items.append(self.tensor_meta.dtype)
         if self._sharding_shapes is not None:
             hash_items.append(tuple(sorted(self._sharding_shapes.items())))
-        hash_tuple = tuple(hash_items)
-        return hash(hash_tuple)
+        try:
+            return hash(tuple(hash_items))
+        except TypeError:
+            # Symbolic (SymInt) shapes under torch.compile are unhashable;
+            # collisions are allowed and __eq__ still discriminates.
+            return hash((self.mesh, self.placements))
+
+    def __setattr__(self, attr: str, value) -> None:
+        r"""Invalidate the cached hash when the sharding shapes change.
+
+        ``DTensorSpec.__setattr__`` resets ``_hash`` for the fields it hashes;
+        ``_sharding_shapes`` is hashed here as well and is populated lazily,
+        so it needs the same treatment or a spec hashed before population
+        keeps a stale hash.
+        """
+        super().__setattr__(attr, value)
+        if attr == "_sharding_shapes" and hasattr(self, "_hash"):
+            self._hash = None
 
     def __hash__(self) -> int:
         r"""Compute the hash lazily.
@@ -206,6 +237,34 @@ class ShardTensorSpec(DTensorSpec):
         """
         if not isinstance(other, ShardTensorSpec):
             return False
+        if _is_symbolic(self) or _is_symbolic(other):
+            # Symbolic shapes hash by (mesh, placements) only, so collisions
+            # with specs from other traces reach here: never compare SymInts
+            # (that records guards or fails across traces). Same objects or
+            # equal ints only; anything else is a cache miss, not an error.
+            if self is other:
+                return True
+            a, b = self.tensor_meta, other.tensor_meta
+            if (
+                self.mesh != other.mesh
+                or self.placements != other.placements
+                or (a is None) != (b is None)
+            ):
+                return False
+            if a is not None and not (
+                a.dtype == b.dtype
+                and _same_dims(a.shape, b.shape)
+                and _same_dims(a.stride, b.stride)
+            ):
+                return False
+            sa, sb = self._sharding_shapes, other._sharding_shapes
+            if sa is None or sb is None:
+                return sa is sb
+            return sa.keys() == sb.keys() and all(
+                len(sa[k]) == len(sb[k])
+                and all(_same_dims(x, y) for x, y in zip(sa[k], sb[k]))
+                for k in sa
+            )
         if not super().__eq__(other):
             return False
         if self._sharding_shapes != other._sharding_shapes:
@@ -355,13 +414,19 @@ def _gather_shard_shapes_for_dim(
     """
     local_size = dist.get_world_size(group=local_group)
 
-    if not isinstance(local_shape, torch.Tensor):
-        shape = torch.tensor(local_shape, device="cpu", pin_memory=True)
+    # Collectives run on the process group's backend device: CUDA when
+    # available, otherwise CPU (gloo) -- so CPU-only single-process use of
+    # ``sharding_shapes="infer"`` works too.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if isinstance(local_shape, torch.Tensor):
+        shape = local_shape
+    else:
+        shape = torch.tensor(local_shape, device="cpu", pin_memory=(device == "cuda"))
 
-    local_shape = shape.to(device="cuda", non_blocking=True)
+    local_shape = shape.to(device=device, non_blocking=True)
 
     all_shapes = [
-        torch.zeros_like(local_shape, device="cuda") for _ in range(local_size)
+        torch.zeros_like(local_shape, device=device) for _ in range(local_size)
     ]
 
     dist.all_gather(all_shapes, local_shape, group=local_group)
@@ -713,6 +778,8 @@ def validate_aligned_sharding(specs, op_name: str) -> None:
             continue
         cached = getattr(spec, "_sharding_shapes", None) or {}
         shape = tuple(spec.tensor_meta.shape)
+        if any(type(d) is not int for d in shape):
+            continue  # symbolic shapes: boundaries can't be compared here
         key = (spec.mesh, len(shape), placements, tuple(shape[d] for _, d in sharded))
         known = reference.setdefault(key, {})
         for mesh_dim, tensor_dim in sharded:

@@ -33,6 +33,7 @@ if ST_AVAILABLE:
         from .attention_patches import sdpa_wrapper
         from .conv_patches import generic_conv_nd_wrapper
         from .index_ops import (
+            getitem_wrapper,
             index_select_wrapper,
             sharded_select_backward_helper,
             sharded_select_helper,

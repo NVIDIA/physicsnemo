@@ -57,12 +57,31 @@ Set the dataset location via one of:
 
 ### Training
 
-Multi-node via SLURM (edit `DRIVAER_DATA_DIR` in `run.sh` to point to your
-dataset root, then):
+To train with SLURM on one node of 4 GPUs (the reference setup), set
+`DRIVAER_DATA_DIR` in `run.sh` to your dataset root. A full run takes about
+2.5 days on 4 GB300 GPUs as one job. If your cluster allows a job that long,
+set `--time` in `run.sh` to 3 days (`--time=3-00:00:00`), and submit it:
 
 ```bash
 sbatch run.sh
 ```
+
+Otherwise, queue the run as a chain of shorter jobs. Each job saves a
+checkpoint before its time limit, and the next job with the same name resumes
+from it (`--dependency=singleton`). Each job spends about 75 minutes
+compiling, so a 4-hour job trains about 19 epochs. A full run then takes
+about 24 jobs and 4 days. Queue a few spare jobs:
+
+```bash
+for i in $(seq 26); do sbatch run.sh; done
+```
+
+If the run stops before epoch 450, queue more jobs. A job that starts after
+the last epoch exits right after it loads the checkpoint.
+
+Checkpoints from earlier versions of this example do not resume. Start a new
+run in a new output directory, for example with a new job name (`-J`) in
+`run.sh`.
 
 Or run locally on a single GPU:
 
@@ -100,28 +119,78 @@ Green's function-like kernels.  Key architectural properties:
 - **Parity-equivariant**: Reflections are handled correctly.
 
 For 3D, the model uses `n_spatial_dims=3` with 4 spherical harmonic terms
-and multiscale kernels parameterized by per-sample reference lengths
-(car length, sqrt of frontal area).
+and multiscale kernels parameterized by two per-sample reference lengths:
+the car's reference length `lRef` (its wheelbase) and a flat-plate estimate
+of the turbulent boundary-layer thickness.
+
+The boundary input has three partitions: the car surface (`vehicle`) and
+the wind-tunnel floor, split into an inviscid `slip_floor` upstream of
+x = -2.339 m and a viscous `no_slip_floor` downstream.
+
+The defaults follow the model and training configuration of the DrivAerML
+results in the [GLOBE paper](https://arxiv.org/abs/2511.15856):
+
+- 2 communication hyperlayers, kernel networks with 3 hidden layers of 512,
+  16 scalar and 8 vector latent channels, and a Barnes-Hut opening angle of 1.5
+- 50,000 car-surface faces and 50,000 prediction points sampled per car and
+  step
+- Huber loss
+- Muon for matrix-shaped parameters and AdamW for the rest, with learning rate
+  3e-3 and weight decay 1e-4
+- 450 epochs, with the learning rate dropping 10x every 200 epochs (3e-3,
+  3e-4, then 3e-5). The paper's run stopped after about 430 epochs.
+- bfloat16 autocast and `torch.compile`, on one node of 4 GPUs (one car per
+  GPU, so 4 cars per step)
+
+The data pipeline is this example's own, so its scores are not directly
+comparable with the paper's. It trains on 436 cars and validates on 48 (the
+paper: 400 and 34), predicts at mesh vertices with equal weights (the paper:
+at surface cells, with an area-weighted loss), and uses each car's own
+reference lengths.
 
 ## Preprocessing Pipeline
 
 1. Load VTP car body surface (~8.8M quad-dominant cells) and triangulate
 2. Compute nondimensional fields: C_p (already nondimensional),
-   C_f = wallShearStress / q_inf
+   C_f = wallShearStress / q_inf (the stress the wall exerts on the fluid, so
+   the friction force on the car is -C_f)
 3. Interpolate cell-centered data to mesh vertices
 4. Parse reference lengths and force coefficients from CSV files
-5. Cache preprocessed samples as .pt files for fast subsequent loading
-6. At load time, randomly subsample cells for the GLOBE boundary mesh
-   (default 80K faces, configurable via `--n-faces-per-boundary`)
+5. Create the two floor patches at the height of the tire contact
+6. Cache preprocessed samples as .pt files for fast subsequent loading
+   (about 295 GB for all 484 cars, written during the first epoch)
+7. At load time, randomly subsample cells for the GLOBE boundary mesh
+   (default 50K faces, configurable via `--n-faces-per-boundary`)
 
 ## Expected Training Behavior
 
-This section describes what a healthy training run with reference settings (as
-of 2026-05-05) looks like, so you can sanity-check your own runs.
+This section describes a healthy run with the default settings, so you can
+sanity-check your own runs.
 
-- Reference hardware: 4 nodes x 4 B200 192GB
-- Wall time per epoch: 217 seconds
-- Peak VRAM per rank: ~179 GB
-- At epoch 20, train loss ~0.07, validation loss ~0.07; both still decreasing.
-- At epoch 100, train loss ~0.0150, validation loss ~0.0155; both still decreasing.
-- At epoch 500, train loss ~0.0080, validation loss ~0.0085; both still decreasing.
+- Reference hardware: 1 node of 4 NVIDIA GB300 GPUs
+- Wall time per epoch: about 454 seconds (7.6 minutes), at 3.9 seconds per
+  training step. The first epoch of each job takes about 60 to 75 minutes,
+  almost all of it `torch.compile`. A few of the next epochs take 12 to 14
+  minutes each, while one GPU recompiles the training step. These times were
+  measured with the preprocessing cache already built. A new run also writes
+  the cache during its first epoch, which then takes longer.
+- Peak memory per GPU: about 118 GiB in `nvidia-smi` (about 117 GiB in
+  MLflow's `system/vram_gb`)
+- Losses:
+
+  | Epoch | Train loss | Validation loss |
+  | --- | --- | --- |
+  | 20 | 0.0118 | 0.0114 |
+  | 100 | 0.00478 | 0.00541 |
+  | 200 | 0.00352 | 0.00401 |
+  | 300 | 0.00193 | 0.00270 |
+  | 400 | 0.00176 | 0.00265 |
+  | 450 | 0.00165 | 0.00255 |
+
+  Both losses step down when the learning rate drops at epoch 201 (MLflow's
+  `lr` metric shows the drop one epoch early). The lowest validation loss,
+  0.00252, came at epoch 414, and `best_model.mdlus` holds that epoch's model.
+
+  These are one run's values. Expect yours to agree to about 10%. From epoch
+  20 to epoch 200, the validation loss changes from one epoch to the next by
+  3% (median) and by up to 13%. A second run was 10% higher at epoch 19.

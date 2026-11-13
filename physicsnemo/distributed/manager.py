@@ -17,6 +17,7 @@
 import atexit
 import os
 import queue
+import re
 import warnings
 from datetime import timedelta
 from numbers import Real
@@ -63,6 +64,23 @@ class PhysicsNeMoUninitializedDistributedManagerWarning(Warning):
             + "DistributedManager.initialize() before instantiating."
         )
         super().__init__(message)
+
+
+def _first_slurm_host(nodelist: str) -> str:
+    r"""First host of a Slurm host list, e.g. ``gpu03`` for ``gpu[03-05,07],cpu1``.
+
+    Parameters
+    ----------
+    nodelist : str
+        Slurm host list, such as the value of ``SLURM_STEP_NODELIST``.
+
+    Returns
+    -------
+    str
+        Name of the first host in the list.
+    """
+    first = re.split(r",(?![^\[]*\])", nodelist)[0]  # commas outside brackets
+    return re.sub(r"\[([^\],-]+)[^\]]*\]", r"\1", first)  # first of each range
 
 
 class DistributedManager(object):
@@ -349,15 +367,12 @@ class DistributedManager(object):
         """Setup method using generic initialization"""
         rank = int(os.environ.get("RANK"))
         world_size = int(os.environ.get("WORLD_SIZE"))
-        if "LOCAL_RANK" in os.environ:
-            local_rank = os.environ.get("LOCAL_RANK")
-            if local_rank is not None:
-                local_rank = int(local_rank)
-            else:
-                local_rank = rank % torch.cuda.device_count()
-
-        else:
-            local_rank = rank % torch.cuda.device_count()
+        local_rank = os.environ.get("LOCAL_RANK")
+        if local_rank is not None:
+            local_rank = int(local_rank)
+        # When LOCAL_RANK is not provided, leave it as None so that setup()
+        # derives it (rank modulo the accelerator count, or 0 on CPU-only
+        # hosts).
 
         # Read env variables
         addr = os.environ.get("MASTER_ADDR")
@@ -397,7 +412,16 @@ class DistributedManager(object):
         rank = int(os.environ.get("SLURM_PROCID"))
         world_size = int(os.environ.get("SLURM_NPROCS"))
         local_rank = int(os.environ.get("SLURM_LOCALID"))
-        addr = os.environ.get("SLURM_LAUNCH_NODE_IPADDR")
+        # Rank 0 hosts the rendezvous. Slurm starts task 0 on the first node of
+        # the job step, which need not be the node that ran srun. A batch script
+        # run without srun has neither variable and runs on the job's first node.
+        nodelist = os.environ.get("SLURM_STEP_NODELIST")
+        if nodelist:
+            addr = _first_slurm_host(nodelist)
+        else:
+            addr = os.environ.get("SLURM_LAUNCH_NODE_IPADDR")
+            if addr is None and os.environ.get("SLURM_JOB_NODELIST"):
+                addr = _first_slurm_host(os.environ["SLURM_JOB_NODELIST"])
 
         DistributedManager.setup(
             rank=rank,
@@ -420,7 +444,11 @@ class DistributedManager(object):
                 https://pytorch.org/docs/stable/distributed.html#environment-variable-initialization
             `SLURM`: Initialization on SLURM systems.
                 Uses `SLURM_PROCID`, `SLURM_NPROCS`, `SLURM_LOCALID` and
-                `SLURM_LAUNCH_NODE_IPADDR` environment variables.
+                `SLURM_STEP_NODELIST` environment variables, and rendezvouses
+                on the first node of the job step, whose Slurm node name must
+                resolve from every node. Without `SLURM_STEP_NODELIST` it uses
+                `SLURM_LAUNCH_NODE_IPADDR`, and in a batch script run without
+                `srun`, the first node of `SLURM_JOB_NODELIST`.
             `OPENMPI`: Initialization for OpenMPI launchers.
                 Uses `OMPI_COMM_WORLD_RANK`, `OMPI_COMM_WORLD_SIZE` and
                 `OMPI_COMM_WORLD_LOCAL_RANK` environment variables.
@@ -652,7 +680,9 @@ class DistributedManager(object):
             manager._rank = rank
             manager._world_size = world_size
             if local_rank is None:
-                manager._local_rank = rank % torch.cuda.device_count()
+                # On CPU-only hosts there are no devices to assign by rank
+                n_devices = torch.cuda.device_count()
+                manager._local_rank = rank % n_devices if n_devices > 0 else 0
             else:
                 manager._local_rank = local_rank
 
@@ -666,13 +696,16 @@ class DistributedManager(object):
             )
 
         if manager._distributed:
-            # Setup distributed process group
+            # Setup distributed process group. device_id must be an
+            # accelerator device: recent PyTorch versions raise when a CPU
+            # device is passed, so only bind a device on CUDA.
+            device_id = manager.device if manager.device.type == "cuda" else None
             try:
                 dist.init_process_group(
                     backend,
                     rank=manager.rank,
                     world_size=manager.world_size,
-                    device_id=manager.device,
+                    device_id=device_id,
                     timeout=timeout,
                 )
             except TypeError:
@@ -993,6 +1026,7 @@ class DistributedManager(object):
             and DistributedManager._shared_state["_is_initialized"]
             and "_distributed" in DistributedManager._shared_state
             and DistributedManager._shared_state["_distributed"]
+            and dist.is_initialized()
         ):
             if barrier:
                 if torch.cuda.is_available():

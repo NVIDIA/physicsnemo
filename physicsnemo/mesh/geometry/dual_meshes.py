@@ -679,18 +679,19 @@ def compute_dual_volumes_1(
 ) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
     r"""Compute dual 1-cell volumes (dual to edges).
 
-    The dual 1-cell of an edge is the portion of the circumcentric dual mesh
-    associated with that edge. For a 2D triangle mesh, it consists of segments
-    from the edge midpoint to the circumcenters of adjacent triangles,
+    The result is
 
     .. math::
 
         |{\star}e| = |e| \, w_{ij},
 
-    where :math:`w_{ij}` is the FEM cotangent weight for the edge. This
-    relationship holds for any manifold dimension; the FEM stiffness matrix
-    approach (see :func:`compute_cotan_weights_fem`) derives these weights from
-    the gradient dot products of barycentric basis functions.
+    where :math:`w_{ij}` is the FEM cotangent weight for the edge, which the
+    FEM stiffness matrix approach (see :func:`compute_cotan_weights_fem`)
+    derives from the gradient dot products of barycentric basis functions.
+    For manifold dimension at most 2 this is the volume of the circumcentric
+    dual 1-cell: for a 2D triangle mesh, the segments from the edge midpoint
+    to the circumcenters of the adjacent triangles. In 3D and higher it
+    approximates that volume.
 
     Parameters
     ----------
@@ -739,11 +740,9 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_point
     Float[torch.Tensor, " n_points"]
         Dual volumes for vertices, shape ``(n_points,)``.
     """
-    cached = mesh._cache.get(("point", "dual_volumes_0"), None)
-    if cached is None:
-        cached = compute_dual_volumes_0(mesh)
-        mesh._cache["point", "dual_volumes_0"] = cached
-    return cached
+    return mesh._cached(
+        ("point", "dual_volumes_0"), lambda: compute_dual_volumes_0(mesh)
+    )
 
 
 def get_or_compute_circumcenters(
@@ -761,9 +760,7 @@ def get_or_compute_circumcenters(
     Float[torch.Tensor, "n_cells n_spatial_dims"]
         Circumcenters for all cells, shape ``(n_cells, n_spatial_dims)``.
     """
-    cached = mesh._cache.get(("cell", "circumcenters"), None)
-    if cached is None:
-        parent_cell_vertices = gather_rows(mesh.points, mesh.cells)
-        cached = compute_circumcenters(parent_cell_vertices)
-        mesh._cache["cell", "circumcenters"] = cached
-    return cached
+    return mesh._cached(
+        ("cell", "circumcenters"),
+        lambda: compute_circumcenters(gather_rows(mesh.points, mesh.cells)),
+    )

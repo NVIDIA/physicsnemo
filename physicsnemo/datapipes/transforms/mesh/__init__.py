@@ -29,10 +29,12 @@ from physicsnemo.datapipes.transforms.mesh.augmentations import (
 )
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.mesh.transforms import (
+    BoundaryCellsToPoints,
     CenterMesh,
     ComputeCellCentroids,
     ComputeSurfaceNormals,
     DropMeshFields,
+    FlipBoundaryOrientation,
     MeshToDomainMesh,
     MeshToTensorDict,
     NormalizeMeshFields,
@@ -49,6 +51,8 @@ __all__ = [
     "MeshTransform",
     "ComputeCellCentroids",
     "ComputeSurfaceNormals",
+    "BoundaryCellsToPoints",
+    "FlipBoundaryOrientation",
     "ScaleMesh",
     "TranslateMesh",
     "RotateMesh",

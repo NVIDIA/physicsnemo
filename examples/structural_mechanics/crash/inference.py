@@ -33,7 +33,8 @@ from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils import load_checkpoint
 
-from datapipe import simsample_collate
+from datapipes.datapipe import simsample_collate
+from utils.warm_start import load_warm_start
 
 
 def denormalize_positions(
@@ -70,24 +71,30 @@ def save_vtp_sequence(
     prefix="frame",
     extra_fields=None,  # dict[name -> list of [N,C] tensors per timestep]
     exact_extra_fields=None,  # optional exact values for extra fields
+    frame_offset=0,
 ):
     """
     Save a sequence of predicted (and optional exact) positions to VTP files.
     preds/exacts: tensor [T,N,3] or list of [N,3] torch.Tensors
     extra_fields: dict mapping field name to list of [N,C] tensors (one per timestep)
     """
+    if frame_offset < 0:
+        raise ValueError("frame_offset cannot be negative")
     os.makedirs(out_pred_dir, exist_ok=True)
     if exacts is not None and out_exact_dir is not None:
         os.makedirs(out_exact_dir, exist_ok=True)
 
     T = len(preds)
     for t in range(T):
-        vtp_file = os.path.join(vtp_frames_dir, f"{prefix}_{t:03d}.vtp")
+        frame_idx = t + frame_offset
+        vtp_file = os.path.join(vtp_frames_dir, f"{prefix}_{frame_idx:03d}.vtp")
         if not os.path.exists(vtp_file):
             logging.warning(f"Missing VTP frame: {vtp_file}, skipping timestep {t}.")
             continue
 
-        pred_np = preds[t].detach().cpu().numpy()
+        # VTK has no float16 or bfloat16 array type. Inference follows the
+        # training AMP dtype, so explicitly serialize all tensors as float32.
+        pred_np = preds[t].detach().float().cpu().numpy()
         mesh_pred = pv.read(vtp_file)
         if pred_np.shape[0] != mesh_pred.n_points:
             logging.warning(
@@ -102,7 +109,7 @@ def save_vtp_sequence(
         # Add predicted extra fields (stress, strain, etc.)
         if extra_fields:
             for name, field_seq in extra_fields.items():
-                field_np = field_seq[t].detach().cpu().numpy()  # [N] or [N,C]
+                field_np = field_seq[t].detach().float().cpu().numpy()  # [N] or [N,C]
                 if field_np.shape[0] != mesh_pred.n_points:
                     logging.warning(
                         f"Field '{name}' size mismatch at t={t}: "
@@ -114,11 +121,11 @@ def save_vtp_sequence(
                 else:
                     mesh_pred.point_data[f"pred_{name}"] = field_np
 
-        mesh_pred.save(os.path.join(out_pred_dir, f"{prefix}_{t:03d}_pred.vtp"))
+        mesh_pred.save(os.path.join(out_pred_dir, f"{prefix}_{frame_idx:03d}_pred.vtp"))
 
         # Exact + difference
         if exacts is not None and out_exact_dir is not None:
-            exact_np = exacts[t].detach().cpu().numpy()
+            exact_np = exacts[t].detach().float().cpu().numpy()
             if exact_np.shape[0] != mesh_pred.n_points:
                 logging.warning(
                     f"Exact mismatch at t={t}: {exact_np.shape[0]} vs mesh {mesh_pred.n_points}"
@@ -133,7 +140,7 @@ def save_vtp_sequence(
                 if exact_extra_fields:
                     for name, field_seq in exact_extra_fields.items():
                         exact_field_np = (
-                            field_seq[t].detach().cpu().numpy()
+                            field_seq[t].detach().float().cpu().numpy()
                         )  # [N] or [N,C]
                         if exact_field_np.shape[0] != mesh_exact.n_points:
                             logging.warning(
@@ -148,7 +155,9 @@ def save_vtp_sequence(
                             mesh_exact.point_data[f"exact_{name}"] = exact_field_np
 
                         if extra_fields and name in extra_fields:
-                            pred_field_np = extra_fields[name][t].detach().cpu().numpy()
+                            pred_field_np = (
+                                extra_fields[name][t].detach().float().cpu().numpy()
+                            )
                             if pred_field_np.shape == exact_field_np.shape:
                                 if (
                                     pred_field_np.ndim == 1
@@ -169,7 +178,7 @@ def save_vtp_sequence(
                                     )
 
                 mesh_exact.save(
-                    os.path.join(out_exact_dir, f"{prefix}_{t:03d}_exact.vtp")
+                    os.path.join(out_exact_dir, f"{prefix}_{frame_idx:03d}_exact.vtp")
                 )
 
 
@@ -184,6 +193,15 @@ class InferenceWorker:
         self.logger = logger
         self.dist = dist
         self.device = dist.device
+        self.amp = bool(cfg.training.amp)
+        amp_dtype_name = cfg.training.get("amp_dtype", "float16")
+        amp_dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16}
+        if amp_dtype_name not in amp_dtypes:
+            raise ValueError(
+                "training.amp_dtype must be 'float16' or 'bfloat16'; "
+                f"got {amp_dtype_name!r}"
+            )
+        self.amp_dtype = amp_dtypes[amp_dtype_name]
 
         # Build model once per rank
         self.model = instantiate(cfg.model)
@@ -192,8 +210,33 @@ class InferenceWorker:
         self.model.eval()
 
         ckpt_path = cfg.training.ckpt_path
-        load_checkpoint(ckpt_path, models=self.model, device=self.device)
-        self.logger.info(f"[Rank {dist.rank}] Loaded checkpoint {ckpt_path}")
+        warm_start = cfg.training.get("warm_start_model")
+        if warm_start:
+            # A weights-only file (.mdlus or state dict), as for the evaluators;
+            # no training checkpoint is needed then.
+            report = load_warm_start(self.model, warm_start)
+            self.logger.info(
+                f"[Rank {dist.rank}] Weights from {warm_start}: "
+                f"{len(report['loaded'])} tensors loaded"
+            )
+        else:
+            loaded_epoch = load_checkpoint(
+                ckpt_path,
+                models=self.model,
+                device=self.device,
+                epoch=cfg.training.get("load_epoch"),
+            )
+            if loaded_epoch <= 0:
+                raise FileNotFoundError(
+                    f"No training checkpoint (checkpoint.0.<E>.pt with its model "
+                    f"file) found in {ckpt_path}; pass "
+                    "training.warm_start_model=<file>.mdlus to run a weights-only "
+                    "checkpoint"
+                )
+            self.logger.info(
+                f"[Rank {dist.rank}] Loaded checkpoint {ckpt_path} at epoch "
+                f"{loaded_epoch}"
+            )
 
         # For VTP exporting
         self.vtp_prefix = cfg.inference.get("vtp_prefix", "frame")
@@ -246,6 +289,11 @@ class InferenceWorker:
                 k: v.to(self.device)
                 for k, v in getattr(dataset, "feature_stats", {}).items()
             },
+            global_features={
+                "mean": dataset.global_stats["global_mean"].to(self.device),
+                "std": dataset.global_stats["global_std"].to(self.device),
+                "keys": list(dataset.global_features_keys or []),
+            },
         )
 
         # Simple 1-sample loader
@@ -277,7 +325,12 @@ class InferenceWorker:
             )
 
             # Forward rollout: model returns [N, T, Fo]
-            pred = self.model(sample=sample, data_stats=data_stats)
+            with torch.autocast(
+                device_type=self.device.type,
+                enabled=self.amp and self.device.type == "cuda",
+                dtype=self.amp_dtype,
+            ):
+                pred = self.model(sample=sample, data_stats=data_stats)
             target_series = getattr(sample, "target_series", None) or {}
 
             # Extract positions [T, N, 3] and extra fields
@@ -317,6 +370,7 @@ class InferenceWorker:
                     prefix=self.vtp_prefix,
                     extra_fields=pred_extra or None,
                     exact_extra_fields=exact_extra or None,
+                    frame_offset=1,
                 )
                 if pred_extra:
                     self.logger.info(
@@ -333,6 +387,7 @@ class InferenceWorker:
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     # Initialize distributed (one process per GPU via torchrun)
+    """Run distributed crash inference and write predicted VTP trajectories."""
     DistributedManager.initialize()
     dist = DistributedManager()
 
@@ -342,7 +397,17 @@ def main(cfg: DictConfig):
     logging.getLogger().setLevel(logging.INFO)
 
     # Discover all .vtp files in the parent directory (flat layout)
-    parent_dir = to_absolute_path(cfg.inference.raw_data_dir_test)
+    raw_data_dir_test = (
+        cfg.inference.get("raw_data_dir_test") if "inference" in cfg else None
+    )
+    if not raw_data_dir_test:
+        raise ValueError(
+            "inference.raw_data_dir_test is not set. inference.py serves the VTP "
+            "recipes (the graph and point-cloud datapipes over .vtp runs); the "
+            "Yaris recipes are scored by evaluate_px_yaris.py, which writes "
+            "metrics only and exports no predicted shapes."
+        )
+    parent_dir = to_absolute_path(raw_data_dir_test)
     if not os.path.isdir(parent_dir):
         logger0.error(f"Parent directory not found: {parent_dir}")
         return

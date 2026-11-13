@@ -31,6 +31,7 @@ from tensordict import TensorDict
 from physicsnemo.mesh import DomainMesh, Mesh
 
 from forward_kwargs import (
+    extract_target_measure,
     extract_targets,
     resolve_forward_kwargs,
     resolve_spec,
@@ -224,6 +225,19 @@ class TestResolveSpec:
                 {"source": "global_data.U_inf", "expand_like": "embedding"},
                 simple_domain,
             )
+
+    def test_literal_passes_as_it_is(self, simple_domain):
+        """A ``{literal: value}`` dict gives its value as it is: names, not paths."""
+        assert resolve_spec({"literal": ["vehicle"]}, simple_domain) == ["vehicle"]
+        assert (
+            resolve_spec({"literal": "interior.points"}, simple_domain)
+            == "interior.points"
+        )
+        ### A literal nested in a dict spec, beside resolved paths.
+        out = resolve_spec(
+            {"names": {"literal": ["a", "b"]}, "v": "boundaries.vehicle"}, simple_domain
+        )
+        assert out["names"] == ["a", "b"] and isinstance(out["v"], Mesh)
 
     def test_none_passes_through(self, simple_domain):
         """None passes through."""
@@ -419,3 +433,7 @@ class TestExtractTargets:
         result = extract_targets(simple_domain, {"pressure": "scalar"})
         assert isinstance(result, TensorDict)
         assert set(result.keys()) == {"pressure"}
+
+    def test_native_point_cloud_has_no_target_measure(self, simple_domain):
+        """Without a stored measure, every target point counts alike."""
+        assert extract_target_measure(simple_domain) is None

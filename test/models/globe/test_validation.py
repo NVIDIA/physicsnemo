@@ -22,17 +22,19 @@ given ``boundary_source_schemas`` / ``global_schema`` accepts any
 leaf with matching rank.  Extra leaves are silently dropped by the
 ``select`` filter inside :class:`GLOBE`; missing leaves and rank
 mismatches raise ``ValueError`` at forward entry.  The construction-time
-tests pin which field declarations GLOBE refuses, and that schema objects
-survive a checkpoint.
+tests pin the attributes GLOBE stores, which arguments it refuses, and that
+its arguments survive a checkpoint.
 """
 
 import pytest
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.core import Module
 from physicsnemo.mesh import FieldSchema, Mesh, RankSpec
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.models.globe import GLOBE
+from test.models.globe._helpers import assert_globe_attributes
 
 ### Test fixtures and helpers
 # `lumpy_sphere(subdivisions=1)` -> 80 triangle faces. Validation runs in
@@ -250,3 +252,90 @@ def test_globe_silently_accepts_extra_global_data_keys(
     pressure_clean = out_clean.point_data["pressure"]
     assert torch.all(torch.isfinite(pressure_extra))
     torch.testing.assert_close(pressure_extra, pressure_clean)
+
+
+### Constructor arguments: only the required ones, then every optional one
+### set to a value other than its default.
+REQUIRED_KWARGS = {
+    "n_spatial_dims": 3,
+    "output_schema": {"pressure": {"rank": 0}, "velocity": {"rank": 1}},
+    "boundary_source_schemas": {"no_slip": {"alpha": {"rank": 0}}, "freestream": {}},
+    "reference_length_names": ["delta_FS", "chord"],
+    "reference_area": 2.0,
+}
+CUSTOM_KWARGS = {
+    "global_schema": {"U_inf": {"rank": 1}},
+    "n_communication_hyperlayers": 1,
+    "n_latent_scalars": 3,
+    "n_latent_vectors": 2,
+    "smoothing_radius": 1e-6,
+    "hidden_layer_sizes": [8, 4],
+    "n_spherical_harmonics": 2,
+    "theta": 0.5,
+    "leaf_size": 4,
+    "network_type": "mlp",
+    "self_regularization_beta": 0.5,
+    "latent_compression_scale": 10.0,
+    "expand_far_targets": False,
+    "use_gradient_checkpointing": False,
+    "tree_build_device": "cpu",
+}
+
+
+@pytest.mark.parametrize(
+    "optional_kwargs", [{}, CUSTOM_KWARGS], ids=["defaults", "custom"]
+)
+def test_globe_constructor_attributes(optional_kwargs: dict) -> None:
+    """GLOBE stores its constructor arguments as public attributes (see
+    :func:`assert_globe_attributes`)."""
+    model = GLOBE(**REQUIRED_KWARGS, **optional_kwargs)
+    assert_globe_attributes(model, REQUIRED_KWARGS | optional_kwargs)
+
+
+@pytest.mark.parametrize("n_spatial_dims", [1, 4])
+def test_globe_rejects_unsupported_n_spatial_dims(n_spatial_dims: int) -> None:
+    """GLOBE is defined in 2 and 3 dimensions only."""
+    with pytest.raises(ValueError, match=r"n_spatial_dims must be 2 or 3"):
+        GLOBE(**(REQUIRED_KWARGS | {"n_spatial_dims": n_spatial_dims}))
+
+
+@pytest.mark.parametrize("prediction_chunk_size", [0, -1, 2.5, "big"])
+def test_globe_rejects_invalid_prediction_chunk_size(
+    monkeypatch,
+    prediction_points: torch.Tensor,
+    reference_lengths: dict[str, torch.Tensor],
+    prediction_chunk_size,
+) -> None:
+    """An invalid ``prediction_chunk_size`` raises before any computation."""
+    model = _make_model()
+
+    def fail(*args, **kwargs):
+        raise AssertionError("trees were built before validation")
+
+    monkeypatch.setattr(model, "_build_trees_and_plans", fail)
+    with pytest.raises(ValueError, match=r"prediction_chunk_size"):
+        model(
+            prediction_points=prediction_points,
+            boundary_meshes={"no_slip": _mesh_with_cell_data(None)},
+            reference_lengths=reference_lengths,
+            prediction_chunk_size=prediction_chunk_size,
+        )
+
+
+def test_globe_checkpoints_tree_build_device(tmp_path) -> None:
+    """A ``torch.device`` given as ``tree_build_device`` survives a checkpoint."""
+    model = GLOBE(
+        n_spatial_dims=3,
+        output_schema={"pressure": {"rank": 0}},
+        boundary_source_schemas={"no_slip": {}},
+        reference_length_names=["test_length"],
+        reference_area=1.0,
+        n_communication_hyperlayers=1,
+        hidden_layer_sizes=[8],
+        tree_build_device=torch.device("cpu"),
+    )
+    path = tmp_path / "globe.mdlus"
+    model.save(path)
+    loaded = Module.from_checkpoint(path)
+    assert isinstance(loaded, GLOBE)
+    assert loaded.tree_build_device == torch.device("cpu")

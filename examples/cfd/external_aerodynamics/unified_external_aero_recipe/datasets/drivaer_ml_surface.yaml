@@ -82,12 +82,22 @@ pipeline:
     # the original triangulated surface, with non-target cell features
     # (normals) preserved on the boundary's cell_data. The dataset builder
     # auto-injects `cell_data_targets` from the `targets:` block below.
-    - _target_: ${dp:MeshToDomainMesh}
+    # SurfaceMeshToDomainMesh is MeshToDomainMesh on this Mesh, and also keeps
+    # the tunnel boundaries when a model config reads them
+    # (`dataset_reader_overrides: {domain_boundaries: [...]}`).
+    - _target_: ${dp:SurfaceMeshToDomainMesh}
       interior_points: cell_centroids
 
 # Single source of truth for prediction field names + types. Read by both the
-# dataset builder (auto-injected into MeshToDomainMesh above) and the train
+# dataset builder (auto-injected into SurfaceMeshToDomainMesh above) and the train
 # loop (used to build LossCalculator and MetricCalculator).
 targets:
   pressure: scalar
   wss: vector
+
+# Conventions of the stored surface, read by the integrated force coefficients
+# (src/forces.py). The surface is wound so that its normals point into the car.
+# OpenFOAM's wallShearStress is the stress the wall exerts on the fluid, so the
+# friction force on the car is its negative.
+surface_normals_point: inward
+wall_shear_acts_on: fluid

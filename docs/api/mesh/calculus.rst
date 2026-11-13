@@ -223,7 +223,7 @@ Use the following guidelines to choose a function:
         - yes
       * - Gradient, LSQ, cells
         - yes
-        - extrinsic only
+        - yes
         - yes
         - yes
         - yes

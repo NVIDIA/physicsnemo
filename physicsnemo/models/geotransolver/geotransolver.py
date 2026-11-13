@@ -31,6 +31,7 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 from jaxtyping import Float
+from torch.distributed.tensor import Replicate
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -699,20 +700,75 @@ class GeoTransolver(Module):
         local_positions: tuple[torch.Tensor, ...] | None,
         geometry: torch.Tensor | None,
         global_embedding: torch.Tensor | None,
+        *,
+        detach_geometry_context: bool = True,
     ) -> tuple[
         torch.Tensor | None,
         list[torch.Tensor] | None,
         torch.Tensor | None,
     ]:
-        r"""Build context directly or under activation checkpointing."""
+        r"""Build context directly or under activation checkpointing.
+
+        Extension point: subclasses that condition further stages on the live
+        geometry tokens (:class:`~physicsnemo.experimental.models.deformer.DeFormer`)
+        call this with ``detach_geometry_context=False`` and then
+        :meth:`_process_preprocessed_embeddings`; keep both seams stable.
+        """
+        inputs = (local_embedding, local_positions, geometry, global_embedding)
+        if not detach_geometry_context:
+            # Only the live-token request adds an input; GeoTransolver's own
+            # checkpointed call keeps its arity.
+            inputs += (False,)
         return self._run_checkpointed_component(
-            "context",
-            self.context_builder.build_context,
-            local_embedding,
-            local_positions,
-            geometry,
-            global_embedding,
+            "context", self.context_builder.build_context, *inputs
         )
+
+    def _process_preprocessed_embeddings(
+        self,
+        embeddings: list[torch.Tensor],
+        context: torch.Tensor | None,
+        local_features: list[torch.Tensor] | None,
+        *,
+        return_point_features: bool = False,
+        compute_outputs: bool = True,
+    ) -> list[torch.Tensor] | tuple[list[torch.Tensor] | None, list[torch.Tensor]]:
+        r"""Process native hidden states, allowing hybrid mesh refinement.
+
+        Each input is ``[B, N, n_hidden]``. This seam lets mesh processors
+        refine the projected state without a bottleneck back to raw features.
+        Both regular and hybrid forwards share checkpointing and output heads.
+        With ``compute_outputs=False`` the output projection is skipped and
+        ``None`` stands in for the outputs, for callers that consume the
+        hidden states only (requires ``return_point_features=True``).
+        Extension point relied on by
+        :class:`~physicsnemo.experimental.models.deformer.DeFormer` together with
+        :meth:`_build_context`.
+        """
+        if self.include_local_features and local_features is not None:
+            embeddings = [
+                torch.cat([embeddings[i], local_features[i]], dim=-1)
+                for i in range(len(embeddings))
+            ]
+        for block_idx, block in enumerate(self.blocks):
+            if self._should_checkpoint_block(block_idx):
+                embeddings = self._checkpoint_block(block, embeddings, context)
+            else:
+                embeddings = block(tuple(embeddings), context)
+
+        point_features = list(embeddings)
+        if not compute_outputs:
+            if not return_point_features:
+                raise ValueError(
+                    "compute_outputs=False requires return_point_features=True"
+                )
+            return None, point_features
+        outputs = [
+            self._run_checkpointed_component("output", self.ln_mlp_out[i], value)
+            for i, value in enumerate(embeddings)
+        ]
+        if return_point_features:
+            return outputs, point_features
+        return outputs
 
     def forward(
         self,
@@ -792,6 +848,112 @@ class GeoTransolver(Module):
         ValueError
             If input tensors have incorrect dimensions.
         """
+        output, embedding_states, point_features, _ = self._forward_impl(
+            local_embedding, local_positions, global_embedding, geometry, time
+        )
+        outputs = [output]
+        if return_embedding_states:
+            outputs.append(embedding_states)
+        if return_point_features:
+            outputs.append(point_features)
+        return tuple(outputs) if len(outputs) > 1 else output
+
+    def forward_with_geometry_features(
+        self,
+        local_embedding: (
+            Float[torch.Tensor, "batch tokens features"]
+            | tuple[Float[torch.Tensor, "batch tokens features"], ...]
+        ),
+        local_positions: (
+            Float[torch.Tensor, "batch tokens spatial_dim"]
+            | tuple[Float[torch.Tensor, "batch tokens spatial_dim"], ...]
+            | None
+        ) = None,
+        global_embedding: Float[torch.Tensor, "batch global_tokens global_dim"]
+        | None = None,
+        geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
+        time: torch.Tensor | None = None,
+    ) -> tuple[
+        Float[torch.Tensor, "..."] | tuple[Float[torch.Tensor, "..."], ...],
+        Float[torch.Tensor, "batch heads slices dim_head"] | None,
+    ]:
+        r"""Predict and return detached geometry tokens in one forward pass.
+
+        Parameters
+        ----------
+        local_embedding : torch.Tensor | tuple[torch.Tensor, ...]
+            Input tensor of shape :math:`(B, N, C)`, or one tensor per stream.
+            Structured inputs follow the same conventions as :meth:`forward`.
+        local_positions : torch.Tensor | tuple[torch.Tensor, ...] | None, optional, default=None
+            Positions of shape :math:`(B, N, 3)` for each input stream.
+            Required when ``include_local_features=True``.
+        global_embedding : torch.Tensor | None, optional, default=None
+            Global context of shape :math:`(B, N_g, C_g)`.
+        geometry : torch.Tensor | None, optional, default=None
+            Geometry inputs of shape :math:`(B, N_geo, C_geo)`.
+        time : torch.Tensor | None, optional, default=None
+            Time embedding (not yet implemented).
+
+        Returns
+        -------
+        tuple[torch.Tensor | tuple[torch.Tensor, ...], torch.Tensor | None]
+            Always ``(prediction, geometry_features)``. Prediction has the same
+            shape, stream structure, and gradients as :meth:`forward` with its
+            return flags unset. Geometry features have shape
+            :math:`(B, H, S, D_g)` and are detached from the computation graph.
+            They are ``None`` when geometry tokenization or its input is absent.
+            Pending domain reductions are completed before returning features.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``time`` is provided.
+        ValueError
+            If inputs do not satisfy the same requirements as :meth:`forward`.
+
+        Notes
+        -----
+        Features contain only geometry tokens, not combined global context.
+        Pooling and OOD scoring belong to the caller. This method does not run
+        model-level forward hooks. For a wrapper such as DistributedDataParallel,
+        call this method inside an adapter's ``forward`` and wrap that adapter;
+        calling it through ``wrapper.module`` bypasses the wrapper's forward.
+
+        Examples
+        --------
+        >>> model = GeoTransolver(functional_dim=3, out_dim=1, geometry_dim=3,
+        ...                       n_layers=1, n_hidden=16, n_head=4, use_te=False)
+        >>> inputs = torch.randn(1, 10, 3)
+        >>> geometry = torch.randn(1, 20, 3)
+        >>> prediction, tokens = model.forward_with_geometry_features(
+        ...     inputs, geometry=geometry)
+        """
+        prediction, _, _, geometry_features = self._forward_impl(
+            local_embedding, local_positions, global_embedding, geometry, time
+        )
+        # Tokenization may leave a pending reduction over domain shards.
+        # Complete it before callers pool or score these features.
+        placements = getattr(geometry_features, "placements", ())
+        if any(p.is_partial() for p in placements):
+            geometry_features = geometry_features.redistribute(
+                placements=[Replicate() if p.is_partial() else p for p in placements]
+            )
+        return prediction, geometry_features
+
+    def _forward_impl(
+        self,
+        local_embedding: torch.Tensor | tuple[torch.Tensor, ...],
+        local_positions: torch.Tensor | tuple[torch.Tensor, ...] | None,
+        global_embedding: torch.Tensor | None,
+        geometry: torch.Tensor | None,
+        time: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+    ]:
+        r"""Compute predictions and features shared by both public entry points."""
         # Track whether input was a single tensor for output format
         single_input = isinstance(local_embedding, torch.Tensor)
 
@@ -869,10 +1031,9 @@ class GeoTransolver(Module):
                     f"got {global_embedding.ndim}D tensor with shape {tuple(global_embedding.shape)}"
                 )
 
-        # Build context embeddings and extract local features. The third
-        # return value (detached geometry latent) is consumed by an optional
-        # external OOD guard wrapper via a forward hook, not here.
-        embedding_states, local_embedding_bq, _ = self._build_context(
+        # Geometry features are detached tokens from the geometry tokenizer,
+        # distinct from the combined geometry/global context embeddings.
+        embedding_states, local_embedding_bq, geometry_features = self._build_context(
             local_embedding, local_positions, geometry, global_embedding
         )
 
@@ -882,28 +1043,9 @@ class GeoTransolver(Module):
             for i, le in enumerate(local_embedding)
         ]
 
-        # Concatenate local features if enabled
-        if self.include_local_features and local_embedding_bq is not None:
-            x = [
-                torch.cat([x[i], local_embedding_bq[i]], dim=-1) for i in range(len(x))
-            ]
-
-        # Pass through GALE transformer blocks with context cross-attention
-        for block_idx, block in enumerate(self.blocks):
-            if self._should_checkpoint_block(block_idx):
-                x = self._checkpoint_block(block, x, embedding_states)
-            else:
-                x = block(tuple(x), embedding_states)
-
-        # Per-point features just before the output projection. Shape per
-        # stream: (B, N, effective_hidden). Captured for pointwise heads.
-        point_features = list(x)
-
-        # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
-        x = [
-            self._run_checkpointed_component("output", self.ln_mlp_out[i], x[i])
-            for i in range(len(x))
-        ]
+        x, point_features = self._process_preprocessed_embeddings(
+            x, embedding_states, local_embedding_bq, return_point_features=True
+        )
 
         if self.structured_shape is not None and unflatten_output:
             B = x[0].shape[0]
@@ -923,10 +1065,4 @@ class GeoTransolver(Module):
             x = tuple(x)
             point_features_out = tuple(point_features)
 
-        if return_embedding_states and return_point_features:
-            return x, embedding_states, point_features_out
-        if return_embedding_states:
-            return x, embedding_states
-        if return_point_features:
-            return x, point_features_out
-        return x
+        return x, embedding_states, point_features_out, geometry_features

@@ -106,23 +106,29 @@ def _build_inputs(n_points, geometry_points=_N_GEO):
     return build_inputs
 
 
-def _shard_inputs(args, kwargs, mesh):
+def _shard_inputs(args, kwargs, mesh, *, requires_grad=False):
     (local_embedding,) = args
     # Scatter from this domain group's own first rank: on a submesh of a
     # larger mesh, global rank 0 is not in every group and scattering from
     # it hangs the other replicas.
     src = dist.get_global_rank(mesh.get_group(), 0)
     sharded_args = (
-        scatter_tensor(local_embedding, src, mesh, (Shard(1),), requires_grad=False),
+        scatter_tensor(
+            local_embedding, src, mesh, (Shard(1),), requires_grad=requires_grad
+        ),
     )
     sharded_kwargs = {
         # Independent point cloud, unevenly sharded on the same mesh.
         "geometry": scatter_tensor(
-            kwargs["geometry"], src, mesh, (Shard(1),), requires_grad=False
+            kwargs["geometry"], src, mesh, (Shard(1),), requires_grad=requires_grad
         ),
         # Global tokens stay replicated (domino _NON_SHARDED_KEYS pattern).
         "global_embedding": scatter_tensor(
-            kwargs["global_embedding"], src, mesh, (Replicate(),), requires_grad=False
+            kwargs["global_embedding"],
+            src,
+            mesh,
+            (Replicate(),),
+            requires_grad=requires_grad,
         ),
     }
     return sharded_args, sharded_kwargs
@@ -435,3 +441,115 @@ def test_gale_block_distributed(distributed_mesh, attention_type):
         rtol=1e-4,
         output_check_fn=_assert_sharded_like_hidden,
     )
+
+
+class _GeometryFeatureAdapter(nn.Module):
+    """Expose the feature method through forward for the model test harness and DDP."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, local_embedding, geometry, global_embedding):
+        return self.model.forward_with_geometry_features(
+            local_embedding, geometry=geometry, global_embedding=global_embedding
+        )
+
+
+def _geometry_feature_case(attention_type):
+    """Compare predictions, detached tokens and gradients against a dense model."""
+    n_points = 131
+
+    def build_model(device):
+        return _GeometryFeatureAdapter(_build_geotransolver(attention_type)(device))
+
+    def shard_inputs(args, kwargs, mesh):
+        args, kwargs = _shard_inputs(args, kwargs, mesh, requires_grad=True)
+        # The numerical helper checks input gradients for positional arguments.
+        # Include all three inputs so it checks geometry/global gradients too.
+        return (*args, kwargs["geometry"], kwargs["global_embedding"]), {}
+
+    def check_output(output):
+        prediction, features = output
+        _check_output(n_points)(prediction)
+        assert features.placements == (Replicate(),)
+        assert not features.requires_grad
+
+    return DomainParallelModelCase(
+        name=f"geotransolver-geometry-features-{attention_type.lower()}",
+        build_model=build_model,
+        build_inputs=_build_inputs(n_points, geometry_points=91),
+        shard_inputs=shard_inputs,
+        strategy="ddp",
+        output_check_fn=check_output,
+        loss_fn=lambda output: output[0].square().mean(),
+        check_grads=True,
+        atol=1e-4,
+        rtol=1e-4,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("topology", ["world", "member_domain"])
+@pytest.mark.parametrize(
+    "case",
+    [_geometry_feature_case("GALE"), _geometry_feature_case("GALE_FA")],
+    ids=lambda case: case.name,
+)
+def test_geometry_features_distributed(distributed_mesh, topology, case):
+    """Check sharding and dense-reference forward/backward on each domain group."""
+    from torch.distributed.device_mesh import init_device_mesh
+
+    dm = DistributedManager()
+    mesh = distributed_mesh
+    member = 0
+    if topology == "member_domain":
+        if dm.world_size != 4:
+            pytest.skip("Member/domain isolation requires four GPUs")
+        parent = init_device_mesh("cuda", (2, 2), mesh_dim_names=("member", "domain"))
+        member = parent.get_coordinate()[0]
+        mesh = parent["domain"]
+    # Distinct weights and inputs across members expose accidental WORLD
+    # reductions; each domain group must match its own dense reference.
+    torch.manual_seed(62 + member)
+    run_domain_parallel_model_check(case, mesh=mesh)
+
+
+@pytest.mark.multigpu_static
+def test_geometry_method_through_ddp_adapter(distributed_mesh):
+    """An adapter lets DDP synchronize gradients from the geometry-feature entry point."""
+    from torch.nn.parallel import DistributedDataParallel
+
+    dm = DistributedManager()
+    torch.manual_seed(72)
+    model = _build_geotransolver("GALE")(dm.device).train()
+    torch.manual_seed(73 + dm.rank)
+    args, kwargs = _build_inputs(31, geometry_points=19)(dm.device)
+    expected = model(*args, **kwargs)
+    expected.square().mean().backward()
+    gradients = {}
+    for name, parameter in model.named_parameters():
+        grad = parameter.grad.clone()
+        dist.all_reduce(grad)
+        gradients[name] = grad / dm.world_size
+    model.zero_grad(set_to_none=True)
+    adapter = _GeometryFeatureAdapter(model)
+    wrapped = DistributedDataParallel(adapter, device_ids=[dm.local_rank])
+    observed = []
+    handle = adapter.register_forward_hook(
+        lambda module, inputs, output: observed.append(output)
+    )
+    # Two steps also detect unfinished reductions or unused-parameter errors.
+    for _ in range(2):
+        wrapped.zero_grad(set_to_none=True)
+        prediction, tokens = wrapped(*args, **kwargs)
+        torch.testing.assert_close(prediction, expected, rtol=0, atol=0)
+        assert not tokens.requires_grad
+        prediction.square().mean().backward()
+        for name, parameter in model.named_parameters():
+            torch.testing.assert_close(
+                parameter.grad, gradients[name], rtol=1e-5, atol=1e-8
+            )
+    handle.remove()
+    assert len(observed) == 2
