@@ -40,6 +40,7 @@ from physicsnemo.datapipes.transforms.geometric import (
     Translate,
 )
 from physicsnemo.datapipes.transforms.mesh import (
+    BoundaryCellsToPoints,
     CenterMesh,
     ComputeCellCentroids,
     ComputeSurfaceNormals,
@@ -115,6 +116,7 @@ __all__ = [
     "CenterMesh",
     "SubsampleMesh",
     "DropMeshFields",
+    "BoundaryCellsToPoints",
     "FlipBoundaryOrientation",
     "RenameMeshFields",
     "NormalizeMeshFields",

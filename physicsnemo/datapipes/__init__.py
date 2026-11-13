@@ -60,6 +60,7 @@ from physicsnemo.datapipes.registry import (
     register_resolvers,
 )
 from physicsnemo.datapipes.transforms import (
+    BoundaryCellsToPoints,
     BoundingBoxFilter,
     BroadcastGlobalFeatures,
     CenterMesh,
@@ -149,6 +150,7 @@ __all__ = [
     "CenterMesh",
     "SubsampleMesh",
     "DropMeshFields",
+    "BoundaryCellsToPoints",
     "FlipBoundaryOrientation",
     "RenameMeshFields",
     "NormalizeMeshFields",

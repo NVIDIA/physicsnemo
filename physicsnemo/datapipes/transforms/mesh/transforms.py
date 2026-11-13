@@ -1039,6 +1039,137 @@ class FlipBoundaryOrientation(MeshTransform):
         return f"boundaries={self.boundaries}, normal_fields={self.normal_fields}"
 
 
+@register()
+class BoundaryCellsToPoints(MeshTransform):
+    r"""Add a point-cloud boundary at a draw of another boundary's cell centroids.
+
+    Draws ``n_cells`` cells of the :class:`~physicsnemo.mesh.DomainMesh`
+    boundary ``source`` uniformly without replacement, as
+    :class:`SubsampleMesh` does, and adds a point-cloud boundary ``name``
+    with one point per drawn cell. The ``cell_data`` fields named in
+    ``fields`` become its ``point_data`` fields and are removed from
+    ``source``, so that no model reads them through it, as in
+    :class:`MeshToDomainMesh`. ``source`` keeps all its cells.
+
+    Each point sits at its cell's centroid moved ``offset`` along the cell's
+    unit normal, on the side the normal points to. Each point records its
+    cell's measure times N / n, for n cells drawn of N, under
+    :data:`~physicsnemo.mesh.calculus.measure.EFFECTIVE_MEASURE_KEY`, so sums
+    over the points estimate integrals over ``source`` without bias.
+
+    Parameters
+    ----------
+    source : str
+        Name of the boundary whose cells are drawn.
+    name : str
+        Name of the new point-cloud boundary.
+    fields : Mapping[str, str]
+        ``{source cell_data field: new point_data field}``.
+    n_cells : int or None
+        Cells drawn per sample; ``None`` takes every cell. Default: ``None``.
+    offset : float
+        Distance off the cell along its unit normal, in the coordinates'
+        units. Default: 0, the centroids.
+
+    Raises
+    ------
+    TypeError
+        When called on a bare :class:`Mesh`: the transform needs a
+        ``DomainMesh``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import DomainMesh, Mesh
+    >>> wall = Mesh(
+    ...     points=torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+    ...     cells=torch.tensor([[0, 1, 2]]),
+    ...     cell_data={"p": torch.tensor([2.0])},
+    ... )
+    >>> domain = DomainMesh(interior=Mesh(points=torch.zeros(1, 3)), boundaries={"wall": wall})
+    >>> out = BoundaryCellsToPoints(
+    ...     source="wall", name="wall_points", fields={"p": "p_wall"}, offset=0.5
+    ... ).apply_to_domain(domain)
+    >>> out.boundaries["wall_points"].points
+    tensor([[0.3333, 0.3333, 0.5000]])
+    >>> out.boundaries["wall_points"].point_data["p_wall"], "p" in out.boundaries["wall"].cell_data
+    (tensor([2.]), False)
+    """
+
+    def __init__(
+        self,
+        source: str,
+        name: str,
+        fields: Mapping[str, str],
+        n_cells: int | None = None,
+        offset: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.source = str(source)
+        self.name = str(name)
+        self.fields = _parse_key_mapping(dict(fields))
+        self.n_cells = n_cells
+        self.offset = float(offset)
+        self._generator: torch.Generator | None = None
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        raise TypeError("BoundaryCellsToPoints needs a DomainMesh, not a Mesh")
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Add the point-cloud boundary ``name`` (see the class docstring).
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh.
+
+        Returns
+        -------
+        DomainMesh
+            The domain with ``source``'s fields moved onto the new boundary.
+        """
+        if self.source not in domain.boundary_names:
+            raise KeyError(
+                f"BoundaryCellsToPoints: boundary {self.source!r} not found; "
+                f"available: {domain.boundary_names}"
+            )
+        if self.name in domain.boundary_names:
+            raise ValueError(f"BoundaryCellsToPoints: {self.name!r} already exists")
+        source = domain.boundaries[self.source]
+        require_keys(source.cell_data, self.fields, what="Source field")
+        drawn = source
+        if self.n_cells is not None:
+            sampler = SubsampleMesh(n_cells=self.n_cells, compact=False)
+            sampler._generator = self._generator
+            drawn = sampler(source)
+        points = drawn.cell_centroids
+        if self.offset:
+            points = points + self.offset * drawn.cell_normals
+        new = Mesh(
+            points=points,
+            point_data=rename_keys(
+                drawn.cell_data.select(*self.fields), self.fields, strict=True
+            ),
+        )
+        set_point_measures(new, cell_measures(drawn), dimension=drawn.n_manifold_dims)
+        boundaries = dict(domain.boundaries.items())
+        boundaries[self.source] = source.with_data(
+            cell_data=exclude_keys(source.cell_data, self.fields)
+        )
+        boundaries[self.name] = new
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=boundaries,
+            global_data=domain.global_data,
+        )
+
+    def extra_repr(self) -> str:
+        return (
+            f"source={self.source!r}, name={self.name!r}, fields={self.fields}, "
+            f"n_cells={self.n_cells}, offset={self.offset}"
+        )
+
+
 def _mesh_to_tensordict(mesh: Mesh) -> TensorDict:
     """Convert a single Mesh into a flat TensorDict (no cache, no tensorclass)."""
     out: dict = {
