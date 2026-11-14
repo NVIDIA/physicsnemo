@@ -165,7 +165,8 @@ Use the following guidelines to choose a function:
 - To repair a mesh from an outside source, use :func:`repair_mesh`. Its
   ``tolerance`` defaults to ``max(1e-6, 100 * eps)`` times the bounding-box
   diagonal of the mesh, where ``eps`` is the machine epsilon of the point
-  dtype.
+  dtype, and its ``area_tolerance`` to ``tolerance`` raised to the manifold
+  dimension.
 - To close the slits that open where one cell edge meets two shorter ones,
   use :func:`stitch_t_junctions`. It splits triangles at those vertices and
   moves no point.
@@ -179,7 +180,10 @@ Use the following guidelines to choose a function:
    you pass ``split_nonmanifold_edges=True``. That step is off by default
    because it deletes geometry: it drops thin open sheets attached along an
    edge, such as baffles and zero-thickness plates, as fins. A triangle
-   repeated with the opposite winding also stays unless that step runs.
+   repeated with the opposite winding also stays unless that step runs,
+   which it does only in 3D. On meshes of other cells, :func:`repair_mesh`
+   removes no duplicate cells, so run :func:`clean_mesh` first if the mesh
+   can have them.
 
 Summary
 -------

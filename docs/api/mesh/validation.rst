@@ -149,8 +149,9 @@ cost more time:
      - off
      - Pairs of triangles that intersect anywhere other than at the vertices
        they share, on triangle meshes in 3D, with
-       :func:`find_self_intersections`. It is keyword-only and the most
-       expensive check. Other meshes report ``-1``.
+       :func:`find_self_intersections`. Duplicate cells are not reported.
+       It is keyword-only and the most expensive check. Other meshes report
+       ``-1``.
 
 With ``raise_on_error=True``, :func:`validate` raises ``ValueError`` at the
 first problem instead of returning a report. For watertight and manifold
