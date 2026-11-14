@@ -21,8 +21,6 @@ Combines multiple repair operations into a single convenient function.
 
 from typing import TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -93,7 +91,8 @@ def repair_mesh(
         Remove the later copies of triangles with the same vertices and the
         same winding. Reversed copies are left to
         :func:`~physicsnemo.mesh.repair.split_nonmanifold_edges`, which keeps
-        the copy wound like the surface.
+        the copy wound like the surface; where it does not run (triangle
+        meshes in 2D, or ``split_nonmanifold_edges=False``), they survive.
     stitch_t_junctions : bool, optional
         Split triangles at the vertices lying on their open edges. See
         :func:`~physicsnemo.mesh.repair.stitch_t_junctions`.
@@ -161,7 +160,10 @@ def repair_mesh(
 
     ### Operation 2: Remove duplicate cells with the same winding
     # remove_duplicate_cells keeps the first copy whatever its winding, so the
-    # parity of each triangle's vertex order rides along as an extra vertex
+    # parity of each triangle's vertex order rides along in its indices, as
+    # 2 * index + parity. Three such indices pack into one int64 key up to
+    # about 1M points; beyond, remove_duplicate_cells takes the slower
+    # row-wise unique, with the same result.
     if remove_duplicates:
         if is_triangle_mesh:
             from physicsnemo.mesh.mesh import Mesh
@@ -172,9 +174,9 @@ def repair_mesh(
             parity = ((a > b).long() + (a > c).long() + (b > c).long()) % 2
             n_points = current_mesh.n_points
             unique_cells, cell_data = remove_duplicate_cells(
-                torch.cat([cells, (n_points + parity)[:, None]], dim=1),
+                2 * cells + parity[:, None],
                 current_mesh.cell_data,
-                index_bound=n_points + 2,
+                index_bound=2 * n_points,
             )
             all_stats["duplicates"] = {
                 "n_cells_original": current_mesh.n_cells,
@@ -183,7 +185,7 @@ def repair_mesh(
             if unique_cells.shape[0] < current_mesh.n_cells:
                 current_mesh = Mesh(
                     points=current_mesh.points,
-                    cells=unique_cells[:, :3],
+                    cells=unique_cells // 2,
                     point_data=current_mesh.point_data,
                     cell_data=cell_data,
                     global_data=current_mesh.global_data,

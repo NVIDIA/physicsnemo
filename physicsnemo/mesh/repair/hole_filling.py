@@ -227,7 +227,7 @@ def fill_holes(
     }
 
     ### Step 1: Find boundary half-edges, directed as their owner faces traverse them
-    boundary_edges, _, _ = _open_half_edges(mesh.cells)
+    boundary_edges, _, _ = _open_half_edges(mesh.cells, mesh.n_points)
 
     ### Step 2: Trace boundary edges into simple loops
     loops, stats["n_edges_untraced"] = _trace_boundary_loops(boundary_edges)
