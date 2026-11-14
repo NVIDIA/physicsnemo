@@ -1105,6 +1105,74 @@ def _triangulate_with_parent_ids(
     return triangulated, output_parent_ids
 
 
+def _with_leading_unused_points(
+    grid: "pv.UnstructuredGrid", count: int
+) -> "pv.UnstructuredGrid":
+    """``grid`` with ``count`` unused copies of its first point placed first.
+
+    vtkDataSetTriangleFilter (``UnstructuredGrid.triangulate``) ignores a
+    polygon triangulation that fails, and then writes the polygon's local
+    vertex numbers (0 to k - 1) as point IDs. With at least k leading unused
+    points, such IDs can only land on those points.
+    """
+    points = np.asarray(grid.points)
+    ### New points and cells on a shallow copy; the input keeps its own.
+    shifted = grid.copy(deep=False)
+    shifted.point_data.clear()
+    shifted.SetPoints(
+        pv.vtk_points(np.concatenate([np.repeat(points[:1], count, axis=0), points]))
+    )
+    shifted.SetCells(
+        pv.convert_array(np.asarray(grid.celltypes)),
+        pv.CellArray.from_arrays(
+            np.asarray(grid.cell_offsets, dtype=np.int64),
+            np.asarray(grid.cell_connectivity, dtype=np.int64) + count,
+        ),
+    )
+    if _ORIGINAL_POINT_ID_KEY in grid.point_data:
+        original_point_ids = np.asarray(grid.point_data[_ORIGINAL_POINT_ID_KEY])
+        shifted.point_data[_ORIGINAL_POINT_ID_KEY] = np.concatenate(
+            [np.repeat(original_point_ids[:1], count), original_point_ids]
+        )
+    return shifted
+
+
+def _without_leading_unused_points(
+    simplices_grid: "pv.UnstructuredGrid",
+    count: int,
+    simplex_type: "pv.CellType",
+    output_parent_ids: np.ndarray,
+    cell_types: np.ndarray,
+) -> "pv.UnstructuredGrid":
+    """Undo ``_with_leading_unused_points``; raise if a simplex uses those points."""
+    simplices = np.asarray(simplices_grid.cell_connectivity, dtype=np.int64).reshape(
+        simplices_grid.n_cells, -1
+    )
+    invalid = ((simplices < count) | (simplices >= simplices_grid.n_points)).any(axis=1)
+    if invalid.any():
+        bad = np.unique(output_parent_ids[invalid])
+        shown = ", ".join(
+            f"parent {int(parent_id)} "
+            f"({_vtk_cell_type_name(int(cell_types[parent_id]))})"
+            for parent_id in bad[:5]
+        )
+        more = f" and {len(bad) - 5} more" if len(bad) > 5 else ""
+        raise ValueError(
+            f"VTK could not split {len(bad)} cell(s) into simplices: {shown}{more}. "
+            "VTK's vtkDataSetTriangleFilter, which UnstructuredGrid.triangulate() "
+            "also uses, then writes the cell's local vertex numbers as point IDs. "
+            "Split these cells into simplices yourself before conversion."
+        )
+    restored = pv.UnstructuredGrid(
+        {simplex_type: simplices - count}, np.asarray(simplices_grid.points)[count:]
+    )
+    if _ORIGINAL_POINT_ID_KEY in simplices_grid.point_data:
+        restored.point_data[_ORIGINAL_POINT_ID_KEY] = np.asarray(
+            simplices_grid.point_data[_ORIGINAL_POINT_ID_KEY]
+        )[count:]
+    return restored
+
+
 def _polydata_surface_triangles(
     pyvista_mesh: "pv.PolyData",
     topology: dict[str, tuple[np.ndarray, np.ndarray]],
@@ -1268,8 +1336,16 @@ def _select_and_linearize_unstructured_grid(
         output_parent_ids = None if selected_all_cells else selected_parent_ids
         return selected, original_point_ids, output_parent_ids
 
+    ### Only polygons go through VTK's ear cutting, which can fail silently.
+    n_unused_points = (
+        int(np.diff(selected.cell_offsets).max())
+        if bool((selected.celltypes == pv.CellType.POLYGON).any())
+        else 0
+    )
     linearized_mesh, output_parent_ids = _triangulate_with_parent_ids(
-        selected,
+        _with_leading_unused_points(selected, n_unused_points)
+        if n_unused_points
+        else selected,
         selected_parent_ids,
     )
     linearized = cast("pv.UnstructuredGrid", linearized_mesh)
@@ -1303,6 +1379,11 @@ def _select_and_linearize_unstructured_grid(
         raise ValueError(
             f"Could not linearize manifold dimension {target_dim} to "
             f"{simplex_type.name}; VTK returned {output_names}."
+        )
+
+    if n_unused_points:
+        linearized = _without_leading_unused_points(
+            linearized, n_unused_points, simplex_type, output_parent_ids, cell_types
         )
 
     original_point_ids = (

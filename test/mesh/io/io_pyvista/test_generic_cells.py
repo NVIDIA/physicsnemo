@@ -902,6 +902,81 @@ def test_parent_provenance_rejects_unknown_parent(monkeypatch):
         from_pyvista(grid)
 
 
+def test_polygon_simplices_on_local_vertex_numbers_are_rejected(monkeypatch):
+    """Simplices on a polygon's local vertex numbers are refused, naming parents."""
+    ### Seven disjoint unit pentagons in the z = 0 plane.
+    pentagon = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.5, 0.5, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    points = np.concatenate([pentagon + [2.0 * i, 0.0, 0.0] for i in range(7)])
+    cells = np.concatenate([[5, *range(5 * i, 5 * i + 5)] for i in range(7)])
+    grid = pv.UnstructuredGrid(
+        cells, np.full(7, pv.CellType.POLYGON, dtype=np.uint8), points
+    )
+    original_triangulate = pv.UnstructuredGrid.triangulate
+
+    def fail_like_vtk(mesh, *args, **kwargs):
+        triangulated = original_triangulate(mesh, *args, **kwargs)
+        parents = np.asarray(triangulated.cell_data["__physicsnemo_parent_cell_id"])
+        cells = triangulated.cells_dict[pv.CellType.TRIANGLE]
+        ### As VTK does when a polygon's ear cutting fails: positions within the
+        ### polygon instead of point IDs.
+        cells[:] = [0, 1, 2]
+        corrupted = pv.UnstructuredGrid(
+            {pv.CellType.TRIANGLE: cells}, np.asarray(triangulated.points)
+        )
+        corrupted.cell_data["__physicsnemo_parent_cell_id"] = parents
+        return corrupted
+
+    monkeypatch.setattr(pv.UnstructuredGrid, "triangulate", fail_like_vtk)
+
+    with pytest.raises(
+        ValueError,
+        match=r"could not split 7 cell\(s\).*parent 0 \(POLYGON\).* and 2 more\.",
+    ):
+        from_pyvista(grid)
+
+
+@pytest.mark.parametrize("unused_points_first", [True, False])
+def test_polygon_vtk_cannot_split_raises_or_splits_fully(unused_points_first):
+    """A polygon that VTK's ear cutting fails on raises, or splits into k - 2 triangles.
+
+    VTK's vtkDataSetTriangleFilter writes such a polygon's local vertex numbers
+    as point IDs: here the six unused points, or the polygon's own points 0 to
+    5, which give two triangles that cover only part of it.
+    """
+    angles = np.linspace(0.0, 2.0 * np.pi, 6, endpoint=False)
+    star = np.stack(
+        [np.cos(angles), np.sin(angles), 3.0 * np.cos(3.0 * angles)], axis=1
+    )[[0, 3, 1, 4, 2, 5]]
+    if unused_points_first:
+        unused = 100.0 + np.arange(18, dtype=float).reshape(6, 3)
+        points, first = np.vstack([unused, star]), 6
+    else:
+        points, first = star, 0
+    grid = pv.UnstructuredGrid(
+        np.array([6, *range(first, first + 6)]),
+        np.array([pv.CellType.POLYGON], dtype=np.uint8),
+        points,
+    )
+
+    try:
+        mesh = from_pyvista(grid)
+    except ValueError as error:
+        assert "could not split 1 cell(s) into simplices: parent 0 (POLYGON)" in str(
+            error
+        )
+    else:
+        assert mesh.n_cells == 4
+        assert bool((mesh.cells >= first).all())
+
+
 def test_malformed_inputs_raise_in_one_subprocess():
     """Malformed attributes and topology are checked in one isolated process."""
     script = textwrap.dedent(
