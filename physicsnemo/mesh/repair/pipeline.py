@@ -37,7 +37,7 @@ def repair_mesh(
     max_hole_edges: int = 10,
     remove_duplicates: bool = True,
     stitch_t_junctions: bool = True,
-    split_nonmanifold_edges: bool = True,
+    split_nonmanifold_edges: bool = False,
 ) -> tuple["Mesh", dict[str, dict]]:
     """Apply multiple repair operations in sequence.
 
@@ -52,7 +52,7 @@ def repair_mesh(
     4. Stitch T-junctions (triangle meshes), which also closes the slits that
        removing a zero-area cell opens
     5. Split non-manifold edges and drop fins, pillows and reversed copies of
-       faces (triangle meshes in 3D)
+       faces (triangle meshes in 3D, if enabled)
     6. Remove isolated points
     7. Fix orientation (if enabled)
     8. Fill holes (if enabled)
@@ -75,8 +75,9 @@ def repair_mesh(
     fill_holes : bool, optional
         Close boundary loops (expensive).
     tolerance : float, optional
-        Absolute L2 distance threshold for merging duplicate points and for
-        stitching T-junctions. Defaults to ``max(1e-6, 100 * eps)`` times the
+        Absolute L2 distance threshold for merging duplicate points, for
+        stitching T-junctions, and for the slit and planarity tests of hole
+        filling. Defaults to ``max(1e-6, 100 * eps)`` times the
         bounding-box diagonal, where ``eps`` is the machine epsilon of the
         point dtype, as in :func:`~physicsnemo.mesh.repair.stitch_t_junctions`
         (before, it defaulted to an absolute ``1e-6``).
@@ -98,7 +99,10 @@ def repair_mesh(
         :func:`~physicsnemo.mesh.repair.stitch_t_junctions`.
     split_nonmanifold_edges : bool, optional
         Split edges used by three or more triangles into manifold wedges and
-        drop fins. See :func:`~physicsnemo.mesh.repair.split_nonmanifold_edges`.
+        drop fins. Off by default, since it deletes geometry: thin open sheets
+        attached along an edge, such as baffles, zero-thickness plates and
+        splitter plates, are dropped as fins too. See
+        :func:`~physicsnemo.mesh.repair.split_nonmanifold_edges`.
 
     Returns
     -------
@@ -122,19 +126,19 @@ def repair_mesh(
     >>> cube = cube_surface.load()
     >>> copy = cube.cells[:2, [0, 2, 1]]
     >>> doubled = Mesh(points=cube.points, cells=torch.cat([copy, cube.cells]))
-    >>> repaired, stats = repair_mesh(doubled)
+    >>> repaired, stats = repair_mesh(doubled, split_nonmanifold_edges=True)
     >>> stats["nonmanifold_edges"]["n_cells_dropped"]
     2
     >>> torch.equal(repaired.cells, cube.cells)
     True
     """
-    from physicsnemo.mesh.repair._stitching import _default_tolerance
+    from physicsnemo.mesh.utilities._tolerances import default_length_tolerance
 
     current_mesh = mesh
     all_stats = {}
     is_triangle_mesh = mesh.n_manifold_dims == 2
     if tolerance is None:
-        tolerance = _default_tolerance(mesh.points)
+        tolerance = default_length_tolerance(mesh.points)
     if area_tolerance is None:
         area_tolerance = tolerance**mesh.n_manifold_dims
 
@@ -254,7 +258,9 @@ def repair_mesh(
         if current_mesh.n_manifold_dims == 2:
             from physicsnemo.mesh.repair.hole_filling import fill_holes as fill_h
 
-            current_mesh, stats = fill_h(current_mesh, max_hole_edges=max_hole_edges)
+            current_mesh, stats = fill_h(
+                current_mesh, max_hole_edges=max_hole_edges, tolerance=tolerance
+            )
             all_stats["holes"] = stats
         else:
             all_stats["holes"] = {"skipped": "Only for 2D manifolds"}

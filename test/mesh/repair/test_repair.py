@@ -476,8 +476,10 @@ class TestRepairPipeline:
     def test_pipeline_closes_seams_holes_and_fins(self, scale):
         """The audit's end-to-end case comes out closed, manifold, consistently
         wound and of volume 1, the same way at any scale."""
-        mesh = self._audit_cube(scale)
-        repaired, stats = repair_mesh(mesh, fix_orientation=True, fill_holes=True)
+        kwargs = dict(
+            fix_orientation=True, fill_holes=True, split_nonmanifold_edges=True
+        )
+        repaired, stats = repair_mesh(self._audit_cube(scale), **kwargs)
         assert _edge_counts(repaired.cells) == {
             "open": 0,
             "nonmanifold": 0,
@@ -486,9 +488,7 @@ class TestRepairPipeline:
         assert abs(_signed_volume(repaired)) == pytest.approx(scale**3)
         assert stats["nonmanifold_edges"]["n_cells_dropped"] == 1
         assert stats["holes"]["n_holes_filled"] == 1
-        reference, _ = repair_mesh(
-            self._audit_cube(1.0), fix_orientation=True, fill_holes=True
-        )
+        reference, _ = repair_mesh(self._audit_cube(1.0), **kwargs)
         assert torch.equal(repaired.cells, reference.cells)
 
     @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3])
@@ -538,11 +538,62 @@ class TestRepairPipeline:
         from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
         mesh = lumpy_sphere.load(subdivisions=2, device=device)
-        repaired, stats = repair_mesh(mesh)
+        repaired, stats = repair_mesh(mesh, split_nonmanifold_edges=True)
         assert torch.equal(repaired.points, mesh.points)
         assert torch.equal(repaired.cells, mesh.cells)
         assert stats["t_junctions"]["n_cells_split"] == 0
         assert stats["nonmanifold_edges"]["n_cells_dropped"] == 0
+
+    def test_pipeline_keeps_plate_attached_along_an_edge(self, device):
+        """By default nothing real is deleted: a zero-thickness plate on an
+        edge of a cube stays, and goes only with split_nonmanifold_edges."""
+        from physicsnemo.mesh.primitives.surfaces import cube_surface
+
+        cube = cube_surface.load(device=device)
+        # A plate on the cube's edge (0, 1), at x = y = -0.5
+        plate_points = torch.tensor([[-1.0, -1.0, -0.5], [-1.0, -1.0, 0.5]])
+        mesh = Mesh(
+            points=torch.cat([cube.points, plate_points]),
+            cells=torch.cat([cube.cells, torch.tensor([[0, 1, 9], [0, 9, 8]])]),
+        )
+        repaired, _ = repair_mesh(mesh)
+        assert repaired.n_cells == 14
+        dropped, _ = repair_mesh(mesh, split_nonmanifold_edges=True)
+        assert dropped.n_cells == 12
+
+    def test_pipeline_fills_slit_too_wide_to_stitch(self, device):
+        """An explicit tolerance reaches hole filling too: a gap too wide for
+        it to stitch is not a slit for fill_holes either, so it is filled."""
+        from physicsnemo.mesh.primitives.surfaces import cube_surface
+
+        cube = cube_surface.load(device=device)
+        points = cube.points.double()
+        # Split the top face's triangle (1, 5, 7) at a point m 1e-7 off its
+        # diagonal (1, 7), towards 5, leaving a thin gap (1, m, 7)
+        m = cube.n_points
+        offset = torch.tensor([[1.0, -1.0, 0.0]], dtype=torch.float64) * 1e-7 / 2**0.5
+        cells = cube.cells[(cube.cells != torch.tensor([1, 5, 7])).any(dim=1)]
+        mesh = Mesh(
+            points=torch.cat(
+                [points, points[[1, 7]].mean(dim=0, keepdim=True) + offset]
+            ),
+            cells=torch.cat([cells, torch.tensor([[1, 5, m], [m, 5, 7]])]),
+        )
+        repaired, stats = repair_mesh(mesh, tolerance=1e-9, fill_holes=True)
+        assert stats["t_junctions"]["n_cells_split"] == 0
+        assert stats["holes"]["n_holes_filled"] == 1
+        assert _edge_counts(repaired.cells)["open"] == 0
+
+    def test_pipeline_merges_coincident_points(self, device):
+        """Points that all coincide still merge: the relative tolerance
+        has a floor."""
+        mesh = Mesh(
+            points=torch.ones(3, 3, device=device),
+            cells=torch.tensor([[0, 1, 2]], device=device),
+        )
+        repaired, stats = repair_mesh(mesh)
+        assert stats["merge_points"]["n_duplicates_merged"] == 2
+        assert repaired.n_cells == 0
 
 
 class TestHoleFilling:

@@ -102,7 +102,7 @@ def split_nonmanifold_edges(
     surface keeps its own wedge whichever side a fin lies on, and then across
     parts. Each pair, and each triangle left unpaired, gets its own copy of
     the edge: an end vertex is duplicated for every part of its star that the
-    split disconnects, as :func:`~physicsnemo.mesh.generate._repair.split_pinched_vertices`
+    split disconnects, as ``split_pinched_vertices`` of the mesh generator
     does for pinched vertices. Two triangles at equal angles never pair with
     each other, so a zero-volume pillow opens rather than closes.
 

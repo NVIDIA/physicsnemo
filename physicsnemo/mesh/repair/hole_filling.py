@@ -156,6 +156,7 @@ def _ear_clip(
 def fill_holes(
     mesh: "Mesh",
     max_hole_edges: int = 10,
+    tolerance: float | None = None,
 ) -> tuple["Mesh", dict[str, int]]:
     """Fill holes bounded by boundary loops (2D manifolds only).
 
@@ -166,8 +167,6 @@ def fill_holes(
     a tolerance) is ear-clipped in that plane, which adds no points; any other
     loop gets a fan from a centroid vertex inserted at its center. A loop of
     zero area (a slit, which :func:`stitch_t_junctions` closes) is left open.
-    The tolerance is ``max(1e-6, 100 * eps)`` times the bounding-box diagonal,
-    where ``eps`` is the machine epsilon of the point dtype.
 
     In ``point_data`` and ``cell_data``, the new centroid points and fill faces
     hold NaN for floating-point fields and 0 for all other fields.
@@ -180,6 +179,11 @@ def fill_holes(
         Maximum number of edges in a hole to fill. Holes larger than this
         are left open. This prevents accidentally filling large openings
         that may be intentional geometry.
+    tolerance : float, optional
+        Distance within which a loop counts as planar, and, times its
+        perimeter, the area below which it counts as a slit. Defaults to
+        ``max(1e-6, 100 * eps)`` times the bounding-box diagonal, where
+        ``eps`` is the machine epsilon of the point dtype.
 
     Returns
     -------
@@ -213,7 +217,8 @@ def fill_holes(
             f"Got {mesh.n_manifold_dims=}."
         )
 
-    from physicsnemo.mesh.repair._stitching import _default_tolerance, _open_half_edges
+    from physicsnemo.mesh.repair._stitching import _open_half_edges
+    from physicsnemo.mesh.utilities._tolerances import default_length_tolerance
 
     device = mesh.points.device
     stats = {
@@ -252,7 +257,8 @@ def fill_holes(
     loops = [loop.flip(0) if rev else loop for loop, rev in zip(loops, reverse)]
 
     ### Step 4: Fill each loop that is small enough
-    tolerance = _default_tolerance(mesh.points)
+    if tolerance is None:
+        tolerance = default_length_tolerance(mesh.points)
     new_points_list: list[torch.Tensor] = []
     new_faces_list: list[torch.Tensor] = []
     next_point_idx = mesh.n_points
