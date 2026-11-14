@@ -40,9 +40,8 @@ from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
 ### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,
 ### subset) pairs per chunk of the least-norm solve (the (point, direction) pairs of
-### its active-set solver): a bound on their blocks. Both
-### run in a custom op, so their loops over chunks do not specialize a dynamic query
-### count under torch.compile.
+### its active-set solver): a bound on their blocks. Both run in a custom op, so their
+### loops over chunks do not specialize a dynamic query count under torch.compile.
 _SEARCH_PAIRS = 2**23
 
 #: The softening of the logarithmic length channels, in the frame's length unit
@@ -700,11 +699,10 @@ def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     arithmetic. A row stops when the step would not progress: no direction is below
     ``|x|^2``, the added direction is in the corral, the corral is full, its system
     is singular, its norm rises beyond rounding, or, once certified, its norm stops
-    falling. As in
-    :func:`_min_norm_points`, a row with no certified point returns its iterate of
-    least duality gap among those that separate the origin, and 0 when none does. A
-    full corral of positive weights holds the origin in its simplex, which gives
-    exactly 0. Wolfe's steps number a few times ``d`` in practice; their cap only
+    falling. As in :func:`_min_norm_points`, a row with no certified point returns its
+    iterate of least duality gap among those that separate the origin, and 0 when none
+    does. A full corral of positive weights holds the origin in its simplex, which
+    gives exactly 0. Wolfe's steps number a few times ``d`` in practice; their cap only
     guards rounding cycles."""
     n, k, d = c.shape
     m, slots = d + 1, torch.arange(d + 1, device=c.device)
