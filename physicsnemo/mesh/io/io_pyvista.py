@@ -1153,7 +1153,7 @@ def _refan_failed_polygons(
     ``(v_i, v_{i+1}, center)``, wound like the polygon, around a new point at
     its vertex mean. Every other polygon keeps VTK's triangles. A vertex that
     repeats the next one is ignored, and a polygon left with 3 vertices becomes
-    that triangle.
+    that triangle; one left with fewer keeps VTK's split.
 
     Parameters
     ----------
