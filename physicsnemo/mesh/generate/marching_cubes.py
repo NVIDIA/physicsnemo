@@ -22,6 +22,8 @@ import torch
 import warp as wp
 from jaxtyping import Float
 
+from physicsnemo.core.function_spec import FunctionSpec
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -85,8 +87,10 @@ def marching_cubes(
     -----
     This operation is **not differentiable**. The input tensor is detached
     before being passed to Warp's marching cubes kernel, so gradients do not
-    flow through this function. The kernel runs on ``field``'s device (CPU or
-    CUDA), and ``coords`` may be on any device.
+    flow through this function. A CUDA ``field`` is processed on its own GPU;
+    a CPU ``field`` on Warp's default device (a GPU when one is present). The
+    mesh is returned on ``field``'s device, and ``coords`` may be on any
+    device.
 
     Examples
     --------
@@ -120,15 +124,20 @@ def marching_cubes(
                     f"size {field.shape[dim]} along dimension {dim}"
                 )
 
-    # Warp runs marching cubes on the device of its input array, so the field
-    # stays where it is. Warp has no bfloat16 field, so cast to float32 first.
-    field_wp = wp.from_torch(field.detach().to(torch.float32).contiguous())
-
-    mc = wp.MarchingCubes(nx=field.shape[0], ny=field.shape[1], nz=field.shape[2])
-    mc.surface(field=field_wp, threshold=threshold)
-
-    points = wp.to_torch(mc.verts).clone()  # (N_v, 3), float32
-    cells = wp.to_torch(mc.indices).reshape(-1, 3).to(torch.int64)  # (N_f, 3)
+    # Warp runs marching cubes on the device of its input array. A CUDA field
+    # stays on its GPU. A CPU field goes to Warp's default device, a GPU when
+    # one is present, since Warp's CPU kernel is about 100x slower.
+    wp.init()
+    run_device = field.device if field.is_cuda else torch.device(wp.get_device().alias)
+    # Warp's marching cubes accepts only float32 fields.
+    field_f32 = field.detach().to(device=run_device, dtype=torch.float32).contiguous()
+    _, stream = FunctionSpec.warp_launch_context(field_f32)
+    with FunctionSpec.warp_stream_scope(stream):
+        mc = wp.MarchingCubes(nx=field.shape[0], ny=field.shape[1], nz=field.shape[2])
+        mc.surface(field=wp.from_torch(field_f32), threshold=threshold)
+        points = wp.to_torch(mc.verts).to(field.device, copy=True)  # (N_v, 3)
+        cells = wp.to_torch(mc.indices).reshape(-1, 3)
+        cells = cells.to(device=field.device, dtype=torch.int64)  # (N_f, 3)
 
     ### Map from grid-index space to physical coordinates via piecewise linear interp
     if coords is not None:

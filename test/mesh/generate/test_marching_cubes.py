@@ -190,9 +190,9 @@ class TestMarchingCubesValidation:
 
 
 class TestDevice:
-    """Marching cubes runs where the field lives."""
+    """The mesh comes back on the field's device, with coords on any device."""
 
-    def test_runs_on_field_device(self, device):
+    def test_returns_on_field_device(self, device):
         sdf, coords = _sphere_sdf(resolution=24)
         reference = marching_cubes(sdf, coords=(coords, coords, coords))
 
@@ -202,5 +202,45 @@ class TestDevice:
 
         assert mesh.points.device.type == torch.device(device).type
         assert mesh.cells.device.type == torch.device(device).type
+        assert torch.equal(mesh.cells.cpu(), reference.cells)
+        torch.testing.assert_close(mesh.points.cpu(), reference.points)
+
+    def test_cpu_field_with_coords_on_device(self, device):
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+
+        mesh = marching_cubes(sdf, coords=(coords.to(device),) * 3)
+
+        assert mesh.points.device.type == "cpu"
+        torch.testing.assert_close(mesh.points, reference.points)
+
+    def test_bfloat16_field_on_device(self, device):
+        sdf, _ = _sphere_sdf(resolution=16)
+
+        mesh = marching_cubes(sdf.to(device=device, dtype=torch.bfloat16))
+
+        assert mesh.n_cells > 0
+        assert mesh.points.dtype == torch.float32
+        assert mesh.points.device.type == torch.device(device).type
+
+    def test_empty_surface_on_device(self, device):
+        sdf, _ = _sphere_sdf(resolution=16)
+
+        mesh = marching_cubes(sdf.to(device), threshold=10.0)
+
+        assert mesh.n_points == 0 and mesh.n_cells == 0
+        assert mesh.points.device.type == torch.device(device).type
+
+    def test_cuda_field_on_side_stream(self):
+        if not torch.cuda.is_available():
+            pytest.skip("needs CUDA")
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+
+        with torch.cuda.stream(torch.cuda.Stream()):
+            field = (sdf.cuda() * 2.0) / 2.0  # produced on the side stream
+            mesh = marching_cubes(field, coords=(coords.cuda(),) * 3)
+            torch.cuda.current_stream().synchronize()
+
         assert torch.equal(mesh.cells.cpu(), reference.cells)
         torch.testing.assert_close(mesh.points.cpu(), reference.points)
