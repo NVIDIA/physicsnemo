@@ -549,6 +549,31 @@ class TestHoleFilling:
             }
             assert _signed_volume(filled) == pytest.approx(1.0)
 
+    def test_fan_fill_wound_like_surface(self, device):
+        """Regression (B1): a centroid fan over a non-planar hole follows the surface's winding."""
+        cube = _grid_cube([2] * 6)
+        corner = int((cube.points == 1).all(dim=1).nonzero())
+        cut = (cube.cells == corner).any(dim=1)  # the hole bends around the corner
+        generator = torch.Generator().manual_seed(0)
+        for _ in range(20):
+            perm = torch.randperm(cube.n_points, generator=generator)
+            mesh = Mesh(
+                points=cube.points[perm].to(device),
+                cells=torch.argsort(perm)[cube.cells[~cut]].to(device),
+            )
+            filled, stats = fill_holes(mesh, max_hole_edges=64)
+            assert stats["n_holes_filled"] == 1 and stats["n_points_added"] == 1
+            assert _edge_counts(filled.cells) == {
+                "open": 0,
+                "nonmanifold": 0,
+                "same_dir": 0,
+            }
+            # The cube less the cone from the fan's centroid over the cut cells
+            a, b, c = (cube.points[cube.cells[cut][:, k]] for k in range(3))
+            apex = filled.points[-1].cpu()
+            cone = torch.linalg.det(torch.stack([a - apex, b - apex, c - apex], 1))
+            assert _signed_volume(filled) == pytest.approx(1 - float(cone.sum()) / 6)
+
     def test_fill_holes_sharing_a_vertex(self, device):
         """Regression (B4): two holes touching at a vertex are both traced and filled."""
         points = torch.tensor(

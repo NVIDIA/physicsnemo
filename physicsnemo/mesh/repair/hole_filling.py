@@ -114,6 +114,8 @@ def _trace_boundary_loops(
     return loops, n_edges_untraced
 
 
+# Not physicsnemo.mesh.tessellation.triangulate: it fans convex polygons from vertex 0,
+# giving zero-area triangles at the collinear vertices that rims beside T-junction seams have.
 def _ear_clip(
     xy: Float[torch.Tensor, "n_loop 2"],
 ) -> list[tuple[int, int, int]] | None:
