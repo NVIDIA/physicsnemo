@@ -1092,10 +1092,9 @@ def _triangulate_with_parent_ids(
             f"output cell: expected {triangulated.n_cells}, got "
             f"{len(output_parent_ids)}."
         )
-    unexpected_parent_ids = np.setdiff1d(
-        np.unique(output_parent_ids),
-        parent_ids,
-        assume_unique=True,
+    # np.isin, not np.unique: a lookup table is much faster on parent IDs.
+    unexpected_parent_ids = np.unique(
+        output_parent_ids[~np.isin(output_parent_ids, parent_ids)]
     )
     if len(unexpected_parent_ids) > 0:
         raise ValueError(
@@ -1103,6 +1102,188 @@ def _triangulate_with_parent_ids(
             f"{unexpected_parent_ids.tolist()}."
         )
     return triangulated, output_parent_ids
+
+
+def _polygon_cycles(
+    offsets: Int[np.ndarray, " n_rows_plus_1"],
+    connectivity: Int[np.ndarray, " n_connectivity"],
+    rows: Int[np.ndarray, " n_rows"],
+) -> tuple[
+    Int[np.ndarray, " n_polygons"],
+    Int[np.ndarray, " n_vertices"],
+    Int[np.ndarray, " n_vertices"],
+    Int[np.ndarray, " n_polygons_plus_1"],
+]:
+    """Gather polygons without vertices that repeat the next one.
+
+    Returns the rows that keep at least 3 vertices, their vertex IDs, the
+    polygon (index into the returned rows) of each vertex, and the offsets of
+    the polygons' vertices.
+    """
+    vertex_ids, owners, row_offsets = _gather_vtk_rows(offsets, connectivity, rows)
+    following = np.roll(vertex_ids, -1)
+    following[row_offsets[1:] - 1] = vertex_ids[row_offsets[:-1]]
+    counts = np.bincount(owners[vertex_ids != following], minlength=len(rows))
+    is_polygon = counts >= 3
+    keep = (vertex_ids != following) & is_polygon[owners]
+    return (
+        rows[is_polygon],
+        vertex_ids[keep],
+        (np.cumsum(is_polygon) - 1)[owners[keep]],
+        np.r_[0, np.cumsum(counts[is_polygon])],
+    )
+
+
+def _refan_failed_polygons(
+    triangles: Int[np.ndarray, "n_triangles 3"],
+    parent_ids: Int[np.ndarray, " n_triangles"],
+    polygon_ids: Int[np.ndarray, " n_polygons"],
+    offsets: Int[np.ndarray, " n_rows_plus_1"],
+    connectivity: Int[np.ndarray, " n_connectivity"],
+    n_points: int,
+) -> tuple[
+    Int[np.ndarray, "n_out 3"], Int[np.ndarray, " n_out"], Int[np.ndarray, " n_fans"]
+]:
+    """Replace each wrong VTK polygon split by a fan around a new center point.
+
+    VTK's ear cutting can give up partway (fewer than n - 2 triangles, so
+    polygon edges and vertices are lost), repeat a triangle, write local vertex
+    numbers as point IDs, or pick a diagonal that is also an edge of another
+    cell. Each such polygon is split instead as OpenFOAM does: into n triangles
+    ``(v_i, v_{i+1}, center)``, wound like the polygon, around a new point at
+    its vertex mean. Every other polygon keeps VTK's triangles. A vertex that
+    repeats the next one is ignored, and a polygon left with 3 vertices becomes
+    that triangle; one left with fewer keeps VTK's split.
+
+    Parameters
+    ----------
+    triangles : np.ndarray
+        Shape ``(n_triangles, 3)``, VTK's triangles in source point IDs.
+    parent_ids : np.ndarray
+        Shape ``(n_triangles,)``, the row of ``offsets`` of each triangle's
+        parent cell.
+    polygon_ids : np.ndarray
+        Sorted rows of ``offsets`` that are polygons (vertices in cyclic order)
+        to check.
+    offsets, connectivity : np.ndarray
+        VTK cell array of the parent cells.
+    n_points : int
+        Number of source points; the center of the k-th polygon fanned around
+        a center gets point ID ``n_points + k``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        The triangles and their parent rows, ordered by parent, and the sorted
+        rows of the polygons fanned around a new center point.
+    """
+    arities = offsets[polygon_ids + 1] - offsets[polygon_ids]
+    polygon_ids, vertex_ids, owners, vertex_offsets = _polygon_cycles(
+        offsets, connectivity, polygon_ids[arities > 3]
+    )
+    if len(polygon_ids) == 0:
+        return triangles, parent_ids, polygon_ids
+
+    ### Find each child vertex among its polygon's vertices, by (polygon, point).
+    n_vertices = len(vertex_ids)
+    vertex_keys = owners * n_points + vertex_ids
+    vertex_order = np.argsort(vertex_keys, kind="stable")
+    sorted_vertex_keys = vertex_keys[vertex_order]
+    position = np.minimum(
+        np.searchsorted(polygon_ids, parent_ids), len(polygon_ids) - 1
+    )
+    children = np.flatnonzero(polygon_ids[position] == parent_ids)
+    owner = position[children]
+    child_keys = owner[:, None] * n_points + triangles[children]
+    found = np.minimum(np.searchsorted(sorted_vertex_keys, child_keys), n_vertices - 1)
+    foreign = (sorted_vertex_keys[found] != child_keys).any(axis=1)
+    vertex = vertex_order[found]  # (n_children, 3) indices into vertex_ids
+    following = np.roll(vertex, -1, axis=1)
+    n = np.diff(vertex_offsets)[owner][:, None]
+    step = (following - vertex) % n
+    on_boundary = ((step == 1) | (step == n - 1)) & ~foreign[:, None]
+    is_diagonal = np.zeros(triangles.shape, dtype=bool)  # edge (k, k + 1 mod 3)
+    is_diagonal[children] = ~on_boundary & ~foreign[:, None]
+
+    ### A polygon needs n - 2 children of its own vertices, each polygon edge
+    ### (from vertex i to vertex i + 1) in one child and each diagonal in two.
+    boundary_counts = np.bincount(
+        np.where(step == 1, vertex, following)[on_boundary], minlength=n_vertices
+    )
+    diagonal_keys = np.sort(
+        (np.minimum(vertex, following) * n_vertices + np.maximum(vertex, following))[
+            is_diagonal[children]
+        ],
+        kind="stable",  # fast here: children come grouped by polygon
+    )
+    run_starts = np.flatnonzero(np.diff(diagonal_keys, prepend=-1))
+    run_lengths = np.diff(np.r_[run_starts, len(diagonal_keys)])
+    is_bad = np.bincount(owner, minlength=len(polygon_ids)) != (
+        np.diff(vertex_offsets) - 2
+    )
+    is_bad[owner[foreign]] = True
+    is_bad[owners[boundary_counts != 1]] = True
+    is_bad[owners[diagonal_keys[run_starts[run_lengths != 2]] // n_vertices]] = True
+
+    ### A diagonal that is in another cell's triangles too is non-manifold.
+    following = np.roll(triangles, -1, axis=1)
+    edge_keys = np.minimum(triangles, following) * n_points + np.maximum(
+        triangles, following
+    )
+    all_keys = np.sort(edge_keys.ravel())
+    run_starts = np.flatnonzero(np.diff(all_keys, prepend=-1))
+    run_lengths = np.diff(np.r_[run_starts, len(all_keys)])
+    shared = np.isin(edge_keys[is_diagonal], all_keys[run_starts[run_lengths != 2]])
+    fanned = np.union1d(
+        polygon_ids[is_bad],
+        np.broadcast_to(parent_ids[:, None], triangles.shape)[is_diagonal][shared],
+    )
+
+    ### Fan each wrong polygon around its center: (v_i, v_{i+1}, center).
+    ### A polygon with only 3 distinct vertices becomes that triangle instead.
+    if len(fanned) == 0:
+        return triangles, parent_ids, fanned
+    _, vertex_ids, owners, fan_offsets = _polygon_cycles(offsets, connectivity, fanned)
+    has_center = np.diff(fan_offsets) > 3
+    in_fan = has_center[owners]
+    next_vertex = np.arange(1, len(vertex_ids) + 1)
+    next_vertex[fan_offsets[1:] - 1] = fan_offsets[:-1]
+    centers = n_points + np.cumsum(has_center) - 1
+    fans = np.stack([vertex_ids, vertex_ids[next_vertex], centers[owners]], axis=1)
+    keep = ~np.isin(parent_ids, fanned)
+    parent_ids = np.concatenate(
+        [parent_ids[keep], fanned[owners[in_fan]], fanned[~has_center]]
+    )
+    triangles = np.concatenate(
+        [triangles[keep], fans[in_fan], vertex_ids[~in_fan].reshape(-1, 3)]
+    )
+    order = np.argsort(parent_ids, kind="stable")
+    return triangles[order], parent_ids[order], fanned[has_center]
+
+
+def _with_fan_centers(
+    values: torch.Tensor,
+    offsets: Int[np.ndarray, " n_rows_plus_1"],
+    connectivity: Int[np.ndarray, " n_connectivity"],
+    fanned: Int[np.ndarray, " n_fans"],
+) -> torch.Tensor:
+    """Append one value per fan center of :func:`_refan_failed_polygons`.
+
+    The center's value is the mean of the polygon's vertex values for floating
+    dtypes, and the value of its first vertex otherwise.
+    """
+    _, vertex_ids, _, fan_offsets = _polygon_cycles(offsets, connectivity, fanned)
+    if values.is_floating_point():
+        centers = _vertex_means(
+            values.reshape(len(values), -1).numpy(),
+            fan_offsets,
+            vertex_ids,
+            np.arange(len(fanned)),
+        )
+        centers = torch.from_numpy(centers).to(values.dtype)
+    else:
+        centers = values[vertex_ids[fan_offsets[:-1]]]
+    return torch.cat([values, centers.reshape(-1, *values.shape[1:])])
 
 
 def _polydata_surface_triangles(
@@ -1182,11 +1363,9 @@ def _polydata_surface_triangles(
         first_face_parent + n_faces + n_strips,
         dtype=np.int64,
     )
-    missing_parent_ids = np.setdiff1d(
-        selected_surface_parents,
-        np.unique(output_parent_ids),
-        assume_unique=True,
-    )
+    missing_parent_ids = selected_surface_parents[
+        ~np.isin(selected_surface_parents, output_parent_ids)
+    ]
     if len(missing_parent_ids) > 0:
         raise ValueError(
             "VTK triangulation dropped selected PolyData surface parents "
@@ -1275,12 +1454,9 @@ def _select_and_linearize_unstructured_grid(
     linearized = cast("pv.UnstructuredGrid", linearized_mesh)
 
     ### Every selected parent must generate at least one output simplex.
-    produced_parent_ids = np.unique(output_parent_ids)
-    missing_parent_ids = np.setdiff1d(
-        selected_parent_ids,
-        produced_parent_ids,
-        assume_unique=True,
-    )
+    missing_parent_ids = selected_parent_ids[
+        ~np.isin(selected_parent_ids, output_parent_ids)
+    ]
     if len(missing_parent_ids) > 0:
         missing_details = ", ".join(
             f"parent {int(parent_id)} "
@@ -1390,6 +1566,15 @@ def from_pyvista(
     downstream geometric calculations generally remain in ``float64``. To
     normalize the returned mesh and its floating data to ``float32``, use
     ``from_pyvista(...).to(torch.float32)``.
+
+    Polygons are split into triangles by VTK. Where VTK's split of a polygon
+    is wrong (it loses polygon edges, repeats a triangle, uses points outside
+    the polygon, or shares a diagonal with another cell), the polygon is split
+    instead into a fan of triangles around a new point at its vertex mean,
+    appended after the input points. Its point data is the mean of the
+    polygon's vertex values for floating dtypes, and the first vertex's value
+    otherwise. A polygon with only three distinct vertices (a collapsed quad,
+    for example) becomes that triangle instead, without a new point.
 
     Topology conversion is limited to explicitly supported linear VTK cell
     families. Higher-order, control-net, parametric, abstract, and generic
@@ -1718,6 +1903,40 @@ def from_pyvista(
         point_id_map = torch.from_numpy(original_point_ids).long()
         cells = point_id_map[cells]
 
+    ### Fan the polygons that VTK split wrongly around new center points.
+    fanned_polygons = np.empty(0, dtype=np.int64)
+    if manifold_dim == 2 and output_parent_ids is not None:
+        if polydata_topology is not None:
+            polygon_offsets, polygon_connectivity = polydata_topology["faces"]
+            first_polygon = (
+                source_pyvista_mesh.GetNumberOfVerts()
+                + source_pyvista_mesh.GetNumberOfLines()
+            )
+            polygon_ids = np.arange(len(polygon_offsets) - 1)
+        else:
+            polygon_offsets = np.asarray(source_pyvista_mesh.cell_offsets)
+            polygon_connectivity = np.asarray(source_pyvista_mesh.cell_connectivity)
+            first_polygon = 0
+            polygon_ids = np.flatnonzero(
+                np.isin(
+                    source_pyvista_mesh.celltypes,
+                    [pv.CellType.POLYGON, pv.CellType.QUAD],
+                )
+            )
+        triangles, output_parent_ids, fanned_polygons = _refan_failed_polygons(
+            cells.numpy(),
+            output_parent_ids - first_polygon,
+            polygon_ids,
+            polygon_offsets,
+            polygon_connectivity,
+            len(points),
+        )
+        cells = torch.from_numpy(triangles)
+        output_parent_ids = output_parent_ids + first_polygon
+        points = _with_fan_centers(
+            points, polygon_offsets, polygon_connectivity, fanned_polygons
+        )
+
     ### Warn only after target selection and all topology filters succeeded.
     if warn_on_lost_data:
         _warn_on_data_loss(
@@ -1754,12 +1973,19 @@ def from_pyvista(
     else:
         output_cell_data = {}
 
+    point_data = _vtk_data_to_tensor_dict(
+        geometry_source.point_data, force_copy, nested_names=nested_names
+    )
+    if len(fanned_polygons) > 0:
+        point_data = point_data.apply(
+            lambda values: _with_fan_centers(
+                values, polygon_offsets, polygon_connectivity, fanned_polygons
+            )
+        )
     return Mesh(
         points=points,
         cells=cells,
-        point_data=_vtk_data_to_tensor_dict(
-            geometry_source.point_data, force_copy, nested_names=nested_names
-        ),
+        point_data=point_data,
         cell_data=output_cell_data,
         global_data=_vtk_data_to_tensor_dict(
             source_pyvista_mesh.field_data, force_copy, nested_names=nested_names

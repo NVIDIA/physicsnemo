@@ -205,8 +205,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`domain_parallelism.domain_size`), reading samples sharded and running the
   model on ShardTensors over a domain x data-parallel device mesh.
 
+- `physicsnemo.mesh.repair` adds `stitch_t_junctions`, which closes the
+  zero-width gaps where a vertex lies on another triangle's edge, and
+  `split_nonmanifold_edges`, which pairs the triangles at each edge shared by
+  three or more of them and drops the unpaired fins and the pillows (coincident
+  triangles wound opposite ways).
+- `physicsnemo.mesh.validation` adds `find_self_intersections`, which finds the
+  pairs of crossing triangles in a 3D surface. `validate` runs it when
+  `check_self_intersection=True` and skips meshes it does not apply to.
+
 ### Changed
 
+- `repair_mesh` also removes duplicate cells and stitches T-junctions of
+  triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
+  Its default tolerances are now relative to the mesh's size, and an explicit
+  `tolerance` also sets the stitching distance, with `area_tolerance` then
+  defaulting to its square on surfaces.
 - Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
   `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
   `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
@@ -554,6 +568,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
+  of triangles around one new point at its center, so its output can have more
+  points than the input. A closed polygon surface used to convert with holes,
+  repeated triangles or stray triangles.
+- `fill_holes` winds each fill like the surrounding surface, fills holes that
+  pass through a shared vertex, leaves zero-area slits to
+  `stitch_t_junctions`, and fills flat holes without folded triangles.
 - `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
   path. They used to raise unless `copy_existing=True` was passed, because the
   loaded tensors are memory-mapped to the original files.
