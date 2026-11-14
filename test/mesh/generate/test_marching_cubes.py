@@ -187,3 +187,20 @@ class TestMarchingCubesValidation:
 
         assert mesh.n_points > 0
         assert mesh.points.dtype == torch.float32
+
+
+class TestDevice:
+    """Marching cubes runs where the field lives."""
+
+    def test_runs_on_field_device(self, device):
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+
+        mesh = marching_cubes(
+            sdf.to(device), coords=(coords.to(device), coords, coords.to(device))
+        )
+
+        assert mesh.points.device.type == torch.device(device).type
+        assert mesh.cells.device.type == torch.device(device).type
+        assert torch.equal(mesh.cells.cpu(), reference.cells)
+        torch.testing.assert_close(mesh.points.cpu(), reference.points)

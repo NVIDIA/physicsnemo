@@ -483,6 +483,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package's only export. Legacy import shims keep the old
   `physicsnemo.experimental.models.globe` paths and saved checkpoints working
   and emit a `LegacyFeatureWarning`.
+- `physicsnemo.mesh.generate.marching_cubes` runs on the field's device and
+  returns the mesh there, so a CUDA field no longer makes a round trip through
+  the CPU, and `coords` on a CUDA device no longer raise a device error.
 
 ### Deprecated
 
