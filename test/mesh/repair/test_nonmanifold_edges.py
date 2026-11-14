@@ -97,16 +97,58 @@ class TestSplitNonmanifoldEdges:
         assert_closed_and_oriented(result.cells)
         assert enclosed_volume(result) == pytest.approx(1.0)
 
-    @pytest.mark.parametrize("winding", [1, -1])
-    def test_fin_inside_keeps_the_body(self, winding):
-        """A fin inside the cube pairs with one of the cube's triangles, so
-        neither the fin nor the cube is left unpaired as a whole."""
+    @pytest.mark.parametrize("inverted", [False, True])
+    @pytest.mark.parametrize("height", [0.0, 1.0], ids=["inside", "outside"])
+    @pytest.mark.parametrize("n_fin_cells", [1, 2])
+    def test_fin_dropped_on_either_side(self, inverted, height, n_fin_cells):
+        """A fin is dropped whichever side of the surface it lies on, and
+        whichever way the surface is wound."""
         cube = cube_surface.load()
-        fin = [*TOP_DIAGONAL[::winding], 8]
-        mesh = add_cells(cube, [[0.0, 0.0, 0.0]], [fin])
+        if inverted:
+            cube = Mesh(points=cube.points, cells=cube.cells[:, [0, 2, 1]])
+        a, b = TOP_DIAGONAL
+        if n_fin_cells == 1:
+            mesh = add_cells(cube, [[0.0, 0.0, height]], [[a, b, 8]])
+        else:
+            mesh = add_cells(
+                cube,
+                [[-0.4, -0.4, height], [0.4, 0.4, height]],
+                [[a, b, 9], [a, 9, 8]],
+            )
         result, stats = split_nonmanifold_edges(mesh)
-        assert stats["n_cells_dropped"] == 0
-        assert result.n_cells == 13
+        assert stats["n_cells_dropped"] == n_fin_cells
+        assert stats["n_vertices_duplicated"] == 0
+        assert torch.equal(result.cells, cube.cells)
+        assert_closed_and_oriented(result.cells)
+        assert abs(enclosed_volume(result)) == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("winding", [[0, 1, 2], [0, 2, 1]])
+    def test_duplicate_cell_dropped(self, winding):
+        """A copy of a cell, wound either way, pairs nowhere and is dropped."""
+        cube = cube_surface.load()
+        mesh = Mesh(
+            points=cube.points,
+            cells=torch.cat([cube.cells, cube.cells[:1, winding]]),
+        )
+        result, stats = split_nonmanifold_edges(mesh)
+        assert stats == {
+            "n_edges_split": 0,
+            "n_vertices_duplicated": 0,
+            "n_cells_dropped": 1,
+        }
+        assert torch.equal(result.cells, cube.cells)
+
+    @pytest.mark.parametrize("prepend", [False, True])
+    def test_zero_area_cell_dropped_in_any_order(self, prepend):
+        """A zero-area cell at an edge gives no reference for the angles."""
+        cube = cube_surface.load()
+        midpoint = cube.points[list(TOP_DIAGONAL)].mean(dim=0, keepdim=True)
+        flat = torch.tensor([[*TOP_DIAGONAL, 8]])
+        cells = [flat, cube.cells] if prepend else [cube.cells, flat]
+        mesh = Mesh(points=torch.cat([cube.points, midpoint]), cells=torch.cat(cells))
+        result, stats = split_nonmanifold_edges(mesh)
+        assert stats["n_cells_dropped"] == 1
+        assert torch.equal(result.cells, cube.cells)
 
     def test_fin_kept_detached_without_drop(self):
         cube = cube_surface.load()
@@ -159,6 +201,27 @@ class TestSplitNonmanifoldEdges:
         assert torch.equal(result.points[16:], result.points[[6, 7]])
         assert result.point_data["id"][16:].tolist() == [6, 7]
         assert torch.equal(result.cell_data["id"], torch.arange(24))
+
+    def test_two_cubes_sharing_an_edge_with_a_fin_first(self):
+        """The cubes split apart although the dropped fin comes first."""
+        a = cube_surface.load()
+        b_cells = a.cells + 8
+        b_cells[b_cells == 8] = 6
+        b_cells[b_cells == 9] = 7
+        points = torch.cat(
+            [a.points, a.points + torch.tensor([1.0, 1.0, 0.0]), torch.eye(3)[:1]]
+        )
+        fin = torch.tensor([[6, 7, 16]])
+        mesh = Mesh(points=points, cells=torch.cat([fin, a.cells, b_cells]))
+        result, stats = split_nonmanifold_edges(mesh)
+        assert stats == {
+            "n_edges_split": 1,
+            "n_vertices_duplicated": 2,
+            "n_cells_dropped": 1,
+        }
+        assert_closed_and_oriented(result.cells)
+        assert n_parts(result.cells) == 2
+        assert enclosed_volume(result) == pytest.approx(2.0)
 
     def test_rejects_planar_mesh(self):
         from physicsnemo.mesh.primitives.basic import two_triangles_2d

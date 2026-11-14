@@ -24,7 +24,7 @@ dropping the fins and pillows left open along the split edges.
 from typing import TYPE_CHECKING
 
 import torch
-from jaxtyping import Int
+from jaxtyping import Bool, Float, Int
 
 from physicsnemo.mesh.utilities._duplicate_detection import (
     vectorized_connected_components,
@@ -64,6 +64,30 @@ def _corner_links(
     )
 
 
+def _wedges(
+    half_edges: Int[torch.Tensor, " n_candidates"],
+    group: Int[torch.Tensor, " n_all_half_edges"],
+    angle: Float[torch.Tensor, " n_all_half_edges"],
+    forward: Bool[torch.Tensor, " n_all_half_edges"],
+    tie: Int[torch.Tensor, " n_all_half_edges"],
+) -> Int[torch.Tensor, "n_wedges 2"]:
+    """Pair half-edges into wedges, within each group sorted around its edge.
+
+    Each backward half-edge pairs with the next one counterclockwise if that
+    one is forward and at a different angle: on an outward-oriented surface,
+    the two enclose its inside.
+    """
+    order = half_edges[torch.argsort(tie[half_edges], stable=True)]
+    order = order[torch.argsort(angle[order], stable=True)]
+    order = order[torch.argsort(group[order], stable=True)]
+    _, sizes = torch.unique_consecutive(group[order], return_counts=True)
+    start = (torch.cumsum(sizes, dim=0) - sizes).repeat_interleave(sizes)
+    positions = torch.arange(order.shape[0], device=order.device)
+    nxt = order[start + (positions - start + 1) % sizes.repeat_interleave(sizes)]
+    is_wedge = ~forward[order] & forward[nxt] & (angle[order] != angle[nxt])
+    return torch.stack([order[is_wedge], nxt[is_wedge]], dim=1)
+
+
 def split_nonmanifold_edges(
     mesh: "Mesh",
     drop_fins: bool = True,
@@ -73,7 +97,10 @@ def split_nonmanifold_edges(
     The triangles around such an edge are sorted by angle around it, and each
     is paired with its neighbor in that order that traverses the edge the
     other way, where the two enclose the inside of an outward-oriented
-    surface. Each pair, and each triangle left unpaired, gets its own copy of
+    surface. Triangles pair first with those of their own facet-connected
+    part (connected through edges used by exactly two triangles), so that a
+    surface keeps its own wedge whichever side a fin lies on, and then across
+    parts. Each pair, and each triangle left unpaired, gets its own copy of
     the edge: an end vertex is duplicated for every part of its star that the
     split disconnects, as :func:`~physicsnemo.mesh.generate._repair.split_pinched_vertices`
     does for pinched vertices. Two triangles at equal angles never pair with
@@ -149,61 +176,74 @@ def split_nonmanifold_edges(
     if not bool((counts > 2).any()):
         return mesh, no_change
 
-    ### Angle of each half-edge's triangle around its edge, from the edge's first
+    ### Angle of each half-edge's triangle around its edge, from the widest one
     axis = points[hi] - points[lo]
     axis = axis / axis.norm(dim=-1, keepdim=True).clamp_min(
         torch.finfo(axis.dtype).tiny
     )
     w = points[apex] - points[lo]
     w = w - (w * axis).sum(dim=-1, keepdim=True) * axis
+    width = w.norm(dim=-1)
     half_edges = torch.arange(3 * n_cells, device=device)
-    first = torch.full_like(counts, 3 * n_cells).scatter_reduce_(
-        0, edge_ids, half_edges, reduce="amin"
+    widest = torch.full_like(width, -1.0).scatter_reduce_(
+        0, edge_ids, width, reduce="amax"
     )
-    u = w[first[edge_ids]]
+    reference = torch.full_like(counts, 3 * n_cells).scatter_reduce_(
+        0,
+        edge_ids,
+        torch.where(width == widest[edge_ids], half_edges, 3 * n_cells),
+        reduce="amin",
+    )
+    u = w[reference[edge_ids]]
     angle = torch.atan2(
         (torch.linalg.cross(u, w) * axis).sum(dim=-1), (u * w).sum(dim=-1)
     )
-
-    ### Sort by edge, then angle, then forward (lo -> hi) half-edges first
     forward = tail == lo
-    order = torch.argsort((~forward).to(torch.int8), stable=True)
-    order = order[torch.argsort(angle[order], stable=True)]
-    order = order[torch.argsort(edge_ids[order], stable=True)]
+    # At equal angles: forward (lo -> hi) half-edges first, by ascending index,
+    # then backward ones by descending index, so the first of several copies
+    # of a cell is the one next to the other triangles at each of its edges
+    tie = torch.where(forward, half_edges, 6 * n_cells - half_edges)
 
-    ### Pair each half-edge with the next one around its edge
-    edge = edge_ids[order]
-    start = (torch.cumsum(counts, dim=0) - counts)[edge]
-    nxt = order[start + (half_edges - start + 1) % counts[edge]]
-    is_nonmanifold = counts[edge] > 2
-    is_manifold = (counts[edge] == 2) & (half_edges == start)
-    # Backward then forward, counterclockwise: the inside of an outward surface
-    is_wedge = is_nonmanifold & ~forward[order] & forward[nxt]
-    joined = is_manifold | is_wedge
+    ### Facet-connected parts, through edges used by exactly two triangles
+    by_edge = torch.argsort(edge_ids, stable=True)
+    is_pair = (edge_ids[by_edge[:-1]] == edge_ids[by_edge[1:]]) & (
+        counts[edge_ids[by_edge[:-1]]] == 2
+    )
+    manifold = torch.stack([by_edge[:-1][is_pair], by_edge[1:][is_pair]], dim=1)
+    part = vectorized_connected_components(manifold // 3, n_cells)
+
+    ### Pair around each edge, within each part first, then across parts
+    nonmanifold = counts[edge_ids] > 2
+    own = edge_ids * n_cells + part[half_edges // 3]
+    wedges = _wedges(nonmanifold.nonzero().squeeze(1), own, angle, forward, tie)
+    paired = torch.zeros(3 * n_cells, dtype=torch.bool, device=device)
+    paired[wedges.reshape(-1)] = True
+    rest = (nonmanifold & ~paired).nonzero().squeeze(1)
+    wedges = torch.cat([wedges, _wedges(rest, edge_ids, angle, forward, tie)])
+    paired[wedges.reshape(-1)] = True
+    unpaired = (nonmanifold & ~paired).nonzero().squeeze(1)
+    joined = torch.cat([manifold, wedges])
 
     ### Drop the facet-connected parts left unpaired at every split edge they use
     drop = torch.zeros(n_cells, dtype=torch.bool, device=device)
     if drop_fins:
-        paired = torch.zeros(3 * n_cells, dtype=torch.bool, device=device)
-        paired[order[is_wedge]] = True
-        paired[nxt[is_wedge]] = True
-        unpaired = (counts[edge_ids] > 2) & ~paired
-        part = vectorized_connected_components(
-            torch.stack([order[joined] // 3, nxt[joined] // 3], dim=1), n_cells
-        )
+        part = vectorized_connected_components(joined // 3, n_cells)
         is_fin = torch.zeros(n_cells, dtype=torch.bool, device=device)
-        is_fin[part[unpaired.nonzero().squeeze(1) // 3]] = True
-        is_fin[part[order[is_wedge] // 3]] = False
+        is_fin[part[unpaired // 3]] = True
+        is_fin[part[wedges[:, 0] // 3]] = False
         drop = is_fin[part]
 
     ### Star components of the corners, after (split) and before (whole) the split
-    split_links = _corner_links(cells, order[joined], nxt[joined])
-    whole_links = torch.cat(
-        [split_links, _corner_links(cells, order[is_nonmanifold], nxt[is_nonmanifold])]
-    )
     kept = ~drop.repeat_interleave(3)
+    split_links = _corner_links(cells, joined[:, 0], joined[:, 1])
     split_links = split_links[kept[split_links].all(dim=1)]
-    whole_links = whole_links[kept[whole_links].all(dim=1)]
+    at_edge = (nonmanifold & kept).nonzero().squeeze(1)
+    first = torch.full_like(counts, 3 * n_cells).scatter_reduce_(
+        0, edge_ids[at_edge], at_edge, reduce="amin"
+    )
+    whole_links = torch.cat(
+        [split_links, _corner_links(cells, at_edge, first[edge_ids[at_edge]])]
+    )
     split_labels = vectorized_connected_components(split_links, 3 * n_cells)
     whole_labels = vectorized_connected_components(whole_links, 3 * n_cells)
 
@@ -219,7 +259,7 @@ def split_nonmanifold_edges(
     kept_cells = (~drop).nonzero().squeeze(1)
 
     ### Count the non-manifold edges whose kept triangles use several copies
-    at_split = kept & (counts[edge_ids] > 2)
+    at_split = kept & nonmanifold
     new_tail = new_cells[at_split]
     new_head = new_cells.reshape(n_cells, 3).roll(-1, dims=1).reshape(-1)[at_split]
     edge_copies = unique_index_tuples(
