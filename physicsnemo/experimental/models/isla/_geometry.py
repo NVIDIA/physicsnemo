@@ -639,6 +639,13 @@ def _hull_candidates(cc: torch.Tensor, subsets: list[torch.Tensor]):
     return x, norm, gap
 
 
+def _enumerable(k: int, d: int) -> bool:
+    """Whether one row of ``k`` directions in ``d`` dimensions, its subsets of 2 to
+    ``d`` times its directions, fits a chunk of :func:`_min_norm_points`'s enumeration
+    (in three dimensions, up to 50 directions)."""
+    return k * sum(math.comb(k, m) for m in range(2, min(k, d) + 1)) <= _SEARCH_PAIRS // 8
+
+
 def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     """For each row of ``c`` ``(n, K, d)`` (``K`` distinct unit vectors), the point
     of their convex hull closest to the origin ``(n, d)``. That point lies in the
@@ -653,61 +660,120 @@ def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     for every ``k``; the least-norm point does). The result is then the candidate
     with the least duality gap ``g = |x|^2 - min_k c_k . x`` (``|x - x*| <= sqrt(2
     g)``), and otherwise 0. ``c`` comes in a canonical order, so the result is a
-    function of the set. The work is chunked over the rows. Where one row's subsets
-    and directions overflow a chunk (a vertex shared by hundreds of cells), it runs
-    one row at a time over chunks of its subsets, with the same result. The work
-    grows as ``K**(d + 1)``: a query tied with hundreds of cells (on the axis of a
-    faceted tube, at a sphere's centre) takes seconds. An active-set solver (Wolfe's)
-    over every tied row at once, certified as here, would remove that term; it is a
-    follow-up."""
+    function of the set. The work is chunked over the rows. It grows as ``K**(d +
+    1)``, so rows whose subsets and directions overflow a chunk (:func:`_enumerable`;
+    a query on the axis of a faceted tube or at a sphere's centre ties with hundreds
+    of cells) take :func:`_wolfe_min_norm`, certified and with fallbacks as here."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
+    if not _enumerable(k, d):
+        return _wolfe_min_norm(c, c.new_ones(n, k, dtype=torch.bool))
     sizes, budget = range(2, min(k, d) + 1), _SEARCH_PAIRS // 8
     total = sum(math.comb(k, m) for m in sizes)
-    if total * k <= budget:
-        subsets = [torch.tensor(list(itertools.combinations(range(k), m)), device=c.device) for m in sizes]
-        chunk = max(1, budget // total)
-        out = []
-        for s in range(0, n, chunk):
-            x, norm, gap = _hull_candidates(c[s : s + chunk], subsets)
-            certified = torch.isfinite(norm).any(1)
-            pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
-            best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
-            out.append(torch.where((certified | torch.isfinite(gap).any(1))[:, None], best, 0.0))
-        return torch.cat(out)
-    ### The subsets are generated in the same order, a chunk at a time, and the first
-    ### least norm and the first least gap kept (a later chunk only when smaller).
+    subsets = [torch.tensor(list(itertools.combinations(range(k), m)), device=c.device) for m in sizes]
+    chunk = max(1, budget // total)
     out = []
-    for cc in c.split(1):
-        least = [c.new_full((1,), torch.inf), c.new_full((1,), torch.inf)]
-        best = [c.new_zeros(1, d), c.new_zeros(1, d)]
-        for m in sizes:
-            subsets = itertools.combinations(range(k), m)
-            while sub := list(itertools.islice(subsets, max(1, budget // k))):
-                x, *scores = _hull_candidates(cc, [torch.tensor(sub, device=c.device)])
-                for j, score in enumerate(scores):
-                    i = score.argmin(1, keepdim=True)
-                    value = score.gather(1, i)[:, 0]
-                    smaller = value < least[j]
-                    least[j] = torch.where(smaller, value, least[j])
-                    point = x.gather(1, i[..., None].expand(-1, 1, d))[:, 0]
-                    best[j] = torch.where(smaller[:, None], point, best[j])
-        out.append(
-            torch.where(
-                torch.isfinite(least[0])[:, None],
-                best[0],
-                torch.where(torch.isfinite(least[1])[:, None], best[1], 0.0),
-            )
-        )
+    for s in range(0, n, chunk):
+        x, norm, gap = _hull_candidates(c[s : s + chunk], subsets)
+        certified = torch.isfinite(norm).any(1)
+        pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
+        best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
+        out.append(torch.where((certified | torch.isfinite(gap).any(1))[:, None], best, 0.0))
     return torch.cat(out)
+
+
+def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    """The least-norm point of the hull of each row's directions ``c`` ``(n, K, d)``
+    where ``valid`` ``(n, K)`` (padding elsewhere) ``(n, d)``, by Wolfe's active-set
+    method (1976) over all the rows at once. Each row keeps a corral of at most ``d +
+    1`` directions and their weights. A major step keeps the row's least-norm point
+    ``x`` that meets :func:`_hull_candidates`'s certificate, ``min_k c_k . x >=
+    |x|^2`` to the same rounding slack, and adds the direction of least ``c_k . x``
+    while that is below ``|x|^2``. A minor step moves ``x`` to the corral's least-norm
+    affine point (solved in differences from its heaviest direction, so nearly
+    coincident directions keep their accuracy), or, where a weight there is not
+    positive, as far towards it as the weights stay non-negative, and drops the
+    directions whose weight reaches 0. The norm falls at every major step in exact
+    arithmetic. A row stops when the step would not progress: no direction is below
+    ``|x|^2``, the added direction is in the corral, the corral is full, its system
+    is singular, or neither the norm nor the duality gap falls (rounding). As in
+    :func:`_min_norm_points`, a row with no certified point returns its iterate of
+    least duality gap among those that separate the origin, and 0 when none does. A
+    full corral of positive weights holds the origin in its simplex, which gives
+    exactly 0. Wolfe's steps number a few times ``d`` in practice; their cap only
+    guards rounding cycles."""
+    n, k, d = c.shape
+    m, slots = d + 1, torch.arange(d + 1, device=c.device)
+    slack = 2 * d * torch.finfo(c.dtype).eps
+    rows = torch.arange(n, device=c.device)[:, None]
+    corral = valid.long().argmax(1, keepdim=True).expand(n, m).clone()
+    used, w = slots == 0, (slots == 0).to(c.dtype)
+    used, w = used.expand(n, m).clone(), w.expand(n, m).clone()
+    x = c[rows[:, 0], corral[:, 0]]
+    active, major = valid.any(1), torch.ones_like(valid[:, 0])
+    last, last_gap, best_sq, best_gap = (c.new_full((n,), torch.inf) for _ in range(4))
+    best, best_x = c.new_zeros(n, d), c.new_zeros(n, d)
+    for _ in range(64 * m):
+        if not active.any():
+            break
+        dots = (c * x[:, None]).sum(-1).masked_fill(~valid, torch.inf)
+        low, j = dots.min(1)
+        sq = (x * x).sum(-1)
+        step = active & major
+        ok = step & (low >= sq - slack)
+        least = ok & (sq < best_sq)
+        best_sq, best = torch.where(least, sq, best_sq), torch.where(least[:, None], x, best)
+        better = step & ~ok & (low > slack) & (sq - low < best_gap)
+        best_gap, best_x = torch.where(better, sq - low, best_gap), torch.where(better[:, None], x, best_x)
+        stalled = (sq > last) | ((sq == last) & (sq - low >= last_gap))
+        stuck = ((corral == j[:, None]) & used).any(1) | used.all(1) | stalled | (low >= sq)
+        last, last_gap = torch.where(step, sq, last), torch.where(step, sq - low, last_gap)
+        active &= ~(step & stuck)
+        add = (step & active)[:, None] & (slots == (~used).long().argmax(1, keepdim=True))
+        corral, used = torch.where(add, j[:, None], corral), used | add
+        ### The corral's least-norm affine point, from its heaviest direction a:
+        ### x = a + sum_i v_i (c_i - a) over the others, the least-squares solution
+        ### of Q^T v = -a by QR (the normal equations would square the condition
+        ### number), with rows v_i = 0 for the other slots.
+        p = c[rows, corral]
+        anchor = slots == w.argmax(1, keepdim=True)
+        a = (anchor[..., None] * p).sum(1)
+        free = used & ~anchor
+        q = torch.where(free[..., None], p - a[:, None], 0.0)
+        qr = torch.linalg.qr(torch.cat([q.mT, torch.diag_embed((~free).to(c.dtype))], 1))
+        rhs = (qr.Q[:, :d] * -a[..., None]).sum(1, keepdim=True).mT
+        v = torch.linalg.solve_triangular(qr.R, rhs, upper=True)[..., 0]
+        v = v + anchor * (1 - v.sum(1, keepdim=True))
+        y = torch.where(used.all(1, keepdim=True), 0.0, a + (v[..., None] * q).sum(1))
+        active &= torch.isfinite(v).all(1)
+        positive = ((v > 0) | ~used).all(1)
+        ### Where a weight is not positive, the last point of the segment from the
+        ### corral's weights w to v with non-negative weights, dropping a zero weight.
+        ratio = torch.where(used & (v <= 0), w / (w - v).clamp_min(torch.finfo(c.dtype).tiny), torch.inf)
+        theta, drop = ratio.min(1, keepdim=True)
+        theta = theta.clamp_max(1)
+        u = theta * v + (1 - theta) * w
+        keep = used & (u > 0) & (slots != drop)
+        u = torch.where(keep, u, 0.0)
+        z = ((u / u.sum(1, keepdim=True))[..., None] * p).sum(1)
+        move = active & positive
+        x = torch.where(move[:, None], y, torch.where(active[:, None], z, x))
+        w = torch.where(move[:, None], torch.where(used, v, 0.0), torch.where(active[:, None], u, w))
+        used = torch.where(active[:, None] & ~positive[:, None], keep, used)
+        major = positive
+    fallback = torch.where(torch.isfinite(best_gap)[:, None], best_x, 0.0)
+    return torch.where(torch.isfinite(best_sq)[:, None], best, fallback)
 
 
 def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> torch.Tensor:
     """The least-norm point of the hull of each group's distinct directions
     (:func:`_min_norm_points`), ``(n_groups, d)``, zero for an empty group; the rows
     ``c`` ``(P, d)`` belong to the groups ``group`` ``(P,)``. The directions are
-    de-duplicated and sorted per group, so each result is a function of its set."""
+    de-duplicated and sorted per group, so each result is a function of its set.
+    The groups of each size that :func:`_enumerable` admits are enumerated together,
+    and every larger group takes :func:`_wolfe_min_norm` in one batch, padded to the
+    largest."""
     out = c.new_zeros(n_groups, c.shape[1])
     if group.numel() == 0:
         return out
@@ -715,9 +781,18 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     group, c = rows[:, 0].long(), rows[:, 1:]
     ids, counts = torch.unique_consecutive(group, return_counts=True)
     start = torch.cumsum(counts, 0) - counts
+    large = []
     for k in torch.unique(counts).tolist():
         here = (counts == k).nonzero()[:, 0]
+        if not _enumerable(k, c.shape[1]):
+            large.append(here)
+            continue
         out[ids[here]] = _min_norm_points(c[start[here, None] + torch.arange(k, device=c.device)])
+    if large:
+        here = torch.cat(large)
+        k = counts[here, None]
+        j = torch.arange(int(k.max()), device=c.device)
+        out[ids[here]] = _wolfe_min_norm(c[start[here, None] + torch.minimum(j, k - 1)], j < k)
     return out
 
 
