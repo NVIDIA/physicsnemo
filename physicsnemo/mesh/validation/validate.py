@@ -82,8 +82,9 @@ def validate(
         return dict with all validation results.
     check_self_intersection : bool
         Check for pairs of triangles that intersect outside their shared
-        vertices, with :func:`find_self_intersections` (triangle meshes in 3D
-        only, expensive). Keyword-only.
+        vertices, with :func:`find_self_intersections` (expensive).
+        Keyword-only. It applies to triangle meshes in 3D only; on other
+        meshes it is skipped and reports ``-1`` pairs.
 
     Returns
     -------
@@ -101,7 +102,8 @@ def validate(
             - "inverted_cell_indices": Tensor (if check enabled and any found)
             - "is_manifold": bool (if check enabled, 2D only)
             - "non_manifold_edges": Tensor of edge indices (if check enabled)
-            - "n_self_intersecting_pairs": int (if check enabled)
+            - "n_self_intersecting_pairs": int (if check enabled; -1 if not
+              a triangle mesh in 3D)
             - "self_intersecting_pairs": Tensor of cell index pairs (if check
               enabled and any found)
 
@@ -109,9 +111,6 @@ def validate(
     ------
     ValueError
         If raise_on_error=True and validation fails
-    NotImplementedError
-        If ``check_self_intersection=True`` and ``mesh`` is not a triangle
-        mesh in 3D.
 
     Examples
     --------
@@ -286,21 +285,24 @@ def validate(
             results["is_manifold"] = None  # Only defined for 2D manifolds
             results["n_non_manifold_edges"] = -1  # Not applicable
 
-    ### Check for self-intersecting triangle pairs
+    ### Check for self-intersecting triangle pairs (triangle meshes in 3D only)
     if check_self_intersection:
-        pairs = find_self_intersections(mesh)
-        n_pairs = len(pairs)
-        results["n_self_intersecting_pairs"] = n_pairs
+        if mesh.n_manifold_dims == 2 and mesh.n_spatial_dims == 3:
+            pairs = find_self_intersections(mesh)
+            n_pairs = len(pairs)
+            results["n_self_intersecting_pairs"] = n_pairs
 
-        if n_pairs > 0:
-            results["valid"] = False
-            results["self_intersecting_pairs"] = pairs
+            if n_pairs > 0:
+                results["valid"] = False
+                results["self_intersecting_pairs"] = pairs
 
-            if raise_on_error:
-                raise ValueError(
-                    f"Found {n_pairs} pairs of self-intersecting triangles.\n"
-                    f"First few pairs: {pairs[:5].tolist()}"
-                )
+                if raise_on_error:
+                    raise ValueError(
+                        f"Found {n_pairs} pairs of self-intersecting triangles.\n"
+                        f"First few pairs: {pairs[:5].tolist()}"
+                    )
+        else:
+            results["n_self_intersecting_pairs"] = -1  # Not applicable
 
     return results
 

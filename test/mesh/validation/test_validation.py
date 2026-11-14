@@ -1312,6 +1312,16 @@ class TestSelfIntersections:
         assert report["n_self_intersecting_pairs"] == 0
         assert "self_intersecting_pairs" not in report
 
+    def test_validate_skips_check_on_non_triangle_meshes(self):
+        """Like check_manifoldness, the check is skipped where it does not apply."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        report = validate(mesh, check_self_intersection=True, raise_on_error=True)
+        assert report["valid"]
+        assert report["n_self_intersecting_pairs"] == -1
+
     def test_validate_skips_check_on_out_of_bounds_cells(self):
         """Out-of-bounds indices stop validation before any geometry."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]])

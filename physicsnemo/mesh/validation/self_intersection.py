@@ -136,7 +136,8 @@ def find_self_intersections(mesh: "Mesh") -> Int[torch.Tensor, "n_pairs 2"]:
       somewhere else (a crossing, or an edge of one touching the other);
     - triangles that share an edge are reported when they overlap beyond it,
       which happens only when they are coplanar and fold onto the same side
-      of the edge;
+      of the edge (a fold that is only nearly coplanar meets the other
+      triangle on the edge alone, so it is not reported);
     - triangles with all three vertices in common (duplicate cells) are not
       reported; :func:`~physicsnemo.mesh.repair.remove_duplicate_cells` finds
       those.
