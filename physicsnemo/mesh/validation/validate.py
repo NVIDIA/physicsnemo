@@ -33,6 +33,7 @@ from physicsnemo.mesh.boundaries import (
 )
 from physicsnemo.mesh.utilities._duplicate_detection import find_duplicate_pairs
 from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.mesh.validation.self_intersection import find_self_intersections
 from physicsnemo.utils._index_tuple_ops import sort_index_tuples
 from physicsnemo.utils._small_linalg import small_det
 
@@ -80,8 +81,9 @@ def validate(
         If True, raise ValueError on first error. If False,
         return dict with all validation results.
     check_self_intersection : bool
-        Request a self-intersection check. This option is keyword-only and not
-        yet implemented; passing ``True`` raises ``NotImplementedError``.
+        Check for pairs of triangles that intersect outside their shared
+        vertices, with :func:`find_self_intersections` (triangle meshes in 3D
+        only, expensive). Keyword-only.
 
     Returns
     -------
@@ -99,14 +101,17 @@ def validate(
             - "inverted_cell_indices": Tensor (if check enabled and any found)
             - "is_manifold": bool (if check enabled, 2D only)
             - "non_manifold_edges": Tensor of edge indices (if check enabled)
+            - "n_self_intersecting_pairs": int (if check enabled)
+            - "self_intersecting_pairs": Tensor of cell index pairs (if check
+              enabled and any found)
 
     Raises
     ------
     ValueError
         If raise_on_error=True and validation fails
     NotImplementedError
-        If ``check_self_intersection=True`` because that check is not yet
-        implemented.
+        If ``check_self_intersection=True`` and ``mesh`` is not a triangle
+        mesh in 3D.
 
     Examples
     --------
@@ -115,18 +120,6 @@ def validate(
     >>> report = validate(mesh)
     >>> assert report["valid"] == True
     """
-    ### Reject unsupported options before any other validation can return or raise.
-    if check_self_intersection:
-        # Fail loudly rather than returning a None sentinel that masquerades as
-        # "no self-intersections found". Implementing this needs BVH-accelerated
-        # cell-cell intersection tests (the naive version is O(n^2)).
-        # TODO: implement BVH-accelerated self-intersection detection.
-        raise NotImplementedError(
-            "Self-intersection checking is not yet implemented (it requires "
-            "BVH-accelerated cell-cell intersection tests). Do not pass "
-            "check_self_intersection=True until it is available."
-        )
-
     ### Default tolerance based on point dtype
     if tolerance is None:
         tolerance = safe_eps(mesh.points.dtype)
@@ -292,6 +285,22 @@ def validate(
         else:
             results["is_manifold"] = None  # Only defined for 2D manifolds
             results["n_non_manifold_edges"] = -1  # Not applicable
+
+    ### Check for self-intersecting triangle pairs
+    if check_self_intersection:
+        pairs = find_self_intersections(mesh)
+        n_pairs = len(pairs)
+        results["n_self_intersecting_pairs"] = n_pairs
+
+        if n_pairs > 0:
+            results["valid"] = False
+            results["self_intersecting_pairs"] = pairs
+
+            if raise_on_error:
+                raise ValueError(
+                    f"Found {n_pairs} pairs of self-intersecting triangles.\n"
+                    f"First few pairs: {pairs[:5].tolist()}"
+                )
 
     return results
 
