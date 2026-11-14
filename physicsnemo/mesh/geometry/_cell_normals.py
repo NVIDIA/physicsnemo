@@ -24,11 +24,11 @@ where possible:
 - **Triangles in 3D** (d=3): ``torch.linalg.cross``.
 - **General** (d>=4): signed minor determinants of the edge-vector matrix.
 
-The closed-form branches for d=2 and d=3 use only multiply-add
-operations, so they support reduced-precision dtypes (bfloat16, float16)
-natively. The general fallback disables ``torch.autocast`` to keep
-``torch.det`` in the native dtype, since it dispatches to cuBLAS LU
-factorization which does not support reduced-precision dtypes.
+All branches compute in at least float32 and cast the normals back to the
+input dtype once, since the cross products and minors of float16 edge vectors
+can overflow. The general fallback disables ``torch.autocast`` to keep
+``torch.det`` in that dtype, since it dispatches to cuBLAS LU factorization
+which does not support reduced-precision dtypes.
 """
 
 import torch
@@ -76,13 +76,20 @@ def compute_cell_normals(
     """
     n_spatial_dims = relative_vectors.shape[-1]
 
+    # In the input dtype, but at least float32, since cross products and minors
+    # can overflow float16; the normals are cast back to the input dtype
+    vectors = relative_vectors.to(
+        torch.promote_types(relative_vectors.dtype, torch.float32)
+    )
+
     match n_spatial_dims:
         case 2:
-            return _normals_2d(relative_vectors)
+            normals = _normals_2d(vectors)
         case 3:
-            return _normals_3d(relative_vectors)
+            normals = _normals_3d(vectors)
         case _:
-            return _normals_general(relative_vectors)
+            normals = _normals_general(vectors)
+    return normals.to(relative_vectors.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -100,15 +107,22 @@ def _compute_cell_normals_from_points(
     larger than the unnormalized normals is alive while they are normalized.
     The values are identical to those of :func:`compute_cell_normals`.
     """
+    # Edge vectors in the points' dtype, then products in at least float32, as
+    # in compute_cell_normals; the normals are cast back to the points' dtype
+    dtype = torch.promote_types(points.dtype, torch.float32)
+
     if points.shape[-1] not in (2, 3):
         # Includes points in 1D, whose cells have no edges to gather one by one
         relative_vectors = gather_rows(points, cells[:, 1:]) - gather_rows(
             points, cells[:, :1]
         )
-        return _normals_general(relative_vectors)
+        return _normals_general(relative_vectors.to(dtype)).to(points.dtype)
 
     v0 = gather_rows(points, cells[:, 0])
-    edges = [gather_rows(points, cells[:, k]) - v0 for k in range(1, cells.shape[1])]
+    edges = [
+        (gather_rows(points, cells[:, k]) - v0).to(dtype)
+        for k in range(1, cells.shape[1])
+    ]
     del v0
 
     if points.shape[-1] == 2:
@@ -118,7 +132,7 @@ def _compute_cell_normals_from_points(
         # Cross product, as in _normals_3d
         normals = torch.linalg.cross(edges[0], edges[1])
     del edges
-    return safe_normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1).to(points.dtype)
 
 
 def _normals_2d(

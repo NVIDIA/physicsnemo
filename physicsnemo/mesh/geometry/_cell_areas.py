@@ -26,11 +26,12 @@ dimension-specific closed-form expressions where possible:
   3x3 minors of the edge vectors for higher spatial dimensions.
 - **General** (n>=4): Gram determinant via ``torch.det``.
 
-The closed-form branches use only multiply-add-sqrt operations, so they
-support reduced-precision dtypes (bfloat16, float16) natively. The general
-fallback disables ``torch.autocast`` to keep ``torch.matmul`` in the
-native dtype, since ``torch.det`` dispatches to cuBLAS LU factorization
-which does not support reduced-precision dtypes.
+All branches compute in at least float32 and cast the volumes back to the
+input dtype once, since the determinants and cross products of float16 edge
+vectors can overflow even when the volume fits in float16. The general
+fallback disables ``torch.autocast`` to keep ``torch.matmul`` in that dtype,
+since ``torch.det`` dispatches to cuBLAS LU factorization which does not
+support reduced-precision dtypes.
 """
 
 import itertools
@@ -90,15 +91,21 @@ def compute_cell_areas(
     """
     n_manifold_dims = relative_vectors.shape[-2]
 
+    # In the input dtype, but at least float32, since determinants and cross
+    # products can overflow float16; the volumes are cast back once below
+    vectors = relative_vectors.to(
+        torch.promote_types(relative_vectors.dtype, torch.float32)
+    )
+
     match n_manifold_dims:
         case 1:
-            result = _edge_lengths(relative_vectors)
+            result = _edge_lengths(vectors)
         case 2:
-            result = _triangle_areas(relative_vectors)
+            result = _triangle_areas(vectors)
         case 3:
-            result = _tetrahedron_volumes(relative_vectors)
+            result = _tetrahedron_volumes(vectors)
         case _:
-            result = _gram_det_volumes(relative_vectors)
+            result = _gram_det_volumes(vectors)
 
     # Lock the dtype contract: under CUDA ``torch.autocast`` (e.g. bf16),
     # reductions like ``aten::sum`` that the closed-form branches rely on are on

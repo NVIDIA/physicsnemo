@@ -762,6 +762,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Loop subdivision keeps float16 and bfloat16 points in their dtype, and no
   longer overflows on float16 meshes far from the origin. Before, it returned
   float32 points.
+- `cell_areas`, `cell_normals`, and Butterfly subdivision compute in at least
+  float32 and cast back once, so float16 results that fit in float16 are
+  finite. Before, their cross products, determinants, and sums of positions
+  overflowed float16 to `inf` or `nan`, and `scale` gave finite areas only if
+  they were cached before the call.
 - `sample_random_points_on_cells` with `alpha` other than 1 works on float16
   and bfloat16 meshes on CPU. Before, it raised an error.
 - Anisotropic maps with a small overall scale are no longer taken for
