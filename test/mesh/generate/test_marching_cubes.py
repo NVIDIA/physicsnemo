@@ -196,12 +196,13 @@ class TestDevice:
         sdf, coords = _sphere_sdf(resolution=24)
         reference = marching_cubes(sdf, coords=(coords, coords, coords))
 
+        field = sdf.to(device)
         mesh = marching_cubes(
-            sdf.to(device), coords=(coords.to(device), coords, coords.to(device))
+            field, coords=(coords.to(device), coords, coords.to(device))
         )
 
-        assert mesh.points.device.type == torch.device(device).type
-        assert mesh.cells.device.type == torch.device(device).type
+        assert mesh.points.device == field.device
+        assert mesh.cells.device == field.device
         assert torch.equal(mesh.cells.cpu(), reference.cells)
         torch.testing.assert_close(mesh.points.cpu(), reference.points)
 
@@ -211,25 +212,43 @@ class TestDevice:
 
         mesh = marching_cubes(sdf, coords=(coords.to(device),) * 3)
 
-        assert mesh.points.device.type == "cpu"
+        assert mesh.points.device == sdf.device
         torch.testing.assert_close(mesh.points, reference.points)
+
+    @pytest.mark.cuda
+    def test_field_on_second_gpu(self):
+        if torch.cuda.device_count() < 2:
+            pytest.skip("needs two GPUs")
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+        field = sdf.to("cuda:1")  # the current device stays cuda:0
+
+        mesh = marching_cubes(field, coords=(coords.to("cuda:0"), coords, coords))
+
+        assert torch.cuda.current_device() == 0
+        assert mesh.points.device == field.device
+        assert mesh.cells.device == field.device
+        assert torch.equal(mesh.cells.cpu(), reference.cells)
+        torch.testing.assert_close(mesh.points.cpu(), reference.points)
 
     def test_bfloat16_field_on_device(self, device):
         sdf, _ = _sphere_sdf(resolution=16)
 
-        mesh = marching_cubes(sdf.to(device=device, dtype=torch.bfloat16))
+        field = sdf.to(device=device, dtype=torch.bfloat16)
+        mesh = marching_cubes(field)
 
         assert mesh.n_cells > 0
         assert mesh.points.dtype == torch.float32
-        assert mesh.points.device.type == torch.device(device).type
+        assert mesh.points.device == field.device
 
     def test_empty_surface_on_device(self, device):
         sdf, _ = _sphere_sdf(resolution=16)
 
-        mesh = marching_cubes(sdf.to(device), threshold=10.0)
+        field = sdf.to(device)
+        mesh = marching_cubes(field, threshold=10.0)
 
         assert mesh.n_points == 0 and mesh.n_cells == 0
-        assert mesh.points.device.type == torch.device(device).type
+        assert mesh.points.device == field.device
 
     @pytest.mark.cuda
     def test_cuda_field_on_side_stream(self):
@@ -237,8 +256,10 @@ class TestDevice:
         reference = marching_cubes(sdf, coords=(coords, coords, coords))
 
         with torch.cuda.stream(torch.cuda.Stream()):
-            mesh = marching_cubes(sdf.cuda(), coords=(coords.cuda(),) * 3)
+            field = sdf.cuda()
+            mesh = marching_cubes(field, coords=(coords.cuda(),) * 3)
             torch.cuda.current_stream().synchronize()
 
+        assert mesh.points.device == field.device
         assert torch.equal(mesh.cells.cpu(), reference.cells)
         torch.testing.assert_close(mesh.points.cpu(), reference.points)
