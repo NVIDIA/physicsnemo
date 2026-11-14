@@ -47,7 +47,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.calculus.measure import set_cell_measures
+from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
 ### Fixtures ###
@@ -262,6 +262,39 @@ def test_with_cells_checks_simplex_type_under_fullgraph_compile(
     tetrahedra = torch.cat([cells, cells[:, :1]], dim=1)
     with pytest.raises(RuntimeError, match="must preserve simplex type"):
         compiled(points, cells, tetrahedra)
+
+
+def test_with_cells_keeps_measures_under_fullgraph_compile() -> None:
+    """A compiled winding flip keeps effective measures and ignores ``_cache``.
+
+    A cold and a warm input mesh share one graph, and the compiled call leaves
+    the input mesh's cache keys unchanged.
+    """
+    g = torch.Generator().manual_seed(0)
+    cold = Mesh(
+        points=torch.rand(600, 3, generator=g),
+        cells=torch.randperm(600, generator=g).reshape(200, 3),
+    )
+    # Float32 areas of these triangles depend on the vertex order
+    flipped = Mesh(points=cold.points, cells=cold.cells[:, [0, 2, 1]])
+    assert not torch.equal(flipped.cell_areas, cold.cell_areas)
+    warm = Mesh(points=cold.points * 2.0, cells=cold.cells)
+    for mesh in (cold, warm):
+        set_cell_measures(mesh, torch.full((mesh.n_cells,), 0.5))
+    _ = warm.cell_centroids, warm.cell_areas  # eager reads fill the cache
+
+    torch._dynamo.reset()
+    compiled = torch.compile(
+        lambda mesh: cell_measures(mesh.with_cells(mesh.cells[:, [0, 2, 1]])),
+        backend="eager",
+        fullgraph=True,
+        dynamic=True,
+    )
+    with torch._dynamo.config.patch(error_on_recompile=True):
+        for mesh in (cold, warm):
+            keys = set(mesh._cache.keys(True, True))
+            assert torch.equal(compiled(mesh), cell_measures(mesh))
+            assert set(mesh._cache.keys(True, True)) == keys
 
 
 @pytest.mark.parametrize("backend", ["eager", "inductor"])

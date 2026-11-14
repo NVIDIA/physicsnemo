@@ -201,16 +201,34 @@ def lumped_point_measures(mesh: "Mesh") -> torch.Tensor:
 
 
 def _transfer_cell_measures(
-    source: "Mesh", result: "Mesh", parents: torch.Tensor | None = None
+    source: "Mesh",
+    result: "Mesh",
+    parents: torch.Tensor | None = None,
+    unchanged: torch.Tensor | None = None,
 ) -> None:
-    """Transfer explicit cell measures through geometric changes/subdivision."""
+    """Transfer explicit cell measures through geometric changes/subdivision.
+
+    Result row ``i`` comes from source row ``parents[i]``, or from row ``i``
+    without ``parents``. ``unchanged`` is a boolean mask over result rows: a
+    marked row only reorders its source row's vertices, so it keeps that row's
+    measure bitwise and, outside tracing and autograd, its cached area.
+    """
     if EFFECTIVE_MEASURE_KEY not in source.cell_data:
         return
     measures = cell_measures(source)
     old_areas = source.cell_areas
     if parents is not None:
         measures, old_areas = measures[parents], old_areas[parents]
-    if not is_tracing() and bool(((old_areas == 0) & (measures != 0)).any()):
+    new_areas = result.cell_areas
+    degenerate = (old_areas == 0) & (measures != 0)
+    if unchanged is not None:
+        new_areas = torch.where(unchanged, old_areas, new_areas)
+        degenerate = degenerate & ~unchanged
+        # Later transfers divide by the cached area, so cache the bits paired
+        # with the measure rather than a recompute in the new vertex order.
+        if not (is_tracing() or result.points.requires_grad):
+            result._cache["cell", "areas"] = new_areas
+    if not is_tracing() and bool(degenerate.any()):
         raise ValueError(
             "Cannot transform nonzero effective measure on a zero-measure cell; supply replacement measures"
         )
@@ -218,11 +236,14 @@ def _transfer_cell_measures(
     # The measures follow the widest dtype involved; the area ratio can overflow
     # float16, so compute in at least float32.
     out_dtype = torch.promote_types(
-        torch.promote_types(measures.dtype, result.cell_areas.dtype), old_areas.dtype
+        torch.promote_types(measures.dtype, new_areas.dtype), old_areas.dtype
     )
     dtype = torch.promote_types(out_dtype, torch.float32)
-    ratio = result.cell_areas.to(dtype) / denominator.to(dtype)
-    set_cell_measures(result, (measures.to(dtype) * ratio).to(out_dtype))
+    ratio = new_areas.to(dtype) / denominator.to(dtype)
+    transferred = (measures.to(dtype) * ratio).to(out_dtype)
+    if unchanged is not None:
+        transferred = torch.where(unchanged, measures.to(out_dtype), transferred)
+    set_cell_measures(result, transferred)
 
 
 def _require_preserved_point_measures(mesh: "Mesh") -> None:

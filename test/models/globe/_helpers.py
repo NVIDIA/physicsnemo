@@ -18,8 +18,8 @@
 
 import torch
 
-from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh import FieldSchema
+from physicsnemo.models.globe import GLOBE
 
 ### GLOBE's optional constructor arguments and their defaults.
 DEFAULTS = {

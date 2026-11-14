@@ -28,8 +28,8 @@ CRASH_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))
 if CRASH_DIR not in sys.path:
     sys.path.insert(0, CRASH_DIR)
 
-from datapipe import SimSample  # noqa: E402
-from rollout import GeoTransolverOneShot  # noqa: E402
+from datapipes.datapipe import SimSample  # noqa: E402
+from models.rollout import GeoTransolverOneShot  # noqa: E402
 
 
 @pytest.mark.parametrize(

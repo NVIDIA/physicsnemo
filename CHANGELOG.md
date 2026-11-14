@@ -10,8 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
+- Unified external aero recipe: adds AB-UPT surface, volume, and joint
+  configurations calling the library model directly, configurable independent
+  point-set sampling in `DomainMeshReader`, and grouped tensor outputs for
+  unequal surface/volume point counts.
 
+- The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
+- The unified external aerodynamics recipe adds experimental ISLA configs on
+  DrivAerML (`isla_surface`, `isla_volume` and `isla_volume_joint`) and a
+  `scheduler` config group. Each ISLA config reads the whole flow-domain
+  boundary and fits one 80 GB GPU at its defaults.
+- Adds the `FlipBoundaryOrientation` and `BoundaryCellsToPoints` mesh
+  transforms to `physicsnemo.datapipes`. The first reverses the cell winding
+  and stored normals of named boundaries, and the second adds a point-cloud
+  boundary at drawn cells of another boundary, with those cells' fields and
+  measures.
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference
@@ -22,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
   mesh, the same in every pose, bitwise the same from run to run on CPU and
   on CUDA, and compiles to one graph.
+- `KNNScorer` and `DensityScorer` provide reusable out-of-distribution (OOD)
+  scoring under `experimental.uq.ood`, with optional geometry descriptors.
+  The examples keep scoring decisions in the application. Both scorers support
+  weights-only tensor persistence. The k-nearest neighbors (kNN) scorer uses
+  bounded distance blocks and leave-one-out reference scoring. The density
+  scorer supports held-out calibration.
 - `Mean` and `Variance` now support opt-in tensor-aware streaming with detached
   state, state combination, and `ShardTensor` reductions over declared
   observation axes.
@@ -56,6 +75,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `QuantileRegressionScore`, and `AuxScale`. Custom scores subclass
   `NonconformityScore` and register with `register_score`; `check_score`
   tests them.
+- Adds `physicsnemo.experimental.nn.shell_contact`: shell contact as pure
+  functions over tensors (node-to-facet pair search with a Warp BVH broad
+  phase and fused Warp narrow phase, crossing-aware signed gaps, edge
+  features and tapers, penetration depths and rigid-wall clamp), and
+  `physicsnemo.experimental.nn.geodesic_knn` (k-nearest neighbourhoods of a
+  mesh along its edges; Euclidean ones use `physicsnemo.nn.functional.knn`).
+- Adds `physicsnemo.experimental.models.deformer`: the DeFormer
+  network (a GeoTransolver/FLARE backbone with static kNN-attention
+  stages and a fused kernel) and its contact-aware corrector (message passing
+  on the structural edges and on the contact edges discovered on a predicted
+  shape).
+- Adds the DeFormer crash surrogate to `examples/structural_mechanics/crash`:
+  the time-conditional network and corrector wrappers, the three full-vehicle Yaris
+  recipes (`px_yaris_deformer`, `px_yaris_deformer_corrector`,
+  `px_yaris_geotransolver`), the body-in-white recipe `biw_yaris_deformer`
+  and target-relative penetration metrics.
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
@@ -74,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_effective_measure` point-data key, so
   integrals and weighted losses over the query points remain possible after
   the cells are gone.
+- Unified external aero recipe: a sample can carry several prediction point
+  sets with their own targets (`target_sources`), so branch models
+  (`output_groups`) and single-decoder models (`output_sets`) can train on
+  volume and surface points jointly; model configs can add such a set to any
+  dataset with `extra_task`.
 - Unified external aero recipe: `NonDimensionalizeByMetadata` gains
   `scale_geometry` so chained instances scale the geometry once; inference
   re-dimensionalizes with the field maps of every instance.
@@ -94,6 +134,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `physicsnemo.experimental.models.isla.ISLA` (Invariant Slice Attention),
+  an experimental mesh-native surrogate for steady boundary-value problems that
+  takes the boundary as named meshes, and `case_scales`, which gives other
+  models ISLA's length and field scales. ISLA's outputs follow rotations,
+  reflections and translations of the problem exactly, up to roundoff, except
+  on some symmetric or nearly symmetric boundaries described on its
+  documentation page.
+- `physicsnemo.mesh.spatial` exports `canonical_frame`, the principal-axis frame
+  that a weighted point set carries with it, and `frame_coordinates`, the
+  points' coordinates in that frame.
+- `ClusterTree.find_point_interaction_pairs` takes targets of shape `(R, M, D)`
+  with `root_rows`, the row each root's tree reads, so one call walks a forest
+  whose trees each use their own coordinates.
 - Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
   `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
   `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
@@ -154,6 +207,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
+  `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
+  `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
+  recipe of the example now names its dataset (`px_yaris_*` full vehicle,
+  `biw_yaris_*` body-in-white, `bumper_*` bumper beam).
+- &#9888;&#65039; **BC-impact (crash example global features):** the datapipe of
+  `examples/structural_mechanics/crash` standardizes the global features with
+  train-split statistics stored in `stats/global_stats.json`, which changes the
+  inputs of the three bumper recipes. A run directory written before this
+  change holds checkpoints but no such file: `train.py` refuses to resume it
+  instead of recomputing the statistics and continuing on rescaled inputs, and
+  `inference.py` needs the file. Start such runs afresh.
+- &#9888;&#65039; **BC-impact (crash example edge statistics):** the graph datapipe
+  of the crash example divides the first sample's contribution to the edge
+  statistics by the sample count like every other sample's, which fixes an
+  edge-length standard deviation that collapsed to about 1e-4. Existing runs
+  keep the values stored in their own `stats` directory; new runs compute the
+  corrected ones, so their models are not interchangeable with the old runs'.
+- &#9888;&#65039; **BC-impact (crash example frame names):** `inference.py` of the
+  crash example writes the predicted frames as `frame_001` to `frame_T`
+  (prediction `k` belongs to frame `k + 1`) instead of starting at
+  `frame_000`; `post_processing/compute_l2_error.py` reads the new names.
 - &#9888;&#65039; **BC-impact (diffusion metric imports):** Cleans up
   `physicsnemo.diffusion` dependencies and imports. General-purpose metrics can
   no longer be imported from `physicsnemo.diffusion.metrics`. Use the following
@@ -396,9 +471,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
   the requested rows instead of all-gathering the source; no host sync, and
   `torch.compile` safe.
+- Unified external aero recipe: when a dataset puts its targets at cell
+  centroids, as the surface datasets do, the training loss and the metrics
+  weight each target point by its cell's area (or volume), so they no longer
+  depend on how finely the mesh resolves each region. Set
+  `measure_weighted=false` to count every point alike, as before.
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
+- Promotes GLOBE out of `experimental` to `physicsnemo.models.globe.GLOBE`, the
+  package's only export. Legacy import shims keep the old
+  `physicsnemo.experimental.models.globe` paths and saved checkpoints working
+  and emit a `LegacyFeatureWarning`.
 
 ### Deprecated
 
@@ -414,6 +498,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computed (target-normalized relative MSE, no square root) and delegates
   to `physicsnemo.metrics.general.relative_error`. `rmse` still works and
   warns.
+- The `physicsnemo.experimental.models.globe` import path is deprecated.
+  Import GLOBE from `physicsnemo.models.globe` instead.
 
 ### Removed
 
@@ -422,6 +508,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used. Instead of `export_to_onnx_stream`, call
   `torch.onnx.export` with an `io.BytesIO` target; instead of
   `run_onnx_inference`, run the result in an `onnxruntime.InferenceSession`.
+- `physicsnemo.experimental.guardrails`. Scoring moved to
+  `physicsnemo.experimental.uq.ood`; thresholds and responses now live in
+  example recipes. Replacements:
+  - `GuardedGeoTransolver`, `attach_ood_guard`, `OODGuard`, `OODGuardConfig`:
+    call `GeoTransolver.forward_with_geometry_features`, pool the tokens,
+    and score them with `KNNScorer`. Global-parameter bounds become an explicit
+    input check. See `examples/minimal/uq/feature_scoring.py`. A saved
+    `GuardedGeoTransolver` keeps its GeoTransolver weights under the `model.`
+    prefix; refit the scorer on reference features.
+  - `GeometryGuardrail`, `GeometryDensityModel`, `TorchPCEDensityModel`:
+    `DensityScorer(method="gmm" | "pce")` on descriptors from
+    `physicsnemo.experimental.uq.ood.geometry.extract_features`. See
+    `examples/minimal/guardrails/geometry_validation.py`, which also replaces
+    `load_features_from_dir`.
+  - The other geometry utilities keep their names under
+    `physicsnemo.experimental.uq.ood.geometry`; `FEATURE_VERSION` is now `v1.1`.
 - The `physicsnemo.experimental.uq.variational_gp_head` and
   `physicsnemo.experimental.uq.field_variational_gp_head` modules. Import the
   heads from `physicsnemo.experimental.uq` as before, or from
@@ -465,6 +567,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The container build compiles pyg-lib from source without the uv cache, so
   it no longer reuses a pyg-lib wheel built against an older PyTorch, which
   failed to load with an undefined symbol after a base image upgrade.
+- `Mesh.with_cells` and `fix_orientation` keep the effective measure and area
+  of each cell whose vertices are only reordered, as when flipping a winding,
+  instead of rescaling them by float32 roundoff or raising on zero-area cells.
 - `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
   its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
   `cleanup()` no longer raises after a failed initialization.
@@ -484,6 +589,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
   Padé networks (pytorch/pytorch#193194).
+- Stabilizes PCE density scores for collinear features by fitting polynomial
+  covariance/precision in float64. Rejects non-finite density scores before
+  percentile decisions and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
 - `torch.compile` with ShardTensor: neighborhood attention (`na1d`/`na2d`/
@@ -731,6 +839,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a subclass with fields of its own. Before, `from_zarr` refused these stores.
 - `from_zarr`, `MeshReader` and `DomainMeshReader` keep the cell shape of a
   zarr mesh with zero cells. Before, such a mesh came back as a point cloud.
+- With domain-parallel reading, `MeshReader` and `DomainMeshReader` also keep
+  the cell shape and cell data of a mesh with zero cells. Before, such a mesh
+  came back as a point cloud, so computing its normals or merging it with
+  other boundaries raised.
 - `to_pyvista` exports empty meshes with vector or tensor fields, where it
   raised before, and `from_pyvista` reads complex arrays of one value with
   shape `(1,)`, where it raised or dropped a dimension before.

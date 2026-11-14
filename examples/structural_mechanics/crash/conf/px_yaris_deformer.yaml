@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DeFormer network on the full-resolution Yaris mesh (1.48M kept nodes, 99
+# designs, 20 held-out designs): every future frame (stride 5, 5 ms) is predicted
+# independently from the initial mesh by the time-conditional DeFormer
+# (conf/model/deformer_time_conditional.yaml: FLARE backbone, Fourier time code,
+# static kNN attention with k = 32 Euclidean neighbours, two-stage
+# local decoder). Loss: MSE of the position error in millimetres over one 10 mm
+# scale for all three axes, plus 0.1 x the same loss on the provisional head.
+# Muon/AdamW, cosine 2e-4 -> 1e-6 over 60 epochs, bf16 autocast, 16 GPUs.
+# Validation every 5 epochs on the 20 held-out designs (exact, horizon-aware).
+# Prepare the statistics and caches first: python px_yaris_prepare.py
+# --config-name px_yaris_deformer yaris.data_root=... (see README.md).
+defaults:
+  - reader: px_yaris_full
+  - datapipe: px_yaris_full
+  - model: deformer_time_conditional
+  - training: default
+  - inference: default
+  - _self_
+
+experiment_name: PX-Yaris-DeFormer
+
+yaris:
+  data_root: ???       # directory of <case>.zarr stores
+  split_manifest: ???  # dataset creator's splits.csv
+  outlier_mask: ???    # outlier_nodes.npz with a boolean `exclude` array (null keeps all)
+  work_dir: ???        # ABSOLUTE path: statistics, neighbourhood caches, checkpoints, records
+                       # (Hydra changes into it; a relative path would nest the outputs)
+  stride: 5            # 5 ms frames from the 1 ms stores
+  dt: 0.005            # frame interval in seconds (= stride * reader.raw_dt); the datapipe
+                       # and the time-conditional models read it from here
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ${yaris.work_dir}
+
+training:
+  trainer_class: trainers.px_yaris_trainer.YarisFullTrainer  # exact, horizon-aware validation
+  raw_data_dir: ${yaris.data_root}
+  raw_data_dir_validation: ${yaris.data_root}
+  global_features_filepath: null
+  num_training_samples: 69
+  num_validation_samples: 20
+  num_time_steps: 31   # ceil(152 / 5); per-case horizons come from the stores
+  num_dataloader_workers: 0  # one sample per step read from Zarr on the training process
+  ckpt_path: ${yaris.work_dir}/checkpoints
+  tensorboard_log_dir: ${yaris.work_dir}/tensorboard
+  optimizer: muon
+  muon_min_dim: 9      # tiny 2-D parameters (per-head bias projections) stay on AdamW
+  amp: true
+  amp_dtype: bfloat16
+  manual_gradient_allreduce: true
+  seed: 42             # paired seeds: training.seed=43 training.sampler_seed=1
+  reproducible_sampling: true
+  sampler_seed: 0
+  deterministic: false
+  epochs: 60
+  start_lr: 2.0e-4
+  end_lr: 1.0e-6
+  validation_freq: 5
+  validation_region_bounds: [-2000.0, -1000.0]  # reference-x bounds (mm) of the per-region readouts
+  save_checkpoint_freq: 5
+  early_stopping_patience: 0
+  auxiliary_loss_weight: 0.1
+  loss: mse
+  loss_space: physical
+  loss_scale_mm: 10.0
+
+# inference.py reads VTP sequences only and does not run on the Yaris stores.
+# evaluate_px_yaris.py scores a checkpoint and writes metrics only (the JSON
+# record, the node RMSE array and node_meta.npz); there is no export of a
+# predicted Yaris shape.
+inference:
+  raw_data_dir_test: null

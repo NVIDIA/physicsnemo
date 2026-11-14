@@ -27,6 +27,9 @@ reference.  If an intentional change alters outputs, delete the
 ``.pth`` file and re-run to regenerate.
 """
 
+import importlib
+import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,9 +37,10 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
-from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.models.globe import GLOBE
 from test.models.globe._helpers import assert_globe_attributes
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -244,7 +248,11 @@ def _make_checkpoint_inputs(device: torch.device) -> dict:
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_globe_from_checkpoint(device: str) -> None:
     """``Module.from_checkpoint`` rebuilds GLOBE from the committed checkpoint,
-    with its constructor arguments, and reproduces the reference outputs."""
+    with its constructor arguments, and reproduces the reference outputs.
+
+    The checkpoint stores the pre-move class path
+    ``physicsnemo.experimental.models.globe.model``, so this also tests that
+    old checkpoints load as the promoted class."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA not available")
     if not CHECKPOINT_PATH.exists():
@@ -282,3 +290,38 @@ def test_globe_from_checkpoint(device: str) -> None:
             **tolerances,
             msg=f"Output field '{key}' differs from reference",
         )
+
+
+def test_globe_legacy_checkpoint_class_path() -> None:
+    """The class paths stored by pre-move checkpoints resolve to GLOBE."""
+    from physicsnemo.experimental.models.globe import GLOBE as LegacyPackageGLOBE
+    from physicsnemo.experimental.models.globe.field_kernel import (
+        BarnesHutKernel as LegacyBarnesHutKernel,
+    )
+    from physicsnemo.experimental.models.globe.model import (
+        GLOBE as LegacyModuleGLOBE,
+    )
+    from physicsnemo.models.globe.field_kernel import BarnesHutKernel
+
+    assert LegacyPackageGLOBE is GLOBE
+    assert LegacyModuleGLOBE is GLOBE
+    assert LegacyBarnesHutKernel is BarnesHutKernel
+
+
+def test_globe_legacy_import_paths() -> None:
+    """The pre-move package warns and re-exports the promoted objects."""
+    from physicsnemo.models.globe import field_kernel
+
+    ### Drop the cached legacy modules so the shim warning fires again.
+    for module_name in list(sys.modules):
+        if module_name.startswith("physicsnemo.experimental.models.globe"):
+            del sys.modules[module_name]
+
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape("physicsnemo.models.globe")
+    ):
+        legacy_pkg = importlib.import_module("physicsnemo.experimental.models.globe")
+
+    assert legacy_pkg.GLOBE is GLOBE
+    for name in ["Kernel", "BarnesHutKernel", "MultiscaleKernel"]:
+        assert getattr(legacy_pkg, name) is getattr(field_kernel, name), name

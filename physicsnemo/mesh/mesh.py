@@ -2098,8 +2098,11 @@ class Mesh(
         This operation is for connectivity changes that preserve cell indexing
         and simplex type, such as reversing the winding of selected triangles.
         The replacement must have exactly the same shape as the current cells.
-        User data is preserved, while all caches are cleared by default because
+        User data is preserved, while caches are cleared by default because
         changing connectivity can invalidate cell, point, and topology caches.
+        A row that only reorders its own vertices is the same simplex, so it
+        keeps its effective measure bitwise and, as the Notes describe, its
+        cached centroid and area.
 
         Parameters
         ----------
@@ -2113,7 +2116,8 @@ class Mesh(
         -------
         Mesh
             New mesh with replacement connectivity, preserved points and data,
-            and only the selected caches.
+            and the selected caches. It may also cache cell centroids and
+            areas; see Notes.
 
         Raises
         ------
@@ -2127,6 +2131,12 @@ class Mesh(
         tensor leaves are shared. Retaining any cache through ``keep`` is an
         expert operation: the caller is responsible for ensuring every retained
         value remains valid for the replacement connectivity.
+
+        The result also caches cell centroids when this mesh has them cached,
+        and cell areas when it has effective measures, unless ``keep`` retains
+        them. Neither is cached while tracing or when ``points`` requires
+        gradients. Both are computed eagerly for all cells, then each row that
+        only reorders its vertices takes this mesh's values bitwise.
 
         Examples
         --------
@@ -2155,9 +2165,28 @@ class Mesh(
             cells=cells,
             keep=keep,
         )
-        from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+        from physicsnemo.mesh.calculus.measure import (
+            EFFECTIVE_MEASURE_KEY,
+            _transfer_cell_measures,
+        )
 
-        _transfer_cell_measures(self, result)
+        # Like _cached, leave the cache alone while tracing or under autograd.
+        centroids = (
+            None
+            if is_tracing() or self.points.requires_grad
+            else self._cache.get(("cell", "centroids"), None)
+        )
+        unchanged = None
+        if centroids is not None or EFFECTIVE_MEASURE_KEY in self.cell_data:
+            # Use the normalized cells: PyTorch compares uint16, uint32 and
+            # uint64 only with their own dtype.
+            sorted_cells = result.cells.sort(dim=1).values
+            unchanged = (sorted_cells == self.cells.sort(dim=1).values).all(dim=1)
+        if centroids is not None:
+            result._cache["cell", "centroids"] = torch.where(
+                unchanged[:, None], centroids, result.cell_centroids
+            )
+        _transfer_cell_measures(self, result, unchanged=unchanged)
         return result
 
     def with_data(

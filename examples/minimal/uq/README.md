@@ -9,6 +9,8 @@ feature extraction, and application decisions remain separate from statistics.
 ```bash
 python examples/minimal/uq/streaming_predictions.py
 python examples/minimal/uq/force_statistics.py
+python examples/minimal/uq/feature_scoring.py
+python examples/minimal/uq/geometry_scoring.py
 python examples/minimal/uq/weighted_mean.py
 torchrun --standalone --nproc-per-node=4 examples/minimal/uq/distributed_moments.py
 ```
@@ -63,6 +65,20 @@ pointwise variances alone cannot propagate correlations.
 checks that statistics retain no computation graph while the original forces can
 still participate in a training loss. The application controls its energy models
 and gradient context. This example needs no GP or application-specific toolkit.
+
+## Scoring and Persistence
+
+`feature_scoring.py` obtains optional GeoTransolver geometry tokens, pools them
+in the recipe, fits reusable distance and density scorers, and applies a validation
+threshold. Generic scorers do not depend on geometry utilities. For mesh
+descriptors, explicitly import `physicsnemo.experimental.uq.ood.geometry`.
+Persist checkpoint identity, pooling, preprocessing, feature schema, and threshold
+alongside scorer state. The API reference includes save and restore examples.
+
+`geometry_scoring.py` uses synthetic primitive meshes and explicitly imports
+optional mesh descriptors. It saves density tensor state, application metadata,
+and policy in one weights-only PyTorch artifact. It also validates feature
+identity and checks restored scores and decisions.
 
 ## Distributed Calibration
 
