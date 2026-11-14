@@ -28,9 +28,11 @@ import glob as _glob
 import logging
 import operator
 from dataclasses import dataclass
+from graphlib import TopologicalSorter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Literal
 
+import numpy as np
 import torch
 from tensordict import TensorDict
 
@@ -44,9 +46,15 @@ from physicsnemo.datapipes._domain_parallel import (
 )
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
+from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, scale_measures
+from physicsnemo.mesh.calculus.measure import (
+    EFFECTIVE_MEASURE_KEY,
+    cell_measures,
+    scale_measures,
+    set_cell_measures,
+)
 from physicsnemo.mesh.io import io_zarr
 
 if TYPE_CHECKING:
@@ -58,6 +66,114 @@ logger = logging.getLogger(__name__)
 # Do not hardcode elsewhere so format can evolve.
 DEFAULT_MESH_EXTENSION = ".pmsh"
 DEFAULT_DOMAIN_MESH_EXTENSION = ".pdmsh"
+
+
+def _sample_point_sets(
+    domain: DomainMesh,
+    specifications: dict[str, dict],
+    *,
+    seed: int,
+    epoch: int,
+    index: int,
+) -> DomainMesh:
+    """Gather configured point sets without materializing complete memmap fields.
+
+    See ``DomainMeshReader.point_sets`` for the configuration contract. Original
+    source names take precedence over outputs. Draw dependencies first, and add
+    retained meshes after sampling so they cannot shadow the source geometry.
+    Shared indices require the identical source mesh and association.
+    """
+    originals = dict(domain.boundaries.items())
+    originals["interior"] = domain.interior
+    dependencies = {}
+    for name, spec in specifications.items():
+        needed = set() if spec["source"] in originals else {spec["source"]}
+        if spec.get("indices_from") is not None:
+            needed.add(spec["indices_from"])
+        dependencies[name] = needed
+    outputs = {}
+    retained_outputs = {}
+    selections = {}
+    for name in TopologicalSorter(dependencies).static_order():
+        spec = specifications[name]
+        source = spec["source"]
+        mesh = originals[source] if source in originals else outputs[source]
+        association = spec.get("association", "points")
+        if association not in ("points", "cell_centroids"):
+            raise ValueError(
+                "point-set association must be 'points' or 'cell_centroids'"
+            )
+        count = spec.get("count")
+        if count is not None and (
+            isinstance(count, bool) or not isinstance(count, int) or count < 1
+        ):
+            raise ValueError("point-set count must be a positive integer or None")
+        stream = spec["stream"]
+        if isinstance(stream, bool) or not isinstance(stream, int) or stream < 0:
+            raise ValueError("point-set stream must be a nonnegative integer")
+        total = mesh.n_points if association == "points" else mesh.n_cells
+        if total == 0:
+            raise ValueError(f"Point-set source {source!r} has no {association}")
+        shared = spec.get("indices_from")
+        if shared is not None:
+            previous_mesh, previous_association, ids = selections[shared]
+            if mesh is not previous_mesh or association != previous_association:
+                raise ValueError(
+                    "indices_from must reference the same source and association"
+                )
+        elif count is None or count >= total:
+            ids = torch.arange(total, device=mesh.points.device)
+        else:
+            rng = np.random.default_rng(
+                np.random.SeedSequence([seed, epoch, index, stream])
+            )
+            ids = torch.from_numpy(np.sort(rng.choice(total, count, replace=False)))
+        selections[name] = mesh, association, ids
+        if association == "points":
+            points = mesh.points[ids].clone()
+            data = mesh.point_data
+        else:
+            points = mesh.points[mesh.cells[ids].long()].mean(dim=1)
+            data = mesh.cell_data
+        fields = TensorDict({}, batch_size=[len(ids)])
+        for src, dst in spec.get("fields", {}).items():
+            fields.set(as_nested_key(dst), data[as_nested_key(src)][ids].clone())
+        outputs[name] = Mesh(points=points, point_data=fields)
+        retained = spec.get("retain_cells_as")
+        if retained is not None:
+            if association != "cell_centroids":
+                raise ValueError("retain_cells_as requires cell_centroids")
+            if (
+                retained == "interior"
+                or retained in outputs
+                or retained in retained_outputs
+                or retained in specifications
+            ):
+                raise ValueError("retain_cells_as must name a distinct output boundary")
+            vertices, cells = torch.unique(
+                mesh.cells[ids].long(), sorted=True, return_inverse=True
+            )
+            selected = Mesh(
+                points=mesh.points[vertices].clone(), cells=cells.reshape(len(ids), -1)
+            )
+            measures = (
+                mesh.cell_data["_effective_measure"][ids].clone()
+                if "_effective_measure" in mesh.cell_data
+                else cell_measures(selected)
+            )
+            set_cell_measures(selected, measures * (total / len(ids)))
+            retained_outputs[retained] = selected
+    outputs.update(retained_outputs)
+    interior = outputs.pop("interior", None)
+    if interior is None:
+        interior = Mesh(
+            points=next(iter(outputs.values())).points.new_empty(
+                (0, domain.interior.n_spatial_dims)
+            )
+        )
+    return DomainMesh(
+        interior=interior, boundaries=outputs, global_data=domain.global_data.clone()
+    )
 
 
 def _subsample_mesh_points(
@@ -270,7 +386,8 @@ def _subsample_mesh(
 #
 # Layout: one batch axis per mesh, always even chunks.
 # - Point cloud (no cells): ``points`` / ``point_data`` chunk over the
-#   (windowed) point range; ``global_data`` replicates.
+#   (windowed) point range; ``global_data`` replicates. A mesh with zero cells
+#   is laid out the same way, and keeps its empty ``cells`` and ``cell_data``.
 # - Mesh with cells: ``cells`` / ``cell_data`` chunk over the (windowed) cell
 #   range and ``points`` / ``point_data`` chunk over the point range -- after
 #   the same global compaction onto referenced vertices the eager reader
@@ -364,7 +481,7 @@ def _read_mesh_selection(
             "point_data",
             leaf_reader=lambda a: _zarr_selection(a, point_selection, n_points),
         )
-        if drop_cells or n_cells == 0:
+        if drop_cells or "cells" not in src:
             cells, cell_data = None, empty
         else:
             cells = _zarr_selection(src["cells"], cell_selection, n_cells)
@@ -377,7 +494,7 @@ def _read_mesh_selection(
     else:
         points = _read(src.points[point_selection])
         point_data = _read_leaves(src.point_data, point_selection)
-        if drop_cells or src.n_cells == 0:
+        if drop_cells:
             cells, cell_data = None, empty
         else:
             cells = _read(src.cells[cell_selection])
@@ -575,7 +692,8 @@ def mesh_selection_to_proto(
     Three layouts, all even ``torch.chunk``-style splits so the assembly wrap
     needs no communication:
 
-    - point cloud: this rank's share of the (windowed) point range;
+    - point cloud, mesh with zero cells, or mesh whose cells were dropped:
+      this rank's share of the (windowed) point range;
     - mesh with cells, no window: this rank's share of the cell range and of
       the point range -- cells keep their global vertex ids;
     - mesh with cells and a cell window: the whole window of ``cells`` is
@@ -588,16 +706,18 @@ def mesh_selection_to_proto(
     vertex space; ``points[cells]`` on the assembled mesh is the routed gather.
     """
     device_mesh = plan.device_mesh
-    drop_cells = plan.n_cells_src == 0
-    if drop_cells:
+    if plan.n_cells_src == 0:
         n_points = (
             len(plan.point_window)
             if plan.point_window is not None
             else plan.n_points_src
         )
         p = _select(plan.point_window, _chunk(n_points, plan.shard_points, device_mesh))
-        local = _read_mesh_selection(src, p, slice(0, 0), drop_cells=True)
-        cells = torch.zeros(0, 1, dtype=torch.long)
+        # A source with cells had them dropped. One with zero cells keeps
+        # their shape and its (empty) cell data, as the eager reader does.
+        cells_dropped = _mesh_counts(src)[1] > 0
+        local = _read_mesh_selection(src, p, slice(0, 0), drop_cells=cells_dropped)
+        cells = local.cells
     elif plan.cell_window is None:
         n_points = plan.n_points_src
         c = _chunk(plan.n_cells_src, plan.shard_cells, device_mesh)
@@ -1059,6 +1179,7 @@ class DomainMeshReader(_MeshReaderBase):
         drop_interior_cells: bool = False,
         drop_in_file_boundaries: bool = False,
         interior_n_points_range: tuple[int, int] | None = None,
+        point_sets: dict[str, dict] | None = None,
         domain_parallel: dict | None = None,
         device_mesh: "torch.distributed.device_mesh.DeviceMesh | None" = None,
     ) -> None:
@@ -1163,6 +1284,28 @@ class DomainMeshReader(_MeshReaderBase):
             otherwise be subsampled (an expensive ``slice_points`` remap,
             GIL-held, that blocks worker-thread overlap) and pinned every
             sample for nothing.
+        point_sets : dict[str, dict], optional
+            Construct independently sampled point clouds before pinning or device
+            transfer. Each key names an output boundary (``interior`` is reserved
+            for the interior). Each specification contains ``source`` (an input
+            boundary, ``interior``, or another configured point set). Original
+            mesh names take precedence; dependencies are sampled first. Each
+            specification also contains ``association`` (``points`` or
+            ``cell_centroids``), ``count`` (positive integer or None for all),
+            and an integer ``stream``. Optional
+            ``fields`` maps source field names to output point-data names.
+            ``indices_from`` reuses another set's selection from the same source
+            and association, e.g. to supervise anchors. ``retain_cells_as`` keeps
+            the selected cells as an additional boundary, with inverse-inclusion
+            integration measures, added after all sets are sampled. Other input
+            meshes and fields are discarded.
+
+            Sampling is uniform without replacement and deterministic per
+            reader seed, epoch, sample index, and stream, independent of access
+            order and other point-set sizes. Memory-mapped stores gather only
+            selected rows; Zarr uses the full-domain load. Cannot be combined
+            with the other subsampling, drop, extra-boundary, or domain-parallel
+            options. An omitted interior becomes an empty point cloud.
         domain_parallel : dict, optional
             Optional dict to configure domain-parallel (rank-local)
             reading; see :class:`MeshReader`. Every sub-mesh's two batch
@@ -1176,6 +1319,20 @@ class DomainMeshReader(_MeshReaderBase):
             1-D device mesh for domain-parallel reading; required with
             ``domain_parallel``. Constructed and injected at runtime.
         """
+        if point_sets is not None and (
+            not point_sets
+            or subsample_n_points is not None
+            or subsample_n_cells is not None
+            or interior_n_points_range is not None
+            or extra_boundaries
+            or drop_interior_cells
+            or drop_in_file_boundaries
+            or domain_parallel is not None
+        ):
+            raise ValueError(
+                "point_sets must be nonempty and cannot be combined with other reader selections"
+            )
+        self.point_sets = point_sets
         self._root = Path(path)
         self._pattern = pattern
         self.pin_memory = pin_memory
@@ -1416,6 +1573,15 @@ class DomainMeshReader(_MeshReaderBase):
         generator = self._index_generator(index) if subsample else None
         interior_n_points = self._interior_n_points(generator) if subsample else None
         dm = self._load_sample(index, generator, interior_n_points)
+
+        if self.point_sets is not None:
+            dm = _sample_point_sets(
+                dm,
+                self.point_sets,
+                seed=self._seed_base or 0,
+                epoch=self._epoch,
+                index=index,
+            )
 
         # Trim unused data before subsample/pin. Both references are lazy (no
         # memmap materialization here):

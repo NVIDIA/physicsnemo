@@ -56,15 +56,21 @@ import hydra
 import pytest
 import torch
 from collate import build_collate_fn
-from datasets import _apply_dataset_reader_overrides
+from datasets import (
+    _apply_dataset_reader_overrides,
+    apply_model_config,
+    load_dataset_config,
+)
 from hydra import compose, initialize_config_dir
 from loss import LossCalculator
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import normalize_output_to_tensordict
+from output_normalize import normalize_output_to_tensordict, resolve_output_layout
 from tensordict import TensorDict
-from utils import field_dim
+from utils import field_dim, resolve_field_weights
 
+from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -137,6 +143,73 @@ def test_volume_dataset_reader_boundary_policy(
         assert train_cfg.forward_kwargs.boundary_meshes.vehicle == "boundaries.vehicle"
 
 
+_MODEL_NAMES = sorted(p.stem for p in (_RECIPE_ROOT / "conf" / "model").glob("*.yaml"))
+### The schedule train.yaml held before it became the `scheduler` group.
+_STEP_LR = {
+    "_target_": "torch.optim.lr_scheduler.StepLR",
+    "step_size": 100,
+    "gamma": 0.1,
+}
+
+
+@pytest.mark.parametrize("model", [m for m in _MODEL_NAMES if not m.startswith("isla")])
+def test_scheduler_group_keeps_every_other_models_schedule(model: str) -> None:
+    """The default `step_lr` choice resolves as train.yaml's inline StepLR did,
+    with each model template's own scheduler keys and a CLI override on top."""
+    own = OmegaConf.load(_RECIPE_ROOT / "conf" / "model" / f"{model}.yaml")
+    expected = OmegaConf.merge(
+        _STEP_LR, OmegaConf.select(own, "training.scheduler", default={})
+    )
+    dataset = "drivaer_ml_surface" if "surface" in model else "drivaer_ml_volume"
+    cfg = _compose_train_cfg(model, dataset)
+    assert cfg.training.scheduler == expected
+    cfg = _compose_train_cfg(
+        model, dataset, overrides=["training.scheduler.gamma=0.25"]
+    )
+    assert cfg.training.scheduler == OmegaConf.merge(expected, {"gamma": 0.25})
+
+
+@pytest.mark.parametrize("model", [m for m in _MODEL_NAMES if m.startswith("isla")])
+def test_isla_schedule_warms_up_then_decays(model: str) -> None:
+    """`warmup_cosine` at the defaults: 0.2 of the peak at the first epoch, the
+    peak at the fifth, 1e-6 at the last, one step per epoch."""
+    dataset = "drivaer_ml_surface" if "surface" in model else "drivaer_ml_volume"
+    cfg = _compose_train_cfg(model, dataset)
+    assert cfg.training.scheduler_update_mode == "epoch"
+    peak = cfg.training.optimizer.lr
+    assert peak == 3.75e-4
+    opt = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=peak)
+    scheduler = hydra.utils.instantiate(cfg.training.scheduler, optimizer=opt)
+    lrs = []
+    for _ in range(cfg.training.num_epochs):
+        lrs.append(opt.param_groups[0]["lr"])
+        opt.step()
+        scheduler.step()
+    assert lrs[0] == pytest.approx(0.2 * peak, rel=1e-9)
+    assert max(range(len(lrs)), key=lrs.__getitem__) == 4
+    assert lrs[4] == pytest.approx(peak, rel=1e-9)
+    assert lrs[-1] == pytest.approx(1e-6, rel=1e-9)
+    assert all(a >= b for a, b in zip(lrs[4:], lrs[5:]))
+
+
+@pytest.mark.parametrize("config_name", ["train", "infer"])
+def test_measure_weighted_defaults_on_and_command_line_turns_it_off(
+    config_name: str,
+) -> None:
+    """``base.yaml`` sets ``measure_weighted: true`` for both entry points, and
+    ``measure_weighted=false`` on the command line overrides it."""
+    with initialize_config_dir(
+        config_dir=str(_RECIPE_ROOT / "conf"), version_base=None
+    ):
+        select = ["model=transolver_surface", "dataset=drivaer_ml_surface"]
+        default = compose(config_name=config_name, overrides=select)
+        off = compose(
+            config_name=config_name, overrides=[*select, "measure_weighted=false"]
+        )
+    assert default.measure_weighted is True
+    assert off.measure_weighted is False
+
+
 ### ---------------------------------------------------------------------------
 ### Synthetic DomainMesh builders
 ### ---------------------------------------------------------------------------
@@ -161,6 +234,36 @@ def _volume_domain_mesh(target_config: dict[str, str], n_pts: int = 200) -> Doma
     return make_volume_domain_mesh(target_config, n_pts=n_pts)
 
 
+def _ab_upt_domain_mesh(mode: str) -> DomainMesh:
+    """Post-pipeline point sets with unequal surface and volume query counts."""
+    surface = make_surface_domain_mesh(n_cells=11)
+    geometry = surface.boundaries["vehicle"].points
+    boundaries = {
+        "geometry": Mesh(points=geometry),
+        "supernodes": Mesh(points=geometry[:5]),
+    }
+    if mode != "volume":
+        boundaries["surface_anchors"] = Mesh(points=surface.interior.points[:7])
+        if mode == "surface":
+            interior = surface.interior
+        else:
+            boundaries["surface_queries"] = Mesh(
+                points=surface.interior.points,
+                point_data=surface.interior.point_data,
+            )
+    if mode != "surface":
+        volume = make_volume_domain_mesh(n_pts=13).interior
+        boundaries["volume_anchors"] = Mesh(points=volume.points[:9])
+        fields = volume.point_data.select("velocity", "pressure", "nut")
+        interior = Mesh(
+            points=volume.points,
+            point_data=fields,
+        )
+    return DomainMesh(
+        interior=interior, boundaries=boundaries, global_data=surface.global_data
+    )
+
+
 ### ---------------------------------------------------------------------------
 ### Model-shrinking overrides
 ### ---------------------------------------------------------------------------
@@ -171,6 +274,16 @@ def _volume_domain_mesh(target_config: dict[str, str], n_pts: int = 200) -> Doma
 ### run on CPU. Per-class because each model exposes a different set of
 ### shrinkable knobs.
 _MODEL_SHRINK_OVERRIDES: dict[str, dict] = {
+    "ABUPT": {
+        "hidden_dim": 24,
+        "num_heads": 3,
+        "num_interaction_blocks": 1,
+        "num_shared_layers": 1,
+        "num_decoder_layers": 1,
+        "pooling_chunk_size": 31,
+        "query_chunk_size": 4,
+        "radius_search_backend": "torch",
+    },
     "SMART": {
         "hidden_dim": 16,
         "num_heads": 2,
@@ -231,6 +344,27 @@ class _RecipeSpec(NamedTuple):
 
 
 _TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
+    _RecipeSpec(
+        "ab_upt_surface",
+        "ab_upt_surface",
+        "drivaer_ml_surface_point_sets",
+        "ab_upt_surface",
+        [],
+    ),
+    _RecipeSpec(
+        "ab_upt_volume",
+        "ab_upt_volume",
+        "drivaer_ml_volume_point_sets",
+        "ab_upt_volume",
+        [],
+    ),
+    _RecipeSpec(
+        "ab_upt_joint",
+        "ab_upt_joint",
+        "drivaer_ml_joint_point_sets",
+        "ab_upt_joint",
+        [],
+    ),
     _RecipeSpec("smart_surface", "smart_surface", "drivaer_ml_surface", "surface", []),
     _RecipeSpec("smart_volume", "smart_volume", "drivaer_ml_volume", "volume", []),
     _RecipeSpec(
@@ -299,7 +433,7 @@ _TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
 
 
 def _output_to_tensordict(
-    output, target_config: dict[str, str], n_spatial_dims: int = 3
+    output, target_config: dict[str, str], n_spatial_dims: int = 3, **layout
 ) -> TensorDict:
     """Mirror the output-normalization step in ``train.forward_pass``.
 
@@ -313,7 +447,7 @@ def _output_to_tensordict(
     """
     output_type = "mesh" if isinstance(output, Mesh) else "tensors"
     return normalize_output_to_tensordict(
-        output, target_config, output_type, n_spatial_dims
+        output, target_config, output_type, n_spatial_dims, **layout
     )
 
 
@@ -347,7 +481,9 @@ def test_tensor_input_config_synthetic_e2e(
     target_config = _load_dataset_targets(dataset)
 
     ### Build a synthetic post-pipeline DomainMesh.
-    if domain == "surface":
+    if domain.startswith("ab_upt_"):
+        ds = _ab_upt_domain_mesh(domain.removeprefix("ab_upt_"))
+    elif domain == "surface":
         ds = _surface_domain_mesh(target_config)
     elif domain == "volume":
         ds = _volume_domain_mesh(target_config)
@@ -356,10 +492,17 @@ def test_tensor_input_config_synthetic_e2e(
 
     ### Build the recipe collate the same way `build_dataloaders` would.
     forward_kwargs_spec = OmegaConf.to_container(train_cfg.forward_kwargs, resolve=True)
+    dataset_cfg = OmegaConf.load(_RECIPE_ROOT / "datasets" / f"{dataset}.yaml")
+    target_sources = (
+        OmegaConf.to_container(dataset_cfg.target_sources, resolve=True)
+        if "target_sources" in dataset_cfg
+        else None
+    )
     collate = build_collate_fn(
         input_type="tensors",
         forward_kwargs_spec=forward_kwargs_spec,
         target_config=target_config,
+        target_sources=target_sources,
     )
     batch = collate([(ds, {})])
 
@@ -374,12 +517,17 @@ def test_tensor_input_config_synthetic_e2e(
     ### Forward and verify output shape matches the target channel count.
     with torch.no_grad():
         output = model_inst(**batch["forward_kwargs"])
-    pred_td = _output_to_tensordict(output, target_config)
+    pred_td = _output_to_tensordict(
+        output, target_config, **resolve_output_layout(train_cfg)
+    )
 
     for name in target_config:
-        assert name in pred_td.keys(), f"{name} missing from pred"
-        pred_t = pred_td[name]
-        target_t = batch["targets"][name]
+        key = as_nested_key(name)
+        assert key in pred_td.keys(include_nested=True, leaves_only=True), (
+            f"{name} missing from pred"
+        )
+        pred_t = pred_td[key]
+        target_t = batch["targets"][key]
         assert pred_t.shape == target_t.shape, (
             f"shape mismatch for {name}: pred={tuple(pred_t.shape)} "
             f"vs target={tuple(target_t.shape)}"
@@ -421,9 +569,20 @@ _GLOBE_SHRINK_OVERRIDES = {
 }
 
 
+_ISLA_SMALL = ["model.hidden=16", "model.n_layers=1", "model.n_slices=4"]
+
 _MESH_INPUT_RECIPES: list[tuple[str, str, str, str, list[str]]] = [
     ("globe_surface", "globe_surface", "drivaer_ml_surface", "surface", []),
     ("globe_volume", "globe_volume", "drivaer_ml_volume", "volume", []),
+    ("isla_surface", "isla_surface", "drivaer_ml_surface", "surface", _ISLA_SMALL),
+    ("isla_volume", "isla_volume", "drivaer_ml_volume", "volume", _ISLA_SMALL),
+    (
+        "isla_volume_joint",
+        "isla_volume_joint",
+        "drivaer_ml_volume",
+        "volume",
+        _ISLA_SMALL,
+    ),
 ]
 
 
@@ -459,19 +618,56 @@ def test_mesh_input_config_synthetic_e2e(
         ds = _volume_domain_mesh(target_config)
     else:  # pragma: no cover
         raise ValueError(f"Unknown domain {domain!r}")
+    ### The other boundaries a model reads (ISLA's tunnel), as one triangle each.
+    read = OmegaConf.select(train_cfg, "forward_kwargs.boundary_meshes", default={})
+    extra = {
+        name: Mesh(points=torch.eye(3) * 8.0 + i, cells=torch.tensor([[0, 1, 2]]))
+        for i, name in enumerate(read)
+        if name not in ds.boundary_names
+    }
+    task = OmegaConf.select(train_cfg, "extra_task")
+    if task is not None:
+        ### The model's extra prediction set, from a closed vehicle that
+        ### carries DrivAerML's stored wall fields.
+        vehicle = sphere_icosahedral.load(subdivisions=1)
+        n = vehicle.n_cells
+        extra["vehicle"] = vehicle.with_data(
+            cell_data={
+                "pMeanTrim": torch.randn(n) * 100,
+                "wallShearStressMeanTrim": torch.randn(n, 3),
+            }
+        )
+    if extra:
+        ds = DomainMesh(
+            interior=ds.interior,
+            boundaries={**dict(ds.boundaries.items()), **extra},
+            global_data=ds.global_data,
+        )
+    target_sources = None
+    if task is not None:
+        for t_cfg in task.transforms:
+            ds = hydra.utils.instantiate(t_cfg).apply_to_domain(ds)
+        target_config = {**target_config, **OmegaConf.to_container(task.targets)}
+        target_sources = {
+            name: task.target_sources.get(name, f"interior.point_data.{name}")
+            for name in target_config
+        }
 
     forward_kwargs_spec = OmegaConf.to_container(train_cfg.forward_kwargs, resolve=True)
     collate = build_collate_fn(
         input_type="mesh",
         forward_kwargs_spec=forward_kwargs_spec,
         target_config=target_config,
+        target_sources=target_sources,
     )
     batch = collate([(ds, {})])
 
     ### Shrink GLOBE while preserving the externally-visible
     ### `output_schema` and `boundary_source_schemas`.
-    small_model_cfg = OmegaConf.merge(
-        train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES)
+    small_model_cfg = (
+        OmegaConf.merge(train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES))
+        if model.startswith("globe")
+        else train_cfg.model
     )
     try:
         model_inst = hydra.utils.instantiate(small_model_cfg, _convert_="partial")
@@ -480,7 +676,13 @@ def test_mesh_input_config_synthetic_e2e(
 
     with torch.no_grad():
         output = model_inst(**batch["forward_kwargs"])
-    pred_td = _output_to_tensordict(output, target_config)
+    pred_td = normalize_output_to_tensordict(
+        output,
+        target_config,
+        "mesh",
+        targets=batch["targets"],
+        **resolve_output_layout(train_cfg),
+    )
 
     for name in target_config:
         assert name in pred_td.keys(), f"{name} missing from pred"
@@ -491,22 +693,63 @@ def test_mesh_input_config_synthetic_e2e(
             f"vs target={tuple(target_t.shape)}"
         )
 
-    field_weights = (
-        OmegaConf.to_container(
-            OmegaConf.select(
-                train_cfg, "training.field_weights", default=OmegaConf.create({})
-            ),
-            resolve=True,
-        )
-        or None
-    )
     lc = LossCalculator(
         target_config=target_config,
         loss_type=train_cfg.training.loss_type,
-        field_weights=field_weights,
+        field_weights=resolve_field_weights(train_cfg),
     )
     loss, _ = lc(pred_td, batch["targets"])
     assert torch.isfinite(loss), f"loss not finite: {float(loss)}"
+
+
+def test_isla_volume_joint_is_isla_volume_plus_the_wall_set() -> None:
+    """The joint config composes as isla_volume with only the wall-set keys
+    added or changed."""
+    base = OmegaConf.to_container(
+        _compose_train_cfg("isla_volume", "drivaer_ml_volume")
+    )
+    joint = OmegaConf.to_container(
+        _compose_train_cfg("isla_volume_joint", "drivaer_ml_volume")
+    )
+    wall_set = "boundaries.vehicle_points"
+    assert joint.pop("extra_task")["target_sources"] == {
+        "pressure_wall": f"{wall_set}.point_data.pressure_wall",
+        "wss": f"{wall_set}.point_data.wss",
+    }
+    assert joint.pop("output_sets") == {
+        "interior": {"velocity": "velocity", "pressure": "pressure", "nut": "nut"},
+        wall_set: {"pressure_wall": "pressure", "wss": "wss"},
+    }
+    assert joint["forward_kwargs"].pop("prediction_points") == {
+        "concat_point_sets": ["interior", wall_set]
+    }
+    base["forward_kwargs"].pop("prediction_points")
+    assert joint["model"]["output_schema"].pop("wss") == {"rank": 1}
+    assert joint == base
+
+
+@pytest.mark.parametrize(
+    "model, dataset",
+    [
+        ("isla_surface", "drivaer_ml_surface"),
+        ("isla_volume", "drivaer_ml_volume"),
+        ("isla_volume_joint", "drivaer_ml_volume"),
+    ],
+)
+def test_isla_configs_declare_the_reversed_vehicle(model: str, dataset: str) -> None:
+    """Each ISLA config reverses the vehicle, so the dataset as it reads it declares
+    outward normals and keeps DrivAerML's wall shear on the fluid side."""
+    cfg = _compose_train_cfg(model, dataset)
+    stored = load_dataset_config(_RECIPE_ROOT / "datasets" / f"{dataset}.yaml")
+    assert (stored.surface_normals_point, stored.wall_shear_acts_on) == (
+        "inward",
+        "fluid",
+    )
+    adapted = apply_model_config(stored, cfg)
+    assert (adapted.surface_normals_point, adapted.wall_shear_acts_on) == (
+        "outward",
+        "fluid",
+    )
 
 
 ### ---------------------------------------------------------------------------

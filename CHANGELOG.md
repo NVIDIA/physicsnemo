@@ -10,8 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
+- Unified external aero recipe: adds AB-UPT surface, volume, and joint
+  configurations calling the library model directly, configurable independent
+  point-set sampling in `DomainMeshReader`, and grouped tensor outputs for
+  unequal surface/volume point counts.
 
+- The unified external aerodynamics recipe adds experimental SMART surface and volume templates.
+- The unified external aerodynamics recipe adds experimental ISLA configs on
+  DrivAerML (`isla_surface`, `isla_volume` and `isla_volume_joint`) and a
+  `scheduler` config group. Each ISLA config reads the whole flow-domain
+  boundary and fits one 80 GB GPU at its defaults.
+- Adds the `FlipBoundaryOrientation` and `BoundaryCellsToPoints` mesh
+  transforms to `physicsnemo.datapipes`. The first reverses the cell winding
+  and stored normals of named boundaries, and the second adds a point-cloud
+  boundary at drawn cells of another boundary, with those cells' fields and
+  measures.
 - Adds `physicsnemo.experimental.models.ab_upt.ABUPT`, an independent
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference
@@ -121,6 +134,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `physicsnemo.experimental.models.isla.ISLA` (Invariant Slice Attention),
+  an experimental mesh-native surrogate for steady boundary-value problems that
+  takes the boundary as named meshes, and `case_scales`, which gives other
+  models ISLA's length and field scales. ISLA's outputs follow rotations,
+  reflections and translations of the problem exactly, up to roundoff, except
+  on some symmetric or nearly symmetric boundaries described on its
+  documentation page.
+- `physicsnemo.mesh.spatial` exports `canonical_frame`, the principal-axis frame
+  that a weighted point set carries with it, and `frame_coordinates`, the
+  points' coordinates in that frame.
+- `ClusterTree.find_point_interaction_pairs` takes targets of shape `(R, M, D)`
+  with `root_rows`, the row each root's tree reads, so one call walks a forest
+  whose trees each use their own coordinates.
 - Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
   `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
   `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
@@ -445,6 +471,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
   the requested rows instead of all-gathering the source; no host sync, and
   `torch.compile` safe.
+- Unified external aero recipe: when a dataset puts its targets at cell
+  centroids, as the surface datasets do, the training loss and the metrics
+  weight each target point by its cell's area (or volume), so they no longer
+  depend on how finely the mesh resolves each region. Set
+  `measure_weighted=false` to count every point alike, as before.
 - The stream-based ring helpers `perform_ring_iteration_async` and
   `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
   `wait=False` and `finish_ring_iteration` for overlap.
@@ -532,6 +563,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The container build compiles pyg-lib from source without the uv cache, so
   it no longer reuses a pyg-lib wheel built against an older PyTorch, which
   failed to load with an undefined symbol after a base image upgrade.
+- `Mesh.with_cells` and `fix_orientation` keep the effective measure and area
+  of each cell whose vertices are only reordered, as when flipping a winding,
+  instead of rescaling them by float32 roundoff or raising on zero-area cells.
 - `DistributedManager` now initializes on CPU-only hosts, where PyTorch rejected
   its CPU `device_id` and a missing local rank raised `ZeroDivisionError`.
   `cleanup()` no longer raises after a failed initialization.
@@ -806,6 +840,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a subclass with fields of its own. Before, `from_zarr` refused these stores.
 - `from_zarr`, `MeshReader` and `DomainMeshReader` keep the cell shape of a
   zarr mesh with zero cells. Before, such a mesh came back as a point cloud.
+- With domain-parallel reading, `MeshReader` and `DomainMeshReader` also keep
+  the cell shape and cell data of a mesh with zero cells. Before, such a mesh
+  came back as a point cloud, so computing its normals or merging it with
+  other boundaries raised.
 - `to_pyvista` exports empty meshes with vector or tensor fields, where it
   raised before, and `from_pyvista` reads complex arrays of one value with
   shape `(1,)`, where it raised or dropped a dimension before.

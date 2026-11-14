@@ -40,13 +40,17 @@ The rest pins the config/aggregation glue (`build_axis_frame`,
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import forces
 import pytest
 import torch
 from conftest import make_surface_domain_mesh, make_volume_domain_mesh
+from datasets import apply_model_config, load_dataset_config
 from omegaconf import OmegaConf
 
-from physicsnemo.mesh import Mesh
+from physicsnemo.datapipes.transforms.mesh import FlipBoundaryOrientation
+from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import scale_measures
 
 
@@ -391,6 +395,45 @@ def test_force_context_coefficients_surface_and_volume():
     vol = make_volume_domain_mesh(n_pts=120)
     vcoeff = vol.interior.point_data.select("velocity", "pressure", "nut")
     assert ctx.coefficients(vol, vcoeff, vcoeff, normalizer=None) is None
+
+
+def test_flip_with_dataset_override_keeps_the_coefficients():
+    """A model config that reverses the vehicle and overrides the dataset's declared
+    orientation (isla_surface.yaml) integrates the same CD and CL as the stored one."""
+    root = Path(__file__).resolve().parents[1]
+    stored_cfg = load_dataset_config(root / "datasets" / "drivaer_ml_surface.yaml")
+    model_cfg = OmegaConf.load(root / "conf" / "model" / "isla_surface.yaml")
+    flipped_cfg = apply_model_config(stored_cfg, model_cfg)
+    flip = OmegaConf.to_container(model_cfg.dataset_append_transforms[0])
+    flip.pop("_target_")
+
+    ### The tetrahedron wound inward, as DrivAerML stores its vehicle.
+    outward = _closed_tetrahedron()
+    stored = make_surface_domain_mesh(n_cells=outward.n_cells)
+    stored = DomainMesh(
+        interior=stored.interior,
+        boundaries={
+            "vehicle": Mesh(points=outward.points, cells=outward.cells[:, [0, 2, 1]])
+        },
+        global_data=stored.global_data,
+    )
+    flipped = FlipBoundaryOrientation(**flip).apply_to_domain(stored)
+    ft = {"pressure": "pressure", "wss": "stress"}
+    coeff = stored.interior.point_data.select("pressure", "wss")
+
+    def integrated(dataset_cfg, domain):
+        ctx = forces.ForceContext.from_config(
+            _force_cfg(), ft, "cpu", dataset_cfg=dataset_cfg
+        )
+        return ctx.coefficients(domain, coeff, coeff, normalizer=None)[0]
+
+    reference = integrated(stored_cfg, stored)
+    ours = integrated(flipped_cfg, flipped)
+    undeclared = integrated(stored_cfg, flipped)
+    for name in ("CD", "CL"):
+        assert ours[name] == pytest.approx(reference[name], abs=1e-5)
+    ### Without the override the pressure part, and so CD, would change.
+    assert undeclared["CD"] != pytest.approx(reference["CD"], abs=1e-3)
 
 
 ### ---------------------------------------------------------------------------

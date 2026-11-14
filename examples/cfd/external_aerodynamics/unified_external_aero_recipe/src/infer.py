@@ -590,6 +590,7 @@ def main(cfg: DictConfig) -> None:
     metric_calculator = MetricCalculator(
         target_config=target_config,
         metrics=resolve_metrics(cfg),
+        measure_weighted=bool(cfg.get("measure_weighted", True)),
         mask_nonfinite_targets=bool(
             OmegaConf.select(cfg, "training.mask_nonfinite_targets", default=False)
         ),
@@ -647,7 +648,12 @@ def main(cfg: DictConfig) -> None:
 
         ### Metrics in training space (matches the validation numbers); pull the
         ### whole TensorDict host-side once so each .item() is a free CPU index.
-        metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
+        target_measure = batch.get("target_measure")
+        metric_td = metric_calculator(
+            pred_td.float(),
+            batch["targets"].float(),
+            None if target_measure is None else target_measure.float(),
+        )
         sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
         ### Masked targets: skip a field's NaN metrics (no finite target).
         for k, v in sample_metrics.items():
