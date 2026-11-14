@@ -554,6 +554,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `save_checkpoint` and `load_checkpoint` find existing checkpoints in a
+  directory whose name contains glob characters, such as `run[lr=0.1]`.
+  Loading without an epoch used to return 0 without restoring anything, and
+  saving without an epoch overwrote index 0 on every call.
 - `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
   path. They used to raise unless `copy_existing=True` was passed, because the
   loaded tensors are memory-mapped to the original files.

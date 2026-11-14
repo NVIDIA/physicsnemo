@@ -286,6 +286,34 @@ def test_load_checkpoint_without_training_state(tmp_path, model_generator):
         torch.testing.assert_close(fresh.state_dict()[name], value)
 
 
+@pytest.mark.parametrize("dirname", ["run[lr=0.1]", "layers=[64,64]", "run[0]"])
+def test_checkpoint_latest_index_with_glob_characters_in_path(
+    tmp_path, model_generator, dirname
+):
+    """Glob characters in the checkpoint directory are matched literally."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    path = tmp_path / dirname
+    source = model_generator(8)
+    optimizer = torch.optim.Adam(source.parameters(), lr=0.01)
+    for _ in range(2):
+        save_checkpoint(path, models=source, optimizer=optimizer)
+    with torch.no_grad():
+        for parameter in source.parameters():
+            parameter.fill_(3)
+    save_checkpoint(path, models=source, optimizer=optimizer, epoch=3)
+    assert sorted(p.name for p in path.glob("checkpoint.*")) == [
+        "checkpoint.0.0.pt",
+        "checkpoint.0.1.pt",
+        "checkpoint.0.3.pt",
+    ]
+
+    fresh = model_generator(8)
+    assert load_checkpoint(path, models=fresh) == 3
+    for name, value in source.state_dict().items():
+        torch.testing.assert_close(fresh.state_dict()[name], value)
+
+
 @pytest.mark.parametrize("automatic_index", [False, True])
 @pytest.mark.parametrize("latest_weights", ["complete", "deleted", "newer"])
 def test_load_checkpoint_uses_training_checkpoint_index(
