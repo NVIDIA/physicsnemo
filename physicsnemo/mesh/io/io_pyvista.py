@@ -1147,58 +1147,53 @@ def _refan_failed_polygons(
         rows of the re-fanned polygons.
     """
     arities = offsets[polygon_ids + 1] - offsets[polygon_ids]
-    polygon_ids, arities = polygon_ids[arities > 3], arities[arities > 3]
+    polygon_ids = polygon_ids[arities > 3]
     if len(polygon_ids) == 0:
         return triangles, parent_ids, polygon_ids
+
+    ### Find each child vertex among its polygon's vertices, by (polygon, point).
+    vertex_ids, owners, vertex_offsets = _gather_vtk_rows(
+        offsets, connectivity, polygon_ids
+    )
+    n_vertices = len(vertex_ids)
+    vertex_keys = owners * n_points + vertex_ids
+    vertex_order = np.argsort(vertex_keys, kind="stable")
+    sorted_vertex_keys = vertex_keys[vertex_order]
     position = np.minimum(
         np.searchsorted(polygon_ids, parent_ids), len(polygon_ids) - 1
     )
-    triangle_arities = np.where(
-        polygon_ids[position] == parent_ids, arities[position], 0
-    )
-    is_bad = np.zeros(len(offsets) - 1, dtype=bool)
+    children = np.flatnonzero(polygon_ids[position] == parent_ids)
+    owner = position[children]
+    child_keys = owner[:, None] * n_points + triangles[children]
+    found = np.minimum(np.searchsorted(sorted_vertex_keys, child_keys), n_vertices - 1)
+    foreign = (sorted_vertex_keys[found] != child_keys).any(axis=1)
+    vertex = vertex_order[found]  # (n_children, 3) indices into vertex_ids
+    following = np.roll(vertex, -1, axis=1)
+    n = np.diff(vertex_offsets)[owner][:, None]
+    step = (following - vertex) % n
+    on_boundary = ((step == 1) | (step == n - 1)) & ~foreign[:, None]
     is_diagonal = np.zeros(triangles.shape, dtype=bool)  # edge (k, k + 1 mod 3)
+    is_diagonal[children] = ~on_boundary & ~foreign[:, None]
 
-    ### Check the children of each polygon size in local vertex numbers.
-    for n in np.flatnonzero(np.bincount(arities)):
-        rows = polygon_ids[arities == n]
-        children = np.flatnonzero(triangle_arities == n)
-        r = np.searchsorted(rows, parent_ids[children])
-        polygons = connectivity[offsets[rows[r]][:, None] + np.arange(n)]
-        local = (polygons[:, None, :] == triangles[children][:, :, None]).argmax(2)
-        foreign = (
-            np.take_along_axis(polygons, local, axis=1) != triangles[children]
-        ).any(axis=1)
-        following = np.roll(local, -1, axis=1)
-        step = (following - local) % n
-        on_boundary = ((step == 1) | (step == n - 1)) & ~foreign[:, None]
-        is_diagonal[children] = ~on_boundary & ~foreign[:, None]
-        # Polygon edge i joins local vertices i and i + 1 and is in exactly one
-        # child; each diagonal is in exactly two.
-        boundary_counts = np.bincount(
-            (r[:, None] * n + np.where(step == 1, local, following))[on_boundary],
-            minlength=len(rows) * n,
-        )
-        diagonal_keys = np.sort(
-            (
-                (r[:, None] * n + np.minimum(local, following)) * n
-                + np.maximum(local, following)
-            )[is_diagonal[children]]
-        )
-        run_starts = np.flatnonzero(np.diff(diagonal_keys, prepend=-1))
-        run_lengths = np.diff(np.r_[run_starts, len(diagonal_keys)])
-        sorted_local = np.sort(local, axis=1)
-        child_keys = np.sort(
-            ((r * n + sorted_local[:, 0]) * n + sorted_local[:, 1]) * n
-            + sorted_local[:, 2]
-        )
-        row_bad = (np.bincount(r, minlength=len(rows)) != n - 2) | (
-            boundary_counts.reshape(-1, n) != 1
-        ).any(axis=1)
-        row_bad[r[foreign]] = True
-        row_bad[child_keys[1:][child_keys[1:] == child_keys[:-1]] // n**3] = True
-        row_bad[diagonal_keys[run_starts[run_lengths != 2]] // n**2] = True
-        is_bad[rows[row_bad]] = True
+    ### A polygon needs n - 2 children of its own vertices, each polygon edge
+    ### (from vertex i to vertex i + 1) in one child and each diagonal in two.
+    boundary_counts = np.bincount(
+        np.where(step == 1, vertex, following)[on_boundary], minlength=n_vertices
+    )
+    diagonal_keys = np.sort(
+        (np.minimum(vertex, following) * n_vertices + np.maximum(vertex, following))[
+            is_diagonal[children]
+        ],
+        kind="stable",  # fast here: children come grouped by polygon
+    )
+    run_starts = np.flatnonzero(np.diff(diagonal_keys, prepend=-1))
+    run_lengths = np.diff(np.r_[run_starts, len(diagonal_keys)])
+    is_bad = np.bincount(owner, minlength=len(polygon_ids)) != (
+        np.diff(vertex_offsets) - 2
+    )
+    is_bad[owner[foreign]] = True
+    is_bad[owners[boundary_counts != 1]] = True
+    is_bad[owners[diagonal_keys[run_starts[run_lengths != 2]] // n_vertices]] = True
 
     ### A diagonal that is in another cell's triangles too is non-manifold.
     following = np.roll(triangles, -1, axis=1)
@@ -1209,19 +1204,19 @@ def _refan_failed_polygons(
     run_starts = np.flatnonzero(np.diff(all_keys, prepend=-1))
     run_lengths = np.diff(np.r_[run_starts, len(all_keys)])
     shared = np.isin(edge_keys[is_diagonal], all_keys[run_starts[run_lengths != 2]])
-    is_bad[
-        np.broadcast_to(parent_ids[:, None], triangles.shape)[is_diagonal][shared]
-    ] = True
+    fanned = np.union1d(
+        polygon_ids[is_bad],
+        np.broadcast_to(parent_ids[:, None], triangles.shape)[is_diagonal][shared],
+    )
 
     ### Fan each wrong polygon around its center: (v_i, v_{i+1}, center).
-    fanned = np.flatnonzero(is_bad)
     if len(fanned) == 0:
         return triangles, parent_ids, fanned
     vertex_ids, owners, fan_offsets = _gather_vtk_rows(offsets, connectivity, fanned)
     next_vertex = np.arange(1, len(vertex_ids) + 1)
     next_vertex[fan_offsets[1:] - 1] = fan_offsets[:-1]
     fans = np.stack([vertex_ids, vertex_ids[next_vertex], n_points + owners], axis=1)
-    keep = ~is_bad[parent_ids]
+    keep = ~np.isin(parent_ids, fanned)
     parent_ids = np.concatenate([parent_ids[keep], fanned[owners]])
     order = np.argsort(parent_ids, kind="stable")
     return np.concatenate([triangles[keep], fans])[order], parent_ids[order], fanned

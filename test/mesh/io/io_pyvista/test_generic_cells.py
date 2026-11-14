@@ -1004,23 +1004,41 @@ def test_polygon_vtk_cannot_split_is_fanned(unused_points_first):
 
 def test_partial_vtk_polygon_split_is_fanned_with_data():
     """A face that VTK splits only partly is fanned; point and cell data follow."""
-    polydata = pv.PolyData(_HANGING_NODE_FACE, faces=[7, 0, 1, 2, 3, 4, 5, 6])
-    polydata.point_data["pressure"] = np.arange(7, dtype=np.float32)
-    polydata.point_data["velocity"] = np.arange(21, dtype=np.float64).reshape(7, 3)
-    polydata.point_data["label"] = np.arange(10, 17, dtype=np.int32)
-    polydata.cell_data["patch"] = np.array([5], dtype=np.int16)
+    strip_points = np.array([[2.0, 0, 0], [3.0, 0, 0], [2.0, 1, 0], [3.0, 1, 0]])
+    points = np.concatenate([_HANGING_NODE_FACE, strip_points])
+    polydata = pv.PolyData(
+        points, faces=[7, 0, 1, 2, 3, 4, 5, 6], strips=[4, 7, 8, 9, 10]
+    )
+    polydata.point_data["pressure"] = np.arange(11, dtype=np.float32)
+    polydata.point_data["velocity"] = np.arange(33, dtype=np.float64).reshape(11, 3)
+    polydata.point_data["label"] = np.arange(10, 21, dtype=np.int32)
+    polydata.cell_data["patch"] = np.array([5, 6], dtype=np.int16)
+    strip_triangles = (
+        pv.PolyData(points, strips=[4, 7, 8, 9, 10]).triangulate().regular_faces
+    )
 
     mesh = from_pyvista(polydata)
 
-    assert mesh.cells.tolist() == _fan(list(range(7)), 7)
+    assert mesh.cells.tolist() == _fan(list(range(7)), 11) + strip_triangles.tolist()
     torch.testing.assert_close(
-        mesh.points[7], torch.from_numpy(_HANGING_NODE_FACE.mean(axis=0))
+        mesh.points[11], torch.from_numpy(_HANGING_NODE_FACE.mean(axis=0))
     )
-    assert mesh.point_data["pressure"][7].item() == 3.0
+    assert mesh.point_data["pressure"][11].item() == 3.0
     assert mesh.point_data["pressure"].dtype == torch.float32
-    assert mesh.point_data["velocity"][7].tolist() == [9.0, 10.0, 11.0]
-    assert mesh.point_data["label"].tolist() == [*range(10, 17), 10]
-    assert mesh.cell_data["patch"].tolist() == [5] * 7
+    assert mesh.point_data["velocity"][11].tolist() == [9.0, 10.0, 11.0]
+    assert mesh.point_data["label"].tolist() == [*range(10, 21), 10]
+    assert mesh.cell_data["patch"].tolist() == [5] * 7 + [6] * 2
+
+
+def test_large_polygon_split_uses_every_vertex():
+    """A polygon with thousands of vertices keeps VTK's full split."""
+    circle = pv.Circle(resolution=4000)
+
+    mesh = from_pyvista(circle)
+
+    assert mesh.n_points == 4000
+    assert mesh.n_cells == 3998
+    assert torch.equal(torch.unique(mesh.cells), torch.arange(4000))
 
 
 def test_closed_polygon_surface_with_failed_split_stays_closed():
