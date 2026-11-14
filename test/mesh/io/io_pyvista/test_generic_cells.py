@@ -1030,6 +1030,32 @@ def test_partial_vtk_polygon_split_is_fanned_with_data():
     assert mesh.cell_data["patch"].tolist() == [5] * 7 + [6] * 2
 
 
+@pytest.mark.parametrize("unstructured", [False, True])
+def test_repeated_polygon_vertex_keeps_correct_vtk_split(unstructured):
+    """A polygon that repeats a vertex keeps VTK's split when it is correct."""
+    points = np.array([[0.0, 0, 0], [1.0, 0, 0], [1.0, 1, 0], [0.0, 1, 0]])
+    polydata = pv.PolyData(points, faces=[5, 0, 1, 1, 2, 3])
+    source = polydata.cast_to_unstructured_grid() if unstructured else polydata
+
+    mesh = from_pyvista(source)
+
+    assert mesh.n_points == 4
+    assert mesh.cells.tolist() == [[0, 1, 3], [2, 3, 1]]
+
+
+def test_failed_split_of_polygon_with_repeated_vertex_has_no_zero_area_fan():
+    """A wrongly split polygon that repeats a vertex is fanned over its distinct vertices."""
+    polydata = pv.PolyData(_HANGING_NODE_FACE, faces=[8, 0, 1, 2, 2, 3, 4, 5, 6])
+
+    mesh = from_pyvista(polydata)
+
+    assert mesh.cells.tolist() == _fan(list(range(7)), 7)
+    assert bool((mesh.cell_areas > 0).all())
+    torch.testing.assert_close(
+        mesh.points[7], torch.from_numpy(_HANGING_NODE_FACE.mean(axis=0))
+    )
+
+
 def test_large_polygon_split_uses_every_vertex():
     """A polygon with thousands of vertices keeps VTK's full split."""
     circle = pv.Circle(resolution=4000)

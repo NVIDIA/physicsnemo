@@ -1092,10 +1092,9 @@ def _triangulate_with_parent_ids(
             f"output cell: expected {triangulated.n_cells}, got "
             f"{len(output_parent_ids)}."
         )
-    unexpected_parent_ids = np.setdiff1d(
-        np.unique(output_parent_ids),
-        parent_ids,
-        assume_unique=True,
+    # np.isin, not np.unique: a lookup table is much faster on parent IDs.
+    unexpected_parent_ids = np.unique(
+        output_parent_ids[~np.isin(output_parent_ids, parent_ids)]
     )
     if len(unexpected_parent_ids) > 0:
         raise ValueError(
@@ -1103,6 +1102,36 @@ def _triangulate_with_parent_ids(
             f"{unexpected_parent_ids.tolist()}."
         )
     return triangulated, output_parent_ids
+
+
+def _polygon_cycles(
+    offsets: Int[np.ndarray, " n_rows_plus_1"],
+    connectivity: Int[np.ndarray, " n_connectivity"],
+    rows: Int[np.ndarray, " n_rows"],
+) -> tuple[
+    Int[np.ndarray, " n_polygons"],
+    Int[np.ndarray, " n_vertices"],
+    Int[np.ndarray, " n_vertices"],
+    Int[np.ndarray, " n_polygons_plus_1"],
+]:
+    """Gather polygons without vertices that repeat the next one.
+
+    Returns the rows that keep at least 3 vertices, their vertex IDs, the
+    polygon (index into the returned rows) of each vertex, and the offsets of
+    the polygons' vertices.
+    """
+    vertex_ids, owners, row_offsets = _gather_vtk_rows(offsets, connectivity, rows)
+    following = np.roll(vertex_ids, -1)
+    following[row_offsets[1:] - 1] = vertex_ids[row_offsets[:-1]]
+    counts = np.bincount(owners[vertex_ids != following], minlength=len(rows))
+    is_polygon = counts >= 3
+    keep = (vertex_ids != following) & is_polygon[owners]
+    return (
+        rows[is_polygon],
+        vertex_ids[keep],
+        (np.cumsum(is_polygon) - 1)[owners[keep]],
+        np.r_[0, np.cumsum(counts[is_polygon])],
+    )
 
 
 def _refan_failed_polygons(
@@ -1122,7 +1151,8 @@ def _refan_failed_polygons(
     numbers as point IDs, or pick a diagonal that is also an edge of another
     cell. Each such polygon is split instead as OpenFOAM does: into n triangles
     ``(v_i, v_{i+1}, center)``, wound like the polygon, around a new point at
-    its vertex mean. Every other polygon keeps VTK's triangles.
+    its vertex mean. Every other polygon keeps VTK's triangles. A vertex that
+    repeats the next one is ignored.
 
     Parameters
     ----------
@@ -1147,14 +1177,13 @@ def _refan_failed_polygons(
         rows of the re-fanned polygons.
     """
     arities = offsets[polygon_ids + 1] - offsets[polygon_ids]
-    polygon_ids = polygon_ids[arities > 3]
+    polygon_ids, vertex_ids, owners, vertex_offsets = _polygon_cycles(
+        offsets, connectivity, polygon_ids[arities > 3]
+    )
     if len(polygon_ids) == 0:
         return triangles, parent_ids, polygon_ids
 
     ### Find each child vertex among its polygon's vertices, by (polygon, point).
-    vertex_ids, owners, vertex_offsets = _gather_vtk_rows(
-        offsets, connectivity, polygon_ids
-    )
     n_vertices = len(vertex_ids)
     vertex_keys = owners * n_points + vertex_ids
     vertex_order = np.argsort(vertex_keys, kind="stable")
@@ -1212,7 +1241,7 @@ def _refan_failed_polygons(
     ### Fan each wrong polygon around its center: (v_i, v_{i+1}, center).
     if len(fanned) == 0:
         return triangles, parent_ids, fanned
-    vertex_ids, owners, fan_offsets = _gather_vtk_rows(offsets, connectivity, fanned)
+    _, vertex_ids, owners, fan_offsets = _polygon_cycles(offsets, connectivity, fanned)
     next_vertex = np.arange(1, len(vertex_ids) + 1)
     next_vertex[fan_offsets[1:] - 1] = fan_offsets[:-1]
     fans = np.stack([vertex_ids, vertex_ids[next_vertex], n_points + owners], axis=1)
@@ -1233,13 +1262,17 @@ def _with_fan_centers(
     The center's value is the mean of the polygon's vertex values for floating
     dtypes, and the value of its first vertex otherwise.
     """
+    _, vertex_ids, _, fan_offsets = _polygon_cycles(offsets, connectivity, fanned)
     if values.is_floating_point():
         centers = _vertex_means(
-            values.reshape(len(values), -1).numpy(), offsets, connectivity, fanned
+            values.reshape(len(values), -1).numpy(),
+            fan_offsets,
+            vertex_ids,
+            np.arange(len(fanned)),
         )
         centers = torch.from_numpy(centers).to(values.dtype)
     else:
-        centers = values[connectivity[offsets[fanned]]]
+        centers = values[vertex_ids[fan_offsets[:-1]]]
     return torch.cat([values, centers.reshape(-1, *values.shape[1:])])
 
 
@@ -1320,11 +1353,9 @@ def _polydata_surface_triangles(
         first_face_parent + n_faces + n_strips,
         dtype=np.int64,
     )
-    missing_parent_ids = np.setdiff1d(
-        selected_surface_parents,
-        np.unique(output_parent_ids),
-        assume_unique=True,
-    )
+    missing_parent_ids = selected_surface_parents[
+        ~np.isin(selected_surface_parents, output_parent_ids)
+    ]
     if len(missing_parent_ids) > 0:
         raise ValueError(
             "VTK triangulation dropped selected PolyData surface parents "
@@ -1413,12 +1444,9 @@ def _select_and_linearize_unstructured_grid(
     linearized = cast("pv.UnstructuredGrid", linearized_mesh)
 
     ### Every selected parent must generate at least one output simplex.
-    produced_parent_ids = np.unique(output_parent_ids)
-    missing_parent_ids = np.setdiff1d(
-        selected_parent_ids,
-        produced_parent_ids,
-        assume_unique=True,
-    )
+    missing_parent_ids = selected_parent_ids[
+        ~np.isin(selected_parent_ids, output_parent_ids)
+    ]
     if len(missing_parent_ids) > 0:
         missing_details = ", ".join(
             f"parent {int(parent_id)} "
