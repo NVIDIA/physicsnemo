@@ -80,7 +80,7 @@ class TestSplitNonmanifoldEdges:
         assert enclosed_volume(result) == pytest.approx(1.0)
 
     def test_two_triangle_fin_dropped(self):
-        """A quad fin: each of its triangles has only one open edge (B7)."""
+        """A quad fin: each of its triangles has only one open edge."""
         cube = cube_surface.load()
         mesh = add_cells(
             cube,
@@ -238,7 +238,7 @@ class TestSplitNonmanifoldEdges:
         assert torch.equal(result.points[[9, 10]], cube.points[list(TOP_DIAGONAL)])
 
     def test_pillow_dropped(self):
-        """Two opposite triangles on one edge enclose no volume (B7)."""
+        """Two opposite triangles on one edge enclose no volume."""
         cube = cube_surface.load()
         mesh = add_cells(
             cube,

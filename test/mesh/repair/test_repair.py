@@ -454,7 +454,7 @@ class TestRepairPipeline:
         assert stats2["merge_points"]["n_duplicates_merged"] == 0
 
     @staticmethod
-    def _audit_cube(scale: float) -> Mesh:
+    def _seamed_cube(scale: float) -> Mesh:
         """Cube with T-junction seams, an L-shaped hole and a one-triangle fin.
 
         The top face is a 4 x 4 grid against 2 x 2 grids elsewhere; squares
@@ -474,12 +474,12 @@ class TestRepairPipeline:
 
     @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3])
     def test_pipeline_closes_seams_holes_and_fins(self, scale):
-        """The audit's end-to-end case comes out closed, manifold, consistently
-        wound and of volume 1, the same way at any scale."""
+        """A cube with T-junction seams, a hole and a fin comes out closed,
+        manifold, consistently wound and of volume 1, the same way at any scale."""
         kwargs = dict(
             fix_orientation=True, fill_holes=True, split_nonmanifold_edges=True
         )
-        repaired, stats = repair_mesh(self._audit_cube(scale), **kwargs)
+        repaired, stats = repair_mesh(self._seamed_cube(scale), **kwargs)
         assert _edge_counts(repaired.cells) == {
             "open": 0,
             "nonmanifold": 0,
@@ -488,13 +488,13 @@ class TestRepairPipeline:
         assert abs(_signed_volume(repaired)) == pytest.approx(scale**3)
         assert stats["nonmanifold_edges"]["n_cells_dropped"] == 1
         assert stats["holes"]["n_holes_filled"] == 1
-        reference, _ = repair_mesh(self._audit_cube(1.0), **kwargs)
+        reference, _ = repair_mesh(self._seamed_cube(1.0), **kwargs)
         assert torch.equal(repaired.cells, reference.cells)
 
     @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3])
     def test_pipeline_removes_duplicates_made_by_merge(self, device, scale):
-        """Two copies of a cube 1e-8 of its size apart give one clean cube
-        (B9), at any scale: the merge tolerance is relative to the size."""
+        """Two copies of a cube 1e-8 of its size apart give one clean cube, at
+        any scale: the merge tolerance is relative to the size."""
         from physicsnemo.mesh.primitives.surfaces import cube_surface
 
         cube = cube_surface.load(device=device)
@@ -509,7 +509,7 @@ class TestRepairPipeline:
         assert stats["duplicates"]["n_cells_final"] == 12
 
     def test_pipeline_closes_slit_of_removed_zero_area_cell(self, device):
-        """Removing a zero-area cell opens a slit; stitching closes it (B5)."""
+        """Removing a zero-area cell opens a slit; stitching closes it."""
         from physicsnemo.mesh.primitives.surfaces import cube_surface
 
         cube = cube_surface.load(device=device)
@@ -672,7 +672,7 @@ class TestHoleFilling:
         )
 
     def test_fill_wound_like_surface(self, device):
-        """Regression (B1): the fill follows the surface's winding, not the vertex labels."""
+        """The fill follows the surface's winding, not the vertex labels."""
         cube = _grid_cube([2] * 6)
         top = (cube.points[cube.cells][:, :, 2] == 1).all(dim=1)
         generator = torch.Generator().manual_seed(0)
@@ -692,7 +692,7 @@ class TestHoleFilling:
             assert _signed_volume(filled) == pytest.approx(1.0)
 
     def test_fan_fill_wound_like_surface(self, device):
-        """Regression (B1): a centroid fan over a non-planar hole follows the surface's winding."""
+        """A centroid fan over a non-planar hole follows the surface's winding."""
         cube = _grid_cube([2] * 6)
         corner = int((cube.points == 1).all(dim=1).nonzero())
         cut = (cube.cells == corner).any(dim=1)  # the hole bends around the corner
@@ -717,7 +717,7 @@ class TestHoleFilling:
             assert _signed_volume(filled) == pytest.approx(1 - float(cone.sum()) / 6)
 
     def test_fill_holes_sharing_a_vertex(self, device):
-        """Regression (B4): two holes touching at a vertex are both traced and filled."""
+        """Two holes touching at a vertex are both traced and filled."""
         points = torch.tensor(
             [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [-1.0, 0.0], [-1.0, -1.0]],
             device=device,
@@ -730,7 +730,7 @@ class TestHoleFilling:
         assert _edge_counts(filled.cells)["open"] == 0
 
     def test_zero_area_slit_left_open(self, device):
-        """Regression (B5): a slit (a vertex on the opposite side's edge) is never fanned."""
+        """A slit (a vertex on the opposite side's edge) is never fanned."""
         mesh = _grid_cube([1] * 6)
         # Split one triangle of face z=1 at the midpoint of its diagonal (0, 0, 1)-(1, 1, 1)
         diagonal = torch.tensor([[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]], dtype=torch.float64)
@@ -760,7 +760,7 @@ class TestHoleFilling:
         }
 
     def test_planar_nonconvex_hole_ear_clipped(self, device):
-        """Regression (B6): an L-shaped planar hole is filled without folds or overlap."""
+        """An L-shaped planar hole is filled without folds or overlap."""
         hole = [[0, 0], [4, 0], [4, 1], [1, 1], [1, 4], [0, 4]]
         outer = [[-1, -1], [5, -1], [5, 2], [2, 2], [2, 5], [-1, 5]]
         xy = torch.tensor(hole + outer, dtype=torch.float64)

@@ -207,8 +207,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `physicsnemo.mesh.repair` adds `stitch_t_junctions`, which closes the
   zero-width gaps where a vertex lies on another triangle's edge, and
-  `split_nonmanifold_edges`, which separates triangles that meet at one edge and
-  drops the fins and zero-volume pillows left over.
+  `split_nonmanifold_edges`, which pairs up the three or more triangles that
+  share an edge and drops the fins and pillows (coincident triangles wound
+  opposite ways) left over.
 - `physicsnemo.mesh.validation` adds `find_self_intersections`, which finds the
   pairs of crossing triangles in a 3D surface. `validate` runs it when
   `check_self_intersection=True` and skips meshes it does not apply to.
@@ -216,9 +217,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
-  triangle meshes by default, and its default tolerances are now relative to the
-  mesh's size. `split_nonmanifold_edges=True` also splits non-manifold edges and
-  drops fins, and an explicit `tolerance` keeps its old meaning.
+  triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
+  Its default tolerances are now relative to the mesh's size, and an explicit
+  `tolerance` also sets the stitching distance, with `area_tolerance` then
+  defaulting to its square on surfaces.
 - Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
   `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
   `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
