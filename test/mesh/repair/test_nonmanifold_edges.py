@@ -141,6 +141,28 @@ class TestSplitNonmanifoldEdges:
         assert stats["n_cells_dropped"] == 4
         assert torch.equal(result.cells, cube.cells)
 
+    @pytest.mark.parametrize("sheet", ["square", "open box"])
+    def test_doubled_open_sheet_kept(self, sheet):
+        """A doubled open sheet has no surface without copies to keep, so at
+        least one copy of each of its cells stays."""
+        if sheet == "square":
+            points = torch.tensor([[0.0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]])
+            cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+        else:
+            cube = cube_surface.load()
+            points = cube.points
+            # The cube without its top face (points 1, 3, 5 and 7)
+            cells = cube.cells[~(cube.cells % 2 == 1).all(dim=1)]
+        result, stats = split_nonmanifold_edges(
+            Mesh(points=points, cells=torch.cat([cells, cells]))
+        )
+        # Copied points map back to the point they copy
+        source = (result.points[:, None] == points[None]).all(dim=-1).int().argmax(1)
+        kept = source[result.cells].sort(dim=1).values
+        assert set(map(tuple, kept.tolist())) == set(
+            map(tuple, cells.sort(dim=1).values.tolist())
+        )
+
     @pytest.mark.parametrize("first", [False, True])
     @pytest.mark.parametrize("face", [(0, 1), (2, 3), (10, 11)])
     def test_reversed_copy_of_a_face_dropped(self, face, first):

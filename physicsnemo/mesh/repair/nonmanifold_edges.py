@@ -116,9 +116,10 @@ def split_nonmanifold_edges(
     drop_fins : bool
         If True, also remove every facet-connected part that the split
         leaves open along edge copies, if its triangles at split edges are
-        all unpaired (fins of any number of triangles) or each of its
-        triangles has a copy, wound either way (pillows, and copies of a
-        surface, whose own copy stays). Their points stay, as with
+        all unpaired (fins of any number of triangles), or if each of its
+        triangles has a copy, wound either way, and it shares a split edge
+        with a part that has a triangle without one (pillows, and copies of
+        a surface, whose own copy stays). Their points stay, as with
         :func:`~physicsnemo.mesh.repair.remove_degenerate_cells`.
 
     Returns
@@ -227,7 +228,8 @@ def split_nonmanifold_edges(
 
     ### Drop the parts left open at split edges: unpaired at every split edge
     ### they use (fins), or made only of cells that have a copy (pillows, and
-    ### copies of a surface)
+    ### copies of a surface) and sharing a split edge with a part that has a
+    ### cell without one, so that a doubled sheet keeps one of its copies
     drop = torch.zeros(n_cells, dtype=torch.bool, device=device)
     if drop_fins:
         part = vectorized_connected_components(joined // 3, n_cells)
@@ -243,7 +245,12 @@ def split_nonmanifold_edges(
         has_wedge[part[wedges[:, 0] // 3]] = True
         has_single = torch.zeros(n_cells, dtype=torch.bool, device=device)
         has_single[part[copies[same_vertices] == 1]] = True
-        drop = (is_open & ~(has_wedge & has_single))[part]
+        half_edge_part = part[half_edges // 3]
+        edge_has_single = torch.zeros_like(counts, dtype=torch.bool)
+        edge_has_single[edge_ids[nonmanifold & has_single[half_edge_part]]] = True
+        attached = torch.zeros(n_cells, dtype=torch.bool, device=device)
+        attached[half_edge_part[nonmanifold & edge_has_single[edge_ids]]] = True
+        drop = (is_open & (~has_wedge | (~has_single & attached)))[part]
 
     ### Star components of the corners, after (split) and before (whole) the split
     kept = ~drop.repeat_interleave(3)
