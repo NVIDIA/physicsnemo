@@ -1152,7 +1152,8 @@ def _refan_failed_polygons(
     cell. Each such polygon is split instead as OpenFOAM does: into n triangles
     ``(v_i, v_{i+1}, center)``, wound like the polygon, around a new point at
     its vertex mean. Every other polygon keeps VTK's triangles. A vertex that
-    repeats the next one is ignored.
+    repeats the next one is ignored, and a polygon left with 3 vertices becomes
+    that triangle.
 
     Parameters
     ----------
@@ -1167,14 +1168,14 @@ def _refan_failed_polygons(
     offsets, connectivity : np.ndarray
         VTK cell array of the parent cells.
     n_points : int
-        Number of source points; the center of the k-th re-fanned polygon
-        gets point ID ``n_points + k``.
+        Number of source points; the center of the k-th polygon fanned around
+        a center gets point ID ``n_points + k``.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray, np.ndarray]
         The triangles and their parent rows, ordered by parent, and the sorted
-        rows of the re-fanned polygons.
+        rows of the polygons fanned around a new center point.
     """
     arities = offsets[polygon_ids + 1] - offsets[polygon_ids]
     polygon_ids, vertex_ids, owners, vertex_offsets = _polygon_cycles(
@@ -1239,16 +1240,25 @@ def _refan_failed_polygons(
     )
 
     ### Fan each wrong polygon around its center: (v_i, v_{i+1}, center).
+    ### A polygon with only 3 distinct vertices becomes that triangle instead.
     if len(fanned) == 0:
         return triangles, parent_ids, fanned
     _, vertex_ids, owners, fan_offsets = _polygon_cycles(offsets, connectivity, fanned)
+    has_center = np.diff(fan_offsets) > 3
+    in_fan = has_center[owners]
     next_vertex = np.arange(1, len(vertex_ids) + 1)
     next_vertex[fan_offsets[1:] - 1] = fan_offsets[:-1]
-    fans = np.stack([vertex_ids, vertex_ids[next_vertex], n_points + owners], axis=1)
+    centers = n_points + np.cumsum(has_center) - 1
+    fans = np.stack([vertex_ids, vertex_ids[next_vertex], centers[owners]], axis=1)
     keep = ~np.isin(parent_ids, fanned)
-    parent_ids = np.concatenate([parent_ids[keep], fanned[owners]])
+    parent_ids = np.concatenate(
+        [parent_ids[keep], fanned[owners[in_fan]], fanned[~has_center]]
+    )
+    triangles = np.concatenate(
+        [triangles[keep], fans[in_fan], vertex_ids[~in_fan].reshape(-1, 3)]
+    )
     order = np.argsort(parent_ids, kind="stable")
-    return np.concatenate([triangles[keep], fans])[order], parent_ids[order], fanned
+    return triangles[order], parent_ids[order], fanned[has_center]
 
 
 def _with_fan_centers(
@@ -1563,7 +1573,8 @@ def from_pyvista(
     instead into a fan of triangles around a new point at its vertex mean,
     appended after the input points. Its point data is the mean of the
     polygon's vertex values for floating dtypes, and the first vertex's value
-    otherwise.
+    otherwise. A polygon with only three distinct vertices (a collapsed quad,
+    for example) becomes that triangle instead, without a new point.
 
     Topology conversion is limited to explicitly supported linear VTK cell
     families. Higher-order, control-net, parametric, abstract, and generic

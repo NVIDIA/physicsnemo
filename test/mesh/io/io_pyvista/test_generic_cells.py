@@ -1043,6 +1043,23 @@ def test_repeated_polygon_vertex_keeps_correct_vtk_split(unstructured):
     assert mesh.cells.tolist() == [[0, 1, 3], [2, 3, 1]]
 
 
+@pytest.mark.parametrize("unstructured", [False, True])
+def test_collapsed_quad_becomes_its_triangle(unstructured):
+    """A quad with only 3 distinct vertices becomes that triangle, with no new point."""
+    triangle = np.array([[2.0, 0, 0], [3.0, 0, 0], [3.0, 1, 0]])
+    points = np.concatenate([_HANGING_NODE_FACE, triangle])
+    polydata = pv.PolyData(points, faces=[4, 7, 8, 8, 9, 7, 0, 1, 2, 3, 4, 5, 6])
+    polydata.cell_data["patch"] = np.array([7, 8], dtype=np.int16)
+    source = polydata.cast_to_unstructured_grid() if unstructured else polydata
+
+    mesh = from_pyvista(source)
+
+    ### Only the fanned hanging-node face gets a center point.
+    assert mesh.n_points == 11
+    assert mesh.cells.tolist() == [[7, 8, 9], *_fan(list(range(7)), 10)]
+    assert mesh.cell_data["patch"].tolist() == [7] + [8] * 7
+
+
 def test_failed_split_of_polygon_with_repeated_vertex_has_no_zero_area_fan():
     """A wrongly split polygon that repeats a vertex is fanned over its distinct vertices."""
     polydata = pv.PolyData(_HANGING_NODE_FACE, faces=[8, 0, 1, 2, 2, 3, 4, 5, 6])
