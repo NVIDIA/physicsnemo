@@ -1105,72 +1105,147 @@ def _triangulate_with_parent_ids(
     return triangulated, output_parent_ids
 
 
-def _with_leading_unused_points(
-    grid: "pv.UnstructuredGrid", count: int
-) -> "pv.UnstructuredGrid":
-    """``grid`` with ``count`` unused copies of its first point placed first.
+def _refan_failed_polygons(
+    triangles: Int[np.ndarray, "n_triangles 3"],
+    parent_ids: Int[np.ndarray, " n_triangles"],
+    polygon_ids: Int[np.ndarray, " n_polygons"],
+    offsets: Int[np.ndarray, " n_rows_plus_1"],
+    connectivity: Int[np.ndarray, " n_connectivity"],
+    n_points: int,
+) -> tuple[
+    Int[np.ndarray, "n_out 3"], Int[np.ndarray, " n_out"], Int[np.ndarray, " n_fans"]
+]:
+    """Replace each wrong VTK polygon split by a fan around a new center point.
 
-    vtkDataSetTriangleFilter (``UnstructuredGrid.triangulate``) ignores a
-    polygon triangulation that fails, and then writes the polygon's local
-    vertex numbers (0 to k - 1) as point IDs. With at least k leading unused
-    points, such IDs can only land on those points.
+    VTK's ear cutting can give up partway (fewer than n - 2 triangles, so
+    polygon edges and vertices are lost), repeat a triangle, write local vertex
+    numbers as point IDs, or pick a diagonal that is also an edge of another
+    cell. Each such polygon is split instead as OpenFOAM does: into n triangles
+    ``(v_i, v_{i+1}, center)``, wound like the polygon, around a new point at
+    its vertex mean. Every other polygon keeps VTK's triangles.
+
+    Parameters
+    ----------
+    triangles : np.ndarray
+        Shape ``(n_triangles, 3)``, VTK's triangles in source point IDs.
+    parent_ids : np.ndarray
+        Shape ``(n_triangles,)``, the row of ``offsets`` of each triangle's
+        parent cell.
+    polygon_ids : np.ndarray
+        Sorted rows of ``offsets`` that are polygons (vertices in cyclic order)
+        to check.
+    offsets, connectivity : np.ndarray
+        VTK cell array of the parent cells.
+    n_points : int
+        Number of source points; the center of the k-th re-fanned polygon
+        gets point ID ``n_points + k``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        The triangles and their parent rows, ordered by parent, and the sorted
+        rows of the re-fanned polygons.
     """
-    points = np.asarray(grid.points)
-    ### New points and cells on a shallow copy; the input keeps its own.
-    shifted = grid.copy(deep=False)
-    shifted.point_data.clear()
-    shifted.SetPoints(
-        pv.vtk_points(np.concatenate([np.repeat(points[:1], count, axis=0), points]))
+    arities = offsets[polygon_ids + 1] - offsets[polygon_ids]
+    polygon_ids, arities = polygon_ids[arities > 3], arities[arities > 3]
+    if len(polygon_ids) == 0:
+        return triangles, parent_ids, polygon_ids
+    position = np.minimum(
+        np.searchsorted(polygon_ids, parent_ids), len(polygon_ids) - 1
     )
-    shifted.SetCells(
-        pv.convert_array(np.asarray(grid.celltypes)),
-        pv.CellArray.from_arrays(
-            np.asarray(grid.cell_offsets, dtype=np.int64),
-            np.asarray(grid.cell_connectivity, dtype=np.int64) + count,
-        ),
+    triangle_arities = np.where(
+        polygon_ids[position] == parent_ids, arities[position], 0
     )
-    if _ORIGINAL_POINT_ID_KEY in grid.point_data:
-        original_point_ids = np.asarray(grid.point_data[_ORIGINAL_POINT_ID_KEY])
-        shifted.point_data[_ORIGINAL_POINT_ID_KEY] = np.concatenate(
-            [np.repeat(original_point_ids[:1], count), original_point_ids]
+    is_bad = np.zeros(len(offsets) - 1, dtype=bool)
+    is_diagonal = np.zeros(triangles.shape, dtype=bool)  # edge (k, k + 1 mod 3)
+
+    ### Check the children of each polygon size in local vertex numbers.
+    for n in np.flatnonzero(np.bincount(arities)):
+        rows = polygon_ids[arities == n]
+        children = np.flatnonzero(triangle_arities == n)
+        r = np.searchsorted(rows, parent_ids[children])
+        polygons = connectivity[offsets[rows[r]][:, None] + np.arange(n)]
+        local = (polygons[:, None, :] == triangles[children][:, :, None]).argmax(2)
+        foreign = (
+            np.take_along_axis(polygons, local, axis=1) != triangles[children]
+        ).any(axis=1)
+        following = np.roll(local, -1, axis=1)
+        step = (following - local) % n
+        on_boundary = ((step == 1) | (step == n - 1)) & ~foreign[:, None]
+        is_diagonal[children] = ~on_boundary & ~foreign[:, None]
+        # Polygon edge i joins local vertices i and i + 1 and is in exactly one
+        # child; each diagonal is in exactly two.
+        boundary_counts = np.bincount(
+            (r[:, None] * n + np.where(step == 1, local, following))[on_boundary],
+            minlength=len(rows) * n,
         )
-    return shifted
+        diagonal_keys = np.sort(
+            (
+                (r[:, None] * n + np.minimum(local, following)) * n
+                + np.maximum(local, following)
+            )[is_diagonal[children]]
+        )
+        run_starts = np.flatnonzero(np.diff(diagonal_keys, prepend=-1))
+        run_lengths = np.diff(np.r_[run_starts, len(diagonal_keys)])
+        sorted_local = np.sort(local, axis=1)
+        child_keys = np.sort(
+            ((r * n + sorted_local[:, 0]) * n + sorted_local[:, 1]) * n
+            + sorted_local[:, 2]
+        )
+        row_bad = (np.bincount(r, minlength=len(rows)) != n - 2) | (
+            boundary_counts.reshape(-1, n) != 1
+        ).any(axis=1)
+        row_bad[r[foreign]] = True
+        row_bad[child_keys[1:][child_keys[1:] == child_keys[:-1]] // n**3] = True
+        row_bad[diagonal_keys[run_starts[run_lengths != 2]] // n**2] = True
+        is_bad[rows[row_bad]] = True
+
+    ### A diagonal that is in another cell's triangles too is non-manifold.
+    following = np.roll(triangles, -1, axis=1)
+    edge_keys = np.minimum(triangles, following) * n_points + np.maximum(
+        triangles, following
+    )
+    all_keys = np.sort(edge_keys.ravel())
+    run_starts = np.flatnonzero(np.diff(all_keys, prepend=-1))
+    run_lengths = np.diff(np.r_[run_starts, len(all_keys)])
+    shared = np.isin(edge_keys[is_diagonal], all_keys[run_starts[run_lengths != 2]])
+    is_bad[
+        np.broadcast_to(parent_ids[:, None], triangles.shape)[is_diagonal][shared]
+    ] = True
+
+    ### Fan each wrong polygon around its center: (v_i, v_{i+1}, center).
+    fanned = np.flatnonzero(is_bad)
+    if len(fanned) == 0:
+        return triangles, parent_ids, fanned
+    vertex_ids, owners, fan_offsets = _gather_vtk_rows(offsets, connectivity, fanned)
+    next_vertex = np.arange(1, len(vertex_ids) + 1)
+    next_vertex[fan_offsets[1:] - 1] = fan_offsets[:-1]
+    fans = np.stack([vertex_ids, vertex_ids[next_vertex], n_points + owners], axis=1)
+    keep = ~is_bad[parent_ids]
+    parent_ids = np.concatenate([parent_ids[keep], fanned[owners]])
+    order = np.argsort(parent_ids, kind="stable")
+    return np.concatenate([triangles[keep], fans])[order], parent_ids[order], fanned
 
 
-def _without_leading_unused_points(
-    simplices_grid: "pv.UnstructuredGrid",
-    count: int,
-    simplex_type: "pv.CellType",
-    output_parent_ids: np.ndarray,
-    cell_types: np.ndarray,
-) -> "pv.UnstructuredGrid":
-    """Undo ``_with_leading_unused_points``; raise if a simplex uses those points."""
-    simplices = np.asarray(simplices_grid.cell_connectivity, dtype=np.int64).reshape(
-        simplices_grid.n_cells, -1
-    )
-    invalid = ((simplices < count) | (simplices >= simplices_grid.n_points)).any(axis=1)
-    if invalid.any():
-        bad = np.unique(output_parent_ids[invalid])
-        shown = ", ".join(
-            f"parent {int(parent_id)} "
-            f"({_vtk_cell_type_name(int(cell_types[parent_id]))})"
-            for parent_id in bad[:5]
+def _with_fan_centers(
+    values: torch.Tensor,
+    offsets: Int[np.ndarray, " n_rows_plus_1"],
+    connectivity: Int[np.ndarray, " n_connectivity"],
+    fanned: Int[np.ndarray, " n_fans"],
+) -> torch.Tensor:
+    """Append one value per fan center of :func:`_refan_failed_polygons`.
+
+    The center's value is the mean of the polygon's vertex values for floating
+    dtypes, and the value of its first vertex otherwise.
+    """
+    if values.is_floating_point():
+        centers = _vertex_means(
+            values.reshape(len(values), -1).numpy(), offsets, connectivity, fanned
         )
-        more = f" and {len(bad) - 5} more" if len(bad) > 5 else ""
-        raise ValueError(
-            f"VTK could not split {len(bad)} cell(s) into simplices: {shown}{more}. "
-            "VTK's vtkDataSetTriangleFilter, which UnstructuredGrid.triangulate() "
-            "also uses, then writes the cell's local vertex numbers as point IDs. "
-            "Split these cells into simplices yourself before conversion."
-        )
-    restored = pv.UnstructuredGrid(
-        {simplex_type: simplices - count}, np.asarray(simplices_grid.points)[count:]
-    )
-    if _ORIGINAL_POINT_ID_KEY in simplices_grid.point_data:
-        restored.point_data[_ORIGINAL_POINT_ID_KEY] = np.asarray(
-            simplices_grid.point_data[_ORIGINAL_POINT_ID_KEY]
-        )[count:]
-    return restored
+        centers = torch.from_numpy(centers).to(values.dtype)
+    else:
+        centers = values[connectivity[offsets[fanned]]]
+    return torch.cat([values, centers.reshape(-1, *values.shape[1:])])
 
 
 def _polydata_surface_triangles(
@@ -1336,16 +1411,8 @@ def _select_and_linearize_unstructured_grid(
         output_parent_ids = None if selected_all_cells else selected_parent_ids
         return selected, original_point_ids, output_parent_ids
 
-    ### Only polygons go through VTK's ear cutting, which can fail silently.
-    n_unused_points = (
-        int(np.diff(selected.cell_offsets).max())
-        if bool((selected.celltypes == pv.CellType.POLYGON).any())
-        else 0
-    )
     linearized_mesh, output_parent_ids = _triangulate_with_parent_ids(
-        _with_leading_unused_points(selected, n_unused_points)
-        if n_unused_points
-        else selected,
+        selected,
         selected_parent_ids,
     )
     linearized = cast("pv.UnstructuredGrid", linearized_mesh)
@@ -1379,11 +1446,6 @@ def _select_and_linearize_unstructured_grid(
         raise ValueError(
             f"Could not linearize manifold dimension {target_dim} to "
             f"{simplex_type.name}; VTK returned {output_names}."
-        )
-
-    if n_unused_points:
-        linearized = _without_leading_unused_points(
-            linearized, n_unused_points, simplex_type, output_parent_ids, cell_types
         )
 
     original_point_ids = (
@@ -1471,6 +1533,14 @@ def from_pyvista(
     downstream geometric calculations generally remain in ``float64``. To
     normalize the returned mesh and its floating data to ``float32``, use
     ``from_pyvista(...).to(torch.float32)``.
+
+    Polygons are split into triangles by VTK. Where VTK's split of a polygon
+    is wrong (it loses polygon edges, repeats a triangle, uses points outside
+    the polygon, or shares a diagonal with another cell), the polygon is split
+    instead into a fan of triangles around a new point at its vertex mean,
+    appended after the input points. Its point data is the mean of the
+    polygon's vertex values for floating dtypes, and the first vertex's value
+    otherwise.
 
     Topology conversion is limited to explicitly supported linear VTK cell
     families. Higher-order, control-net, parametric, abstract, and generic
@@ -1799,6 +1869,40 @@ def from_pyvista(
         point_id_map = torch.from_numpy(original_point_ids).long()
         cells = point_id_map[cells]
 
+    ### Fan the polygons that VTK split wrongly around new center points.
+    fanned_polygons = np.empty(0, dtype=np.int64)
+    if manifold_dim == 2 and output_parent_ids is not None:
+        if polydata_topology is not None:
+            polygon_offsets, polygon_connectivity = polydata_topology["faces"]
+            first_polygon = (
+                source_pyvista_mesh.GetNumberOfVerts()
+                + source_pyvista_mesh.GetNumberOfLines()
+            )
+            polygon_ids = np.arange(len(polygon_offsets) - 1)
+        else:
+            polygon_offsets = np.asarray(source_pyvista_mesh.cell_offsets)
+            polygon_connectivity = np.asarray(source_pyvista_mesh.cell_connectivity)
+            first_polygon = 0
+            polygon_ids = np.flatnonzero(
+                np.isin(
+                    source_pyvista_mesh.celltypes,
+                    [pv.CellType.POLYGON, pv.CellType.QUAD],
+                )
+            )
+        triangles, output_parent_ids, fanned_polygons = _refan_failed_polygons(
+            cells.numpy(),
+            output_parent_ids - first_polygon,
+            polygon_ids,
+            polygon_offsets,
+            polygon_connectivity,
+            len(points),
+        )
+        cells = torch.from_numpy(triangles)
+        output_parent_ids = output_parent_ids + first_polygon
+        points = _with_fan_centers(
+            points, polygon_offsets, polygon_connectivity, fanned_polygons
+        )
+
     ### Warn only after target selection and all topology filters succeeded.
     if warn_on_lost_data:
         _warn_on_data_loss(
@@ -1835,12 +1939,19 @@ def from_pyvista(
     else:
         output_cell_data = {}
 
+    point_data = _vtk_data_to_tensor_dict(
+        geometry_source.point_data, force_copy, nested_names=nested_names
+    )
+    if len(fanned_polygons) > 0:
+        point_data = point_data.apply(
+            lambda values: _with_fan_centers(
+                values, polygon_offsets, polygon_connectivity, fanned_polygons
+            )
+        )
     return Mesh(
         points=points,
         cells=cells,
-        point_data=_vtk_data_to_tensor_dict(
-            geometry_source.point_data, force_copy, nested_names=nested_names
-        ),
+        point_data=point_data,
         cell_data=output_cell_data,
         global_data=_vtk_data_to_tensor_dict(
             source_pyvista_mesh.field_data, force_copy, nested_names=nested_names
