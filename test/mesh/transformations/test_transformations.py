@@ -631,6 +631,33 @@ class TestScale:
         torch.testing.assert_close(scaled.cell_areas, fresh.cell_areas)
         torch.testing.assert_close(scaled.cell_normals, fresh.cell_normals)
 
+    @pytest.mark.parametrize("n_spatial_dims", [2, 3])
+    def test_float16_large_scale_cached_matches_uncached(self, n_spatial_dims):
+        """Regression (#2248): scaling a float16 mesh gives the same areas and
+        normals whether or not they were cached before the call. transform
+        updates the caches in float32, and a fresh computation also runs in at
+        least float32, so neither overflows on the 9e4 cross product."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        cached = Mesh(points=points[:, :n_spatial_dims].half(), cells=cells)
+        _ = cached.cell_areas
+        if n_spatial_dims == 3:
+            _ = cached.cell_normals
+        uncached = Mesh(points=points[:, :n_spatial_dims].half(), cells=cells)
+
+        from_cache = scale(cached, 300.0)
+        from_scratch = scale(uncached, 300.0)
+
+        assert ("cell", "areas") in from_cache._cache
+        assert ("cell", "areas") not in from_scratch._cache
+        expected = torch.tensor([45000.0]).half()  # 44992 in float16
+        torch.testing.assert_close(from_cache.cell_areas, expected, rtol=0, atol=0)
+        torch.testing.assert_close(from_scratch.cell_areas, expected, rtol=0, atol=0)
+        if n_spatial_dims == 3:
+            torch.testing.assert_close(
+                from_scratch.cell_normals, from_cache.cell_normals, rtol=0, atol=0
+            )
+
 
 class TestNonIsotropicAreaScaling:
     """Tests for per-element area scaling under non-isotropic transforms."""

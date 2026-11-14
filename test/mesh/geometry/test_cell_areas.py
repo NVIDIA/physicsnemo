@@ -409,3 +409,58 @@ class TestDeviceParametrized:
         result = compute_cell_areas(vecs)
         assert result.device.type == device
         assert (result > 0).all()
+
+
+### Reduced precision ###
+
+
+class TestReducedPrecision:
+    """float16 and bfloat16 volumes are computed in float32 and rounded once."""
+
+    @pytest.mark.parametrize(
+        "vertices",
+        [
+            [[0.0, 0.0], [300.0, 0.0], [0.0, 300.0]],
+            [[0.0, 0.0, 0.0], [300.0, 0.0, 0.0], [0.0, 300.0, 0.0]],
+            [[0.0, 0.0, 0.0], [60.0, 0.0, 0.0], [0.0, 60.0, 0.0], [0.0, 0.0, 60.0]],
+        ],
+        ids=["triangle_2d", "triangle_3d", "tetrahedron_3d"],
+    )
+    def test_float16_intermediates_do_not_overflow(self, device, vertices):
+        """Regression (#2248): float16 measures that fit in float16 are finite,
+        though the determinant or cross product behind them (9e4, 2.16e5) does
+        not fit, since they are computed in at least float32."""
+        vecs = _relative_vectors(vertices).to(device)
+        result = compute_cell_areas(vecs.half())
+        assert result.dtype == torch.float16
+        torch.testing.assert_close(
+            result, compute_cell_areas(vecs).half(), rtol=0, atol=0
+        )
+
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize(
+        ("n_manifold_dims", "n_spatial_dims"),
+        [(1, 3), (2, 2), (2, 3), (2, 4), (3, 3), (3, 4), (4, 4), (4, 5)],
+        ids=[
+            "edge-3d",
+            "tri-2d",
+            "tri-3d",
+            "tri-4d",
+            "tet-3d",
+            "tet-4d",
+            "4simplex-4d",
+            "4simplex-5d",
+        ],
+    )
+    def test_matches_float32_rounded_once(
+        self, n_manifold_dims, n_spatial_dims, dtype, device
+    ):
+        """Every branch gives its float32 volume rounded once. For 4-simplices this
+        also checks that 16-bit inputs work, since ``torch.linalg.det`` has no
+        float16 or bfloat16 kernels."""
+        vecs = torch.randn(64, n_manifold_dims, n_spatial_dims, device=device)
+        vecs = vecs.to(dtype)
+        expected = compute_cell_areas(vecs.float()).to(dtype)
+        result = compute_cell_areas(vecs)
+        assert result.dtype == dtype
+        torch.testing.assert_close(result, expected, rtol=0, atol=0)

@@ -405,6 +405,24 @@ class TestButterflySubdivision:
         actual = Mesh(points=points, cells=cells.int()).subdivide(1, "butterfly")
         torch.testing.assert_close(actual.points, expected.points)
 
+    def test_butterfly_float16_far_from_origin(self, device):
+        """Regression (#2248): butterfly sums positions in at least float32. In
+        float16, the boundary rule's sum of two endpoints near x = 33000 passed
+        the float16 maximum of 65504, so edge points were infinite."""
+        mesh = (
+            create_triangle_mesh(device)
+            .scale(1000.0)
+            .translate([33000.0, 0.0])
+            .to(torch.float16)
+        )
+        expected = mesh.to(torch.float64).subdivide(1, filter="butterfly")
+        subdivided = mesh.subdivide(1, filter="butterfly")
+        assert subdivided.points.dtype == torch.float16
+        eps = torch.finfo(torch.float16).eps
+        torch.testing.assert_close(
+            subdivided.points.double(), expected.points, rtol=eps, atol=0
+        )
+
 
 ### Test Loop Subdivision
 
