@@ -267,7 +267,7 @@ class FLAREPlusPlus(FLARE):
     n_layers : int, optional
         Number of transformer blocks. Default is 4.
     n_hidden : int, optional
-        Hidden width. Default is 256.
+        Hidden width. Must be divisible by ``n_head``. Default is 256.
     dropout : float, optional
         Dropout rate. Default is 0.0.
     n_head : int, optional
@@ -351,3 +351,15 @@ class FLAREPlusPlus(FLARE):
             activation_checkpointing=activation_checkpointing,
             checkpointing_ratio=checkpointing_ratio,
         )
+
+    def initialize_weights(self) -> None:
+        r"""Initialize the backbone, then restore the FLARE++ mixer initialization.
+
+        The backbone initializer draws every linear layer from a truncated
+        normal distribution. FLARE++ relies on near-identity input
+        projections, so each mixer resets its own parameters afterwards.
+        """
+        super().initialize_weights()
+        for module in self.modules():
+            if isinstance(module, FLAREPlusPlusAttention):
+                module.reset_parameters()

@@ -236,7 +236,7 @@ def test_fresh_model_matches_golden(device):
 
 def test_reference_checkpoint_matches_golden(device):
     """The committed FLARE++ GeoTransolver checkpoint remains numerically stable."""
-    checkpoint = DATA_DIR / "geotransolver_flare_plus_plus_v1.mdlus"
+    checkpoint = DATA_DIR / "geotransolver_flare_plus_plus_v2.mdlus"
     if not checkpoint.exists():
         torch.manual_seed(2026)
         _make_model().save(checkpoint)
@@ -308,7 +308,9 @@ def test_end_to_end_gradients(device):
         assert torch.isfinite(tensor.grad).all()
     attention = model.blocks[0].Attn
     for parameter in (
-        attention.q_seed,
+        attention.latent_q0,
+        attention.latent_q_fixed,
+        attention.gate_logit,
         attention.in_projection.weight,
         attention.context_kv.weight,
     ):

@@ -98,12 +98,6 @@ class _FLAREPlusPlusAttention(FLAREPlusPlus):
                         f"Expected 3D input tensor (B, N, C) at index {index}, "
                         f"got shape {tuple(tensor.shape)}"
                     )
-                if hasattr(tensor, "redistribute"):
-                    raise NotImplementedError(
-                        "The GeoTransolver FLARE++ backend does not yet support "
-                        "token-sharded inputs; use replicated inputs with data "
-                        "parallelism."
-                    )
             if context is not None and self.context_dim == 0:
                 raise ValueError(
                     "Received context, but the FLARE++ backend was constructed "

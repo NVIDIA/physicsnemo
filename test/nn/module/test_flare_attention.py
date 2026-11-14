@@ -114,7 +114,7 @@ def test_flare_gradient_flow(device):
 @pytest.mark.parametrize(
     "kwargs,expected",
     [
-        ({"dim": 64}, (8, 64, 64, 64**-0.5)),
+        ({"dim": 64}, (8, 8, 64, 8**-0.5)),
         (
             {
                 "dim": 24,
@@ -132,20 +132,45 @@ def test_flare_plus_plus_constructor(kwargs, expected):
     """Default and custom constructor values are exposed consistently."""
     attention = FLAREPlusPlus(**kwargs)
     heads, dim_head, n_queries, scale = expected
+    dim = kwargs["dim"]
 
-    assert attention.dim == kwargs["dim"]
+    assert attention.dim == dim
     assert attention.heads == heads
     assert attention.dim_head == dim_head
     assert attention.n_global_queries == n_queries
     assert attention.scale == pytest.approx(scale)
-    assert attention.q_seed.shape == (1, heads, n_queries, dim_head)
-    assert attention.in_projection.out_features == 4 * heads * dim_head
-    assert attention.out_linear.in_features == heads * dim_head
-    if heads * dim_head == kwargs["dim"]:
-        projection_weights = (
-            attention.in_projection.weight.numel() + attention.out_linear.weight.numel()
-        )
-        assert projection_weights == 5 * kwargs["dim"] ** 2
+    assert attention.latent_q0.shape == (heads, n_queries, dim_head)
+    assert attention.latent_q_fixed.shape == (heads, n_queries, dim_head)
+    assert attention.gate_logit.shape == (heads,)
+    # Three input projections (synthesis K/V, physical K, physical V) plus
+    # the output projection.
+    assert attention.in_projection.out_features == 3 * dim
+    projection_weights = (
+        attention.in_projection.weight.numel() + attention.out_linear.weight.numel()
+    )
+    assert projection_weights == 4 * dim**2
+
+
+def test_flare_plus_plus_initialization():
+    """Seeds, gate, norms, and near-identity projections follow the v2 design."""
+    torch.manual_seed(3)
+    dim = 32
+    attention = FLAREPlusPlus(dim=dim, heads=4, n_global_queries=7)
+
+    torch.testing.assert_close(
+        attention.gate_logit, torch.full((4,), FLAREPlusPlus._GATE_LOGIT_INIT)
+    )
+    for latent in (attention.latent_q0, attention.latent_q_fixed):
+        assert latent.std().item() == pytest.approx(0.02, rel=0.25)
+    for norm in (attention.q0_norm, attention.k_norm):
+        assert torch.equal(norm.weight, torch.ones(8))
+        assert torch.equal(norm.bias, torch.zeros(8))
+
+    weight = attention.in_projection.weight.detach().view(3, dim, dim)
+    noise = weight - torch.eye(dim)
+    assert noise.abs().max().item() < 0.2
+    assert noise.std().item() == pytest.approx(0.02, rel=0.25)
+    assert torch.equal(attention.in_projection.bias, torch.zeros(3 * dim))
 
 
 def test_flare_plus_plus_forward_accuracy(device):
@@ -167,8 +192,37 @@ def test_flare_plus_plus_forward_accuracy(device):
     torch.testing.assert_close(output, reference, atol=1e-3, rtol=1e-3)
 
 
+def _reference_flare_plus_plus(attention, x):
+    """Reference FLARE++ v2 mixer written out step by step."""
+    batch, tokens, dim = x.shape
+    heads, dim_head = attention.heads, attention.dim_head
+
+    def split_heads(tensor):
+        return tensor.reshape(batch, tokens, heads, dim_head).transpose(1, 2)
+
+    def head_norm(tensor):
+        return F.layer_norm(tensor, (dim_head,))
+
+    k0_weight, k_weight, v_weight = attention.in_projection.weight.chunk(3, dim=0)
+    k0_bias, k_bias, v_bias = attention.in_projection.bias.chunk(3, dim=0)
+    k0 = head_norm(split_heads(F.linear(x, k0_weight, k0_bias)))
+    k = attention.k_norm(split_heads(F.linear(x, k_weight, k_bias)))
+    v = split_heads(F.linear(x, v_weight, v_bias))
+
+    q0 = attention.q0_norm(attention.latent_q0).expand(batch, -1, -1, -1)
+    q_dynamic = F.scaled_dot_product_attention(q0, k0, k0, scale=attention.scale)
+    q_fixed = head_norm(attention.latent_q_fixed).expand(batch, -1, -1, -1)
+    gate = torch.sigmoid(attention.gate_logit).view(1, heads, 1, 1)
+    q = q_fixed + gate * q_dynamic
+
+    z = F.scaled_dot_product_attention(q, k, v, scale=attention.scale)
+    y = F.scaled_dot_product_attention(k, q, z, scale=attention.scale)
+    y = y.transpose(1, 2).reshape(batch, tokens, dim)
+    return attention.out_dropout(attention.out_linear(y)), q_dynamic
+
+
 def test_flare_plus_plus_matches_paper_equations(device):
-    """FLARE++ matches the three-SDPA formulation from the paper."""
+    """FLARE++ matches the per-block operation sequence of the v2 paper."""
     torch.manual_seed(7)
     attention = FLAREPlusPlus(
         dim=24,
@@ -178,35 +232,31 @@ def test_flare_plus_plus_matches_paper_equations(device):
         dropout=0.0,
     ).to(device)
     attention.eval()
+    # Move parameters away from their initial values so every term matters.
+    with torch.no_grad():
+        for parameter in attention.parameters():
+            parameter.add_(0.1 * torch.randn_like(parameter))
     x = torch.randn(2, 11, 24, device=device)
 
     actual = attention(x)
-    query_k, query_v, physical_k, physical_v = attention.in_projection(x).chunk(
-        4, dim=-1
-    )
-
-    def split_heads(tensor):
-        return tensor.reshape(2, 11, 3, 8).transpose(1, 2)
-
-    query_k, query_v, physical_k, physical_v = map(
-        split_heads, (query_k, query_v, physical_k, physical_v)
-    )
-    queries = F.scaled_dot_product_attention(
-        attention.q_seed.expand(2, -1, -1, -1),
-        query_k,
-        query_v,
-        scale=attention.scale,
-    )
-    routed_values = F.scaled_dot_product_attention(
-        queries, physical_k, physical_v, scale=attention.scale
-    )
-    expected = F.scaled_dot_product_attention(
-        physical_k, queries, routed_values, scale=attention.scale
-    )
-    expected = expected.transpose(1, 2).reshape(2, 11, 24)
-    expected = attention.out_dropout(attention.out_linear(expected))
+    expected, _ = _reference_flare_plus_plus(attention, x)
 
     torch.testing.assert_close(actual, expected)
+
+
+def test_flare_plus_plus_closed_gate_uses_fixed_queries(device):
+    """With the gate closed, the synthesized queries do not affect the output."""
+    torch.manual_seed(9)
+    attention = FLAREPlusPlus(dim=16, heads=2, n_global_queries=4).to(device)
+    attention.eval()
+    with torch.no_grad():
+        attention.gate_logit.fill_(-1e4)
+    x = torch.randn(2, 13, 16, device=device)
+
+    expected = attention(x)
+    with torch.no_grad():
+        attention.latent_q0.add_(torch.randn_like(attention.latent_q0))
+    torch.testing.assert_close(attention(x), expected)
 
 
 def test_flare_plus_plus_routing_is_input_conditioned(device):
@@ -220,21 +270,13 @@ def test_flare_plus_plus_routing_is_input_conditioned(device):
     ).to(device)
     x = torch.stack(
         (
-            torch.zeros(9, 16, device=device),
-            torch.ones(9, 16, device=device),
+            torch.randn(9, 16, device=device),
+            torch.randn(9, 16, device=device),
         )
     )
-    query_k, query_v, _, _ = attention.in_projection(x).chunk(4, dim=-1)
-    query_k = query_k.reshape(2, 9, 2, 8).transpose(1, 2)
-    query_v = query_v.reshape(2, 9, 2, 8).transpose(1, 2)
-    queries = F.scaled_dot_product_attention(
-        attention.q_seed.expand(2, -1, -1, -1),
-        query_k,
-        query_v,
-        scale=attention.scale,
-    )
+    _, dynamic_queries = _reference_flare_plus_plus(attention, x)
 
-    assert not torch.allclose(queries[0], queries[1])
+    assert not torch.allclose(dynamic_queries[0], dynamic_queries[1])
 
 
 def test_flare_plus_plus_eval_is_rng_free(device):
@@ -268,7 +310,7 @@ def test_flare_plus_plus_eval_is_rng_free(device):
 
 
 def test_flare_plus_plus_gradient_flow(device):
-    """Gradients reach the input, learned seeds, and fused projections."""
+    """Gradients reach the input and every learned parameter."""
     attention = FLAREPlusPlus(
         dim=32,
         heads=4,
@@ -280,13 +322,9 @@ def test_flare_plus_plus_gradient_flow(device):
 
     assert x.grad is not None
     assert torch.isfinite(x.grad).all()
-    for parameter in (
-        attention.q_seed,
-        attention.in_projection.weight,
-        attention.out_linear.weight,
-    ):
-        assert parameter.grad is not None
-        assert torch.isfinite(parameter.grad).all()
+    for name, parameter in attention.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
 
 
 def test_flare_plus_plus_validates_options():
@@ -297,6 +335,11 @@ def test_flare_plus_plus_validates_options():
     for scale in (0.0, -1.0, float("inf"), float("nan")):
         with pytest.raises(ValueError, match="attn_scale"):
             FLAREPlusPlus(dim=32, attn_scale=scale)
+
+    with pytest.raises(ValueError, match="divisible by heads"):
+        FLAREPlusPlus(dim=30, heads=4)
+    with pytest.raises(ValueError, match="heads \\* dim_head == dim"):
+        FLAREPlusPlus(dim=32, heads=4, dim_head=16)
 
 
 def test_flare_plus_plus_torch_compile_fullgraph(device):
