@@ -474,8 +474,9 @@ class TestRepairPipeline:
 
     @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3])
     def test_pipeline_closes_seams_holes_and_fins(self, scale):
-        """A cube with T-junction seams, a hole and a fin comes out closed,
-        manifold, consistently wound and of volume 1, the same way at any scale."""
+        """A cube with T-junction seams, a hole, and a fin comes out closed,
+        manifold, consistently wound and of volume ``scale**3``, with the same
+        cells at any scale."""
         kwargs = dict(
             fix_orientation=True, fill_holes=True, split_nonmanifold_edges=True
         )

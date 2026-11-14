@@ -207,9 +207,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `physicsnemo.mesh.repair` adds `stitch_t_junctions`, which closes the
   zero-width gaps where a vertex lies on another triangle's edge, and
-  `split_nonmanifold_edges`, which pairs up the three or more triangles that
-  share an edge and drops the fins and pillows (coincident triangles wound
-  opposite ways) left over.
+  `split_nonmanifold_edges`, which pairs the triangles at each edge shared by
+  three or more of them and drops the unpaired fins and the pillows (coincident
+  triangles wound opposite ways).
 - `physicsnemo.mesh.validation` adds `find_self_intersections`, which finds the
   pairs of crossing triangles in a 3D surface. `validate` runs it when
   `check_self_intersection=True` and skips meshes it does not apply to.
