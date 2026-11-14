@@ -205,8 +205,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`domain_parallelism.domain_size`), reading samples sharded and running the
   model on ShardTensors over a domain x data-parallel device mesh.
 
+- `physicsnemo.mesh.repair` adds `stitch_t_junctions`, which closes the
+  zero-width gaps where a vertex lies on another triangle's edge, and
+  `split_nonmanifold_edges`, which separates triangles that meet at one edge and
+  drops the fins and zero-volume pillows left over.
+- `physicsnemo.mesh.validation` adds `find_self_intersections`, which finds the
+  pairs of crossing triangles in a 3D surface. `validate` runs it when
+  `check_self_intersection=True` and skips meshes it does not apply to.
+
 ### Changed
 
+- `repair_mesh` also removes duplicate cells, stitches T-junctions and splits
+  non-manifold edges of triangle meshes by default, and its default tolerances
+  are now relative to the mesh's size. Each new step has a keyword to turn it
+  off, and an explicit `tolerance` keeps its old meaning.
 - Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
   `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
   `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
@@ -554,10 +566,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `from_pyvista` raises a `ValueError` when VTK cannot split an
-  `UnstructuredGrid` polygon into triangles. VTK then writes the polygon's
-  local vertex numbers as point IDs, which used to convert silently into a mesh
-  with holes and stray triangles.
+- `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
+  of triangles around one new point at its center. A closed polygon surface
+  used to convert with holes, repeated triangles or stray triangles, and now
+  converts to a closed triangle mesh.
+- `fill_holes` winds each fill like the surrounding surface, fills holes that
+  pass through a shared vertex, leaves zero-area slits to
+  `stitch_t_junctions`, and fills flat holes without folded triangles.
 - `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
   path. They used to raise unless `copy_existing=True` was passed, because the
   loaded tensors are memory-mapped to the original files.
