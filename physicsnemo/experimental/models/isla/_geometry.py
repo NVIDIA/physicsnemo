@@ -39,7 +39,8 @@ from physicsnemo.mesh.spatial.cluster_tree import _WARP_MAX_ELEMENTS as WARP_MAX
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
 ### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,
-### subset) pairs per chunk of the least-norm solve: a bound on their blocks. Both
+### subset) pairs per chunk of the least-norm solve (the (point, direction) pairs of
+### its active-set solver): a bound on their blocks. Both
 ### run in a custom op, so their loops over chunks do not specialize a dynamic query
 ### count under torch.compile.
 _SEARCH_PAIRS = 2**23
@@ -668,7 +669,8 @@ def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     if k == 1:
         return c[:, 0]
     if not _enumerable(k, d):
-        return _wolfe_min_norm(c, c.new_ones(n, k, dtype=torch.bool))
+        rows = c.split(max(1, _SEARCH_PAIRS // 8 // k))
+        return torch.cat([_wolfe_min_norm(r, r.new_ones(r.shape[:2], dtype=torch.bool)) for r in rows])
     sizes, budget = range(2, min(k, d) + 1), _SEARCH_PAIRS // 8
     total = sum(math.comb(k, m) for m in sizes)
     subsets = [torch.tensor(list(itertools.combinations(range(k), m)), device=c.device) for m in sizes]
@@ -697,7 +699,8 @@ def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     directions whose weight reaches 0. The norm falls at every major step in exact
     arithmetic. A row stops when the step would not progress: no direction is below
     ``|x|^2``, the added direction is in the corral, the corral is full, its system
-    is singular, or neither the norm nor the duality gap falls (rounding). As in
+    is singular, its norm rises beyond rounding, or, once certified, its norm stops
+    falling. As in
     :func:`_min_norm_points`, a row with no certified point returns its iterate of
     least duality gap among those that separate the origin, and 0 when none does. A
     full corral of positive weights holds the origin in its simplex, which gives
@@ -712,7 +715,7 @@ def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     used, w = used.expand(n, m).clone(), w.expand(n, m).clone()
     x = c[rows[:, 0], corral[:, 0]]
     active, major = valid.any(1), torch.ones_like(valid[:, 0])
-    last, last_gap, best_sq, best_gap = (c.new_full((n,), torch.inf) for _ in range(4))
+    last, best_sq, best_gap = (c.new_full((n,), torch.inf) for _ in range(3))
     best, best_x = c.new_zeros(n, d), c.new_zeros(n, d)
     for _ in range(64 * m):
         if not active.any():
@@ -726,9 +729,12 @@ def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
         best_sq, best = torch.where(least, sq, best_sq), torch.where(least[:, None], x, best)
         better = step & ~ok & (low > slack) & (sq - low < best_gap)
         best_gap, best_x = torch.where(better, sq - low, best_gap), torch.where(better[:, None], x, best_x)
-        stalled = (sq > last) | ((sq == last) & (sq - low >= last_gap))
+        ### A certified row stops once its norm stops falling; an uncertified one goes
+        ### on while its norm does not rise beyond rounding (on nearly flat sets it
+        ### falls by less than the rounding of |x|^2 while the gap is still large).
+        stalled = (sq > last + slack) | (ok & (sq >= last))
         stuck = ((corral == j[:, None]) & used).any(1) | used.all(1) | stalled | (low >= sq)
-        last, last_gap = torch.where(step, sq, last), torch.where(step, sq - low, last_gap)
+        last = torch.where(step, sq, last)
         active &= ~(step & stuck)
         add = (step & active)[:, None] & (slots == (~used).long().argmax(1, keepdim=True))
         corral, used = torch.where(add, j[:, None], corral), used | add
@@ -772,8 +778,8 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     ``c`` ``(P, d)`` belong to the groups ``group`` ``(P,)``. The directions are
     de-duplicated and sorted per group, so each result is a function of its set.
     The groups of each size that :func:`_enumerable` admits are enumerated together,
-    and every larger group takes :func:`_wolfe_min_norm` in one batch, padded to the
-    largest."""
+    and the larger groups take :func:`_wolfe_min_norm` together, largest first, in
+    chunks within the budget, each padded to its largest group."""
     out = c.new_zeros(n_groups, c.shape[1])
     if group.numel() == 0:
         return out
@@ -789,10 +795,13 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
             continue
         out[ids[here]] = _min_norm_points(c[start[here, None] + torch.arange(k, device=c.device)])
     if large:
-        here = torch.cat(large)
-        k = counts[here, None]
-        j = torch.arange(int(k.max()), device=c.device)
-        out[ids[here]] = _wolfe_min_norm(c[start[here, None] + torch.minimum(j, k - 1)], j < k)
+        here = torch.cat(large[::-1])
+        sizes, s = counts[here].tolist(), 0
+        while s < len(sizes):
+            h = here[s : s + max(1, _SEARCH_PAIRS // 8 // sizes[s])]
+            k, j = counts[h, None], torch.arange(sizes[s], device=c.device)
+            out[ids[h]] = _wolfe_min_norm(c[start[h, None] + torch.minimum(j, k - 1)], j < k)
+            s += h.shape[0]
     return out
 
 

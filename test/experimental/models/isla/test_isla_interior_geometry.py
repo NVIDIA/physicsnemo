@@ -27,7 +27,6 @@ the interior task.
 
 import itertools
 import math
-import time
 
 import pytest
 import torch
@@ -1373,22 +1372,48 @@ def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps, monkeypatch):
     On the axis the 192 directions' least-norm point is (0, 0, 0.8) to rounding;
     near it, it moves with the query (by at most 2 eps here), within 2e-16 of
     (0, 0, 0.8) at 1e-12 off. A ring of 56 directions, past the enumeration's
-    budget, gives the enumeration's point (its budget lifted) to 1e-12, certified,
-    or uncertified at its least duality gap, as the enumeration would return."""
+    budget, gives the enumeration's point (its budget lifted) to 1e-13. Every
+    result is certified."""
     c = _ring(192, eps, 16)
     x = geometry._min_norm_points(c)
     axis = torch.tensor([0.0, 0.0, 0.8], dtype=D)
     assert (x - axis).norm(dim=-1).max() <= 2 * eps + 2e-16
-    if eps <= 1e-9:
-        assert _certified(c, x).all()
+    assert _certified(c, x).all()
     c = _ring(56, eps, 16, seed=1)
     assert not geometry._enumerable(56, 3)
     x = geometry._min_norm_points(c)
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
     enumerated = geometry._min_norm_points(c)
-    assert (x - enumerated).norm(dim=-1).max() <= 1e-12
-    gap = (x * x).sum(-1) - (c * x[:, None]).sum(-1).amin(-1)
-    assert (_certified(c, x) | (gap > 0)).all()
+    assert (x - enumerated).norm(dim=-1).max() <= 1e-13
+    assert _certified(c, x).all()
+
+
+@pytest.mark.parametrize("delta", [1e-12, 1e-9, 1e-7])
+@pytest.mark.parametrize("h", [0.8, 0.3])
+def test_least_norm_point_of_a_nearly_flat_ring(h, delta, monkeypatch):
+    """Directions to a regular ring from its axis, each moved by about delta (a
+    float64 body of revolution with slightly noisy vertices), span a nearly flat
+    hull. Wolfe's norm then falls by less than the rounding of |x|^2 while the
+    duality gap is still about delta, so the solver must not stop on an unchanged
+    norm before it certifies: every row is certified and within 2e-15 of the
+    enumeration's point (its budget lifted), with at most 16 steps."""
+    g = torch.Generator().manual_seed(56)
+    phi = (
+        2
+        * math.pi
+        * (torch.arange(56, dtype=D) / 56 + torch.rand(16, 1, dtype=D, generator=g))
+    )
+    r = math.sqrt(1 - h * h)
+    c = torch.stack([r * phi.cos(), r * phi.sin(), torch.full_like(phi, h)], -1)
+    c = torch.nn.functional.normalize(
+        c + delta * torch.randn(c.shape, dtype=D, generator=g), dim=-1
+    )
+    steps, qr = [], torch.linalg.qr
+    monkeypatch.setattr(torch.linalg, "qr", lambda a: steps.append(1) or qr(a))
+    x = geometry._min_norm_points(c)
+    assert _certified(c, x).all() and len(steps) <= 16
+    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
+    assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= 2e-15
 
 
 def test_active_set_solver_on_degenerate_and_duplicate_directions():
@@ -1431,7 +1456,9 @@ def test_active_set_solver_on_degenerate_and_duplicate_directions():
 def test_grouped_least_norm_batches_the_large_groups(monkeypatch):
     """Groups the enumeration admits keep their result bitwise; every larger group
     (60 to 192 directions) takes the active-set solver in one padded batch, with
-    each group's own result, bitwise."""
+    each group's own result, bitwise. Under a smaller budget the large groups go
+    largest first in chunks within it, each padded to its largest group, with the
+    same results bitwise."""
     g = torch.Generator().manual_seed(5)
     sizes = [3, 60, 7, 192, 130, 60, 3]
     rows = [_ring(k, 1e-3, 1, seed=i)[0] for i, k in enumerate(sizes)]
@@ -1456,18 +1483,24 @@ def test_grouped_least_norm_batches_the_large_groups(monkeypatch):
             else solver(row, torch.ones(row.shape[:2], dtype=torch.bool))
         )
         assert torch.equal(out[i], expect[0])
+    calls.clear()
+    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 8 * 400)
+    chunked = geometry._grouped_min_norm(group[perm], torch.cat(rows)[perm], 8)
+    assert calls == [(2, 192, 3), (2, 60, 3)]
+    assert torch.equal(chunked, out)
 
 
-def test_least_norm_point_of_a_ring_of_192_directions_is_fast():
+def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(monkeypatch):
     """The axis of an upright torus faceted 192 times around ties each query with
-    192 cells. The enumeration's 1.2 M subsets per such row took seconds each
-    (minutes for the axis of a slice); the active-set solver takes milliseconds
-    for all of them, here bounded by 2 s for 8 rows on a loaded CPU."""
+    192 cells. The enumeration compared 1.2 M subsets per such row with all 192
+    directions (seconds per row, minutes for the axis of a slice); the active-set
+    solver enumerates no subset and takes at most 16 steps for all 8 rows at once."""
     c = _ring(192, 1e-9, 8)
-    geometry._min_norm_points(c[:1])
-    start = time.perf_counter()
-    geometry._min_norm_points(c)
-    assert time.perf_counter() - start < 2.0
+    monkeypatch.setattr(geometry, "_hull_candidates", None)
+    steps, qr = [], torch.linalg.qr
+    monkeypatch.setattr(torch.linalg, "qr", lambda a: steps.append(1) or qr(a))
+    x = geometry._min_norm_points(c)
+    assert 0 < len(steps) <= 16 and _certified(c, x).all()
 
 
 def test_tie_direction_on_the_axis_of_a_torus(monkeypatch):
