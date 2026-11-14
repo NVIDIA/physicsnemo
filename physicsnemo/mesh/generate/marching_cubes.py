@@ -124,20 +124,25 @@ def marching_cubes(
                     f"size {field.shape[dim]} along dimension {dim}"
                 )
 
-    # Warp runs marching cubes on the device of its input array. A CUDA field
-    # stays on its GPU. A CPU field goes to Warp's default device, a GPU when
-    # one is present, since Warp's CPU kernel is about 100x slower.
-    wp.init()
-    run_device = field.device if field.is_cuda else torch.device(wp.get_device().alias)
-    # Warp's marching cubes accepts only float32 fields.
-    field_f32 = field.detach().to(device=run_device, dtype=torch.float32).contiguous()
-    _, stream = FunctionSpec.warp_launch_context(field_f32)
-    with FunctionSpec.warp_stream_scope(stream):
-        mc = wp.MarchingCubes(nx=field.shape[0], ny=field.shape[1], nz=field.shape[2])
-        mc.surface(field=wp.from_torch(field_f32), threshold=threshold)
-        points = wp.to_torch(mc.verts).to(field.device, copy=True)  # (N_v, 3)
-        cells = wp.to_torch(mc.indices).reshape(-1, 3)
-        cells = cells.to(device=field.device, dtype=torch.int64)  # (N_f, 3)
+    # Warp runs marching cubes on the device of its input array, and accepts only
+    # float32 fields.
+    mc = wp.MarchingCubes(nx=field.shape[0], ny=field.shape[1], nz=field.shape[2])
+    if field.is_cuda:
+        # A CUDA field stays on its GPU, read in order on torch's current stream.
+        field_f32 = field.detach().to(torch.float32).contiguous()
+        _, stream = FunctionSpec.warp_launch_context(field_f32)
+        with FunctionSpec.warp_stream_scope(stream):
+            mc.surface(field=wp.from_torch(field_f32), threshold=threshold)
+            points = wp.to_torch(mc.verts).clone()  # (N_v, 3), float32
+            cells = wp.to_torch(mc.indices).reshape(-1, 3).to(torch.int64)
+    else:
+        # A CPU field goes to Warp's default device, a GPU when one is present,
+        # since Warp's CPU kernel is much slower. NumPy has no bfloat16 dtype,
+        # so cast before crossing into NumPy.
+        field_np = field.detach().to(dtype=torch.float32).numpy()
+        mc.surface(field=wp.array(field_np), threshold=threshold)
+        points = torch.as_tensor(mc.verts.numpy(), dtype=torch.float32)  # (N_v, 3)
+        cells = torch.as_tensor(mc.indices.numpy().reshape(-1, 3), dtype=torch.int64)
 
     ### Map from grid-index space to physical coordinates via piecewise linear interp
     if coords is not None:

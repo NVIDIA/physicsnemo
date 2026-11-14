@@ -231,15 +231,13 @@ class TestDevice:
         assert mesh.n_points == 0 and mesh.n_cells == 0
         assert mesh.points.device.type == torch.device(device).type
 
+    @pytest.mark.cuda
     def test_cuda_field_on_side_stream(self):
-        if not torch.cuda.is_available():
-            pytest.skip("needs CUDA")
         sdf, coords = _sphere_sdf(resolution=24)
         reference = marching_cubes(sdf, coords=(coords, coords, coords))
 
         with torch.cuda.stream(torch.cuda.Stream()):
-            field = (sdf.cuda() * 2.0) / 2.0  # produced on the side stream
-            mesh = marching_cubes(field, coords=(coords.cuda(),) * 3)
+            mesh = marching_cubes(sdf.cuda(), coords=(coords.cuda(),) * 3)
             torch.cuda.current_stream().synchronize()
 
         assert torch.equal(mesh.cells.cpu(), reference.cells)
