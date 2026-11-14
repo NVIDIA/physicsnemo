@@ -249,6 +249,42 @@ def test_mesh_selection_to_proto_point_cloud_window():
     assert sharded[("points",)] == (6, 3)
 
 
+@pytest.mark.parametrize("source", ["mesh", "zarr"])
+def test_mesh_selection_to_proto_keeps_zero_cells(tmp_path, source):
+    """A mesh with zero cells keeps their shape and dtype and its empty cell
+    data, as the eager reader does. Dropped cells still leave a point cloud."""
+    mesh = _small_mesh()
+    empty = Mesh(
+        points=mesh.points,
+        cells=torch.empty(0, 3, dtype=torch.int32),
+        cell_data={"p": torch.empty(0, 2)},
+    )
+    cloud = Mesh(points=mesh.points)
+    if source == "zarr":
+        zarr = pytest.importorskip("zarr")
+        from physicsnemo.mesh.io import to_zarr
+
+        def stored(m: Mesh, name: str):
+            to_zarr(m, tmp_path / f"{name}.zarr")
+            return zarr.open_group(str(tmp_path / f"{name}.zarr"), mode="r")
+
+        empty, mesh, cloud = stored(empty, "e"), stored(mesh, "m"), stored(cloud, "c")
+    plan = plan_mesh_selection(10, 0, True, False, _StubDeviceMesh(2, 1))
+    assert mesh_selection_to_proto(cloud, plan)[0]["cells"].shape == (0, 1)
+
+    tensors, sharded = mesh_selection_to_proto(empty, plan)
+    assert tensors["cells"].shape == (0, 3)
+    assert tensors["cells"].dtype == torch.int32
+    assert tensors["cell_data", "p"].shape == (0, 2)
+    assert set(sharded) == {("points",)}
+    assert _rebuild_mesh(tensors).n_manifold_dims == 2
+
+    # The plan has no cells, but the source has some: they were dropped.
+    tensors, _ = mesh_selection_to_proto(mesh, plan)
+    assert tensors["cells"].shape == (0, 1)
+    assert list(tensors["cell_data"].keys()) == []
+
+
 def test_mesh_selection_to_proto_cells_no_window():
     """Full resolution: chunk of the cell range and chunk of the point range;
     cells keep their global vertex ids."""
