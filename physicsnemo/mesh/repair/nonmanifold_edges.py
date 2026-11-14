@@ -114,10 +114,11 @@ def split_nonmanifold_edges(
     mesh : Mesh
         Input triangle mesh in 3D.
     drop_fins : bool
-        If True, also remove every facet-connected part whose triangles at
-        split edges are all left unpaired: fins of any number of triangles,
-        and pillows, which the split leaves open along the edge copies. Their
-        points stay, as with
+        If True, also remove every facet-connected part that the split
+        leaves open along edge copies, if its triangles at split edges are
+        all unpaired (fins of any number of triangles) or each of its
+        triangles has a copy, wound either way (pillows, and copies of a
+        surface, whose own copy stays). Their points stay, as with
         :func:`~physicsnemo.mesh.repair.remove_degenerate_cells`.
 
     Returns
@@ -224,14 +225,25 @@ def split_nonmanifold_edges(
     unpaired = (nonmanifold & ~paired).nonzero().squeeze(1)
     joined = torch.cat([manifold, wedges])
 
-    ### Drop the facet-connected parts left unpaired at every split edge they use
+    ### Drop the parts left open at split edges: unpaired at every split edge
+    ### they use (fins), or made only of cells that have a copy (pillows, and
+    ### copies of a surface)
     drop = torch.zeros(n_cells, dtype=torch.bool, device=device)
     if drop_fins:
         part = vectorized_connected_components(joined // 3, n_cells)
-        is_fin = torch.zeros(n_cells, dtype=torch.bool, device=device)
-        is_fin[part[unpaired // 3]] = True
-        is_fin[part[wedges[:, 0] // 3]] = False
-        drop = is_fin[part]
+        _, same_vertices, copies = unique_index_tuples(
+            cells.sort(dim=1).values,
+            index_bound=n_points,
+            return_inverse=True,
+            return_counts=True,
+        )
+        is_open = torch.zeros(n_cells, dtype=torch.bool, device=device)
+        is_open[part[unpaired // 3]] = True
+        has_wedge = torch.zeros(n_cells, dtype=torch.bool, device=device)
+        has_wedge[part[wedges[:, 0] // 3]] = True
+        has_single = torch.zeros(n_cells, dtype=torch.bool, device=device)
+        has_single[part[copies[same_vertices] == 1]] = True
+        drop = (is_open & ~(has_wedge & has_single))[part]
 
     ### Star components of the corners, after (split) and before (whole) the split
     kept = ~drop.repeat_interleave(3)

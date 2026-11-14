@@ -122,6 +122,58 @@ class TestSplitNonmanifoldEdges:
         assert_closed_and_oriented(result.cells)
         assert abs(enclosed_volume(result)) == pytest.approx(1.0)
 
+    @pytest.mark.parametrize("first", [False, True])
+    @pytest.mark.parametrize("inverted", [False, True])
+    @pytest.mark.parametrize("height", [0.0, 1.0], ids=["inside", "outside"])
+    def test_quad_pillow_dropped(self, first, inverted, height):
+        """A quad and its reverse on one edge: the two copies pair with each
+        other at the quad's diagonal, yet the pillow is dropped."""
+        cube = cube_surface.load()
+        if inverted:
+            cube = Mesh(points=cube.points, cells=cube.cells[:, [0, 2, 1]])
+        a, b = TOP_DIAGONAL
+        quad = torch.tensor([[a, b, 9], [a, 9, 8]])
+        pillow = torch.cat([quad, quad[:, [0, 2, 1]]])
+        cells = [pillow, cube.cells] if first else [cube.cells, pillow]
+        points = torch.tensor([[-0.4, -0.4, height], [0.4, 0.4, height]])
+        mesh = Mesh(points=torch.cat([cube.points, points]), cells=torch.cat(cells))
+        result, stats = split_nonmanifold_edges(mesh)
+        assert stats["n_cells_dropped"] == 4
+        assert torch.equal(result.cells, cube.cells)
+
+    @pytest.mark.parametrize("first", [False, True])
+    @pytest.mark.parametrize("face", [(0, 1), (2, 3), (10, 11)])
+    def test_reversed_copy_of_a_face_dropped(self, face, first):
+        """The copy of a two-triangle face goes; the surface's own stays."""
+        cube = cube_surface.load()
+        copy = cube.cells[list(face)][:, [0, 2, 1]]
+        cells = [copy, cube.cells] if first else [cube.cells, copy]
+        result, stats = split_nonmanifold_edges(
+            Mesh(points=cube.points, cells=torch.cat(cells))
+        )
+        assert stats == {
+            "n_edges_split": 0,
+            "n_vertices_duplicated": 0,
+            "n_cells_dropped": 2,
+        }
+        assert torch.equal(result.cells, cube.cells)
+
+    @pytest.mark.parametrize("inverted", [False, True])
+    def test_two_cubes_sharing_a_face_stay_closed(self, inverted):
+        a = cube_surface.load()
+        cells = a.cells[:, [0, 2, 1]] if inverted else a.cells
+        # Points 0 to 3 of the second cube (its -X face) are points 4 to 7
+        b_cells = cells + 8
+        for k in range(4):
+            b_cells[b_cells == 8 + k] = 4 + k
+        mesh = Mesh(
+            points=torch.cat([a.points, a.points + torch.tensor([1.0, 0.0, 0.0])]),
+            cells=torch.cat([cells, b_cells]),
+        )
+        result, _ = split_nonmanifold_edges(mesh)
+        assert_closed_and_oriented(result.cells)
+        assert abs(enclosed_volume(result)) == pytest.approx(2.0)
+
     @pytest.mark.parametrize("winding", [[0, 1, 2], [0, 2, 1]])
     def test_duplicate_cell_dropped(self, winding):
         """A copy of a cell, wound either way, pairs nowhere and is dropped."""
