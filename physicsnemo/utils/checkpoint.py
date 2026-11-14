@@ -28,6 +28,7 @@ call the functions (the collective operations inside the DCP helpers require
 it), while only rank 0 performs actual file I/O.
 """
 
+import glob
 import io
 import os
 import re
@@ -642,8 +643,13 @@ def _get_checkpoint_filename(
         checkpoint_filename += file_extension
     # Otherwise try loading the latest epoch or rolling checkpoint
     else:
+        # Escape the directory and base name so glob characters in them
+        # (e.g. ``run[lr=0.1]``) are matched literally.
         file_names = [
-            fname for fname in fs.glob(checkpoint_filename + "*" + file_extension)
+            fname
+            for fname in fs.glob(
+                glob.escape(checkpoint_filename) + "*" + file_extension
+            )
         ]
 
         if len(file_names) > 0:
