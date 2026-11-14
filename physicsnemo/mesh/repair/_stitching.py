@@ -25,24 +25,13 @@ conforming, without moving any point.
 from typing import TYPE_CHECKING
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Int
 
+from physicsnemo.mesh.utilities._tolerances import default_length_tolerance
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-
-
-def _default_tolerance(points: Float[torch.Tensor, "n_points n_spatial_dims"]) -> float:
-    """Length tolerance relative to the mesh size.
-
-    ``max(1e-6, 100 * eps)`` times the bounding-box diagonal, where ``eps`` is
-    the machine epsilon of the point dtype (so about ``1.2e-5`` for float32).
-    """
-    if len(points) == 0:
-        return 0.0
-    diagonal = (points.amax(dim=0) - points.amin(dim=0)).norm().item()
-    return max(1e-6, 100 * torch.finfo(points.dtype).eps) * diagonal
 
 
 def _open_half_edges(
@@ -132,7 +121,7 @@ def stitch_t_junctions(
             f"Got {mesh.n_manifold_dims=}."
         )
     if tolerance is None:
-        tolerance = _default_tolerance(mesh.points)
+        tolerance = default_length_tolerance(mesh.points)
 
     from physicsnemo.mesh.mesh import Mesh
     from physicsnemo.mesh.spatial import BVH

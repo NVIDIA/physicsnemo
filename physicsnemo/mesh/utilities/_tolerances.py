@@ -46,6 +46,7 @@ values that are numerically meaningful in that dtype.
 """
 
 import torch
+from jaxtyping import Float
 
 
 def safe_eps(dtype: torch.dtype) -> float:
@@ -76,3 +77,30 @@ def safe_eps(dtype: torch.dtype) -> float:
     """
     info = torch.finfo(dtype)
     return min(info.tiny**0.25, info.eps)
+
+
+def default_length_tolerance(
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+) -> float:
+    """Length tolerance relative to the mesh size, for the repair operations.
+
+    ``max(1e-6, 100 * eps)`` times the bounding-box diagonal, where ``eps`` is
+    the machine epsilon of the point dtype (so about ``1.2e-5`` for float32),
+    and at least the smallest normal number of that dtype, so that points
+    that all coincide still merge.
+
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point coordinates, shape ``(n_points, n_spatial_dims)``.
+
+    Returns
+    -------
+    float
+        The tolerance, or ``0.0`` when there are no points.
+    """
+    if len(points) == 0:
+        return 0.0
+    info = torch.finfo(points.dtype)
+    diagonal = (points.amax(dim=0) - points.amin(dim=0)).norm().item()
+    return max(max(1e-6, 100 * info.eps) * diagonal, info.tiny)
