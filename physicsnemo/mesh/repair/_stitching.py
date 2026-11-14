@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -45,6 +47,7 @@ def _default_tolerance(points: Float[torch.Tensor, "n_points n_spatial_dims"]) -
 
 def _open_half_edges(
     cells: Int[torch.Tensor, "n_cells 3"],
+    n_points: int,
 ) -> tuple[
     Int[torch.Tensor, "n_open 2"],
     Int[torch.Tensor, " n_open"],
@@ -56,8 +59,11 @@ def _open_half_edges(
     owner cell ``c`` traverses them, with ``c`` and the local edge index ``k``.
     """
     half_edges = torch.stack([cells, cells.roll(-1, dims=1)], dim=-1).reshape(-1, 2)
-    _, inverse, counts = torch.unique(
-        half_edges.sort(dim=1).values, dim=0, return_inverse=True, return_counts=True
+    _, inverse, counts = unique_index_tuples(
+        half_edges.sort(dim=1).values,
+        index_bound=n_points,
+        return_inverse=True,
+        return_counts=True,
     )
     flat_idx = torch.nonzero(counts[inverse] == 1).squeeze(1)
     return half_edges[flat_idx], flat_idx // 3, flat_idx % 3
@@ -139,7 +145,7 @@ def stitch_t_junctions(
 
     while True:
         ### Find vertices of open edges that lie strictly inside other open edges
-        open_edges, owner, local = _open_half_edges(cells)
+        open_edges, owner, local = _open_half_edges(cells, len(points))
         if len(open_edges) == 0:
             break
         candidates = torch.unique(open_edges)

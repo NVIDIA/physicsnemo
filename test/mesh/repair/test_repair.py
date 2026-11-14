@@ -453,6 +453,97 @@ class TestRepairPipeline:
         assert stats2["degenerates"]["n_cells_final"] == repaired.n_cells
         assert stats2["merge_points"]["n_duplicates_merged"] == 0
 
+    @staticmethod
+    def _audit_cube(scale: float) -> Mesh:
+        """Cube with T-junction seams, an L-shaped hole and a one-triangle fin.
+
+        The top face is a 4 x 4 grid against 2 x 2 grids elsewhere; squares
+        5, 6 and 9 of the top face are cut out; the fin stands outward on the
+        diagonal of the first square of the face x = 1.
+        """
+        cube = _grid_cube([2, 4, 2, 2, 2, 2])
+        hole = torch.tensor([5, 6, 9])
+        keep = torch.ones(cube.n_cells, dtype=torch.bool)
+        keep[torch.cat([8 + hole, 24 + hole])] = False
+        a, _, c = cube.cells[64].tolist()
+        apex = torch.tensor([[1.5, 0.25, 0.25]], dtype=torch.float64)
+        return Mesh(
+            points=torch.cat([cube.points, apex]) * scale,
+            cells=torch.cat([cube.cells[keep], torch.tensor([[a, c, cube.n_points]])]),
+        )
+
+    @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3])
+    def test_pipeline_closes_seams_holes_and_fins(self, scale):
+        """The audit's end-to-end case comes out closed, manifold, consistently
+        wound and of volume 1, the same way at any scale."""
+        mesh = self._audit_cube(scale)
+        repaired, stats = repair_mesh(mesh, fix_orientation=True, fill_holes=True)
+        assert _edge_counts(repaired.cells) == {
+            "open": 0,
+            "nonmanifold": 0,
+            "same_dir": 0,
+        }
+        assert abs(_signed_volume(repaired)) == pytest.approx(scale**3)
+        assert stats["nonmanifold_edges"]["n_cells_dropped"] == 1
+        assert stats["holes"]["n_holes_filled"] == 1
+        reference, _ = repair_mesh(
+            self._audit_cube(1.0), fix_orientation=True, fill_holes=True
+        )
+        assert torch.equal(repaired.cells, reference.cells)
+
+    @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3])
+    def test_pipeline_removes_duplicates_made_by_merge(self, device, scale):
+        """Two copies of a cube 1e-8 of its size apart give one clean cube
+        (B9), at any scale: the merge tolerance is relative to the size."""
+        from physicsnemo.mesh.primitives.surfaces import cube_surface
+
+        cube = cube_surface.load(device=device)
+        points = cube.points.double() * scale
+        mesh = Mesh(
+            points=torch.cat([points, points + 1e-8 * scale]),
+            cells=torch.cat([cube.cells, cube.cells + cube.n_points]),
+        )
+        repaired, stats = repair_mesh(mesh)
+        assert torch.equal(repaired.cells, cube.cells)
+        assert _edge_counts(repaired.cells)["nonmanifold"] == 0
+        assert stats["duplicates"]["n_cells_final"] == 12
+
+    def test_pipeline_closes_slit_of_removed_zero_area_cell(self, device):
+        """Removing a zero-area cell opens a slit; stitching closes it (B5)."""
+        from physicsnemo.mesh.primitives.surfaces import cube_surface
+
+        cube = cube_surface.load(device=device)
+        # Split the top face's triangle (1, 5, 7) at the midpoint m of its
+        # diagonal (1, 7), and fill the gap to the other triangle (1, 7, 3)
+        # with the zero-area triangle (1, m, 7).
+        points = cube.points.double()
+        m = cube.n_points
+        cells = cube.cells[(cube.cells != torch.tensor([1, 5, 7])).any(dim=1)]
+        mesh = Mesh(
+            points=torch.cat([points, points[[1, 7]].mean(dim=0, keepdim=True)]),
+            cells=torch.cat([cells, torch.tensor([[1, 5, m], [m, 5, 7], [1, m, 7]])]),
+        )
+        assert _edge_counts(mesh.cells)["open"] == 0
+        repaired, stats = repair_mesh(mesh)
+        assert _edge_counts(repaired.cells) == {
+            "open": 0,
+            "nonmanifold": 0,
+            "same_dir": 0,
+        }
+        assert _signed_volume(repaired) == pytest.approx(1.0)
+        assert stats["degenerates"]["n_zero_area_cells"] == 1
+        assert stats["t_junctions"]["n_cells_split"] == 1
+
+    def test_pipeline_clean_surface_unchanged(self, device):
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+        repaired, stats = repair_mesh(mesh)
+        assert torch.equal(repaired.points, mesh.points)
+        assert torch.equal(repaired.cells, mesh.cells)
+        assert stats["t_junctions"]["n_cells_split"] == 0
+        assert stats["nonmanifold_edges"]["n_cells_dropped"] == 0
+
 
 class TestHoleFilling:
     """Tests for hole filling."""
