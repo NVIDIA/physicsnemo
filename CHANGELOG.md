@@ -215,10 +215,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `repair_mesh` also removes duplicate cells, stitches T-junctions and splits
-  non-manifold edges of triangle meshes by default, and its default tolerances
-  are now relative to the mesh's size. Each new step has a keyword to turn it
-  off, and an explicit `tolerance` keeps its old meaning.
+- `repair_mesh` also removes duplicate cells and stitches T-junctions of
+  triangle meshes by default, and its default tolerances are now relative to the
+  mesh's size. `split_nonmanifold_edges=True` also splits non-manifold edges and
+  drops fins, and an explicit `tolerance` keeps its old meaning.
 - Renames the body-in-white crash recipes `crash_geoflare_oneshot` and
   `crash_geotransolver_oneshot` of `examples/structural_mechanics/crash` to
   `biw_yaris_geoflare_oneshot` and `biw_yaris_geotransolver_oneshot`: every
@@ -567,9 +567,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
-  of triangles around one new point at its center. A closed polygon surface
-  used to convert with holes, repeated triangles or stray triangles, and now
-  converts to a closed triangle mesh.
+  of triangles around one new point at its center, so its output can have more
+  points than the input. A closed polygon surface used to convert with holes,
+  repeated triangles or stray triangles.
 - `fill_holes` winds each fill like the surrounding surface, fills holes that
   pass through a shared vertex, leaves zero-area slits to
   `stitch_t_junctions`, and fills flat holes without folded triangles.
