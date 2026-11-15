@@ -148,7 +148,7 @@ cost more time:
    * - ``check_self_intersection``
      - off
      - Pairs of triangles that intersect anywhere other than at the vertices
-       they share, on triangle meshes in 3D, with
+       or the edge they share, on triangle meshes in 3D, with
        :func:`find_self_intersections`. Duplicate cells are not reported.
        It is keyword-only and the most expensive check. Other meshes report
        ``-1``.
