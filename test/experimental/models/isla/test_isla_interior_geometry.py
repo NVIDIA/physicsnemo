@@ -1388,9 +1388,10 @@ def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps, monkeypatch):
     assert _certified(c, x).all()
 
 
+@pytest.mark.parametrize("device", _DEVICES)
 @pytest.mark.parametrize("delta", [1e-12, 1e-9, 1e-7])
 @pytest.mark.parametrize("h", [0.8, 0.3])
-def test_least_norm_point_of_a_nearly_flat_ring(h, delta, monkeypatch):
+def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     """Directions to a regular ring from its axis, each moved by about delta (a
     float64 body of revolution with slightly noisy vertices), span a nearly flat
     hull. Wolfe's norm then falls by less than the rounding of |x|^2 while the
@@ -1410,7 +1411,9 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, monkeypatch):
     )
     steps, qr = [], torch.linalg.qr
     monkeypatch.setattr(torch.linalg, "qr", lambda a: steps.append(1) or qr(a))
-    x = geometry._min_norm_points(c)
+    x = geometry._min_norm_points(c.to(device))
+    assert x.device == torch.device(device) or x.device.type == device
+    x = x.cpu()
     assert _certified(c, x).all() and len(steps) <= 16
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
     assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= 2e-15
@@ -1490,7 +1493,10 @@ def test_grouped_least_norm_batches_the_large_groups(monkeypatch):
     assert torch.equal(chunked, out)
 
 
-def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(monkeypatch):
+@pytest.mark.parametrize("device", _DEVICES)
+def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(
+    device, monkeypatch
+):
     """The axis of an upright torus faceted 192 times around ties each query with
     192 cells. The enumeration compared 1.2 M subsets per such row with all 192
     directions (seconds per row, minutes for the axis of a slice); the active-set
@@ -1499,11 +1505,12 @@ def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(monkeypatc
     monkeypatch.setattr(geometry, "_hull_candidates", None)
     steps, qr = [], torch.linalg.qr
     monkeypatch.setattr(torch.linalg, "qr", lambda a: steps.append(1) or qr(a))
-    x = geometry._min_norm_points(c)
+    x = geometry._min_norm_points(c.to(device)).cpu()
     assert 0 < len(steps) <= 16 and _certified(c, x).all()
 
 
-def test_tie_direction_on_the_axis_of_a_torus(monkeypatch):
+@pytest.mark.parametrize("device", _DEVICES)
+def test_tie_direction_on_the_axis_of_a_torus(device, monkeypatch):
     """Queries on the axis of an upright torus faceted 192 times around (in float32)
     tie with the whole ring of its inner equator's edges (their midpoints, at a
     radius of 0.7 cos(pi / 192)): their 192 directions take the active-set solver,
@@ -1517,7 +1524,10 @@ def test_tie_direction_on_the_axis_of_a_torus(monkeypatch):
     monkeypatch.setattr(
         geometry, "_wolfe_min_norm", lambda c, v: calls.append(c.shape) or solver(c, v)
     )
-    d, u = exact_boundary_geometry(q, t.points, t.cells)
+    d, u = exact_boundary_geometry(
+        q.to(device), t.points.to(device), t.cells.to(device)
+    )
+    d, u = d.cpu(), u.cpu()
     assert calls == [(5, 192, 3)]
     rho = 0.7 * math.cos(math.pi / 192)
     assert torch.allclose(d, (rho**2 + z * z).sqrt(), atol=1e-6, rtol=0)
