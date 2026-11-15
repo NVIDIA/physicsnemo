@@ -568,6 +568,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `load_checkpoint` reads the training state on the CPU, so a resumed AdamW
+  keeps its step counts there, as a fresh one does. On the GPU, they cost every
+  later optimizer step two host syncs per parameter, which slowed resumed
+  training.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
