@@ -30,6 +30,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.mesh import Mesh
 
 ### Helpers ###
 
@@ -117,6 +118,56 @@ def test_large_magnitude_float16_cell_normal_remains_unit_length():
         rtol=0.0,
         atol=8 * torch.finfo(torch.float16).eps,
     )
+
+
+@pytest.mark.parametrize(
+    "vertices, expected",
+    [
+        (
+            [[0.0, 0.0, 0.0], [300.0, 0.0, 0.0], [0.0, 300.0, 0.0]],
+            [0.0, 0.0, 1.0],
+        ),
+        (
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [300.0, 0.0, 0.0, 0.0],
+                [0.0, 300.0, 0.0, 0.0],
+                [0.0, 0.0, 300.0, 0.0],
+            ],
+            [0.0, 0.0, 0.0, 1.0],
+        ),
+    ],
+    ids=["triangle_3d", "tetrahedron_4d"],
+)
+def test_float16_normal_intermediates_do_not_overflow(device, vertices, expected):
+    """Regression (#2248): float16 normals are finite and unit length, though
+    the cross product or minors behind them (9e4, 2.7e7) do not fit in float16,
+    since they are computed in at least float32. Checks both the edge-vector
+    function and ``Mesh.cell_normals``, which gathers the points itself."""
+    points = torch.tensor(vertices, device=device).half()
+    expected = torch.tensor([expected], device=device).half()
+    relative_vectors = (points[1:] - points[0]).unsqueeze(0)
+    cells = torch.arange(len(vertices), device=device).unsqueeze(0)
+    for result in (
+        compute_cell_normals(relative_vectors),
+        Mesh(points=points, cells=cells).cell_normals,
+    ):
+        assert result.dtype == torch.float16
+        torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("n_spatial_dims", [2, 3, 4, 5])
+def test_reduced_precision_matches_float32_rounded_once(device, dtype, n_spatial_dims):
+    """Every branch gives its float32 normal rounded once. In 5D this also
+    checks that 16-bit inputs work, since ``torch.linalg.det`` has no float16
+    or bfloat16 kernels."""
+    vecs = torch.randn(64, n_spatial_dims - 1, n_spatial_dims, device=device)
+    vecs = vecs.to(dtype)
+    expected = compute_cell_normals(vecs.float()).to(dtype)
+    result = compute_cell_normals(vecs)
+    assert result.dtype == dtype
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("scale", [1.0e-7, 1.0, 1.0e7])

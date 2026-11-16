@@ -62,6 +62,7 @@ import functools
 import importlib.util
 import itertools
 import logging
+import math
 from typing import Callable, Literal, NamedTuple, Sequence, overload
 
 import torch
@@ -171,7 +172,8 @@ def _resolve_walk(
     fits = (
         n_dims in (2, 3)
         and all(dtype in warp_dtypes for dtype in dtypes)
-        and targets.shape[0] * max(n_dims, tree.root_ids.shape[0]) < _WARP_MAX_ELEMENTS
+        and max(math.prod(targets.shape), targets.shape[-2] * tree.root_ids.shape[0])
+        < _WARP_MAX_ELEMENTS
         and tree.n_nodes * n_dims < _WARP_MAX_ELEMENTS
     )
     if implementation == "warp" and not fits:
@@ -179,7 +181,7 @@ def _resolve_walk(
             "the Warp walk takes 2-D or 3-D trees with floating-point boxes and "
             f"arrays of fewer than 2**31 entries, got a {n_dims}-D tree with "
             f"{dtypes} boxes and diameters, {tree.n_nodes} nodes, "
-            f"{tree.root_ids.shape[0]} roots and {targets.shape[0]} targets"
+            f"{tree.root_ids.shape[0]} roots and {targets.shape[-2]} targets"
         )
     if implementation is not None:
         return implementation
@@ -2081,12 +2083,13 @@ class ClusterTree(TensorClass):
     @overload
     def find_point_interaction_pairs(
         self,
-        targets: Float[torch.Tensor, "n_targets n_dims"],
+        targets: Float[torch.Tensor, "*n_rows n_targets n_dims"],
         theta: float = 1.0,
         *,
         validate: bool = True,
         source_admissible: torch.Tensor | None = None,
         implementation: Literal["torch", "warp"] | None = None,
+        root_rows: Int[torch.Tensor, " n_roots"] | None = None,
         count_only: Literal[False] = False,
     ) -> PointInteractionPlan:
         """The plan."""
@@ -2094,24 +2097,26 @@ class ClusterTree(TensorClass):
     @overload
     def find_point_interaction_pairs(
         self,
-        targets: Float[torch.Tensor, "n_targets n_dims"],
+        targets: Float[torch.Tensor, "*n_rows n_targets n_dims"],
         theta: float = 1.0,
         *,
         validate: bool = True,
         source_admissible: torch.Tensor | None = None,
         implementation: Literal["torch", "warp"] | None = None,
+        root_rows: Int[torch.Tensor, " n_roots"] | None = None,
         count_only: Literal[True],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Each target's numbers of near and far entries."""
 
     def find_point_interaction_pairs(
         self,
-        targets: Float[torch.Tensor, "n_targets n_dims"],
+        targets: Float[torch.Tensor, "*n_rows n_targets n_dims"],
         theta: float = 1.0,
         *,
         validate: bool = True,
         source_admissible: torch.Tensor | None = None,
         implementation: Literal["torch", "warp"] | None = None,
+        root_rows: Int[torch.Tensor, " n_roots"] | None = None,
         count_only: bool = False,
     ) -> PointInteractionPlan | tuple[torch.Tensor, torch.Tensor]:
         r"""Find near-field pairs and far-field (point, node) pairs for individual
@@ -2146,9 +2151,10 @@ class ClusterTree(TensorClass):
 
         Parameters
         ----------
-        targets : Float[torch.Tensor, "n_targets n_dims"]
+        targets : Float[torch.Tensor, "*n_rows n_targets n_dims"]
             Target point coordinates, shape :math:`(M, D)`, on the tree's
-            device.
+            device; or :math:`(R, M, D)` with ``root_rows``, :math:`R` rows of
+            coordinates of the same :math:`M` targets.
         theta : float
             Barnes-Hut opening angle. ``theta = 0`` forces all interactions to
             be exact (the plan is every pair, built directly).
@@ -2172,6 +2178,12 @@ class ClusterTree(TensorClass):
             Return only each target's numbers of near and far entries, without
             making the plan; their cumulative sums are the offsets of each
             target's entries in the plan's streams.
+        root_rows : Int[torch.Tensor, "n_roots"] or None, optional
+            For targets of shape :math:`(R, M, D)`: the row of ``targets``
+            each root's tree reads its targets' coordinates from, an int64
+            tensor on the tree's device with values in :math:`[0, R)` (checked
+            only with ``validate``), as for trees that each live in their own
+            coordinates. ``None`` for targets of shape :math:`(M, D)`.
 
         Returns
         -------
@@ -2183,12 +2195,29 @@ class ClusterTree(TensorClass):
         device = self.node_aabb_min.device
         ### Checked here for both walks: the Warp kernels would read past their
         ### arrays or across devices where torch's operations raise.
-        if targets.ndim != 2 or (
-            self.n_nodes > 0 and targets.shape[1] != self.n_spatial_dims
+        n_rows = "n_rows, " if root_rows is not None else ""
+        if targets.ndim != 2 + (root_rows is not None) or (
+            self.n_nodes > 0 and targets.shape[-1] != self.n_spatial_dims
         ):
             raise ValueError(
-                f"targets must have shape (n_targets, {self.n_spatial_dims}), "
-                f"got {tuple(targets.shape)}"
+                f"targets must have shape ({n_rows}n_targets, "
+                f"{self.n_spatial_dims}), got {tuple(targets.shape)}"
+            )
+        if root_rows is not None and (
+            root_rows.shape != self.root_ids.shape
+            or root_rows.dtype != torch.long
+            or root_rows.device != device
+            or (
+                validate
+                and not is_tracing()
+                and bool(((root_rows < 0) | (root_rows >= targets.shape[0])).any())
+            )
+        ):
+            raise ValueError(
+                f"root_rows must be an int64 tensor of shape "
+                f"({self.root_ids.shape[0]},) on {device} with values below "
+                f"{targets.shape[0]}, got {root_rows.dtype} of shape "
+                f"{tuple(root_rows.shape)} on {root_rows.device}"
             )
         if targets.device != device:
             raise ValueError(f"targets must be on {device}, got {targets.device}")
@@ -2202,7 +2231,7 @@ class ClusterTree(TensorClass):
                 f"on {device}, got {source_admissible.dtype} of shape "
                 f"{tuple(source_admissible.shape)} on {source_admissible.device}"
             )
-        n_targets = targets.shape[0]
+        n_targets = targets.shape[-2]
         theta_sq = theta * theta
         empty = torch.empty(0, dtype=torch.long, device=device)
 
@@ -2247,6 +2276,7 @@ class ClusterTree(TensorClass):
                     source_admissible,
                     count_only=count_only,
                     max_elements=_WARP_MAX_ELEMENTS,
+                    root_rows=root_rows,
                 )
             if walked is not None and count_only:
                 return walked
@@ -2272,7 +2302,8 @@ class ClusterTree(TensorClass):
         with record_function("cluster_tree::point_traversal"):
             n_dims = self.n_spatial_dims
             box, kids = _traversal_tables(self)
-            points = targets.detach().to(box.dtype).t().contiguous()  # (D, M)
+            ### (D, R M): row r's coordinates of target q at column r M + q.
+            points = targets.detach().to(box.dtype).reshape(-1, n_dims).t().contiguous()
 
             ### Every target starts at every root, target-major; each (target,
             ### root) walk is keyed ``target * n_roots + root``. Outputs follow
@@ -2297,7 +2328,10 @@ class ClusterTree(TensorClass):
                     break
                 bS = box.index_select(1, active_s)
                 kS = kids.index_select(1, active_s)
-                p = points.index_select(1, active_k // n_roots)
+                column = active_k // n_roots
+                if root_rows is not None:
+                    column = root_rows[active_k % n_roots] * n_targets + column
+                p = points.index_select(1, column)
                 gap = torch.clamp(
                     torch.maximum(p - bS[n_dims : 2 * n_dims], bS[:n_dims] - p), min=0
                 )

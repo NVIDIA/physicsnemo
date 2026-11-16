@@ -30,9 +30,11 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.primitives.surfaces import cube_surface, sphere_icosahedral
 from physicsnemo.mesh.validation import (
     compute_mesh_statistics,
     compute_quality_metrics,
+    find_self_intersections,
     validate,
     validate_mesh,
 )
@@ -1161,21 +1163,172 @@ class TestValidationCodePaths:
         # Degenerate check should be skipped (no key or not computed)
 
 
-@pytest.mark.parametrize("raise_on_error", [False, True])
-def test_self_intersection_check_precedes_other_validation_errors(raise_on_error):
-    """The unsupported option fails consistently, even when the mesh is invalid."""
-    points = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]], dtype=torch.float32
-    )
-    cells = torch.tensor([[0, 1, 3]], dtype=torch.long)
-    mesh = Mesh(points=points, cells=cells)
+###############################################################################
+# Self-Intersection Tests
+###############################################################################
 
-    with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
-        validate(
-            mesh,
-            check_self_intersection=True,
-            raise_on_error=raise_on_error,
+
+def _two_cubes(offset, rotate=False, dtype=torch.float64):
+    """Two unit cube surfaces, the second moved by ``offset`` (and rotated)."""
+    cube = cube_surface.load()
+    second = cube.points.double()
+    if rotate:
+        c, s = math.cos(0.3), math.sin(0.3)
+        rot_z = torch.tensor([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+        rot_x = torch.tensor([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+        second = second @ (rot_z @ rot_x).double().T
+    second = second + torch.tensor(offset, dtype=torch.float64)
+    points = torch.cat([cube.points.double(), second]).to(dtype)
+    cells = torch.cat([cube.cells, cube.cells + cube.n_points])
+    return Mesh(points=points, cells=cells)
+
+
+def _crossing_pairs_reference(mesh, eps=1e-9):
+    """All pairs of vertex-disjoint triangles where an edge of one properly
+    crosses the interior of the other (Moller-Trumbore), brute force."""
+    tri = mesh.points.double()[mesh.cells]
+    i, j = torch.triu_indices(mesh.n_cells, mesh.n_cells, offset=1)
+    disjoint = ~(mesh.cells[i][:, :, None] == mesh.cells[j][:, None, :]).any((1, 2))
+    i, j = i[disjoint], j[disjoint]
+    hit = torch.zeros(len(i), dtype=torch.bool)
+    for u, v in ((tri[i], tri[j]), (tri[j], tri[i])):
+        for k in range(3):
+            p0, d = u[:, k], u[:, (k + 1) % 3] - u[:, k]
+            e1, e2 = v[:, 1] - v[:, 0], v[:, 2] - v[:, 0]
+            h = torch.linalg.cross(d, e2)
+            det = (e1 * h).sum(-1)
+            s = p0 - v[:, 0]
+            q = torch.linalg.cross(s, e1)
+            a, b = (s * h).sum(-1) / det, (d * q).sum(-1) / det
+            t = (e2 * q).sum(-1) / det
+            inside = (a > eps) & (b > eps) & (a + b < 1 - eps)
+            hit |= (det.abs() > 1e-12) & inside & (t > eps) & (t < 1 - eps)
+    return torch.stack([i[hit], j[hit]], dim=1)
+
+
+class TestSelfIntersections:
+    """Tests for find_self_intersections and validate(check_self_intersection)."""
+
+    def test_interpenetrating_cubes(self):
+        """Crossing pairs of two interpenetrating cubes match a brute force."""
+        mesh = _two_cubes([0.4, 0.3, 0.2], rotate=True)
+        pairs = find_self_intersections(mesh)
+        expected = _crossing_pairs_reference(mesh)
+        assert len(expected) > 0
+        assert pairs.tolist() == expected.tolist()
+        assert pairs.dtype == torch.int64
+
+    def test_separated_cubes(self):
+        assert len(find_self_intersections(_two_cubes([1.1, 0.0, 0.0]))) == 0
+
+    def test_touching_cubes_are_reported(self):
+        """Vertex-disjoint triangles that only touch count as intersecting."""
+        pairs = find_self_intersections(_two_cubes([1.0, 0.0, 0.0]))
+        assert len(pairs) > 0
+        assert (pairs[:, 0] < 12).all() and (pairs[:, 1] >= 12).all()
+
+    @pytest.mark.parametrize(
+        "mesh",
+        [cube_surface.load(), sphere_icosahedral.load(subdivisions=2)],
+        ids=["cube", "icosphere"],
+    )
+    def test_closed_surfaces_are_clean(self, mesh):
+        assert len(find_self_intersections(mesh)) == 0
+
+    @pytest.mark.parametrize(
+        "apex, expected",
+        [
+            ([0.3, 0.5, 0.0], [[0, 1]]),  # coplanar fold onto the same side
+            ([0.3, -0.5, 0.0], []),  # coplanar, opposite sides: a flat pair
+            ([0.3, 0.5, 0.1], []),  # a hinge: the triangles meet only on the edge
+        ],
+    )
+    def test_pair_sharing_an_edge(self, apex, expected):
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0], apex])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [1, 0, 3]]))
+        assert find_self_intersections(mesh).tolist() == expected
+
+    @pytest.mark.parametrize(
+        "small, expected",
+        [
+            ([[0.2, 0.2, 0.0], [0.7, 0.2, 0.0], [0.2, 0.7, 0.0]], [[0, 1]]),  # nested
+            (
+                [[-0.5, 0.5, 0.0], [0.5, 0.5, 0.0], [0.0, -0.5, 0.0]],
+                [[0, 1]],
+            ),  # crossed
+            ([[2.5, 0.8, 0.0], [3.0, 0.8, 0.0], [3.0, 1.0, 0.0]], []),  # boxes overlap
+        ],
+    )
+    def test_coplanar_vertex_disjoint_pair(self, small, expected):
+        big = [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        mesh = Mesh(
+            points=torch.tensor(big + small),
+            cells=torch.tensor([[0, 1, 2], [3, 4, 5]]),
         )
+        assert find_self_intersections(mesh).tolist() == expected
+
+    @pytest.mark.parametrize(
+        "c, d, expected",
+        [
+            ([0.5, 0.5, -1.0], [0.5, 0.5, 1.0], [[0, 1]]),  # crosses through
+            ([0.4, 0.4, 0.0], [0.5, 0.1, 0.0], [[0, 1]]),  # coplanar, inside
+            ([0.0, 0.0, 1.0], [-1.0, 0.0, 1.0], []),  # meets only at the vertex
+            ([-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], []),  # coplanar, apart
+        ],
+    )
+    def test_pair_sharing_one_vertex(self, c, d, expected):
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], c, d])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [0, 3, 4]]))
+        assert find_self_intersections(mesh).tolist() == expected
+
+    def test_float32_matches_float64(self):
+        mesh64 = _two_cubes([0.4, 0.3, 0.2], rotate=True)
+        mesh32 = _two_cubes([0.4, 0.3, 0.2], rotate=True, dtype=torch.float32)
+        pairs32 = find_self_intersections(mesh32)
+        assert len(pairs32) > 0
+        assert pairs32.tolist() == find_self_intersections(mesh64).tolist()
+
+    def test_requires_triangles_in_3d(self):
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
+            find_self_intersections(mesh)
+
+    def test_validate_reports_pairs(self):
+        mesh = _two_cubes([0.4, 0.3, 0.2], rotate=True)
+        report = validate(mesh, check_self_intersection=True)
+        expected = find_self_intersections(mesh)
+        assert not report["valid"]
+        assert report["n_self_intersecting_pairs"] == len(expected)
+        assert torch.equal(report["self_intersecting_pairs"], expected)
+        with pytest.raises(ValueError, match="self-intersecting"):
+            validate(mesh, check_self_intersection=True, raise_on_error=True)
+
+    def test_validate_clean_mesh(self):
+        report = validate(cube_surface.load(), check_self_intersection=True)
+        assert report["valid"]
+        assert report["n_self_intersecting_pairs"] == 0
+        assert "self_intersecting_pairs" not in report
+
+    def test_validate_skips_check_on_non_triangle_meshes(self):
+        """Like check_manifoldness, the check is skipped where it does not apply."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        report = validate(mesh, check_self_intersection=True, raise_on_error=True)
+        assert report["valid"]
+        assert report["n_self_intersecting_pairs"] == -1
+
+    def test_validate_skips_check_on_out_of_bounds_cells(self):
+        """Out-of-bounds indices stop validation before any geometry."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 3]]))
+        report = validate(mesh, check_self_intersection=True)
+        assert not report["valid"]
+        assert "n_self_intersecting_pairs" not in report
 
 
 if __name__ == "__main__":

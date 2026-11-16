@@ -37,6 +37,7 @@ from physicsnemo.mesh.calculus.measure import (
     set_point_measures,
 )
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
+from physicsnemo.mesh.transformations.geometric import rotation_matrix
 
 
 def simplex(dimension, *, spatial_dimension=3):
@@ -110,6 +111,19 @@ def test_cell_measures_follow_anisotropic_deformation():
     torch.testing.assert_close(cell_measures(displaced), cell_measures(moved))
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_cell_measures_scale_on_reduced_precision(dtype):
+    """Regression: the area ratio 300**2 overflows float16; the measures do not."""
+    points = torch.tensor([[0.0, 0.0], [0.02, 0.0], [0.0, 0.01]], dtype=dtype)
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+    set_cell_measures(mesh, mesh.cell_areas.clone())
+    scaled = cell_measures(mesh.scale(300.0))
+    assert scaled.dtype == dtype
+    torch.testing.assert_close(
+        scaled, torch.tensor([9.0], dtype=dtype), rtol=1e-2, atol=0.0
+    )
+
+
 def test_point_support_is_required_for_anisotropic_surface_scaling():
     domain = MeshToDomainMesh()(simplex(2))
     before = point_measures(domain.interior).clone()
@@ -137,6 +151,59 @@ def test_counting_and_volume_point_measures_have_known_affine_scaling():
     torch.testing.assert_close(
         point_measures(cloud.scale([2.0, 3.0, 4.0])), torch.full((5,), 48.0)
     )
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_volume_point_measures_scale_on_reduced_precision(dtype):
+    """Regression: the determinant of a 16-bit map (no LU kernels) still scales
+    full-dimensional point measures."""
+    cloud = Mesh(points=torch.randn(5, 3).to(dtype))
+    set_point_measures(cloud, torch.full((5,), 2.0, dtype=dtype), dimension=3)
+    scaled = point_measures(cloud.scale([2.0, 3.0, 4.0]))
+    assert scaled.dtype == dtype
+    torch.testing.assert_close(scaled, torch.full((5,), 48.0, dtype=dtype))
+    rotated = point_measures(cloud.rotate(0.5, axis="z"))
+    assert rotated.dtype == dtype
+    torch.testing.assert_close(rotated, torch.full((5,), 2.0, dtype=dtype))
+    # The determinant 50**3 overflows float16; the scaled measures do not.
+    set_point_measures(cloud, torch.full((5,), 2.0**-9, dtype=dtype), dimension=3)
+    enlarged = point_measures(cloud.scale(50.0))
+    assert enlarged.dtype == dtype
+    torch.testing.assert_close(
+        enlarged, torch.full((5,), 2.0**-9 * 50.0**3, dtype=dtype)
+    )
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_surface_point_measures_transform_on_reduced_precision(dtype):
+    """Regression: a rotation matrix rounded to 16 bits is still a similarity,
+    so it maps lower-dimensional point measures; a stretch still raises."""
+    cloud = Mesh(points=torch.randn(5, 3).to(dtype))
+    set_point_measures(cloud, torch.ones(5, dtype=dtype), dimension=2)
+    rotation = rotation_matrix(0.5, [0.2, -0.5, 0.9], 3, torch.device("cpu"), dtype)
+    for k, expected in ((1.0, 1.0), (2.0, 4.0)):
+        moved = point_measures(cloud.transform(k * rotation))
+        assert moved.dtype == dtype
+        torch.testing.assert_close(moved, torch.full((5,), expected, dtype=dtype))
+    # The length scale squared, 300**2, overflows float16; the measures do not.
+    set_point_measures(cloud, torch.full((5,), 2.0**-10, dtype=dtype), dimension=2)
+    enlarged = point_measures(cloud.transform(300.0 * rotation))
+    assert enlarged.dtype == dtype
+    torch.testing.assert_close(
+        enlarged, torch.full((5,), 2.0**-10 * 300.0**2, dtype=dtype)
+    )
+    # A 2% stretch, given as a list or as a tensor, and a 2% shear are not
+    # similarities
+    stretch = [1.0, 1.0, 1.02]
+    shear = torch.eye(3, dtype=dtype)
+    shear[0, 1] = 0.02
+    for move in (
+        lambda: cloud.scale(stretch),
+        lambda: cloud.scale(torch.tensor(stretch, dtype=dtype)),
+        lambda: cloud.transform(shear),
+    ):
+        with pytest.raises(ValueError, match="support geometry"):
+            move()
 
 
 def test_rigid_transforms_and_dtype_preserve_point_measures():
