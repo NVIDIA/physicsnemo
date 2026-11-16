@@ -939,6 +939,250 @@ class ComputeSurfaceNormals(MeshTransform):
         return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
 
 
+@register()
+class FlipBoundaryOrientation(MeshTransform):
+    r"""Reverse the orientation of meshes: their cell winding and stored normals.
+
+    A cell's normal follows its vertex order, and datasets differ in which way
+    they wind their boundaries. This transform swaps the last two vertices of
+    every cell, which reverses each cell normal and keeps each cell and its
+    measure. It also negates the ``cell_data`` fields named in
+    ``normal_fields``, so that stored normals follow the new winding.
+
+    On a :class:`Mesh` it reverses that mesh. On a
+    :class:`~physicsnemo.mesh.DomainMesh` it reverses only the boundaries
+    named in ``boundaries`` and keeps the interior.
+
+    Parameters
+    ----------
+    boundaries : sequence of str, default ()
+        Names of the :class:`~physicsnemo.mesh.DomainMesh` boundaries to
+        reverse. Used only on a ``DomainMesh``. Every name must exist.
+    normal_fields : sequence of str, default ()
+        ``cell_data`` fields holding stored normals. A mesh that lacks a
+        field skips it.
+
+    Raises
+    ------
+    ValueError
+        If the cells have fewer than 2 vertices.
+    KeyError
+        If a name in ``boundaries`` is not a boundary of the ``DomainMesh``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import DomainMesh, Mesh
+    >>> wall = Mesh(
+    ...     points=torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+    ...     cells=torch.tensor([[0, 1, 2]]),
+    ... )
+    >>> FlipBoundaryOrientation()(wall).cell_normals
+    tensor([[ 0.,  0., -1.]])
+    >>> domain = DomainMesh(
+    ...     interior=Mesh(points=torch.zeros(1, 3)),
+    ...     boundaries={"wall": wall, "inlet": wall},
+    ... )
+    >>> out = FlipBoundaryOrientation(boundaries=["wall"]).apply_to_domain(domain)
+    >>> out.boundaries["wall"].cell_normals, out.boundaries["inlet"].cell_normals
+    (tensor([[ 0.,  0., -1.]]), tensor([[0., 0., 1.]]))
+    """
+
+    def __init__(
+        self, boundaries: Sequence[str] = (), normal_fields: Sequence[str] = ()
+    ) -> None:
+        super().__init__()
+        self.boundaries = [str(name) for name in boundaries]
+        self.normal_fields = as_nested_keys(list(normal_fields))
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        if mesh.cells.shape[-1] < 2:
+            raise ValueError(
+                "FlipBoundaryOrientation needs cells of at least 2 vertices"
+            )
+        cells = torch.cat((mesh.cells[:, :-2], mesh.cells[:, -2:].flip(1)), dim=1)
+        cell_data = mesh.cell_data.copy()  # only the negated fields get new tensors
+        for key in self.normal_fields:
+            if key in cell_data.keys(include_nested=True):
+                cell_data[key] = -cell_data[key]
+        ### A new Mesh, so no cached normals of the old winding survive.
+        return Mesh(
+            points=mesh.points,
+            cells=cells,
+            point_data=mesh.point_data,
+            cell_data=cell_data,
+            global_data=mesh.global_data,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Reverse the named boundaries of a :class:`DomainMesh`.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh.
+
+        Returns
+        -------
+        DomainMesh
+            The domain with the named boundaries reversed.
+        """
+        missing = [b for b in self.boundaries if b not in domain.boundary_names]
+        if missing:
+            raise KeyError(
+                f"FlipBoundaryOrientation: boundaries {missing} not found; "
+                f"available: {domain.boundary_names}"
+            )
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries={
+                name: self(b) if name in self.boundaries else b
+                for name, b in domain.boundaries.items()
+            },
+            global_data=domain.global_data,
+        )
+
+    def extra_repr(self) -> str:
+        return f"boundaries={self.boundaries}, normal_fields={self.normal_fields}"
+
+
+@register()
+class BoundaryCellsToPoints(MeshTransform):
+    r"""Add a point-cloud boundary at drawn cells of another boundary.
+
+    Draws ``n_cells`` cells of the :class:`~physicsnemo.mesh.DomainMesh`
+    boundary ``source`` without replacement, as :class:`SubsampleMesh` does:
+    uniformly up to :math:`2^{24}` cells, and above that with its ordered,
+    near-uniform ``poisson_gap`` draw. It adds a point-cloud boundary ``name``
+    with one point per drawn cell. The ``cell_data`` fields named in
+    ``fields`` become its ``point_data`` fields and are removed from
+    ``source``, so that no model reads them through it, as in
+    :class:`MeshToDomainMesh`. ``source`` keeps all its cells.
+
+    Each point sits at its cell's centroid moved ``offset`` along the cell's
+    unit normal, on the side the normal points to. Each point records its
+    cell's measure times N / n, for n cells drawn of N, under
+    :data:`~physicsnemo.mesh.calculus.measure.EFFECTIVE_MEASURE_KEY`, so sums
+    over the points estimate integrals over ``source``: without bias for a
+    uniform draw, and only close to unbiased above :math:`2^{24}` cells.
+
+    Parameters
+    ----------
+    source : str
+        Name of the boundary whose cells are drawn.
+    name : str
+        Name of the new point-cloud boundary.
+    fields : Mapping[str, str]
+        ``{source cell_data field: new point_data field}``.
+    n_cells : int or None, default None
+        Cells drawn per sample; ``None`` takes every cell.
+    offset : float, default 0.0
+        Distance off the cell along its unit normal, in the coordinates'
+        units; 0 puts the points at the centroids.
+
+    Raises
+    ------
+    TypeError
+        When called on a bare :class:`Mesh`: the transform needs a
+        ``DomainMesh``.
+    KeyError
+        If ``source``, or a field of ``fields`` on it, is missing.
+    ValueError
+        If the domain already has a boundary ``name``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import DomainMesh, Mesh
+    >>> wall = Mesh(
+    ...     points=torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+    ...     cells=torch.tensor([[0, 1, 2]]),
+    ...     cell_data={"p": torch.tensor([2.0])},
+    ... )
+    >>> domain = DomainMesh(interior=Mesh(points=torch.zeros(1, 3)), boundaries={"wall": wall})
+    >>> out = BoundaryCellsToPoints(
+    ...     source="wall", name="wall_points", fields={"p": "p_wall"}, offset=0.5
+    ... ).apply_to_domain(domain)
+    >>> out.boundaries["wall_points"].points
+    tensor([[0.3333, 0.3333, 0.5000]])
+    >>> out.boundaries["wall_points"].point_data["p_wall"], "p" in out.boundaries["wall"].cell_data
+    (tensor([2.]), False)
+    """
+
+    def __init__(
+        self,
+        source: str,
+        name: str,
+        fields: Mapping[str, str],
+        n_cells: int | None = None,
+        offset: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.source = str(source)
+        self.name = str(name)
+        self.fields = _parse_key_mapping(dict(fields))
+        self.n_cells = n_cells
+        self.offset = float(offset)
+        self._generator: torch.Generator | None = None
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        raise TypeError("BoundaryCellsToPoints needs a DomainMesh, not a Mesh")
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Add the point-cloud boundary ``name`` (see the class docstring).
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh.
+
+        Returns
+        -------
+        DomainMesh
+            The domain with ``source``'s fields moved onto the new boundary.
+        """
+        if self.source not in domain.boundary_names:
+            raise KeyError(
+                f"BoundaryCellsToPoints: boundary {self.source!r} not found; "
+                f"available: {domain.boundary_names}"
+            )
+        if self.name in domain.boundary_names:
+            raise ValueError(f"BoundaryCellsToPoints: {self.name!r} already exists")
+        source = domain.boundaries[self.source]
+        require_keys(source.cell_data, self.fields, what="Source field")
+        drawn = source
+        if self.n_cells is not None:
+            sampler = SubsampleMesh(n_cells=self.n_cells, compact=False)
+            sampler._generator = self._generator
+            drawn = sampler(source)
+        points = drawn.cell_centroids
+        if self.offset:
+            points = points + self.offset * drawn.cell_normals
+        new = Mesh(
+            points=points,
+            point_data=rename_keys(
+                drawn.cell_data.select(*self.fields), self.fields, strict=True
+            ),
+        )
+        set_point_measures(new, cell_measures(drawn), dimension=drawn.n_manifold_dims)
+        boundaries = dict(domain.boundaries.items())
+        boundaries[self.source] = source.with_data(
+            cell_data=exclude_keys(source.cell_data, self.fields)
+        )
+        boundaries[self.name] = new
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=boundaries,
+            global_data=domain.global_data,
+        )
+
+    def extra_repr(self) -> str:
+        return (
+            f"source={self.source!r}, name={self.name!r}, fields={self.fields}, "
+            f"n_cells={self.n_cells}, offset={self.offset}"
+        )
+
+
 def _mesh_to_tensordict(mesh: Mesh) -> TensorDict:
     """Convert a single Mesh into a flat TensorDict (no cache, no tensorclass)."""
     out: dict = {

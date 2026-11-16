@@ -54,9 +54,7 @@ class PerfConfig:
     fp_optimizations: Literal["fp32", "amp-fp16", "amp-bf16"] = (
         "fp32"  # Floating point mode: "fp32", "amp-fp16", "amp-bf16"
     )
-    torch_compile: bool = (
-        False  # torch.compile training loss forward (skipped with domain parallelism)
-    )
+    torch_compile: bool = False  # torch.compile training loss forward
     use_apex_gn: bool = (
         False  # Use Apex GroupNorm (enables channels_last memory format)
     )

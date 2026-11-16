@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.GeoTransolverTimeConditional
+_target_: models.rollout.GeoTransolverTimeConditional
 _convert_: all
 
 functional_dim: 4   

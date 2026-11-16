@@ -16,6 +16,8 @@
 
 """Round-trip tests for physicsnemo.mesh.io.to_zarr / from_zarr."""
 
+import re
+
 import pytest
 import torch
 from conftest import (
@@ -122,6 +124,104 @@ def test_unsupported_dtype_raises_before_writing(tmp_path):
     with pytest.raises(TypeError, match=r"'point_data/pred'.*bfloat16"):
         to_zarr(mesh, tmp_path / "mesh.zarr")
     assert not (tmp_path / "mesh.zarr").exists()
+
+
+class _PlainMesh(Mesh):
+    """A Mesh subclass without fields of its own."""
+
+
+class _PlainDomainMesh(DomainMesh):
+    """A DomainMesh subclass without fields of its own."""
+
+
+class _TaggedMesh(Mesh):
+    """A Mesh subclass with a field that from_zarr cannot restore."""
+
+    tag: torch.Tensor | None = None
+
+
+def test_subclass_round_trips_as_base_class(tmp_path):
+    """Subclasses without fields of their own load back as their base class."""
+    mesh = make_mesh()
+    to_zarr(_PlainMesh(points=mesh.points, cells=mesh.cells), tmp_path / "m.zarr")
+    back = from_zarr(tmp_path / "m.zarr")
+    assert type(back) is Mesh
+    assert torch.equal(back.points, mesh.points)
+    assert torch.equal(back.cells, mesh.cells)
+
+    dm = make_domain_mesh()
+    to_zarr(
+        _PlainDomainMesh(
+            interior=dm.interior,
+            boundaries=dict(dm.boundaries.items()),
+            global_data=dm.global_data,
+        ),
+        tmp_path / "dm.zarr",
+    )
+    assert type(from_zarr(tmp_path / "dm.zarr")) is DomainMesh
+    wall = from_zarr(tmp_path / "dm.zarr" / "boundaries" / "wall")
+    assert_meshes_equal(dm.boundaries["wall"], wall)
+
+
+@pytest.mark.parametrize("in_domain", [False, True])
+def test_subclass_with_fields_raises_before_writing(tmp_path, in_domain):
+    """A subclass field that from_zarr could not restore raises, writing nothing."""
+    mesh = make_mesh()
+    obj = _TaggedMesh(points=mesh.points, cells=mesh.cells, tag=torch.ones(2))
+    if in_domain:
+        obj = DomainMesh(interior=make_point_cloud(), boundaries={"wall": obj})
+    with pytest.raises(TypeError, match=r"_TaggedMesh.*'tag'"):
+        to_zarr(obj, tmp_path / "x.zarr")
+    assert not (tmp_path / "x.zarr").exists()
+
+
+@pytest.mark.parametrize("n_vertices_per_cell", [2, 3, 4])
+def test_mesh_without_cells_keeps_cell_shape(tmp_path, n_vertices_per_cell):
+    """A cell mesh with zero cells keeps its cell shape, dtype and dimension."""
+    mesh = Mesh(
+        points=torch.rand(5, 3),
+        cells=torch.empty((0, n_vertices_per_cell), dtype=torch.int32),
+    )
+    dm = DomainMesh(interior=make_point_cloud(), boundaries={"empty": mesh})
+    to_zarr(mesh, tmp_path / "mesh.zarr")
+    to_zarr(dm, tmp_path / "dm.zarr")
+    for back in (
+        from_zarr(tmp_path / "mesh.zarr"),
+        from_zarr(tmp_path / "dm.zarr").boundaries["empty"],
+    ):
+        assert back.cells.shape == (0, n_vertices_per_cell)
+        assert back.cells.dtype == torch.int32
+        assert back.n_manifold_dims == n_vertices_per_cell - 1
+
+
+def _with_point_data_key(mesh: Mesh, name: str) -> Mesh:
+    mesh.point_data[name] = mesh.points
+    return mesh
+
+
+def _with_group_key(mesh: Mesh, name: str) -> Mesh:
+    mesh.global_data[name] = {"x": torch.ones(1)}
+    return mesh
+
+
+def _with_boundary_name(mesh: Mesh, name: str) -> DomainMesh:
+    return DomainMesh(interior=mesh, boundaries={name: mesh})
+
+
+@pytest.mark.parametrize("name", ["U [m/s]", "U [m\\s]", "", ".", "..", "zarr.json"])
+@pytest.mark.parametrize(
+    "make,parent",
+    [
+        (_with_point_data_key, "point_data"),
+        (_with_group_key, "global_data"),
+        (_with_boundary_name, "boundaries"),
+    ],
+)
+def test_invalid_name_raises_before_writing(tmp_path, make, parent, name):
+    """A key or boundary name that zarr cannot store raises, writing nothing."""
+    with pytest.raises(ValueError, match=re.escape(f"key {(parent, name)}")):
+        to_zarr(make(make_mesh(), name), tmp_path / "x.zarr")
+    assert not (tmp_path / "x.zarr").exists()
 
 
 def test_dtype_check_ignores_default_device(tmp_path):

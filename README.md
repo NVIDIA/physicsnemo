@@ -159,7 +159,7 @@ code. The final column links to examples and papers.
 | [GeoTransolver](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/geotransolver) | Point clouds or structured/unstructured grids, with geometry and global context | Geometry-aware CAE: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe), [underfill dispensing](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing) |
 | [DoMINO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/domino) | Geometry points, sampled surface/volume fields, and structured SDF grids | Surface and volume field prediction for automotive aerodynamics: [paper](https://arxiv.org/abs/2501.13350) |
 | [FIGConvNet](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/figconvnet) | Large 3D point clouds represented with factorized 2D grids | 3D CAE field and scalar prediction: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/figconvnet), [vehicle crash](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash) |
-| [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe) *(experimental; API may change)* | Boundary meshes and arbitrary query points | Boundary-driven PDEs and large-geometry CAE: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe), [paper](https://arxiv.org/abs/2511.15856) |
+| [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/globe) | Boundary meshes and arbitrary query points | Boundary-driven PDEs and large-geometry CAE: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe), [paper](https://arxiv.org/abs/2511.15856) |
 | [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa) *(experimental; API may change)* | 3D surface point clouds, operating conditions, and query points | Aerodynamic representation learning and field prediction: [tutorial](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/aerojepa), [paper](https://arxiv.org/abs/2605.05586) |
 
 ### Weather and Climate
@@ -230,8 +230,7 @@ The diagram is simplified. Follow the links below for the public surfaces.
   and the [model lifecycle core](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/core).
 
 [Experimental modules](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental)
-incubate models such as [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe)
-and [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa),
+incubate models such as [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa),
 alongside uncertainty quantification, guardrails, parameter-efficient fine-tuning
 with LoRA, and other research utilities.
 
@@ -291,6 +290,23 @@ cd physicsnemo
 uv sync --extra cu13
 ```
 
+### Notice and Disclaimer
+
+Installing PhysicsNeMo downloads its dependencies. Some datapipes and examples
+also download datasets or model checkpoints when you ask them to.
+
+> NOTICE AND DISCLAIMER: This software automatically retrieves, accesses or interacts
+> with external materials. Those retrieved materials are not distributed with this
+> software and are governed solely by separate terms, conditions and licenses. You are
+> solely responsible for finding, reviewing and complying with all applicable terms,
+> conditions, and licenses, and for verifying the security, integrity and suitability
+> of any retrieved materials for your specific use case. This software is provided "AS
+> IS", without warranty of any kind. The author makes no representations or warranties
+> regarding any retrieved materials, and assumes no liability for any losses, damages,
+> liabilities or legal consequences from your use or inability to use this software or
+> any retrieved materials. Use this software and the retrieved materials at your own
+> risk.
+
 ## Learning Resources
 
 Learn through the [PhysicsNeMo notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo),
@@ -343,3 +359,5 @@ directly and open a pull request.
 
 PhysicsNeMo is licensed under the
 [Apache License 2.0](https://github.com/NVIDIA/physicsnemo/blob/main/LICENSE.txt).
+Third-party code included in this repository is listed in
+[THIRD_PARTY_NOTICES.md](https://github.com/NVIDIA/physicsnemo/blob/main/THIRD_PARTY_NOTICES.md).

@@ -746,10 +746,12 @@ def compute_surface_force_coefficients(
     body surface, using effective cell measures to account for subsampling.
 
     The pressure force on the body is ``-C_p * n`` (outward normal convention)
-    and the friction force is ``C_f`` (tangential).  Normal orientation is
-    determined at integration time using the divergence theorem (matching
-    the AirFRANS pattern), so cell winding in the input mesh does not
-    need to be pre-corrected.
+    and the friction force on the body is ``-C_f``: ``C_f`` is OpenFOAM's
+    ``wallShearStress`` over the dynamic pressure, and that stress is the one
+    the wall exerts on the fluid.  Normal orientation is determined at
+    integration time using the divergence theorem (matching the AirFRANS
+    pattern), so cell winding in the input mesh does not need to be
+    pre-corrected.
 
     Args:
         surface_mesh: Car surface Mesh with ``point_data["C_p"]`` and
@@ -779,9 +781,9 @@ def compute_surface_force_coefficients(
     cp_cells: torch.Tensor = cell_data["C_p"]  # ty: ignore[invalid-assignment]  # (n_cells,)
     cf_cells: torch.Tensor = cell_data["C_f"]  # ty: ignore[invalid-assignment]  # (n_cells, 3)
 
-    ### Force coefficient per cell: (-C_p * n + C_f) * A
+    ### Force coefficient per cell: (-C_p * n - C_f) * A
     f_pressure = -cp_cells.unsqueeze(-1) * normals  # (n_cells, 3)
-    f_friction = cf_cells  # (n_cells, 3)
+    f_friction = -cf_cells  # (n_cells, 3)
     f_total = (f_pressure + f_friction) * areas.unsqueeze(-1)  # (n_cells, 3)
 
     ### Integrate and normalize

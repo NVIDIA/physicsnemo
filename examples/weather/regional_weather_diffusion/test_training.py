@@ -111,7 +111,8 @@ def test_distribute_model_syncs_before_sharding(monkeypatch):
     helper.use_shard_tensor = True
     domain_mesh = object()
     ddp_mesh = object()
-    helper.mesh = {"domain": domain_mesh, "ddp": ddp_mesh}
+    helper.domain_mesh = domain_mesh
+    helper.ddp_mesh = ddp_mesh
     model = torch.nn.Linear(2, 2)
     calls = []
 
@@ -150,8 +151,7 @@ def test_distribute_model_syncs_before_sharding(monkeypatch):
     "domain_parallel_size, force_sharding", [(1, False), (1, True), (2, False)]
 )
 @pytest.mark.parametrize("fp_optimizations", ["fp32", "amp-bf16"])
-# @pytest.mark.parametrize("torch_compile", [True, False])
-@pytest.mark.parametrize("torch_compile", [False])
+@pytest.mark.parametrize("torch_compile", [True, False])
 @pytest.mark.parametrize("scheduler", [None, "CosineAnnealingLR"])
 @pytest.mark.parametrize("sigma_distribution", ["lognormal", "loguniform"])
 def test_training(
@@ -183,12 +183,6 @@ def test_training(
         pytest.skip(
             f"Skipping: not enough processes ({dist.world_size}) to use domain_parallel_size of {domain_parallel_size}."
         )
-    sharding = (domain_parallel_size > 1) or force_sharding
-    if sharding and torch_compile:
-        pytest.skip(
-            "Skipping: torch.compile is not supported with ShardTensor for now."
-        )
-
     # Set up rundir in the temporary directory
     rundir = _setup_rundir(tmp_path, dist.world_size)
 
