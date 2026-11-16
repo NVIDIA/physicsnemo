@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # [imports]
 import torch
 
@@ -51,8 +67,7 @@ from dataclasses import dataclass
 
 import torch.nn as nn
 
-from physicsnemo.models.meta import ModelMetaData
-from physicsnemo.models.module import Module
+from physicsnemo.core import ModelMetaData, Module
 
 
 @dataclass
@@ -69,47 +84,16 @@ MdlsUNet = Module.from_torch(UNet, meta=MdlsUNetMetaData)
 
 # [physicsnemo model]
 
-# [physicsnemo sym model]
-
-from typing import Dict, Optional
-
-from physicsnemo.sym.key import Key
-from physicsnemo.sym.models.arch import Arch
-
-
-class MdlsSymUNet(Arch):
-    def __init__(
-        self,
-        input_keys=[Key("a")],
-        output_keys=[Key("b")],
-        in_channels=1,
-        out_channels=1,
-    ):
-        super(MdlsSymUNet, self).__init__(
-            input_keys=input_keys, output_keys=output_keys
-        )
-
-        self.mdls_model = MdlsUNet(in_channels, out_channels)  # MdlsUNet defined above
-
-    def forward(self, dict_tensor: Dict[str, torch.Tensor]):
-        x = self.concat_input(
-            dict_tensor,
-            self.input_key_dict,
-            detach_dict=None,
-            dim=1,
-        )
-        out = self.mdls_model(x)
-        return self.split_output(out, self.output_key_dict, dim=1)
-
-
-# [physicsnemo sym model]
-
 
 # [code]
 
 import time
 
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining
+
+# CUDA graph capture checks the distributed manager, even for a single process
+DistributedManager.initialize()
 
 normaliser = {
     "permeability": (1.25, 0.75),

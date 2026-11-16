@@ -39,7 +39,8 @@ def load(
     n_turns : float
         Number of complete turns.
     spacing : float
-        Radial spacing between turns.
+        Radial growth per radian of turn, so successive turns are
+        ``2 * pi * spacing`` apart.
     n_points : int
         Number of points along the spiral.
     device : str

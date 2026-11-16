@@ -23,7 +23,6 @@ No research implementation is used as a dependency.
 from __future__ import annotations
 
 import math
-from typing import Literal
 
 import torch
 from jaxtyping import Float
@@ -178,15 +177,15 @@ class SMART(Module):
     r"""Mesh-free steady-field surrogate derived from the SMART paper.
 
     Encodes geometry once into one latent set per depth and decodes each spatial
-    query independently. The surface and volume branches share the decoder and
-    use separate output heads. See `SMART <https://arxiv.org/abs/2601.18707>`_.
+    query independently. Each instance predicts either surface or volume fields.
+    The selected output head determines the field channels. See `SMART <https://arxiv.org/abs/2601.18707>`_.
 
     Parameters
     ----------
-    surface_channels : int, optional, default=1
-        Surface outputs. Zero disables this head.
-    volume_channels : int, optional, default=3
-        Volume outputs. Zero disables this head.
+    field : {"surface", "volume"}, optional, default="surface"
+        Field predicted by this model. Only this output head is constructed.
+    out_dim : int, optional, default=1
+        Number of output channels.
     parameter_channels : int, optional, default=0
         Number of scalar simulation conditions per geometry.
     hidden_dim : int, optional, default=256
@@ -216,47 +215,42 @@ class SMART(Module):
         Optional upper bound (> 1) on a learned per-head multiplier of normalized
         attention logits, initialized at 1. Requires ``qk_normalization=True``.
         This bounded-temperature extension is not specified by the paper.
-    surface_query_feature_channels, volume_query_feature_channels : int, optional, default=0
-        Optional geometric feature dimensions, projected into each query's initial
-        embedding. For CFD-derived features use 3 surface-normal components and
-        4 volume components (surface distance and nearest-surface direction).
-        This feature extension is not specified by the paper. Disable unused
-        output heads by setting their output channel count to zero; features for
-        disabled heads must also be zero. No unused branch parameters are created.
+    query_feature_channels : int, optional, default=0
+        Aligned geometric feature channels. For example, surface normals or
+        volume distance/direction features. Their projection starts at zero.
+        This feature extension is not specified by the paper.
+    eval_chunk_size : int, optional, default=8192
+        Maximum number of queries decoded at once during evaluation.
+    coordinate_scale : tuple of three positive floats, optional, default=(1, 1, 1)
+        Axis scales applied to both point clouds after subtracting ``frame_center``.
+    center_on_geometry : bool, optional, default=False
+        When ``frame_center`` is omitted, center both clouds on the geometry's
+        bounding-box midpoint before scaling.
 
     Forward
     -------
-    geometry : torch.Tensor
-        Geometry-only point cloud of shape :math:`(B,N,3)`, for example CFD
-        surface mesh coordinates. Keep field queries separate from this cloud.
-    surface_queries : torch.Tensor or None, optional, default=None
-        Surface coordinates of shape :math:`(B,M_s,3)`.
-    volume_queries : torch.Tensor or None, optional, default=None
-        Volume coordinates of shape :math:`(B,M_v,3)`.
+    geometry, queries : torch.Tensor
+        Separate geometry and query clouds of shape :math:`(B,N,3)` and :math:`(B,M,3)`.
     parameters : torch.Tensor or None, optional, default=None
-        Simulation conditions of shape :math:`(B,P)`; required if :math:`P>0`.
-    geometry_generator : torch.Generator or None, optional, default=None
-        Sampling RNG on the geometry device. Overrides ``eval_seed`` and keeps
-        geometry sampling independent of other random operations.
-    surface_query_features, volume_query_features : torch.Tensor or None, optional, default=None
-        Aligned geometric features of shape :math:`(B,M,C)`, required when the
-        corresponding feature-channel count is nonzero. Projections start at zero
-        so features initially leave the coordinate-only predictions unchanged.
-        Their physical scaling is a preprocessing contract; the model does not
-        normalize them.
+        Conditions of shape :math:`(B,P)` or :math:`(B,1,P)`.
+    query_features : torch.Tensor or None, optional, default=None
+        Aligned features of shape :math:`(B,M,C)` in the caller's chosen units.
+    frame_center : torch.Tensor or None, optional, default=None
+        Origin of shape :math:`(B,3)` or :math:`(B,1,3)`. Overrides
+        ``center_on_geometry``. When omitted, use the geometry's bounding-box
+        midpoint if ``center_on_geometry=True``, otherwise zero.
 
     Outputs
     -------
-    tuple[torch.Tensor or None, torch.Tensor or None]
-        Surface and volume predictions of shape :math:`(B,M_s,C_s)` and
-        :math:`(B,M_v,C_v)`. An omitted query set produces ``None``.
+    torch.Tensor
+        Field predictions of shape :math:`(B,M,\mathrm{out\_dim})`.
 
     Notes
     -----
     Mixed precision follows the caller's :func:`torch.autocast` context.
-    Coordinates must be finite. Apply the same coordinate normalization to geometry
-    and field queries before calling the model. The positional embedding does not
-    normalize coordinates internally. Padding is not supported. Use fixed-size
+    Coordinates must be finite. ``forward`` normalizes both clouds together.
+    Low-level ``encode_geometry`` and ``decode_queries`` expect coordinates
+    already in the model frame. Padding is not supported. Use fixed-size
     sampled batches or batch size one for ragged clouds. Sampling is without
     replacement. Evaluation is repeatable for a fixed ordered cloud.
     Random-key sampling selects different subsets from earlier randperm-based
@@ -273,33 +267,17 @@ class SMART(Module):
     >>> model = SMART(hidden_dim=24, num_heads=4, num_layers=2,
     ...               num_latents=8, geometry_subsample=16).eval()
     >>> geometry = torch.randn(2, 32, 3)
-    >>> pressure, velocity = model(geometry, torch.randn(2, 12, 3),
-    ...                            torch.randn(2, 20, 3))
-    >>> pressure.shape, velocity.shape
-    (torch.Size([2, 12, 1]), torch.Size([2, 20, 3]))
+    >>> pressure = model(geometry, torch.randn(2, 12, 3))
+    >>> pressure.shape
+    torch.Size([2, 12, 1])
     """
 
-    __model_checkpoint_version__ = "0.2.0"
-    __supported_model_checkpoint_version__ = {
-        "0.1.0": "Loading SMART 0.1.0 with caller-controlled autocast."
-    }
-
-    @classmethod
-    def _backward_compat_arg_mapper(cls, version: str, args: dict) -> dict:
-        """Load earlier checkpoints only when they used caller-controlled precision."""
-        args = super()._backward_compat_arg_mapper(version, args).copy()
-        if args.pop("attention_precision", None) is not None:
-            raise ValueError(
-                "Checkpoints with an attention_precision override require the "
-                "earlier SMART implementation. New models use caller-controlled autocast."
-            )
-        args.pop("attention_precision_scope", None)
-        return args
+    __model_checkpoint_version__ = "0.3.0"
 
     def __init__(
         self,
-        surface_channels: int = 1,
-        volume_channels: int = 3,
+        field: str = "surface",
+        out_dim: int = 1,
         parameter_channels: int = 0,
         hidden_dim: int = 256,
         num_heads: int = 8,
@@ -311,10 +289,39 @@ class SMART(Module):
         eval_seed: int = 0,
         qk_normalization: bool = False,
         qk_temperature_max: float | None = None,
-        surface_query_feature_channels: int = 0,
-        volume_query_feature_channels: int = 0,
+        query_feature_channels: int = 0,
+        eval_chunk_size: int = 8192,
+        coordinate_scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        center_on_geometry: bool = False,
     ):
         super().__init__(meta=ModelMetaData(amp=True, auto_grad=True))
+        if field not in ("surface", "volume"):
+            raise ValueError("field must be surface or volume")
+        for name, value in (("out_dim", out_dim), ("eval_chunk_size", eval_chunk_size)):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if len(coordinate_scale) != 3 or any(
+            isinstance(x, bool) or not math.isfinite(x) or x <= 0
+            for x in coordinate_scale
+        ):
+            raise ValueError(
+                "coordinate_scale must contain three positive finite values"
+            )
+        self.field = field
+        self.out_dim = out_dim
+        self.query_feature_channels = query_feature_channels
+        self.eval_chunk_size = eval_chunk_size
+        self.coordinate_scale = tuple(coordinate_scale)
+        self.center_on_geometry = center_on_geometry
+        self._args["__args__"]["coordinate_scale"] = self.coordinate_scale
+        surface_channels = out_dim if field == "surface" else 0
+        volume_channels = out_dim if field == "volume" else 0
+        surface_query_feature_channels = (
+            query_feature_channels if field == "surface" else 0
+        )
+        volume_query_feature_channels = (
+            query_feature_channels if field == "volume" else 0
+        )
         for name, value in (
             ("hidden_dim", hidden_dim),
             ("num_heads", num_heads),
@@ -327,30 +334,16 @@ class SMART(Module):
                 raise ValueError(f"{name} must be a positive integer")
         if hidden_dim % num_heads:
             raise ValueError("hidden_dim must be divisible by num_heads")
-        if (
-            any(
-                isinstance(c, bool) or not isinstance(c, int) or c < 0
-                for c in (surface_channels, volume_channels, parameter_channels)
-            )
-            or surface_channels + volume_channels == 0
-        ):
-            raise ValueError(
-                "Channel counts must be nonnegative with at least one output"
-            )
-        for field, channels, outputs in (
-            ("surface", surface_query_feature_channels, surface_channels),
-            ("volume", volume_query_feature_channels, volume_channels),
+        for name, channels in (
+            ("parameter_channels", parameter_channels),
+            ("query_feature_channels", query_feature_channels),
         ):
             if (
                 isinstance(channels, bool)
                 or not isinstance(channels, int)
                 or channels < 0
             ):
-                raise ValueError(
-                    f"{field}_query_feature_channels must be a nonnegative integer"
-                )
-            if channels and not outputs:
-                raise ValueError(f"Cannot configure features for disabled {field} head")
+                raise ValueError(f"{name} must be a nonnegative integer")
         if isinstance(eval_seed, bool) or not isinstance(eval_seed, int):
             raise ValueError("eval_seed must be an integer")
         if not -(2**63) <= eval_seed < 2**64:
@@ -413,8 +406,8 @@ class SMART(Module):
             Mlp(hidden_dim, hidden_dim, volume_channels) if volume_channels else None
         )
         # Geometry-only query features are explicit extensions to SMART. They
-        # must never contain target CFD fields. Absent modules preserve legacy
-        # state dictionaries and the default model's parameter count exactly.
+        # must never contain target CFD fields. Only the selected field creates
+        # an output head and optional feature projection.
         self.surface_query_projection = (
             nn.Linear(surface_query_feature_channels, hidden_dim, bias=False)
             if surface_query_feature_channels
@@ -473,12 +466,16 @@ class SMART(Module):
             return points
         # Select random keys without constructing a full permutation per cloud.
         # Keep keys in fp32 even when the default dtype is a reduced precision.
-        indices = torch.rand(
-            points.shape[:2],
-            device=points.device,
-            dtype=torch.float32,
-            generator=generator,
-        ).topk(count, dim=1, sorted=False).indices
+        indices = (
+            torch.rand(
+                points.shape[:2],
+                device=points.device,
+                dtype=torch.float32,
+                generator=generator,
+            )
+            .topk(count, dim=1, sorted=False)
+            .indices
+        )
         return points.gather(1, indices.unsqueeze(-1).expand(-1, -1, 3))
 
     def encode_geometry(
@@ -536,7 +533,6 @@ class SMART(Module):
         contexts: tuple[Float[Tensor, "batch latents hidden_dim"], ...],
         parameters: Float[Tensor, "batch parameter_channels"] | None = None,
         *,
-        field: Literal["surface", "volume"] = "surface",
         query_features: Float[Tensor, "batch query_points feature_channels"]
         | None = None,
     ) -> Float[Tensor, "batch query_points output_channels"]:
@@ -550,8 +546,6 @@ class SMART(Module):
             The ``num_layers`` contexts returned by :meth:`encode_geometry`.
         parameters : torch.Tensor or None, optional, default=None
             The same :math:`(B,P)` conditions used to encode the geometry.
-        field : {"surface", "volume"}, optional, default="surface"
-            Output head to use.
         query_features : torch.Tensor or None, optional, default=None
             Aligned geometric features of shape :math:`(B,M,C)`. When evaluating
             chunks, slice these with the same indices as ``queries``.
@@ -561,11 +555,8 @@ class SMART(Module):
         torch.Tensor
             Predictions of shape :math:`(B,M,C)` for the selected head.
         """
-        if field not in ("surface", "volume"):
-            raise ValueError("field must be 'surface' or 'volume'")
+        field = self.field
         head = self.surface_head if field == "surface" else self.volume_head
-        if head is None:
-            raise ValueError(f"The {field} head is disabled")
         if not torch.compiler.is_compiling():
             self._validate_coordinates(queries)
             self._validate_parameters(parameters, queries.shape[0], queries.device)
@@ -617,65 +608,116 @@ class SMART(Module):
     def forward(
         self,
         geometry: Float[Tensor, "batch geometry_points 3"],
-        surface_queries: Float[Tensor, "batch surface_points 3"] | None = None,
-        volume_queries: Float[Tensor, "batch volume_points 3"] | None = None,
-        parameters: Float[Tensor, "batch parameter_channels"] | None = None,
+        queries: Float[Tensor, "batch query_points 3"],
+        parameters: Float[Tensor, "batch ... parameter_channels"] | None = None,
         *,
-        geometry_generator: torch.Generator | None = None,
-        surface_query_features: Float[
-            Tensor, "batch surface_points surface_query_feature_channels"
-        ]
+        query_features: Float[Tensor, "batch query_points feature_channels"]
         | None = None,
-        volume_query_features: Float[
-            Tensor, "batch volume_points volume_query_feature_channels"
-        ]
-        | None = None,
-    ) -> tuple[
-        Float[Tensor, "batch surface_points surface_channels"] | None,
-        Float[Tensor, "batch volume_points volume_channels"] | None,
-    ]:
-        r"""Encode once; an explicit geometry RNG leaves other randomness untouched."""
-        if surface_queries is None and volume_queries is None:
-            raise ValueError("At least one query set is required")
-        if surface_queries is None and surface_query_features is not None:
-            raise ValueError("surface_query_features requires surface_queries")
-        if volume_queries is None and volume_query_features is not None:
-            raise ValueError("volume_query_features requires volume_queries")
+        frame_center: Float[Tensor, "..."] | None = None,
+    ) -> Float[Tensor, "batch query_points out_dim"]:
+        r"""Encode geometry once and predict the configured field at query points.
+
+        Training samples geometry using the active PyTorch RNG. Evaluation uses
+        ``eval_seed`` to keep geometry sampling fixed across query chunks.
+
+        Parameters
+        ----------
+        geometry, queries : torch.Tensor
+            Separate point clouds of shape :math:`(B,N,3)` and :math:`(B,M,3)`.
+        parameters : torch.Tensor or None, optional, default=None
+            Conditions of shape :math:`(B,P)` or :math:`(B,1,P)`.
+        query_features : torch.Tensor or None, optional, default=None
+            Aligned features of shape :math:`(B,M,C)`.
+        frame_center : torch.Tensor or None, optional, default=None
+            Coordinate origin of shape :math:`(B,3)` or :math:`(B,1,3)`.
+            A three-element tensor broadcasts one origin across the batch.
+            Overrides ``center_on_geometry``. When omitted, use the geometry's
+            bounding-box midpoint if ``center_on_geometry=True``, otherwise zero.
+            Both clouds are divided by ``coordinate_scale``.
+
+        Returns
+        -------
+        torch.Tensor
+            Predictions of shape :math:`(B,M,\mathrm{out\_dim})`. Evaluation
+            decodes at most ``eval_chunk_size`` queries at once.
+        """
         if not torch.compiler.is_compiling():
             self._validate_coordinates(geometry)
-            for field, queries in (
-                ("surface", surface_queries),
-                ("volume", volume_queries),
+        batch = geometry.shape[0]
+        if not torch.compiler.is_compiling():
+            self._validate_coordinates(queries, batch)
+            if self.query_feature_channels:
+                if (
+                    query_features is None
+                    or query_features.shape
+                    != (*queries.shape[:2], self.query_feature_channels)
+                    or not query_features.is_floating_point()
+                    or query_features.device != queries.device
+                ):
+                    actual_shape = (
+                        None if query_features is None else tuple(query_features.shape)
+                    )
+                    raise ValueError(
+                        f"Expected tensor of shape (B, M, {self.query_feature_channels}) "
+                        f"but got tensor of shape {actual_shape} for query_features. "
+                        f"Expected floating-point values on {queries.device}"
+                    )
+            elif query_features is not None:
+                raise ValueError("query_features are disabled")
+            if queries.device != geometry.device:
+                raise ValueError("Queries must be on the geometry device")
+            if frame_center is not None and (
+                frame_center.shape
+                not in ((3,), (1, 3), (1, 1, 3), (batch, 3), (batch, 1, 3))
+                or not frame_center.is_floating_point()
+                or frame_center.device != geometry.device
+                or not torch.isfinite(frame_center).all()
             ):
-                if queries is not None:
-                    self._validate_coordinates(queries, geometry.shape[0])
-                    if queries.device != geometry.device:
-                        raise ValueError("Queries must be on the geometry device")
-                    if not getattr(self, f"{field}_channels"):
-                        raise ValueError(f"The {field} head is disabled")
-        contexts = self.encode_geometry(
-            geometry, parameters, generator=geometry_generator
-        )
-        surface = (
-            None
-            if surface_queries is None
-            else self.decode_queries(
-                surface_queries,
-                contexts,
-                parameters,
-                field="surface",
-                query_features=surface_query_features,
+                raise ValueError(
+                    "Expected tensor of shape (B, 3) or (B, 1, 3), including B=1, or (3,) "
+                    f"but got tensor of shape {tuple(frame_center.shape)} for frame_center. "
+                    f"Expected finite floating-point coordinates on {geometry.device}"
+                )
+            if parameters is not None and parameters.shape not in (
+                (batch, self.parameter_channels),
+                (batch, 1, self.parameter_channels),
+            ):
+                raise ValueError(
+                    f"Expected tensor of shape (B, {self.parameter_channels}) or "
+                    f"(B, 1, {self.parameter_channels}) but got tensor of shape "
+                    f"{tuple(parameters.shape)} for parameters"
+                )
+        if parameters is not None:
+            parameters = parameters.reshape(batch, self.parameter_channels)
+        if not torch.compiler.is_compiling():
+            self._validate_parameters(parameters, batch, geometry.device)
+        if frame_center is None and self.center_on_geometry:
+            frame_center = (geometry.amin(dim=1) + geometry.amax(dim=1)) * 0.5
+        if frame_center is not None:
+            center = frame_center.reshape(-1, 1, 3)
+            geometry = geometry - center
+            queries = queries - center
+        scale = geometry.new_tensor(self.coordinate_scale)
+        geometry = geometry / scale
+        queries = queries / scale
+        contexts = self.encode_geometry(geometry, parameters)
+        if self.training or queries.shape[1] == 0:
+            return self.decode_queries(
+                queries, contexts, parameters, query_features=query_features
             )
+        return torch.cat(
+            [
+                self.decode_queries(
+                    queries[:, start : start + self.eval_chunk_size],
+                    contexts,
+                    parameters,
+                    query_features=query_features[
+                        :, start : start + self.eval_chunk_size
+                    ]
+                    if query_features is not None
+                    else None,
+                )
+                for start in range(0, queries.shape[1], self.eval_chunk_size)
+            ],
+            dim=1,
         )
-        volume = (
-            None
-            if volume_queries is None
-            else self.decode_queries(
-                volume_queries,
-                contexts,
-                parameters,
-                field="volume",
-                query_features=volume_query_features,
-            )
-        )
-        return surface, volume

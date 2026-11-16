@@ -59,6 +59,9 @@ Choosing the right API
 * Implementing a single attention block or need full control over the table
   layout?  Call the functional helpers directly and apply them with
   :func:`apply_rotary_pos_emb`.
+* Using continuous coordinates? Build tables with
+  :func:`build_rope_cos_sin_1d_continuous` once per coordinate set and reuse
+  them across blocks with :func:`apply_rotary_pos_emb`.
 
 Math (axial 2D RoPE)
 --------------------
@@ -196,11 +199,42 @@ def build_rope_cos_sin_1d(
     freqs = theta ** (-k / head_dim)  # (head_dim/2,)
 
     pos = torch.arange(seq_len, dtype=torch.float32, device=device)
-    ang = pos[:, None] * freqs[None, :]  # (seq_len, head_dim/2)
+    return build_rope_cos_sin_1d_continuous(pos, freqs)
 
-    cos = ang.cos().repeat_interleave(2, dim=-1)  # (seq_len, head_dim)
-    sin = ang.sin().repeat_interleave(2, dim=-1)
-    return cos.contiguous(), sin.contiguous()
+
+def build_rope_cos_sin_1d_continuous(
+    positions: Float[torch.Tensor, "..."],
+    frequencies: Float[torch.Tensor, "F"],  # noqa: F821
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""Build RoPE tables from continuous scalar positions and a frequency schedule.
+
+    Parameters
+    ----------
+    positions : torch.Tensor
+        Floating-point coordinates of arbitrary shape, including batch axes.
+    frequencies : torch.Tensor
+        One-dimensional frequency schedule of shape :math:`(F,)` on the same
+        device as ``positions``. Each frequency rotates one adjacent pair.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        Cosine and sine tables of shape ``(*positions.shape, 2 * F)``. Phase
+        arithmetic uses float32, or float64 if either input is float64. Tables
+        retain coordinate gradients and can be reused across attention blocks.
+    """
+    if not torch.compiler.is_compiling():
+        if not positions.is_floating_point() or not frequencies.is_floating_point():
+            raise ValueError("positions and frequencies must be floating point")
+        if frequencies.ndim != 1 or frequencies.numel() == 0:
+            raise ValueError("frequencies must be a nonempty one-dimensional tensor")
+    dtype = (
+        torch.float64
+        if torch.float64 in (positions.dtype, frequencies.dtype)
+        else torch.float32
+    )
+    phase = positions.to(dtype).unsqueeze(-1) * frequencies.to(dtype)
+    return phase.cos().repeat_interleave(2, -1), phase.sin().repeat_interleave(2, -1)
 
 
 def apply_rotary_pos_emb(
@@ -220,8 +254,8 @@ def apply_rotary_pos_emb(
 
     This is the standard *rotate-half* formulation
     ``x * cos + rotate_half(x) * sin``.  The arithmetic is promoted to fp32
-    regardless of ``x``'s dtype (the sign-flipped term accumulates error in
-    half precision) and cast back before returning.
+    for half-precision inputs (the sign-flipped term accumulates error in
+    half precision), preserves float64 inputs/tables, and casts back before returning.
 
     Call this directly when you manage the cos/sin tables
     yourself — for example, inside a custom NATTEN or domain-parallel attention
@@ -247,7 +281,12 @@ def apply_rotary_pos_emb(
         Rotated tensor of the same shape and dtype as ``x``.
     """
     in_dtype = x.dtype
-    x = x.float()
+    dtype = (
+        torch.float64
+        if torch.float64 in (x.dtype, cos.dtype, sin.dtype)
+        else torch.float32
+    )
+    x, cos, sin = x.to(dtype), cos.to(dtype), sin.to(dtype)
 
     # rotate_half: swap adjacent channel pairs with a sign flip, mapping
     # (x0, x1, x2, x3, ...) -> (-x1, x0, -x3, x2, ...). Stacking (-x_odd, x_even)

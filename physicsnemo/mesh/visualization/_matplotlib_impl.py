@@ -498,11 +498,9 @@ def _draw_2d(
             zorder=2,
         )
 
-    ### Set axis limits based on data
-    if len(points_np) > 0:
-        margin = 0.05 * (points_np.max() - points_np.min())
-        ax.set_xlim(points_np[:, 0].min() - margin, points_np[:, 0].max() + margin)
-        ax.set_ylim(points_np[:, 1].min() - margin, points_np[:, 1].max() + margin)
+    ### add_collection does not rescale the view, so fit it to all the data
+    ### drawn on ax. A no-op on axes whose limits the caller fixed.
+    ax.autoscale_view()
 
 
 def _draw_3d(
@@ -611,9 +609,7 @@ def _draw_3d(
             zorder=2,
         )
 
-    ### Set axis limits based on data
-    if len(points_np) > 0:
-        margin = 0.01 * (points_np.max() - points_np.min())
-        ax.set_xlim(points_np[:, 0].min() - margin, points_np[:, 0].max() + margin)
-        ax.set_ylim(points_np[:, 1].min() - margin, points_np[:, 1].max() + margin)
-        ax.set_zlim(points_np[:, 2].min() - margin, points_np[:, 2].max() + margin)
+    ### Fit the view to all the data drawn on ax; draw_mesh_matplotlib then
+    ### makes it an equal-aspect cube and fixes the limits.
+    ax.set_autoscale_on(True)
+    ax.autoscale_view()

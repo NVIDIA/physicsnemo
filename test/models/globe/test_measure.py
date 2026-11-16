@@ -34,9 +34,9 @@ amplified to that power.  These tests pin the consumption contract:
 
 import torch
 
-from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh.calculus.measure import scale_measures
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.models.globe import GLOBE
 
 SEED = 7
 

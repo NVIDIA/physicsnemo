@@ -54,7 +54,7 @@ torch.serialization.add_safe_globals([omegaconf.base.Metadata])
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.experimental.uq import VariationalGPHead
+from physicsnemo.experimental.uq.gp import VariationalGPHead
 
 from utils import CombinedOptimizer
 from gp_utils import (

@@ -60,7 +60,8 @@ def merge_duplicate_points(
     cells : torch.Tensor
         Cell connectivity, shape (n_cells, n_vertices_per_cell).
     point_data : TensorDict
-        Point data to merge (values are averaged across merged groups).
+        Point data to merge (values are averaged across merged groups; point
+        measures are summed).
     tolerance : float, optional
         Absolute L2 distance threshold for considering two points as
         duplicates.
@@ -140,7 +141,7 @@ def _merge_point_data(
     unique_indices: torch.Tensor,
     n_unique: int,
 ) -> TensorDict:
-    """Merge point data by averaging over merged points.
+    """Merge point data by averaging over merged points (summing point measures).
 
     Parameters
     ----------
@@ -176,20 +177,29 @@ def _merge_point_data(
     output_indices = reverse_map[point_mapping]
 
     ### For each unique point, average the data from all points that map to it
-    def _merge_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    def _merge_tensor(tensor: torch.Tensor, aggregation: str = "mean") -> torch.Tensor:
         ### Use scatter aggregation utility
         return scatter_aggregate(
             src_data=tensor,
             src_to_dst_mapping=output_indices,
             n_dst=n_unique,
             weights=None,
-            aggregation="mean",
+            aggregation=aggregation,
         )
 
-    return point_data.apply(
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+    merged = point_data.exclude(EFFECTIVE_MEASURE_KEY).apply(
         _merge_tensor,
         batch_size=torch.Size([n_unique]),
     )
+    # Point measures are complete contributions to integrals: merged points
+    # carry the sum of their measures
+    if EFFECTIVE_MEASURE_KEY in point_data.keys():
+        merged[EFFECTIVE_MEASURE_KEY] = _merge_tensor(
+            point_data[EFFECTIVE_MEASURE_KEY], "sum"
+        )
+    return merged
 
 
 def remove_duplicate_cells(

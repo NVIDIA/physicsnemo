@@ -71,7 +71,7 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.transolver_datapipe import create_transolver_dataset
 
-from physicsnemo.experimental.uq import VariationalGPHead
+from physicsnemo.experimental.uq.gp import VariationalGPHead
 
 from train import (
     CombinedOptimizer,

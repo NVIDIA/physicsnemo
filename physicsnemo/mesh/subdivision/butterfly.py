@@ -162,9 +162,12 @@ def compute_butterfly_weights_2d(
     is_interior = edge_tri_pairs[:, 1] >= 0
 
     ### Step 3: Boundary edges → simple average, computed for every edge
+    # In the points' dtype, but at least float32, since sums of positions can
+    # overflow float16; the positions are cast back to the points' dtype
+    points = mesh.points.to(torch.promote_types(mesh.points.dtype, torch.float32))
     v0 = unique_edges[:, 0]  # (n_edges,)
     v1 = unique_edges[:, 1]  # (n_edges,)
-    boundary_midpoints = (mesh.points[v0] + mesh.points[v1]) / 2
+    boundary_midpoints = (points[v0] + points[v1]) / 2
 
     ### Step 4: Interior edges → 8-point butterfly stencil, also for every edge
     # torch.where keeps it for the interior edges at the end; selecting them by
@@ -189,10 +192,7 @@ def compute_butterfly_weights_2d(
 
     ### 4-point base contribution: 1/2·v0 + 1/2·v1 + 1/8·a + 1/8·b
     midpoint = (
-        0.5 * mesh.points[v0]
-        + 0.5 * mesh.points[v1]
-        + 0.125 * mesh.points[a]
-        + 0.125 * mesh.points[b]
+        0.5 * points[v0] + 0.5 * points[v1] + 0.125 * points[a] + 0.125 * points[b]
     )  # (n_edges, n_spatial_dims)
 
     ### Step 5: Wing vertices (−1/16 each)
@@ -247,10 +247,12 @@ def compute_butterfly_weights_2d(
 
         # Edges without this wing vertex subtract zero, which leaves them as they are
         midpoint -= torch.where(
-            has_wing.unsqueeze(-1), (1.0 / 16.0) * mesh.points[wing_vert], 0.0
+            has_wing.unsqueeze(-1), (1.0 / 16.0) * points[wing_vert], 0.0
         )
 
-    return torch.where(is_interior.unsqueeze(-1), midpoint, boundary_midpoints)
+    return torch.where(is_interior.unsqueeze(-1), midpoint, boundary_midpoints).to(
+        mesh.points.dtype
+    )
 
 
 def subdivide_butterfly(mesh: "Mesh") -> "Mesh":

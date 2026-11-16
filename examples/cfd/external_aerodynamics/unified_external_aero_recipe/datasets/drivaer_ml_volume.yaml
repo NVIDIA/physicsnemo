@@ -51,6 +51,7 @@ pipeline:
       axes: ["z"]
       mode: axis_aligned
       transform_point_data: true
+      transform_cell_data: true      # the vehicle's wall shear
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
@@ -103,3 +104,9 @@ targets:
   velocity: vector
   pressure: scalar
   nut: scalar
+
+# Conventions of the stored vehicle surface, read by the integrated force
+# coefficients (src/forces.py) when a model config adds wall targets from it
+# (drivaer_ml_surface.yaml declares the same).
+surface_normals_point: inward
+wall_shear_acts_on: fluid
