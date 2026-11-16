@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GeoTransolver (FLARE variant) baseline on the full-resolution Yaris mesh under
+# the protocol of px_yaris_deformer: the same backbone width and depth, Fourier
+# time code as node input and global token, Muon, cosine schedule, 60 epochs,
+# physical loss, split and horizon. The point model reads coordinates, thickness
+# and the time label and ignores the kNN neighbourhoods the datapipe builds
+# (they are cached once like the DeFormer's). FLARE blocks and the geometry
+# context are checkpointed so the 1.48M-node forward fits one GPU.
+defaults:
+  - px_yaris_deformer
+  - override model: geotransolver_time_conditional
+  - _self_
+
+experiment_name: PX-Yaris-GeoTransolver
+
+training:
+  auxiliary_loss_weight: 0.0   # the point model has no provisional head
+
+
+model:
+  # coords (3) + thickness (1) + fourier time code (32)
+  functional_dim: 36
+  out_dim: 3
+  global_dim: 32
+  n_hidden: 256
+  n_head: 8
+  attention_type: GALE_FA
+  time_embedding: fourier
+  time_fourier_bands: 8
+  time_dim: 32
+  time_as_global: true
+  activation_checkpointing: true
+  checkpointing_ratio: 1.0
+  activation_checkpointing_components: [blocks, context]

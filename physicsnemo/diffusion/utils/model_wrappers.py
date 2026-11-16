@@ -22,12 +22,6 @@ from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
-from physicsnemo.models.diffusion_unets import (
-    DhariwalUNet,
-    SongUNet,
-    SongUNetPosEmbd,
-    SongUNetPosLtEmbd,
-)
 
 
 class ConcatConditionWrapper(Module):
@@ -51,7 +45,7 @@ class ConcatConditionWrapper(Module):
      - :class:`~physicsnemo.models.diffusion_unets.SongUNetPosLtEmbd`,
      - :class:`~physicsnemo.models.diffusion_unets.DhariwalUNet`,
      - :class:`~physicsnemo.models.dit.DiT`.
-     - Any backbone with an forward signatude matching that of the `DiT` model:
+     - Any backbone with a forward signature matching that of the `DiT` model:
        ``model(x, t, condition=None, **model_kwargs)`` where ``condition`` is a
        tensor of shape :math:`(B, d)` and ``**model_kwargs`` are additional
        keyword arguments forwarded to the backbone.
@@ -67,7 +61,7 @@ class ConcatConditionWrapper(Module):
     input to be concatenated (i.e., treated like the value of ``cond_concat``
     when a ``TensorDict`` is passed).
 
-    The wrapper will route arguments approporiately depending on the backbone
+    The wrapper will route arguments appropriately depending on the backbone
     type. The default behavior for unknown backbones is to concatenate the value
     of ``cond_concat`` (if provided) and pass the value of ``cond_vec`` as the
     ``condition`` keyword argument.
@@ -147,6 +141,17 @@ class ConcatConditionWrapper(Module):
         self.model = model
         self.image_cond_key = image_cond_key
         self.vector_cond_key = vector_cond_key
+        # Match defining modules as well as names to avoid unrelated namesakes.
+        self._legacy_unet = isinstance(model, Module) and any(
+            (base.__module__, base.__name__)
+            in {
+                ("physicsnemo.models.diffusion_unets.song_unet", "SongUNet"),
+                ("physicsnemo.models.diffusion_unets.song_unet", "SongUNetPosEmbd"),
+                ("physicsnemo.models.diffusion_unets.song_unet", "SongUNetPosLtEmbd"),
+                ("physicsnemo.models.diffusion_unets.dhariwal_unet", "DhariwalUNet"),
+            }
+            for base in type(model).__mro__
+        )
 
     def forward(
         self,
@@ -246,9 +251,7 @@ class ConcatConditionWrapper(Module):
         if cond_concat is not None:
             x = torch.cat([x, cond_concat], dim=1)
 
-        if isinstance(
-            self.model, (SongUNet, SongUNetPosEmbd, SongUNetPosLtEmbd, DhariwalUNet)
-        ):
+        if self._legacy_unet:
             augment_labels = model_kwargs.pop("augment_labels", None)
             return self.model(
                 x,

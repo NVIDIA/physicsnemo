@@ -45,8 +45,6 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float
 
-from physicsnemo.mesh.utilities._tolerances import safe_eps
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -127,7 +125,8 @@ def compute_divergence_points_dec(
     divergence.scatter_add_(0, v1_indices, -weighted_flux)
 
     ### Normalize by dual 0-cell volumes
-    divergence = divergence / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
+    # Isolated vertices (zero dual volume, zero sum) keep their 0
+    divergence = divergence / torch.where(dual_volumes_0 > 0, dual_volumes_0, 1.0)
 
     return divergence
 

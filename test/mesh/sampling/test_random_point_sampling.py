@@ -585,3 +585,23 @@ def test_random_sampling_preserves_mesh_dtype():
         mesh, cell_indices=torch.zeros(64, dtype=torch.int64)
     )
     assert samples.dtype == torch.float64
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("alpha", [1.0, 2.0])
+def test_random_sampling_reduced_precision(dtype, alpha):
+    """Regression: float16/bfloat16 meshes sample for any alpha (CPU has no
+    reduced-precision Gamma kernel) and return points in the mesh dtype."""
+    torch.manual_seed(0)
+    points = torch.tensor([[1.0, 1.0], [2.0, 1.0], [1.0, 2.0]], dtype=dtype)
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+    samples = sample_random_points_on_cells(
+        mesh, cell_indices=torch.zeros(256, dtype=torch.int64), alpha=alpha
+    )
+    assert samples.dtype == dtype
+    assert samples.shape == (256, 2)
+    # Inside the cell x >= 1, y >= 1, x + y <= 3, up to the dtype's rounding
+    tol = 2 * torch.finfo(dtype).eps * 3
+    samples = samples.double()
+    assert (samples >= 1.0 - tol).all()
+    assert (samples.sum(dim=-1) <= 3.0 + tol).all()

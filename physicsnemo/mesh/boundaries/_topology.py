@@ -52,7 +52,8 @@ def is_watertight(mesh: "Mesh") -> bool:
     Returns
     -------
     bool
-        True if mesh is watertight (no boundary facets), False otherwise
+        True if every codimension-1 facet is shared by exactly 2 cells,
+        False otherwise
 
     Examples
     --------

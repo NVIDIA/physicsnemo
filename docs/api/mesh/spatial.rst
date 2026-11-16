@@ -152,6 +152,8 @@ Summary
    ClusterTree
    DualInteractionPlan
    SourceAggregates
+   canonical_frame
+   frame_coordinates
    signed_distance_field
 
 Related Topics

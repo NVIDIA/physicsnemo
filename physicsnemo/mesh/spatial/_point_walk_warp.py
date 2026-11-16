@@ -133,6 +133,7 @@ def _count_kernel(
     right: wp.array(dtype=wp.int64),
     leaf_count: wp.array(dtype=wp.int64),
     roots: wp.array(dtype=wp.int64),
+    rows: wp.array(dtype=wp.int64),
     theta_sq: Any,
     mode: int,
     d: int,
@@ -144,11 +145,13 @@ def _count_kernel(
     overflow: wp.array(dtype=wp.int64),
 ):
     """Thread ``t * n_q + q``: target ``q``'s near sources, far nodes and
-    visited nodes in tree ``t``, written at ``q * n_t + t``. A walk whose stack
-    would pass ``WALK_STACK`` entries stops and sets ``overflow``."""
+    visited nodes in tree ``t`` (the target read from its row ``rows[t] * n_q +
+    q``), written at ``q * n_t + t``. A walk whose stack would pass
+    ``WALK_STACK`` entries stops and sets ``overflow``."""
     tid = wp.tid()
     t = tid // n_q
     q = tid - t * n_q
+    row = int(rows[t]) * n_q + q
     stack = _walk_stack()
     stack[0] = wp.int32(roots[t])
     top = int(1)
@@ -159,7 +162,7 @@ def _count_kernel(
         top -= 1
         m = int(stack[top])
         visit += wp.int64(1)
-        if _is_far(pts, q, lo, hi, diam_sq, admissible, m, d, theta_sq, mode):
+        if _is_far(pts, row, lo, hi, diam_sq, admissible, m, d, theta_sq, mode):
             far += wp.int64(1)
         elif left[m] < wp.int64(0):
             near += leaf_count[m]
@@ -187,6 +190,7 @@ def _fill_kernel(
     right: wp.array(dtype=wp.int64),
     leaf_count: wp.array(dtype=wp.int64),
     roots: wp.array(dtype=wp.int64),
+    rows: wp.array(dtype=wp.int64),
     theta_sq: Any,
     mode: int,
     d: int,
@@ -204,17 +208,19 @@ def _fill_kernel(
     far_target: wp.array(dtype=wp.int64),
     far_node: wp.array(dtype=wp.int64),
 ):
-    """Thread ``t * n_q + q``: target ``q``'s entries in tree ``t``, level by
-    level, near sources from ``near_start`` and far nodes from ``far_start``.
-    A level's buffer holds the previous level's opened nodes as (left, right)
-    pairs in its order, so its even entries then its odd ones are the torch
-    walk's order at that depth. The levels alternate between the front of the
+    """Thread ``t * n_q + q``: target ``q``'s entries in tree ``t`` (read from
+    the row of :func:`_count_kernel`), level by level, near sources from
+    ``near_start`` and far nodes from ``far_start``. A level's buffer holds
+    the previous level's opened nodes as (left, right) pairs in its order, so
+    its even entries then its odd ones are the torch walk's order at that
+    depth. The levels alternate between the front of the
     thread's scratch (entry ``j`` at ``base + j``) and its back (at
     ``last - j``); two consecutive levels are disjoint sets of the thread's
     visited nodes, so they fit together."""
     tid = wp.tid()
     t = tid // n_q
     q = tid - t * n_q
+    row = int(rows[t]) * n_q + q
     i = q * n_t + t
     near_at = near_start[i]
     far_at = far_start[i]
@@ -234,7 +240,7 @@ def _fill_kernel(
                     m = int(scratch[base + wp.int64(j)])
                 else:
                     m = int(scratch[last - wp.int64(j)])
-                if _is_far(pts, q, lo, hi, diam_sq, admissible, m, d, theta_sq, mode):
+                if _is_far(pts, row, lo, hi, diam_sq, admissible, m, d, theta_sq, mode):
                     far_target[far_at] = q64
                     far_node[far_at] = wp.int64(m)
                     far_at += wp.int64(1)
@@ -284,15 +290,17 @@ def point_walk(
     *,
     count_only: bool,
     max_elements: int,
+    root_rows: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, ...] | None:
     """The walk of ``find_point_interaction_pairs`` for a nonempty tree of 2
-    or 3 dimensions, nonempty ``targets`` of its dimension on its device (the
-    caller checks them) and ``theta > 0``: ``(near_target,
+    or 3 dimensions, nonempty ``targets`` ``(M, D)`` of its dimension on its
+    device, or ``(R, M, D)`` with each root's row ``root_rows`` (the caller
+    checks them), and ``theta > 0``: ``(near_target,
     near_source, far_target, far_node)``, or with ``count_only`` the counts
     ``(n_near, n_far)`` per target. ``None`` when a walk passes the stack or
     an array would hold ``max_elements`` entries or more. One host read."""
     device = tree.node_aabb_min.device
-    n_q, d = targets.shape[0], tree.n_spatial_dims
+    n_q, d = targets.shape[-2], tree.n_spatial_dims
     n_t = tree.root_ids.shape[0]
     theta_sq = theta * theta
     ### Reduced-precision values are widened exactly to float32 and the kernels
@@ -321,6 +329,7 @@ def point_walk(
         as_long(tree.node_right_child),
         as_long(tree.leaf_count),
         as_long(tree.root_ids),
+        as_long(torch.zeros_like(tree.root_ids) if root_rows is None else root_rows),
         scalar(theta_sq),
         mode,
         d,

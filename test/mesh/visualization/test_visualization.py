@@ -779,6 +779,51 @@ def test_draw_1d_space_fits_view_without_points():
     plt.close("all")
 
 
+@pytest.mark.parametrize("n_spatial_dims", [2, 3])
+def test_draw_overlay_fits_all_meshes(n_spatial_dims):
+    """Meshes drawn on one ax stay in view, at any distance from the origin."""
+    ### Two unit triangles, 10 apart along x, both far from the origin
+    points = torch.eye(3)[:, :n_spatial_dims] + 1000.0
+    first = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+    second = first.translate(torch.tensor([10.0] + [0.0] * (n_spatial_dims - 1)))
+
+    ax = first.draw(show=False, backend="matplotlib")
+    second.draw(show=False, backend="matplotlib", ax=ax)
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+    assert xmin <= 1000.0 and xmax >= 1011.0
+    assert ymin <= 1000.0 and ymax >= 1001.0
+    # The view hugs the meshes: the margins are a fraction of their extent
+    assert xmax - xmin < 2 * 11.0
+    plt.close("all")
+
+
+def test_draw_2d_keeps_fixed_limits():
+    """Limits the caller fixed are kept."""
+    mesh = Mesh(points=torch.eye(3)[:, :2], cells=torch.tensor([[0, 1, 2]]))
+    _, ax = plt.subplots()
+    ax.set_xlim(-20.0, 20.0)
+    ax.set_ylim(-20.0, 20.0)
+    mesh.draw(show=False, backend="matplotlib", ax=ax)
+    assert ax.get_xlim() == (-20.0, 20.0)
+    assert ax.get_ylim() == (-20.0, 20.0)
+    plt.close("all")
+
+
+def test_draw_3d_equal_aspect_survives_later_artists():
+    """An artist added after draw keeps the 3D view an equal-aspect cube."""
+    from physicsnemo.mesh.primitives.surfaces import torus
+
+    mesh = torus.load()
+    ax = mesh.draw(show=False, backend="matplotlib")
+    points = mesh.points.numpy()
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2])
+    ax.figure.canvas.draw()
+    spans = [hi - lo for lo, hi in (ax.get_xlim(), ax.get_ylim(), ax.get_zlim())]
+    assert spans == pytest.approx([spans[0]] * 3)
+    plt.close("all")
+
+
 @pytest.mark.parametrize("n_spatial_dims", [0, 1, 2, 3])
 def test_draw_vertex_cells_with_cell_scalars(n_spatial_dims):
     """Vertex cells draw as markers colored by their cell scalars."""

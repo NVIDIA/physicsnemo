@@ -3,3 +3,4 @@
 *.pt
 *.tfevents*
 *wandb/
+*.nc

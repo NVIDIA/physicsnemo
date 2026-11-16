@@ -21,12 +21,14 @@ metrics, and generating mesh statistics.
 """
 
 from physicsnemo.mesh.validation.quality import compute_quality_metrics
+from physicsnemo.mesh.validation.self_intersection import find_self_intersections
 from physicsnemo.mesh.validation.statistics import compute_mesh_statistics
 from physicsnemo.mesh.validation.validate import validate, validate_mesh
 
 __all__ = [
     "compute_mesh_statistics",
     "compute_quality_metrics",
+    "find_self_intersections",
     "validate",
     "validate_mesh",
 ]
