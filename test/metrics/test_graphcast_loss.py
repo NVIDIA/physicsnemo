@@ -14,11 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+
+import pytest
 import torch
 
 from physicsnemo.metrics.climate.graphcast_loss import (
     CellAreaWeightedLossFunction,
     CustomCellAreaWeightedLossFunction,
+    GraphCastLossFunction,
 )
 
 
@@ -59,3 +63,36 @@ def test_loss(device):
 
     assert torch.allclose(loss1, loss2, atol=atol), loss_diff_msg + " for loss"
     assert torch.allclose(grad1, grad2, atol=atol), grad_diff_msg + " for gradient"
+
+
+@pytest.mark.parametrize(
+    "channel_names",
+    [
+        # surface variables first, pressure levels grouped by variable
+        ["u10m", "t2m", "t500", "t850", "z500"],
+        # interleaved, as in the FourCastNet ERA5 channel layouts
+        ["u10m", "t850", "t2m", "z500", "t500"],
+    ],
+)
+def test_graphcast_loss_variable_weights_follow_channel_order(tmp_path, channel_names):
+    """Each channel gets its own GraphCast weight, whatever the channel order."""
+    metadata_path = tmp_path / "data.json"
+    metadata_path.write_text(json.dumps({"coords": {"channel": channel_names}}))
+
+    loss_fn = GraphCastLossFunction(
+        torch.ones(2, 2), list(range(len(channel_names))), str(metadata_path), None
+    )
+
+    # t2m: 1, other surface variables: 0.1, pressure levels: level / sum of the
+    # levels of the same variable
+    expected = {
+        "u10m": 0.1,
+        "t2m": 1.0,
+        "t500": 500 / 1350,
+        "t850": 850 / 1350,
+        "z500": 1.0,
+    }
+    torch.testing.assert_close(
+        loss_fn.variable_weights,
+        torch.tensor([expected[name] for name in channel_names]),
+    )
