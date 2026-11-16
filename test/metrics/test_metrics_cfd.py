@@ -129,3 +129,31 @@ def test_compute_tke_spectrum_length():
     # Wavenumbers scale inversely with the domain length
     mk_unit, _, _, _ = compute_tke_spectrum(field, length=1.0)
     np.testing.assert_allclose(mk_unit, mk_default * 2 * np.pi)
+
+
+@pytest.mark.parametrize("n", [8, 9])
+def test_compute_tke_spectrum_single_mode(n):
+    # u = cos(k0 x) carries all of its energy, 0.5 * mean(u^2) = 0.25, at |k| = k0.
+    # Half of it sits in the FFT bin of the negative wavenumber -k0, which must
+    # land on the same shell as +k0.
+    k0 = 2
+    x = np.arange(n) * 2 * np.pi / n
+    X, Y, Z = np.meshgrid(x, x, x, indexing="ij")
+    zeros = np.zeros_like(X)
+    field = np.stack([np.cos(k0 * X), zeros, zeros])
+
+    _, _, _, tke = compute_tke_spectrum(field)
+
+    expected = np.zeros(n + 1)
+    expected[k0] = 0.25
+    np.testing.assert_allclose(tke, expected, atol=1e-12)
+
+
+def test_compute_tke_spectrum_parseval():
+    # The binned spectrum keeps all of the kinetic energy (Parseval).
+    n = 16
+    field = np.random.default_rng(0).standard_normal((3, n, n, n))
+
+    _, _, _, tke = compute_tke_spectrum(field)
+
+    np.testing.assert_allclose(tke.sum(), 0.5 * np.mean(np.sum(field**2, axis=0)))
