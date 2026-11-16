@@ -437,3 +437,37 @@ def test_WeightedOceanMSE(
         rtol=rtol,
         atol=atol,
     )
+
+
+@pytest.mark.parametrize("loss_cls", [OceanMSE, WeightedOceanMSE])
+def test_ocean_mse_normalizes_per_batch(device, loss_cls):
+    """The land-sea-mask normalization must follow the current batch size.
+
+    A smaller batch after a larger one (e.g. a final or validation batch) must
+    still give the masked mean, not one scaled by the first batch's size.
+    """
+    faces, channels, height, width = 12, 2, 4, 4
+    kwargs = {"weights": [1.0] * channels} if loss_cls is WeightedOceanMSE else {}
+    loss_fn = loss_cls("unused.zarr", **kwargs)
+    # Skip setup() (it reads the mask from disk) and set the ocean fraction
+    # directly, with the same [1, F, 1, 1, H, W] layout setup() produces.
+    loss_fn.lsm_tensor = torch.rand(1, faces, 1, 1, height, width, device=device)
+    if loss_cls is WeightedOceanMSE:
+        loss_fn.loss_weights = loss_fn.loss_weights.to(device)
+
+    for batch_size in (4, 1):
+        shape = (batch_size, faces, 1, channels, height, width)
+        pred = torch.randn(shape, device=device)
+        targ = torch.randn(shape, device=device)
+
+        lsm = torch.broadcast_to(loss_fn.lsm_tensor, shape)
+        sq_err = (targ - pred) ** 2 * lsm
+        expected_mean = sq_err.sum() / lsm.sum()
+        expected_per_channel = sq_err.sum(dim=(0, 1, 2, 4, 5)) / lsm.sum(
+            dim=(0, 1, 2, 4, 5)
+        )
+
+        torch.testing.assert_close(loss_fn(pred, targ), expected_mean)
+        torch.testing.assert_close(
+            loss_fn(pred, targ, average_channels=False), expected_per_channel
+        )
