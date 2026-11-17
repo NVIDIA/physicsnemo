@@ -33,7 +33,7 @@ import hydra
 
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
-from hydra import to_absolute_path
+from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
 # Get the absolute path to the parent directory
@@ -45,7 +45,8 @@ from utils import find_h5_files
 
 def process_file(h5_file):
     """
-    Processes a single .h5 file to compute the sum, sum of squares, and count for each variable.
+    Processes a single .h5 file to compute the mean and the mean of squares of each
+    variable over its non-NaN voxels.
     """
     print(h5_file)
     with h5py.File(h5_file, "r") as hf:
@@ -118,8 +119,8 @@ def save_stats_to_json(mean, std_dev, output_file):
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     data_path = to_absolute_path(
-        cfg.partitions_path
-    )  # Directory containing the .bin graph files with partitions
+        cfg.h5_path
+    )  # Directory containing the .h5 voxel grids for training
     output_file = to_absolute_path(cfg.stats_file)  # File to save the global statistics
 
     # Find all .h5 files in the directory

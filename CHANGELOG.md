@@ -497,6 +497,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package's only export. Legacy import shims keep the old
   `physicsnemo.experimental.models.globe` paths and saved checkpoints working
   and emit a `LegacyFeatureWarning`.
+- `physicsnemo.mesh.generate.marching_cubes` keeps a CUDA field on its GPU and
+  returns the mesh on the field's device, so a CUDA field no longer makes a
+  round trip through host memory and `coords` on a CUDA device no longer raise
+  a device error. CPU fields run as before.
 - `FunctionSpec.warp_stream_scope` reuses one Warp guard stream per device
   instead of creating one on every call, so back-to-back calls of the Warp
   wrappers that use it no longer stall the host.
@@ -1027,6 +1031,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The transient conjugate heat transfer tank filling example trains again, on
   one GPU or several. Before, its `train.py` stopped with a `TypeError` before
   the first step.
+- The XAeroNet volume example's `compute_stats.py` starts again, and reads the
+  training voxel grids from the `h5_path` of its config. Before, it stopped
+  with an `ImportError`, and then looked for a `partitions_path` key that only
+  the surface recipe's config has.
+- The transient conjugate heat transfer tank filling example's `compute_stats`
+  no longer leaves a file out of the volume minimum and maximum when that
+  file's `surface_fields` array is empty.
 - Importing `physicsnemo.domain_parallel` no longer breaks `torch.compile` for
   the whole process when nothing has imported `torch._dynamo` before it.
 - `MeshReader` and `DomainMeshReader` implement `close()`, so
