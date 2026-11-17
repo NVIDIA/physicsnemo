@@ -38,7 +38,9 @@ from torch.utils.data.dataloader import DataLoader
 
 # Get the absolute path to the parent directory
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.append(parent_dir)
+# Put the parent directory first so its utils.py is found before any other
+# top-level `utils` on sys.path (for example, the one CUTLASS DSL adds).
+sys.path.insert(0, parent_dir)
 
 from utils import find_bin_files
 
