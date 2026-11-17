@@ -341,8 +341,7 @@ class ArGEnT(Module):
         if mask_kv is not None:
             x_kv = x_kv.masked_fill(mask_kv.reshape(*x_kv.shape[:2], 1) == 0, 0.0)
 
-        # The activation is also applied after the last embedding layer.
-        tokens = self.activation(self.kv_to_embedding(x_kv))
+        tokens = self.kv_to_embedding(x_kv)
         return ArGEnTGeometry(tokens, x_kv[..., : self.dim_pos], mask_kv)
 
     def decode_queries(
@@ -377,8 +376,7 @@ class ArGEnT(Module):
                     f"but got tensor of shape {tuple(x_query.shape)}"
                 )
 
-        # The activation is also applied after the last embedding layer.
-        x_query_emb = self.activation(self.query_to_embedding(x_query))
+        x_query_emb = self.query_to_embedding(x_query)
         x_query_emb = self.transformer(
             x_query_emb,
             geometry.tokens,
