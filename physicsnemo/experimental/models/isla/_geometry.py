@@ -684,129 +684,6 @@ def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     return torch.cat(out)
 
 
-def _affine_min_norm(a: torch.Tensor, q: torch.Tensor, free: torch.Tensor):
-    """The least-norm point ``y = a + sum_s v_s q_s`` of each row's affine set ``(n,
-    d)`` and its weights ``v`` ``(n, m)``, 0 off the columns ``free`` ``(n, m)`` (where
-    ``q`` ``(n, m, d)`` is 0), by modified Gram-Schmidt on the columns and ``a``, which
-    is as stable for least squares as Householder QR (Bjorck 1967). ``y`` is the
-    residual of ``a``, projected once more, so it is orthogonal to the columns to the
-    rounding of ``|y|``, not of ``|a|``: near the origin the next major step's
-    ``c_k . y`` keep their accuracy. The steps are elementwise along the rows, with
-    sums over at most ``d`` terms, so a row's bits do not depend on its batch (CUDA's
-    ``torch.linalg.qr`` gives a batch of one other bits)."""
-    m = q.shape[1]
-    e, r, coef, y = [], [], [], a
-    for s in range(m):
-        u, col = q[:, s], []
-        for t in range(s):
-            col.append((e[t] * u).sum(-1))
-            u = u - col[t][:, None] * e[t]
-        norm = (u * u).sum(-1).sqrt()
-        col.append(torch.where(free[:, s], norm, 1.0))
-        e.append(torch.where(free[:, s, None], u / norm[:, None], 0.0))
-        coef.append((e[s] * y).sum(-1))
-        y = y - coef[s][:, None] * e[s]
-        r.append(col)
-    for t in range(m):
-        y = y - (e[t] * y).sum(-1, keepdim=True) * e[t]
-    v = [None] * m
-    for t in reversed(range(m)):
-        v[t] = (-coef[t] - sum(r[s][t] * v[s] for s in range(t + 1, m))) / r[t][t]
-    return y, torch.stack(v, 1)
-
-
-def _wolfe_min_norm_torch(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
-    """The reference of :func:`_wolfe_min_norm`, in torch over all the rows at once
-    (about 150 small kernels per step on CUDA).
-
-    The least-norm point of the hull of each row's directions ``c`` ``(n, K, d)``
-    where ``valid`` ``(n, K)`` (padding elsewhere) ``(n, d)``, by Wolfe's active-set
-    method (1976) over all the rows at once. Each row keeps a corral of at most ``d +
-    1`` directions and their weights. A major step keeps the row's least-norm point
-    ``x`` that meets :func:`_hull_candidates`'s certificate, ``min_k c_k . x >=
-    |x|^2`` to the same rounding slack, and adds the direction of least ``c_k . x``
-    while that is below ``|x|^2``. A minor step moves ``x`` to the corral's least-norm
-    affine point (:func:`_affine_min_norm`, in differences from its heaviest
-    direction, so nearly coincident directions keep their accuracy), or, where a
-    weight there is not positive, as far towards it as the weights stay non-negative,
-    and drops the directions whose weight reaches 0. The norm falls at every major
-    step in exact arithmetic. A row stops when the step would not progress: no
-    direction is below ``|x|^2``, the added direction is in the corral, the corral is
-    full, its system is singular, its norm rises beyond rounding, ``x`` repeats, or,
-    once certified, its norm stops falling. The certificate's slack is absolute, so
-    near the origin it also holds at points up to ``slack / |x|`` farther from the
-    origin than the least-norm one: the result's error is bounded in absolute terms,
-    not relative to ``|x|``. As
-    in :func:`_min_norm_points`, a row with no certified point returns its iterate of
-    least duality gap among those that separate the origin, and 0 when none does. A
-    full corral of positive weights holds the origin in its simplex, which gives
-    exactly 0. Wolfe's steps number a few times ``d`` in practice; their cap only
-    guards rounding cycles."""
-    n, k, d = c.shape
-    m, slots = d + 1, torch.arange(d + 1, device=c.device)
-    slack = 2 * d * torch.finfo(c.dtype).eps
-    rows = torch.arange(n, device=c.device)[:, None]
-    corral = valid.long().argmax(1, keepdim=True).expand(n, m).clone()
-    used, w = slots == 0, (slots == 0).to(c.dtype)
-    used, w = used.expand(n, m).clone(), w.expand(n, m).clone()
-    x = c[rows[:, 0], corral[:, 0]]
-    x_major = torch.full_like(x, torch.nan)
-    active, major = valid.any(1), torch.ones_like(valid[:, 0])
-    last, best_sq, best_gap = (c.new_full((n,), torch.inf) for _ in range(3))
-    best, best_x = c.new_zeros(n, d), c.new_zeros(n, d)
-    for _ in range(64 * m):
-        if not active.any():
-            break
-        dots = (c * x[:, None]).sum(-1).masked_fill(~valid, torch.inf)
-        low, j = dots.min(1)
-        sq = (x * x).sum(-1)
-        step = active & major
-        ok = step & (low >= sq - slack)
-        least = ok & (sq < best_sq)
-        best_sq, best = torch.where(least, sq, best_sq), torch.where(least[:, None], x, best)
-        better = step & ~ok & (low > slack) & (sq - low < best_gap)
-        best_gap, best_x = torch.where(better, sq - low, best_gap), torch.where(better[:, None], x, best_x)
-        ### A certified row stops once its norm stops falling; an uncertified one goes
-        ### on while its norm does not rise beyond rounding (on nearly flat sets it
-        ### falls by less than the rounding of |x|^2 while the gap is still large) and x
-        ### does not repeat (were rounding to give an added direction a weight of at
-        ### most 0, the row would drop it and add it again).
-        stalled = (sq > last + slack) | (ok & (sq >= last)) | (x == x_major).all(1)
-        stuck = ((corral == j[:, None]) & used).any(1) | used.all(1) | stalled | (low >= sq)
-        last, x_major = torch.where(step, sq, last), torch.where(step[:, None], x, x_major)
-        active &= ~(step & stuck)
-        add = (step & active)[:, None] & (slots == (~used).long().argmax(1, keepdim=True))
-        corral, used = torch.where(add, j[:, None], corral), used | add
-        ### The corral's least-norm affine point, from its heaviest direction a:
-        ### x = a + sum_i v_i (c_i - a) over the others (by Gram-Schmidt: the normal
-        ### equations would square the condition number).
-        p = c[rows, corral]
-        anchor = slots == w.argmax(1, keepdim=True)
-        a = (anchor[..., None] * p).sum(1)
-        free = used & ~anchor
-        y, v = _affine_min_norm(a, torch.where(free[..., None], p - a[:, None], 0.0), free)
-        v = v + anchor * (1 - v.sum(1, keepdim=True))
-        y = torch.where(used.all(1, keepdim=True), 0.0, y)
-        active &= torch.isfinite(v).all(1)
-        positive = ((v > 0) | ~used).all(1)
-        ### Where a weight is not positive, the last point of the segment from the
-        ### corral's weights w to v with non-negative weights, dropping a zero weight.
-        ratio = torch.where(used & (v <= 0), w / (w - v).clamp_min(torch.finfo(c.dtype).tiny), torch.inf)
-        theta, drop = ratio.min(1, keepdim=True)
-        theta = theta.clamp_max(1)
-        u = theta * v + (1 - theta) * w
-        keep = used & (u > 0) & (slots != drop)
-        u = torch.where(keep, u, 0.0)
-        z = ((u / u.sum(1, keepdim=True))[..., None] * p).sum(1)
-        move = active & positive
-        x = torch.where(move[:, None], y, torch.where(active[:, None], z, x))
-        w = torch.where(move[:, None], torch.where(used, v, 0.0), torch.where(active[:, None], u, w))
-        used = torch.where(active[:, None] & ~positive[:, None], keep, used)
-        major = positive
-    fallback = torch.where(torch.isfinite(best_gap)[:, None], best_x, 0.0)
-    return torch.where(torch.isfinite(best_sq)[:, None], best, fallback)
-
-
 _mat43d = wp.types.matrix(shape=(4, 3), dtype=wp.float64)
 
 
@@ -820,9 +697,8 @@ def _wolfe_kernel(
     out: wp.array2d(dtype=wp.float64),
     steps: wp.array(dtype=wp.int32),
 ):
-    """Row ``tid`` of :func:`_wolfe_min_norm`: its whole active-set loop, as
-    :func:`_wolfe_min_norm_torch`'s steps on one row, sums in index order; ``steps``
-    gets the number of steps it began."""
+    """Row ``tid`` of :func:`_wolfe_min_norm`: its whole active-set loop, sums in index
+    order; ``steps`` gets the number of steps it began."""
     r = wp.tid()
     k = c.shape[1]
     m = d + 1
@@ -905,7 +781,12 @@ def _wolfe_kernel(
         for i in range(d):
             a[i] = c[r, corral[anchor], i]
         y = a
-        ### The corral's least-norm affine point by Gram-Schmidt (_affine_min_norm).
+        ### The corral's least-norm affine point y = a + sum_s v_s (c_s - a), from its
+        ### heaviest direction a, by modified Gram-Schmidt on the differences and a (as
+        ### stable for least squares as Householder QR, Bjorck 1967; the normal equations
+        ### would square the condition number). y is the residual of a, projected once
+        ### more, so it is orthogonal to the corral to the rounding of |y|, not of |a|:
+        ### near the origin the next major step's c_k . y keep their accuracy.
         e = _mat43d()
         rr = wp.mat44d()
         coef = wp.vec4d()
@@ -1032,11 +913,31 @@ def _wolfe_steps(c: torch.Tensor, valid: torch.Tensor):
 
 def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     """The least-norm point of the hull of each row's directions ``c`` ``(n, K, d)``
-    (float64, ``d`` 2 or 3) where ``valid`` ``(n, K)``, ``(n, d)``: Wolfe's
-    active-set method, the steps of :func:`_wolfe_min_norm_torch` in one Warp kernel
-    with a thread per row, so a row's result does not depend on its batch. It rounds
-    as the reference on CPU but for torch's float64 sqrt, which is not correctly
-    rounded, and gives the same bits on CPU and CUDA."""
+    (float64, ``d`` 2 or 3) where ``valid`` ``(n, K)`` (padding elsewhere), ``(n,
+    d)``, by Wolfe's active-set method (1976), one Warp kernel with a thread per row.
+    Each row keeps a corral of at most ``d + 1`` directions and their weights. A
+    major step keeps the row's least-norm point ``x`` that meets
+    :func:`_hull_candidates`'s certificate, ``min_k c_k . x >= |x|^2`` to the same
+    rounding slack, and adds the direction of least ``c_k . x`` while that is below
+    ``|x|^2``. A minor step moves ``x`` to the corral's least-norm affine point (by
+    Gram-Schmidt in differences from its heaviest direction, so nearly coincident
+    directions keep their accuracy), or, where a weight there is not positive, as far
+    towards it as the weights stay non-negative, and drops the directions whose
+    weight reaches 0. The norm falls at every major step in exact arithmetic. A row
+    stops when the step would not progress: no direction is below ``|x|^2``, the
+    added direction is in the corral, the corral is full, its system is singular, its
+    norm rises beyond rounding, ``x`` repeats (were rounding to give an added
+    direction a weight of at most 0, the row would drop it and add it again), or,
+    once certified, its norm stops falling. The certificate's slack is absolute, so
+    near the origin it also holds at points up to ``slack / |x|`` farther from the
+    origin than the least-norm one: the result's error is bounded in absolute terms,
+    not relative to ``|x|``. As in :func:`_min_norm_points`, a row with no certified
+    point returns its iterate of least duality gap among those that separate the
+    origin, and 0 when none does. A full corral of positive weights holds the origin
+    in its simplex, which gives exactly 0. Wolfe's steps number a few times ``d`` in
+    practice; their cap of ``64 (d + 1)`` only guards rounding cycles. The kernel is
+    compiled without FMA contraction and sums in index order, so a row's result does
+    not depend on its batch, and CPU and CUDA give the same bits."""
     return _wolfe_steps(c, valid)[0]
 
 

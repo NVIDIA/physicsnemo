@@ -1388,6 +1388,105 @@ def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps, monkeypatch):
     assert _certified(c, x).all()
 
 
+def _affine_min_norm_reference(a, q, free):
+    """The torch reference of the kernel's corral solve: the least-norm point ``y = a
+    + sum_s v_s q_s`` of each row's affine set and its weights ``v``, 0 off the
+    columns ``free`` (where ``q`` is 0), by modified Gram-Schmidt on the columns and
+    ``a``, the residual projected once more."""
+    m = q.shape[1]
+    e, r, coef, y = [], [], [], a
+    for s in range(m):
+        u, col = q[:, s], []
+        for t in range(s):
+            col.append((e[t] * u).sum(-1))
+            u = u - col[t][:, None] * e[t]
+        norm = (u * u).sum(-1).sqrt()
+        col.append(torch.where(free[:, s], norm, 1.0))
+        e.append(torch.where(free[:, s, None], u / norm[:, None], 0.0))
+        coef.append((e[s] * y).sum(-1))
+        y = y - coef[s][:, None] * e[s]
+        r.append(col)
+    for t in range(m):
+        y = y - (e[t] * y).sum(-1, keepdim=True) * e[t]
+    v = [None] * m
+    for t in reversed(range(m)):
+        v[t] = (-coef[t] - sum(r[s][t] * v[s] for s in range(t + 1, m))) / r[t][t]
+    return y, torch.stack(v, 1)
+
+
+def _wolfe_reference(c, valid, solve=_affine_min_norm_reference):
+    """The torch reference of ``geometry._wolfe_min_norm``: the kernel's steps over all
+    the rows at once (about 150 small kernels per step on CUDA), with ``solve`` for
+    the corral. Returns each row's point and its number of steps."""
+    n, k, d = c.shape
+    m, slots = d + 1, torch.arange(d + 1, device=c.device)
+    slack = 2 * d * torch.finfo(c.dtype).eps
+    rows = torch.arange(n, device=c.device)[:, None]
+    corral = valid.long().argmax(1, keepdim=True).expand(n, m).clone()
+    used, w = slots == 0, (slots == 0).to(c.dtype)
+    used, w = used.expand(n, m).clone(), w.expand(n, m).clone()
+    x = c[rows[:, 0], corral[:, 0]]
+    x_major = torch.full_like(x, torch.nan)
+    active, major = valid.any(1), torch.ones_like(valid[:, 0])
+    last, best_sq, best_gap = (c.new_full((n,), torch.inf) for _ in range(3))
+    best, best_x = c.new_zeros(n, d), c.new_zeros(n, d)
+    steps = torch.zeros(n, dtype=torch.int32, device=c.device)
+    tiny = torch.finfo(c.dtype).tiny
+    for _ in range(64 * m):
+        if not active.any():
+            break
+        steps += active.to(torch.int32)
+        dots = (c * x[:, None]).sum(-1).masked_fill(~valid, torch.inf)
+        low, j = dots.min(1)
+        sq = (x * x).sum(-1)
+        step = active & major
+        ok = step & (low >= sq - slack)
+        least = ok & (sq < best_sq)
+        best_sq, best = (
+            torch.where(least, sq, best_sq),
+            torch.where(least[:, None], x, best),
+        )
+        better = step & ~ok & (low > slack) & (sq - low < best_gap)
+        best_gap = torch.where(better, sq - low, best_gap)
+        best_x = torch.where(better[:, None], x, best_x)
+        stalled = (sq > last + slack) | (ok & (sq >= last)) | (x == x_major).all(1)
+        in_corral = ((corral == j[:, None]) & used).any(1)
+        stuck = in_corral | used.all(1) | stalled | (low >= sq)
+        last, x_major = (
+            torch.where(step, sq, last),
+            torch.where(step[:, None], x, x_major),
+        )
+        active &= ~(step & stuck)
+        first_free = slots == (~used).long().argmax(1, keepdim=True)
+        add = (step & active)[:, None] & first_free
+        corral, used = torch.where(add, j[:, None], corral), used | add
+        p = c[rows, corral]
+        anchor = slots == w.argmax(1, keepdim=True)
+        a = (anchor[..., None] * p).sum(1)
+        free = used & ~anchor
+        y, v = solve(a, torch.where(free[..., None], p - a[:, None], 0.0), free)
+        v = v + anchor * (1 - v.sum(1, keepdim=True))
+        y = torch.where(used.all(1, keepdim=True), 0.0, y)
+        active &= torch.isfinite(v).all(1)
+        positive = ((v > 0) | ~used).all(1)
+        ratio = torch.where(used & (v <= 0), w / (w - v).clamp_min(tiny), torch.inf)
+        theta, drop = ratio.min(1, keepdim=True)
+        theta = theta.clamp_max(1)
+        u = theta * v + (1 - theta) * w
+        keep = used & (u > 0) & (slots != drop)
+        u = torch.where(keep, u, 0.0)
+        z = ((u / u.sum(1, keepdim=True))[..., None] * p).sum(1)
+        move = active & positive
+        x = torch.where(move[:, None], y, torch.where(active[:, None], z, x))
+        w = torch.where(
+            move[:, None], torch.where(used, v, 0.0), torch.where(active[:, None], u, w)
+        )
+        used = torch.where(active[:, None] & ~positive[:, None], keep, used)
+        major = positive
+    fallback = torch.where(torch.isfinite(best_gap)[:, None], best_x, 0.0)
+    return torch.where(torch.isfinite(best_sq)[:, None], best, fallback), steps
+
+
 def _counted_steps(monkeypatch):
     """The active-set solver's steps per call, those of its slowest row."""
     steps, solve = [], geometry._wolfe_steps
@@ -1526,32 +1625,32 @@ def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(
     assert 0 < sum(steps) <= 16 and _certified(c, x).all()
 
 
-def test_active_set_solver_stops_when_its_iterate_repeats(monkeypatch):
+def test_active_set_solver_stops_when_its_iterate_repeats():
     """Were rounding to give a newly added direction a weight of at most 0, the
     minor step would drop it and the major step add it again, up to the step cap:
-    the solver stops once x repeats, with its best iterate. (The rounding is
-    simulated: in a corral of three directions, all but the heaviest get weights
-    of at most 0, in the torch reference of the kernel's steps.)"""
+    the solver stops once x repeats, with its best iterate. The rounding is
+    simulated in the torch reference, which takes the kernel's steps (a Warp kernel
+    cannot be patched): in a corral of three directions, all but the heaviest get
+    weights of at most 0."""
     c = _ring(192, 1e-9, 2)
-    steps, solve = [], geometry._affine_min_norm
 
     def rounded(a, q, free):
-        steps.append(1)
-        y, v = solve(a, q, free)
+        y, v = _affine_min_norm_reference(a, q, free)
         return y, torch.where(free & (free.sum(1, keepdim=True) > 1), -v.abs(), v)
 
-    monkeypatch.setattr(geometry, "_affine_min_norm", rounded)
-    x = geometry._wolfe_min_norm_torch(c, torch.ones(c.shape[:2], dtype=torch.bool))
-    assert len(steps) <= 8 and (x.norm(dim=-1) > 0.5).all()
+    valid = torch.ones(c.shape[:2], dtype=torch.bool)
+    x, steps = _wolfe_reference(c, valid, solve=rounded)
+    assert steps.max() <= 8 and (x.norm(dim=-1) > 0.5).all()
 
 
 @pytest.mark.parametrize("device", _DEVICES)
-def test_active_set_kernel_takes_the_torch_reference_s_steps(device):
-    """The Warp kernel, a thread per row, takes the torch reference's steps: on
-    caps of every spread and rings in 2D and 3D, padded, its points are within
-    1e-15 of the reference's on CPU (torch's float64 sqrt is not correctly rounded;
-    with a correctly rounded one they agree bitwise), and the same bits on CUDA as
-    on CPU (no FMA contraction, sums in index order)."""
+def test_active_set_kernel_takes_the_reference_s_steps(device):
+    """The Warp kernel, a thread per row, takes the torch reference's steps. On
+    padded caps and rings in 2D and 3D whose directions are 1e-3 apart or more, each
+    row takes as many steps as in the reference, and its point is within 1e-15 of
+    the reference's (torch's float64 sums and sqrt round otherwise than the kernel's
+    in-order sums on some CPUs). On every set, nearly coincident directions too, CUDA
+    gives the same bits as CPU (no FMA contraction, sums in index order)."""
     g = torch.Generator().manual_seed(17)
     for dim in (2, 3):
         for k, spread in ((5, 3.0), (20, 0.4), (60, 1e-3), (192, 1e-7)):
@@ -1561,10 +1660,14 @@ def test_active_set_kernel_takes_the_torch_reference_s_steps(device):
             c = torch.nn.functional.normalize(c, dim=-1)
             perm = torch.randperm(k + 3, generator=g)
             c, valid = c[:, perm], (perm < k).expand(32, -1)
-            x = geometry._wolfe_min_norm(c.to(device), valid.to(device)).cpu()
-            ref = geometry._wolfe_min_norm_torch(c, valid)
-            assert (x - ref).norm(dim=-1).max() <= 1e-15
-            assert torch.equal(x, geometry._wolfe_min_norm(c, valid))
+            x, steps = geometry._wolfe_steps(c, valid)
+            assert torch.equal(
+                x, geometry._wolfe_min_norm(c.to(device), valid.to(device)).cpu()
+            )
+            if spread >= 1e-3:
+                ref, ref_steps = _wolfe_reference(c, valid)
+                assert torch.equal(steps, ref_steps)
+                assert (x - ref).norm(dim=-1).max() <= 1e-15
 
 
 @pytest.mark.parametrize("device", _DEVICES)
