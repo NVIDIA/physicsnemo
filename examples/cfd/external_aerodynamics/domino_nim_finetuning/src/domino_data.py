@@ -67,31 +67,48 @@ def prepare_datasets(cfg: DictConfig):
     else:
         raise ValueError(f"Invalid normalization mode: {cfg.model.normalization}")
 
-    output_dir = Path(cfg.project_dir)
-    paths = {
-        key: output_dir / key.replace("_fields", "_scaling_factors.npy")
-        for key in target_keys
-    }
-    missing = [key for key, path in paths.items() if not path.exists()]
-    factors = {key: np.load(path) for key, path in paths.items() if path.exists()}
-    if missing:
-        if cfg.data_processor.use_cache:
-            raise FileNotFoundError(
-                "Compute scaling factors on uncached training data before using cached data."
-            )
-        statistics = compute_scaling_factors(
-            cfg=cfg,
-            input_path=cfg.data.input_dir,
-            target_keys=missing,
-            max_samples=cfg.data.max_samples_for_statistics,
-        )
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for key in missing:
-            factors[key] = np.stack(
-                [statistics[index][key].cpu().numpy() for index in factor_indices]
-            )
-            if DistributedManager().rank == 0:
-                np.save(paths[key], factors[key])
+    manager = DistributedManager()
+    result = [None, None]
+    if manager.rank == 0:
+        try:
+            output_dir = Path(cfg.project_dir)
+            paths = {
+                key: output_dir / key.replace("_fields", "_scaling_factors.npy")
+                for key in target_keys
+            }
+            missing = [key for key, path in paths.items() if not path.exists()]
+            factors = {
+                key: np.load(path) for key, path in paths.items() if path.exists()
+            }
+            if missing:
+                if cfg.data_processor.use_cache:
+                    raise FileNotFoundError(
+                        "Compute scaling factors on uncached training data before using cached data."
+                    )
+                statistics = compute_scaling_factors(
+                    cfg=cfg,
+                    input_path=cfg.data.input_dir,
+                    target_keys=missing,
+                    max_samples=cfg.data.max_samples_for_statistics,
+                )
+                output_dir.mkdir(parents=True, exist_ok=True)
+                for key in missing:
+                    factors[key] = np.stack(
+                        [
+                            statistics[index][key].cpu().numpy()
+                            for index in factor_indices
+                        ]
+                    )
+                    np.save(paths[key], factors[key])
+            result[0] = factors
+        except Exception as error:
+            # Share startup failures too, rather than strand the other ranks.
+            result[1] = error
+    if manager.world_size > 1:
+        torch.distributed.broadcast_object_list(result, src=0, device=manager.device)
+    if result[1] is not None:
+        raise result[1]
+    factors = result[0]
 
     volume_factors = factors.get("volume_fields")
     surface_factors = factors.get("surface_fields")

@@ -17,17 +17,21 @@
 """Exercise the documented cache workflow with real, small CPU datasets."""
 
 import importlib
+import os
+import socket
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 
 from physicsnemo.datapipes.cae.domino_datapipe import (
     CachedDoMINODataset,
     create_domino_dataset,
 )
+from physicsnemo.distributed import DistributedManager
 
 SRC = Path(__file__).parents[1] / "src"
 
@@ -344,3 +348,95 @@ def test_nim_data_setup(cache_config, monkeypatch, model_type, normalization):
         assert Path(config.project_dir, "surface_scaling_factors.npy").exists()
     else:
         assert surface_factors is None
+
+
+def _nim_distributed_worker(rank, config_values, port, mode):
+    """Run real CPU collectives with independent rank-local scaling directories."""
+    nim_src = SRC.parents[1] / "domino_nim_finetuning" / "src"
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.syspath_prepend(str(nim_src))
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
+        if torch.version.cuda is None:
+            monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda *args: None)
+            monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+        if os.name == "nt":
+            # PyTorch's Windows wheels do not include the libuv TCPStore backend.
+            monkeypatch.setenv("USE_LIBUV", "0")
+        DistributedManager.setup(
+            rank=rank,
+            world_size=2,
+            local_rank=0,
+            addr="127.0.0.1",
+            port=port,
+            backend="gloo",
+            timeout=30,
+        )
+        try:
+            np.random.seed(rank)
+            config = OmegaConf.create(config_values)
+            root_dir = Path(config.project_dir) / "rank0"
+            config.project_dir = str(Path(config.project_dir) / f"rank{rank}")
+            module = importlib.import_module("domino_data")
+            if mode == "missing_cached":
+                with pytest.raises(FileNotFoundError, match="scaling factors"):
+                    module.prepare_datasets(config)
+                return
+            _, _, volume_factors, surface_factors = module.prepare_datasets(config)
+            gathered = [None, None]
+            torch.distributed.all_gather_object(
+                gathered, (volume_factors, surface_factors)
+            )
+            for index, key in enumerate(["volume", "surface"]):
+                np.testing.assert_array_equal(gathered[0][index], gathered[1][index])
+                if mode == "existing":
+                    width = 5 if key == "volume" else 4
+                    np.testing.assert_array_equal(
+                        gathered[rank][index], [[10.0] * width, [0.0] * width]
+                    )
+                np.testing.assert_array_equal(
+                    gathered[rank][index],
+                    np.load(root_dir / f"{key}_scaling_factors.npy"),
+                )
+            if rank == 1:
+                assert not Path(config.project_dir).exists()
+        finally:
+            DistributedManager.cleanup()
+
+
+@pytest.mark.skipif(
+    not torch.distributed.is_gloo_available(), reason="Gloo collectives are required"
+)
+@pytest.mark.parametrize("mode", ["fresh", "existing", "missing_cached"])
+def test_nim_scaling_factors_shared_across_ranks(cache_config, mode):
+    """All ranks use rank-zero factors without reading or writing scaling files."""
+    config = cache_config
+    config.data_processor.use_cache = mode == "missing_cached"
+    config.data.max_samples_for_statistics = 1
+    raw_dir = Path(config.data.input_dir)
+    data = np.load(raw_dir / "tetra.npy", allow_pickle=True).item()
+    for index, multiplier in enumerate([100, 1000]):
+        sample = dict(data)
+        for key in ["volume_fields", "surface_fields"]:
+            sample[key] = data[key] * multiplier
+        np.save(raw_dir / f"sample{index}.npy", sample)
+    if mode in ["existing", "missing_cached"]:
+        # In the error case, rank one could start successfully on its own.
+        # It must still receive rank zero's missing-factor failure.
+        factor_dir = Path(config.project_dir) / (
+            "rank0" if mode == "existing" else "rank1"
+        )
+        factor_dir.mkdir()
+        for key, width in [("volume", 5), ("surface", 4)]:
+            np.save(
+                factor_dir / f"{key}_scaling_factors.npy",
+                np.array([[10.0] * width, [0.0] * width]),
+            )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    torch.multiprocessing.spawn(
+        _nim_distributed_worker,
+        args=(OmegaConf.to_container(config, resolve=True), port, mode),
+        nprocs=2,
+    )
