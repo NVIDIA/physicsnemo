@@ -1024,6 +1024,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The transient conjugate heat transfer tank filling example trains again, on
   one GPU or several. Before, its `train.py` stopped with a `TypeError` before
   the first step.
+- The XAeroNet volume example's `compute_stats.py` starts again, and reads the
+  training voxel grids from the `h5_path` of its config. Before, it stopped
+  with an `ImportError`, and then looked for a `partitions_path` key that only
+  the surface recipe's config has.
+- The transient conjugate heat transfer tank filling example's `compute_stats`
+  no longer leaves a file out of the volume minimum and maximum when that
+  file's `surface_fields` array is empty.
 - Importing `physicsnemo.domain_parallel` no longer breaks `torch.compile` for
   the whole process when nothing has imported `torch._dynamo` before it.
 - `MeshReader` and `DomainMeshReader` implement `close()`, so
