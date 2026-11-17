@@ -17,7 +17,7 @@
 """Mesh repair and cleanup utilities.
 
 Tools for fixing common mesh problems including duplicates, degenerates,
-holes, and orientation issues.
+holes, T-junctions, and orientation issues.
 """
 
 from physicsnemo.mesh.repair._cleaning import (
@@ -27,7 +27,9 @@ from physicsnemo.mesh.repair._cleaning import (
     remove_isolated_points,
     remove_unused_points,
 )
+from physicsnemo.mesh.repair._stitching import stitch_t_junctions
 from physicsnemo.mesh.repair.degenerate_removal import remove_degenerate_cells
 from physicsnemo.mesh.repair.hole_filling import fill_holes
+from physicsnemo.mesh.repair.nonmanifold_edges import split_nonmanifold_edges
 from physicsnemo.mesh.repair.orientation import fix_orientation
 from physicsnemo.mesh.repair.pipeline import repair_mesh

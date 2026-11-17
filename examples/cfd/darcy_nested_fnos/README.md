@@ -50,7 +50,7 @@ Progress can be monitored using MLFlow. Open a new terminal and
 navigate to the training directory, then run:
 
 ```bash
-mlflow ui -p 2458
+mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db -p 2458
 ```
 
 View progress in a browser at <http://127.0.0.1:2458>
@@ -61,7 +61,7 @@ ssh to the server via the specified port, in this case `8080`,
 navigate to the training directory and launch mlflow server
 
 ```bash
-mlflow server --host 0.0.0.0 --port 8080
+mlflow server --backend-store-uri sqlite:///mlruns/mlflow.db --host 0.0.0.0 --port 8080
 ```
 
 On your local machine, open a browser and connect to `localhost:8080`.

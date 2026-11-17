@@ -165,7 +165,7 @@ into the checkpoint with the other constructor arguments.
 rank read from each leaf's shape. Shapes do not record symmetry or parity, so
 these attributes take their defaults.
 
-The GLOBE model (``physicsnemo.experimental.models.globe.GLOBE``) is the
+The GLOBE model (``physicsnemo.models.globe.GLOBE``) is the
 in-tree user. It takes an ``output_schema``, one schema for each
 boundary condition type in ``boundary_source_schemas``, and an optional
 ``global_schema``. In ``forward``, it checks the cell data of each boundary

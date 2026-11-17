@@ -89,7 +89,7 @@ def _assert_same_mesh(actual: Mesh, expected: Mesh) -> None:
     ],
 )
 def test_scale_assumptions(factor, expected):
-    assert _scale_assumptions(factor, 3) == expected
+    assert _scale_assumptions(factor, 3, torch.float64) == expected
 
 
 @pytest.mark.parametrize(
@@ -118,7 +118,27 @@ def test_extreme_scale_assumptions_match_runtime_tests(factor):
         bool(torch.linalg.det(matrix).abs() > 1e-10),
         _is_similarity_transform(matrix),
     )
-    assert _scale_assumptions(factor, 3) == runtime
+    assert _scale_assumptions(factor, 3, torch.float64) == runtime
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "factor",
+    [
+        [1e-8, 3000.0, 3000.0],  # 1e-8 rounds to zero in float16
+        [1.0, 1.0, 1.02],  # anisotropic in each dtype
+        [1.0, 1.0, 1.01],  # within bfloat16 rounding of isotropic
+        [1.0, 1.0, 1.001],  # within float16 rounding of isotropic
+        [2.0, -2.0, 2.0],
+    ],
+)
+def test_scale_assumptions_match_runtime_tests_in_mesh_dtype(factor, dtype):
+    """Python factors decide as the runtime tests do on their matrix in the mesh
+    dtype, so a list and a tensor of these factors scale a mesh alike."""
+    matrix = scale_matrix(factor, 3, torch.device("cpu"), dtype)
+    det = torch.linalg.det(matrix.to(torch.promote_types(dtype, torch.float32)))
+    runtime = (bool(det.abs() > 1e-10), _is_similarity_transform(matrix))
+    assert _scale_assumptions(factor, 3, dtype) == runtime
 
 
 @pytest.mark.parametrize("axis", [[0.0, 0.0, 2.0], "z", (1.0, 1.0, 0.0)])
@@ -220,6 +240,22 @@ def test_similarity_test_is_independent_of_overall_scale(device):
         assert not _is_similarity_transform((k * stretch).to(dtype))
     assert _is_similarity_transform(torch.zeros(3, 3, device=device))
     assert not _is_similarity_transform(torch.full((3, 3), torch.inf, device=device))
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_similarity_test_tolerates_only_16_bit_rounding(dtype):
+    """Regression: orthogonal maps rounded to 16 bits, once or twice, are
+    similarities, but 2% stretches and shears are not (at a tolerance of four
+    epsilons, bfloat16 took them for similarities)."""
+    generator = torch.Generator().manual_seed(0)
+    for _ in range(500):
+        q = torch.linalg.qr(torch.randn(3, 3, generator=generator).double()).Q
+        assert _is_similarity_transform(q.to(dtype))
+        assert _is_similarity_transform(300.0 * q.to(dtype))
+    assert not _is_similarity_transform(torch.diag(torch.tensor([1.0, 1.02])).to(dtype))
+    assert not _is_similarity_transform(
+        torch.tensor([[1.0, 0.02], [0.0, 1.0]]).to(dtype)
+    )
 
 
 def test_rotation_axis_validation(device):

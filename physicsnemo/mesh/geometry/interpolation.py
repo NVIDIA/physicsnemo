@@ -205,6 +205,11 @@ def compute_barycentric_gradients(
             perp_v0_v2 = torch.stack([-edge_v0_v2[:, 1], edge_v0_v2[:, 0]], dim=1)
             perp_v1_v0 = torch.stack([-edge_v1_v0[:, 1], edge_v1_v0[:, 0]], dim=1)
 
+            # Degenerate triangles (zero area) keep zero gradients, as in 3D:
+            # their perpendiculars are finite, and divided by inf give 0
+            twice_signed_area = torch.where(
+                twice_signed_area != 0, twice_signed_area, torch.inf
+            )
             gradients[:, 0, :] = perp_v2_v1 / twice_signed_area
             gradients[:, 1, :] = perp_v0_v2 / twice_signed_area
             gradients[:, 2, :] = perp_v1_v0 / twice_signed_area

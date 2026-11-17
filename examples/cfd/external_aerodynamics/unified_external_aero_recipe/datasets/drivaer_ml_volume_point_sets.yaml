@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DrivAerML prediction point sets and fields; model geometry/anchors are configured separately.
+train_datadir: ${dataset_paths.drivaer_ml}
+independent_validation: true
+validation_reader_overrides:
+  point_sets:
+    interior: {indices_from: null}
+
+pipeline:
+  reader:
+    _target_: ${dp:DomainMeshReader}
+    path: ${train_datadir}
+    pattern: "run_*/domain_*.pdmsh"
+    point_sets:
+      interior:
+        source: interior
+        count: ${sampling_resolution}
+        stream: 5
+        indices_from: null
+        fields:
+          UMeanTrim: velocity
+          pMeanTrim: pressure
+          nutMeanTrim: nut
+  # Keep the native frame so query draws cannot shift geometry/anchors.
+  # No centering/augmentations: moments default to the file origin; augment=true is a no-op.
+  transforms:
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      association: point_data
+      fields:
+        velocity: velocity
+        pressure: pressure
+        nut: identity
+    - _target_: ${dp:NormalizeMeshFields}
+      association: point_data
+      fields:
+        nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
+
+targets:
+  velocity: vector
+  pressure: scalar
+  nut: scalar

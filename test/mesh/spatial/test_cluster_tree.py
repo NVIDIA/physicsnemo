@@ -1891,6 +1891,64 @@ def test_warp_walk_is_the_torch_walk(device, n_dims, dtype, theta):
     assert torch.equal(nan_sources.sort().values, torch.arange(800, device=device))
 
 
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("n_dims", [2, 3])
+def test_point_plan_with_a_row_of_targets_per_root(device, implementation, n_dims):
+    """With targets ``(R, M, D)`` and ``root_rows``, each root's tree reads
+    its row: the plan is that of one walk per row, each root's entries taken
+    from its row's walk, in the walk's order (so the torch and Warp walks give
+    the same plan); ``count_only`` counts it; bad rows are refused."""
+    points, groups, _, n_groups = _group_case(device, n_dims, seed=66)
+    forest, _ = ClusterTree.from_point_groups(
+        points, groups, n_groups=n_groups, leaf_size=4
+    )
+    n_roots, n_q = forest.root_ids.shape[0], 70
+    rows = torch.tensor([2, 0, 1, 0, 2, 1], device=device)[:n_roots]
+    targets = torch.stack(
+        [_points(n_q, n_dims, device, seed=67) * s + s for s in (1.0, 2.0, 3.0)]
+    )
+    mask = torch.rand(forest.n_nodes, generator=torch.Generator().manual_seed(68))
+    kwargs = dict(theta=0.8, source_admissible=(mask > 0.2).to(device))
+    plan = forest.find_point_interaction_pairs(
+        targets, implementation=implementation, root_rows=rows, **kwargs
+    )
+    root_of_source = torch.searchsorted(groups.unique(), groups)
+    near, far = [], []
+    for r in range(3):
+        part = forest.find_point_interaction_pairs(targets[r], **kwargs)
+        for out, t, s, root in (
+            (near, part.near_target_ids, part.near_source_ids, root_of_source),
+            (far, part.far_target_ids, part.far_source_node_ids, None),
+        ):
+            if root is None:
+                root = torch.searchsorted(forest.root_ids, s, right=True) - 1
+            else:
+                root = root[s]
+            keep = rows[root] == r
+            out.append(torch.stack([t * n_roots + root, t, s])[:, keep])
+    near, far = (torch.cat(x, dim=1) for x in (near, far))
+    near, far = (x[1:, torch.argsort(x[0], stable=True)] for x in (near, far))
+    assert plan.n_near > 0 and plan.n_far > 0
+    assert torch.equal(plan.near_target_ids, near[0])
+    assert torch.equal(plan.near_source_ids, near[1])
+    assert torch.equal(plan.far_target_ids, far[0])
+    assert torch.equal(plan.far_source_node_ids, far[1])
+    n_near, n_far = forest.find_point_interaction_pairs(
+        targets,
+        implementation=implementation,
+        root_rows=rows,
+        count_only=True,
+        **kwargs,
+    )
+    assert torch.equal(n_near, near[0].bincount(minlength=n_q))
+    assert torch.equal(n_far, far[0].bincount(minlength=n_q))
+    for bad in (rows[:-1], rows.int(), rows + 1):
+        with pytest.raises(ValueError, match="root_rows must be"):
+            forest.find_point_interaction_pairs(targets, root_rows=bad)
+    with pytest.raises(ValueError, match="targets must have shape"):
+        forest.find_point_interaction_pairs(targets[0], root_rows=rows)
+
+
 @pytest.mark.parametrize(
     "boxes,diagonals,autocast",
     [

@@ -87,10 +87,8 @@ from utils import tensorwise
 from physicsnemo.core.version_check import check_version_spec
 
 if TYPE_CHECKING:
-    # Annotation only: the head itself is built by hydra from cfg.gp_head, and
-    # importing it eagerly would trade its own "install gpytorch" message for an
-    # ImportError on the name.
-    from physicsnemo.experimental.uq import FieldVariationalGPHead
+    # Used only for annotations; Hydra constructs the head from cfg.gp_head.
+    from physicsnemo.experimental.uq.gp import FieldVariationalGPHead
 
 TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 

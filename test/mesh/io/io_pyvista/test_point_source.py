@@ -16,7 +16,9 @@
 
 """Tests for from_pyvista point_source and warn_on_lost_data parameters."""
 
+import collections
 import functools
+import itertools
 import warnings
 
 import numpy as np
@@ -597,6 +599,68 @@ class TestCellCentroidsDualGraph:
         assert mesh.n_manifold_dims == 1
         assert mesh.n_points == 3  # 3 segments -> 3 centroids
         assert mesh.n_cells == 2  # consecutive segments share a vertex
+
+    @staticmethod
+    def _mixed_simplex_dual_graph(cells: list[np.ndarray]) -> collections.Counter:
+        """Dual edges of a VERTEX/LINE/TRIANGLE/TETRA grid as a multiset of pairs."""
+        cell_types = {
+            1: pv.CellType.VERTEX,
+            2: pv.CellType.LINE,
+            3: pv.CellType.TRIANGLE,
+            4: pv.CellType.TETRA,
+        }
+        grid = pv.UnstructuredGrid(
+            np.concatenate([np.r_[len(c), c] for c in cells]),
+            np.array([cell_types[len(c)] for c in cells], dtype=np.uint8),
+            np.random.default_rng(0).random((max(max(c) for c in cells) + 1, 3)),
+        )
+        mesh = from_pyvista(
+            grid,
+            manifold_dim=1,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+        return collections.Counter(tuple(sorted(e)) for e in mesh.cells.tolist())
+
+    def test_mixed_dimension_dual_graph_ignores_cell_order(self):
+        """Cells of different dimensions are joined once per facet of the
+        lower-dimensional cell that lies in the other, in any cell order."""
+        triangle, line = np.array([0, 1, 2]), np.array([0, 3])
+        for cells in ([triangle, line], [line, triangle]):
+            assert self._mixed_simplex_dual_graph(cells) == {(0, 1): 1}
+
+        vol = pv.ImageData(dimensions=(3, 3, 3)).cast_to_unstructured_grid()
+        vol = vol.triangulate()
+        surf = vol.extract_surface(pass_pointid=True)
+        tris = np.asarray(surf.point_data["vtkOriginalPointIds"])[surf.regular_faces]
+        cells = [
+            *np.asarray(vol.cell_connectivity).reshape(-1, 4),
+            *tris,
+            *tris[::4, :2],  # boundary lines
+            *tris[::8, :1],  # vertex cells, which have no facets
+        ]
+
+        ### Brute-force reference: for each pair, count the facets of the
+        ### lower-dimensional cell that lie in the other cell. The cells are
+        ### simplices, so that is the cell with fewer vertices, and its facets
+        ### are its subsets of one vertex fewer.
+        reference = collections.Counter()
+        for a, b in itertools.combinations(range(len(cells)), 2):
+            low, high = sorted((cells[a], cells[b]), key=len)
+            facets = itertools.combinations(low, len(low) - 1) if len(low) > 1 else []
+            n_shared = sum(set(f) <= set(high) for f in facets)
+            if n_shared:
+                reference[a, b] = n_shared
+        assert reference.total() > len(cells)
+
+        rng = np.random.default_rng(0)
+        n = len(cells)
+        for order in (np.arange(n), np.arange(n)[::-1], rng.permutation(n)):
+            edges = self._mixed_simplex_dual_graph([cells[k] for k in order])
+            relabeled = collections.Counter(
+                {tuple(sorted(order[list(e)].tolist())): m for e, m in edges.items()}
+            )
+            assert relabeled == reference
 
     @staticmethod
     def _simplex_dual_graph_cases() -> dict[str, "pv.DataSet"]:

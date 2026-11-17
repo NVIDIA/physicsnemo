@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DeFormer corrector: models.rollout.ResidualTimeConditional (frozen teacher
+# recomputed on the fly) around physicsnemo.experimental.models.deformer.DeFormerCorrector
+# (message
+# passing on the shell mesh edges and on contact edges discovered on the
+# teacher's predicted shape). The recipe adds model.teacher (the teacher's
+# architecture) and model.teacher_weights (its checkpoint). dt, local_knn_k
+# and local_neighborhood are the teacher's datapipe properties, interpolated
+# from the datapipe config.
+_target_: models.rollout.ResidualTimeConditional
+_convert_: all
+teacher_weights: ???
+num_time_steps: ${training.num_time_steps}
+dt: ${oc.select:datapipe.dt,null}  # the dataset's frame interval (s); null without one
+local_knn_k: ${datapipe.local_knn_k}  # the datapipe's neighbourhoods
+local_neighborhood: ${datapipe.local_knn_metric}
+# node inputs: coords (3) + thickness (1) + fourier time code (time_dim) + teacher displacement (3)
+functional_dim: 39
+time_embedding: fourier
+time_fourier_bands: 8
+time_dim: 32
+hidden_dim: 128
+processor_size: 8
+num_processor_checkpoint_segments: 8
+aggregation: sum
+# contact edges from the crossing-aware node-to-facet search on the teacher's
+# shape: 5 mm band, 10 mm reference clearance (assembled pairs are structure,
+# not contact), features over a 10 mm scale, messages in both directions
+use_contact: true
+contact_search_implementation: warp
+contact_surface_max_pairs: 8000000
+contact_activation_distance: 5.0
+node_contact_radius: 10.0
+contact_normal_epsilon: 0.1
+contact_surface_material_fan: true
+contact_side_from_reference: true
+contact_reference_clearance: 10.0
+contact_side_symmetric: false
+contact_crossing_radius: null
+contact_clearance_approach_only: false
+contact_bidirectional: true
+# evaluation-time rigid-wall clamp of the corrected shape (needs
+# datapipe.rigid_wall_position; on in the Yaris recipe)
+final_clamp_to_wall: false
+wall_axis: 0
+wall_sign: 1.0
