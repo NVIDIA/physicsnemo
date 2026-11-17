@@ -1320,10 +1320,11 @@ def test_tie_directions_take_the_exact_least_norm_point(surface, dtype, monkeypa
 @pytest.mark.parametrize("k, dim", [(2, 2), (3, 2), (2, 3), (3, 3), (6, 3)])
 def test_least_norm_point_without_a_certified_candidate(k, dim):
     """Float32 unit vectors read in float64 are unit only to about 6e-8, beyond the
-    optimality certificate's rounding slack, so often no candidate passes it. Where
-    a candidate separates the origin from the hull, the routine returns the one
-    with the least duality gap g = |x|^2 - min_k c_k . x, within sqrt(2 g) of the
-    exact least-norm point; otherwise 0, exactly where the exact point is 0."""
+    optimality certificate's rounding slack, so a pair's midpoint often fails it.
+    Where it separates the origin, the routine returns it, with the duality gap g =
+    |x|^2 - min_k c_k . x, within sqrt(2 g) of the exact least-norm point; otherwise
+    0, exactly where the exact point is 0. From 3 directions on the active-set
+    solver, whose affine points are exact for such vectors, certifies every row."""
     g = torch.Generator().manual_seed(k * dim)
     c = torch.randn(200, 1, dim, generator=g) + 0.4 * torch.randn(
         200, k, dim, generator=g
@@ -1331,6 +1332,7 @@ def test_least_norm_point_without_a_certified_candidate(k, dim):
     c = torch.nn.functional.normalize(c, dim=-1).double()
     x, exact = geometry._min_norm_points(c), _least_norm(c, tol=1e-12)
     assert torch.equal(x.norm(dim=-1) == 0, exact.norm(dim=-1) == 0)
+    assert k == 2 or _certified(c, x).all()
     gap = (x * x).sum(-1) - (c * x[:, None]).sum(-1).amin(-1)
     assert ((x - exact).norm(dim=-1) <= (2 * gap.clamp_min(0)).sqrt() + 1e-12).all()
 
@@ -1361,11 +1363,10 @@ def test_least_norm_point_of_many_directions_by_the_active_set_solver(k):
     """A hub vertex of many cells whose normals differ by rounding ties them all.
     Such rows (a cap, the same read from float32, one spread by rounding only, and
     a sphere, around the origin) take the active-set solver and give the exact
-    least-norm point to rounding:
-    certified, and within 1e-12 of the float64 enumeration, or 1e-8 where the
-    directions differ by 1e-7 (the problem's own conditioning). The float32 row's
-    directions are unit only to 6e-8, so the enumeration's midpoints miss its
-    least-norm point; the solver's does not."""
+    least-norm point to rounding: certified, and within 1e-12 of the float64
+    enumeration, or 1e-8 where the directions differ by 1e-7 (the problem's own
+    conditioning). The float32 row's directions are unit only to 6e-8, so the
+    enumeration's midpoints miss its least-norm point; the solver's does not."""
     g = torch.Generator().manual_seed(9)
     rows = []
     for spread, f32 in ((1e-3, False), (1e-3, True), (1e-7, False), (3.0, False)):
@@ -1562,8 +1563,8 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     16 steps for all the rows, each certified. Its error bound is absolute, since
     near the origin the certificate also holds at points up to slack / h farther
     from the origin than the least-norm one: each row is within 2e-15 of the
-    enumeration's point at heights 0.3 and 0.8, and within 1e-11
-    at 1e-4 and 1e-6 (3.6e-12 at delta = 1e-12, 1e-16 at the larger delta)."""
+    enumeration's point at heights 0.3 and 0.8, and within 1e-11 at 1e-4 and 1e-6
+    (3.6e-12 at delta = 1e-12, 1e-16 at the larger delta)."""
     g = torch.Generator().manual_seed(56)
     phi = (
         2

@@ -617,8 +617,7 @@ def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     rounding slack of :func:`_wolfe_min_norm`'s certificate or separates the origin
     (``c_k . x`` above the slack for both), and 0 otherwise (a pair antipodal to
     rounding). Rows of 3 or more directions take :func:`_wolfe_min_norm`, certified
-    and with the same fallbacks, in chunks of the rows: from 3 directions on it is
-    faster than enumerating their faces, on CPU and CUDA alike."""
+    and with the same fallbacks, in chunks of the rows."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
@@ -913,7 +912,8 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     sizes, s = counts[here].tolist(), 0
     smaller = [-size for size in sizes]
     while s < len(sizes):
-        e = min(s + max(1, _SEARCH_PAIRS // 8 // sizes[s]), bisect.bisect_left(smaller, -(sizes[s] // 2), lo=s + 1))
+        half = bisect.bisect_left(smaller, -(sizes[s] // 2), lo=s + 1)
+        e = min(s + max(1, _SEARCH_PAIRS // 8 // sizes[s]), half)
         h, j = here[s:e], torch.arange(sizes[s], device=c.device)
         k = counts[h, None]
         out[ids[h]] = _wolfe_min_norm(c[start[h, None] + torch.minimum(j, k - 1)], j < k)
