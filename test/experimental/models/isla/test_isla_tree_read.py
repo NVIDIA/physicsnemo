@@ -2831,7 +2831,7 @@ def test_tree_read_pairs_fused_takes_the_reference_basis_when_the_geometry_requi
 @pytest.mark.cuda
 @requires_cuda_triton
 def test_tree_read_pairs_fused_on_cuda_builds_the_basis_in_the_fused_kernel(
-    monkeypatch,
+    monkeypatch, no_tf32_matmul
 ):
     """On CUDA ``tree_read_pairs(kernel="fused")`` builds the basis with the fused
     basis kernel: the reference's plan, and its basis to float32 roundoff; so does
