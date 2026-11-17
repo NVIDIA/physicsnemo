@@ -321,7 +321,7 @@ class ScalingFactors:
 
 def load_scaling_factors(
     cfg: DictConfig, logger=None
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """Load scaling factors from the configuration."""
     pickle_path = os.path.join(cfg.data.scaling_factors)
 
@@ -335,42 +335,30 @@ def load_scaling_factors(
         )
 
     if cfg.model.normalization == "min_max_scaling":
-        vol_factors = np.asarray(
-            [
-                scaling_factors.max_val["volume_fields"],
-                scaling_factors.min_val["volume_fields"],
-            ]
-        )
-        surf_factors = np.asarray(
-            [
-                scaling_factors.max_val["surface_fields"],
-                scaling_factors.min_val["surface_fields"],
-            ]
-        )
+        first, second = scaling_factors.max_val, scaling_factors.min_val
     elif cfg.model.normalization == "mean_std_scaling":
-        vol_factors = np.asarray(
-            [
-                scaling_factors.mean["volume_fields"],
-                scaling_factors.std["volume_fields"],
-            ]
-        )
-        surf_factors = np.asarray(
-            [
-                scaling_factors.mean["surface_fields"],
-                scaling_factors.std["surface_fields"],
-            ]
-        )
+        first, second = scaling_factors.mean, scaling_factors.std
     else:
         raise ValueError(f"Invalid normalization mode: {cfg.model.normalization}")
 
-    vol_factors_tensor = torch.from_numpy(vol_factors)
-    surf_factors_tensor = torch.from_numpy(surf_factors)
-
     dm = DistributedManager()
-    vol_factors_tensor = vol_factors_tensor.to(dm.device, dtype=torch.float32)
-    surf_factors_tensor = surf_factors_tensor.to(dm.device, dtype=torch.float32)
 
-    return vol_factors_tensor, surf_factors_tensor
+    def field_factors(field_key):
+        """Load only the fields needed by the selected model."""
+        values = np.asarray([first[field_key], second[field_key]])
+        return torch.from_numpy(values).to(dm.device, dtype=torch.float32)
+
+    vol_factors = (
+        field_factors("volume_fields")
+        if cfg.model.model_type in ["volume", "combined"]
+        else None
+    )
+    surf_factors = (
+        field_factors("surface_fields")
+        if cfg.model.model_type in ["surface", "combined"]
+        else None
+    )
+    return vol_factors, surf_factors
 
 
 def compute_l2(

@@ -1018,6 +1018,14 @@ class DoMINODataPipe(Dataset):
             yield self.__call__(batch)
 
 
+class _CachedDoMINODataPipe(DoMINODataPipe):
+    """Reuse batch, device, and unscaling behavior for already processed data."""
+
+    def process_data(self, data_dict):
+        """Keep cached tensors and discard legacy string metadata."""
+        return {key: value for key, value in data_dict.items() if key != "filename"}
+
+
 def compute_scaling_factors(
     cfg: DictConfig,
     input_path: str,
@@ -1031,7 +1039,7 @@ def compute_scaling_factors(
         cfg: Hydra configuration object containing all parameters
         input_path: Path to the dataset to load.
         target_keys: List of keys to compute the mean, std, min, and max of.
-        use_cache: (deprecated) This argument has no effect.
+        max_samples: Maximum number of samples used to compute statistics.
     """
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -1055,7 +1063,8 @@ def compute_scaling_factors(
 class CachedDoMINODataset(Dataset):
     """
     Dataset for reading cached DoMINO data files, with optional resampling.
-    Acts as a drop-in replacement for DoMINODataPipe.
+    Returns unbatched samples. The dataset factory wraps it in a datapipe
+    to provide batching, device transfer, and output unscaling for training.
     """
 
     # @nvtx_annotate(message="CachedDoMINODataset __init__")
@@ -1070,6 +1079,7 @@ class CachedDoMINODataset(Dataset):
         model_type=None,  # Model_type, surface, volume or combined
         deterministic_seed=False,
         surface_sampling_algorithm="area_weighted",
+        shuffle: bool = True,
     ):
         super().__init__()
 
@@ -1094,19 +1104,33 @@ class CachedDoMINODataset(Dataset):
         self.surface_sampling_algorithm = surface_sampling_algorithm
 
         self.filenames = get_filenames(self.data_path, exclude_dirs=True)
+        if not shuffle:
+            # Every distributed sampler must partition the same file ordering.
+            self.filenames = sorted(self.filenames)
 
         total_files = len(self.filenames)
 
         self.phase = phase
         self.indices = np.array(range(total_files))
 
-        np.random.shuffle(self.indices)
+        if shuffle:
+            np.random.shuffle(self.indices)
+        self._iteration_indices = list(range(total_files))
 
         if not self.filenames:
             raise AssertionError(f"No cached files found in {self.data_path}")
 
     def __len__(self):
         return len(self.indices)
+
+    def set_indices(self, indices: Iterable[int]) -> None:
+        """Select this epoch's samples while keeping the full dataset length."""
+        self._iteration_indices = list(indices)
+
+    def __iter__(self):
+        """Yield only the samples selected for the current distributed epoch."""
+        for index in self._iteration_indices:
+            yield self[index]
 
     # @nvtx_annotate(message="CachedDoMINODataset __getitem__")
     def __getitem__(self, idx):
@@ -1168,10 +1192,13 @@ class CachedDoMINODataset(Dataset):
                     coords_sampled, self.surface_points, pad_value=-10.0
                 )
 
-            ii = result["neighbor_indices"]
-            result["surface_mesh_neighbors"] = result["surface_mesh_centers"][ii]
-            result["surface_neighbors_normals"] = result["surface_normals"][ii]
-            result["surface_neighbors_areas"] = result["surface_areas"][ii]
+            if "neighbor_indices" in result:
+                # Legacy caches store indices; current preprocessing stores
+                # the expanded neighbor tensors directly.
+                ii = result["neighbor_indices"]
+                result["surface_mesh_neighbors"] = result["surface_mesh_centers"][ii]
+                result["surface_neighbors_normals"] = result["surface_normals"][ii]
+                result["surface_neighbors_areas"] = result["surface_areas"][ii]
 
             result["surface_mesh_centers"] = coords_sampled
 
@@ -1187,7 +1214,7 @@ class CachedDoMINODataset(Dataset):
                 if key in result:
                     result[key] = result[key][idx_surface]
 
-            del result["neighbor_indices"]
+            result.pop("neighbor_indices", None)
 
         # Sample geometry points if present
         if "geometry_coordinates" in result and self.geom_points:
@@ -1229,7 +1256,7 @@ def create_domino_dataset(
         raise ValueError(f"Invalid phase {phase}")
 
     if cfg.data_processor.use_cache:
-        return CachedDoMINODataset(
+        cached_dataset = CachedDoMINODataset(
             input_path,
             phase=phase,
             sampling=sampling,
@@ -1238,7 +1265,22 @@ def create_domino_dataset(
             geom_points_sample=cfg.model.geom_points_sample,
             model_type=cfg.model.model_type,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
+            shuffle=False,
         )
+        datapipe = _CachedDoMINODataPipe(
+            input_path,
+            model_type=model_type,
+            phase=phase,
+            volume_factors=vol_factors,
+            surface_factors=surf_factors,
+            scaling_type=cfg.model.normalization,
+            # Cached samples are already processed. Place normalization
+            # factors with the outputs used by model metrics/unscaling.
+            gpu_preprocessing=cfg.data.gpu_output,
+            gpu_output=cfg.data.gpu_output,
+        )
+        datapipe.set_dataset(cached_dataset)
+        return datapipe
     else:
         # The dataset path works in two pieces:
         # There is a core "dataset" which is loading data and moving to GPU
