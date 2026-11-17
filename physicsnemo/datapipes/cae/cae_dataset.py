@@ -1327,12 +1327,11 @@ def compute_mean_std_min_max(
 
             # Update running mean and M2 (Welford's algorithm)
             delta = batch_mean - mean[field_key]
-            N[field_key] += batch_n  # batch_n should also be torch.int64
+            old_N = N[field_key]
+            N[field_key] = old_N + batch_n
             mean[field_key] = mean[field_key] + delta * (batch_n / N[field_key])
             M2[field_key] = (
-                M2[field_key]
-                + batch_M2
-                + delta**2 * (batch_n * N[field_key]) / N[field_key]
+                M2[field_key] + batch_M2 + delta**2 * (batch_n * old_N) / N[field_key]
             )
 
         end = time.perf_counter()
