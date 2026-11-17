@@ -22,8 +22,7 @@ points' built-in signed distance and direction to the boundary *surface*, from
 the exact closest point on its cells. Both are built from differences of
 positions only, so they refer to no frame origin."""
 
-import itertools
-import math
+import bisect
 from typing import Any
 
 import torch
@@ -39,9 +38,9 @@ from physicsnemo.mesh.spatial.cluster_tree import _WARP_MAX_ELEMENTS as WARP_MAX
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
 ### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,
-### subset) pairs per chunk of the least-norm solve (the (point, direction) pairs of
-### its active-set solver): a bound on their blocks. Both run in a custom op, so their
-### loops over chunks do not specialize a dynamic query count under torch.compile.
+### direction) pairs per chunk of the least-norm solver: a bound on their blocks.
+### Both run in a custom op, so their loops over chunks do not specialize a dynamic
+### query count under torch.compile.
 _SEARCH_PAIRS = 2**23
 
 #: The softening of the logarithmic length channels, in the frame's length unit
@@ -610,78 +609,26 @@ def _covered(cells: torch.Tensor, flat: torch.Tensor, n_vertices: int) -> torch.
     return flat & torch.where(v0 == v2, vertex[v0], segment)
 
 
-def _hull_candidates(cc: torch.Tensor, subsets: list[torch.Tensor]):
-    """The candidates of :func:`_min_norm_points` for the rows ``cc`` ``(n, K, d)``
-    on the subsets (one ``(S, m)`` tensor of indices per size ``m``): each subset's
-    least-norm affine point with non-negative weights ``(n, S, d)`` (infinite where
-    there is none), its norm where it meets the optimality condition to rounding,
-    and its duality gap where it separates the origin (each ``(n, S)``, infinite
-    elsewhere)."""
-    d = cc.shape[-1]
-    xs = []
-    for sub in subsets:
-        p = cc[:, sub]  # (n, S, m, d)
-        if sub.shape[1] == 2:
-            xs.append(0.5 * (p[:, :, 0] + p[:, :, 1]))
-            continue
-        ### (elementwise products, not matmuls: the matrices are 3 x 3)
-        gram = (p[..., :, None, :] * p[..., None, :, :]).sum(-1)
-        lam, info = torch.linalg.solve_ex(gram, p.new_ones(p.shape[:-1]))
-        ok = (info == 0) & torch.isfinite(lam).all(-1) & (lam >= 0).all(-1)
-        x = ((lam / lam.sum(-1, keepdim=True))[..., None] * p).sum(-2)
-        xs.append(torch.where(ok[..., None], x, torch.inf))
-    x = torch.cat(xs, 1)
-    ### Rounding of a d-term dot product of unit vectors, on each side.
-    slack = 2 * d * torch.finfo(cc.dtype).eps
-    low, sq = (cc[:, None] * x[:, :, None]).sum(-1).amin(-1), (x * x).sum(-1)
-    norm = torch.where(low >= sq - slack, x.norm(dim=-1), torch.inf)
-    gap = torch.where((low > slack) & torch.isfinite(sq), sq - low, torch.inf)
-    return x, norm, gap
-
-
-def _enumerable(k: int, d: int) -> bool:
-    """Whether one row of ``k`` directions in ``d`` dimensions, its subsets of 2 to
-    ``d`` times its directions, fits a chunk of :func:`_min_norm_points`'s enumeration
-    (in three dimensions, up to 50 directions)."""
-    return k * sum(math.comb(k, m) for m in range(2, min(k, d) + 1)) <= _SEARCH_PAIRS // 8
-
-
 def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     """For each row of ``c`` ``(n, K, d)`` (``K`` distinct unit vectors), the point
-    of their convex hull closest to the origin ``(n, d)``. That point lies in the
-    relative interior of a face spanned by at most ``d`` of them (Caratheodory), where
-    it is the face's least-norm affine point with non-negative weights, and every
-    such point lies in the hull. So it is the least-norm one over those faces (a
-    pair's midpoint, since the vectors have equal norms; the first in the enumeration
-    at equal norms) that meets the optimality condition ``c_k . x >= |x|^2``. Only
-    the hull's least-norm point meets it; other faces' points can match its norm to
-    rounding where vectors nearly coincide. When none meets it to rounding, the
-    origin is outside the hull exactly when a candidate separates it (``c_k . x > 0``
-    for every ``k``; the least-norm point does). The result is then the candidate
-    with the least duality gap ``g = |x|^2 - min_k c_k . x`` (``|x - x*| <= sqrt(2
-    g)``), and otherwise 0. ``c`` comes in a canonical order, so the result is a
-    function of the set. The work is chunked over the rows. It grows as ``K**(d +
-    1)``, so rows whose subsets and directions overflow a chunk (:func:`_enumerable`;
-    a query on the axis of a faceted tube or at a sphere's centre ties with hundreds
-    of cells) take :func:`_wolfe_min_norm`, certified and with fallbacks as here."""
+    of their convex hull closest to the origin ``(n, d)``. One direction is its own
+    point, and a pair's is its midpoint, since the vectors have equal norms: the
+    midpoint where it meets the optimality condition ``c_k . x >= |x|^2`` to the
+    rounding slack of :func:`_wolfe_min_norm`'s certificate or separates the origin
+    (``c_k . x`` above the slack for both), and 0 otherwise (a pair antipodal to
+    rounding). Rows of 3 or more directions take :func:`_wolfe_min_norm`, certified
+    and with the same fallbacks, in chunks of the rows: from 3 directions on it is
+    faster than enumerating their faces, on CPU and CUDA alike."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
-    if not _enumerable(k, d):
+    if k > 2:
         rows = c.split(max(1, _SEARCH_PAIRS // 8 // k))
         return torch.cat([_wolfe_min_norm(r, r.new_ones(r.shape[:2], dtype=torch.bool)) for r in rows])
-    sizes, budget = range(2, min(k, d) + 1), _SEARCH_PAIRS // 8
-    total = sum(math.comb(k, m) for m in sizes)
-    subsets = [torch.tensor(list(itertools.combinations(range(k), m)), device=c.device) for m in sizes]
-    chunk = max(1, budget // total)
-    out = []
-    for s in range(0, n, chunk):
-        x, norm, gap = _hull_candidates(c[s : s + chunk], subsets)
-        certified = torch.isfinite(norm).any(1)
-        pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
-        best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
-        out.append(torch.where((certified | torch.isfinite(gap).any(1))[:, None], best, 0.0))
-    return torch.cat(out)
+    x = 0.5 * (c[:, 0] + c[:, 1])
+    low, sq = (c * x[:, None]).sum(-1).amin(-1), (x * x).sum(-1)
+    slack = 2 * d * torch.finfo(c.dtype).eps
+    return torch.where(((low >= sq - slack) | (low > slack))[:, None], x, 0.0)
 
 
 _mat43d = wp.types.matrix(shape=(4, 3), dtype=wp.float64)
@@ -916,25 +863,25 @@ def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     (float64, ``d`` 2 or 3) where ``valid`` ``(n, K)`` (padding elsewhere), ``(n,
     d)``, by Wolfe's active-set method (1976), one Warp kernel with a thread per row.
     Each row keeps a corral of at most ``d + 1`` directions and their weights. A
-    major step keeps the row's least-norm point ``x`` that meets
-    :func:`_hull_candidates`'s certificate, ``min_k c_k . x >= |x|^2`` to the same
-    rounding slack, and adds the direction of least ``c_k . x`` while that is below
-    ``|x|^2``. A minor step moves ``x`` to the corral's least-norm affine point (by
-    Gram-Schmidt in differences from its heaviest direction, so nearly coincident
-    directions keep their accuracy), or, where a weight there is not positive, as far
-    towards it as the weights stay non-negative, and drops the directions whose
-    weight reaches 0. The norm falls at every major step in exact arithmetic. A row
-    stops when the step would not progress: no direction is below ``|x|^2``, the
-    added direction is in the corral, the corral is full, its system is singular, its
-    norm rises beyond rounding, ``x`` repeats (were rounding to give an added
-    direction a weight of at most 0, the row would drop it and add it again), or,
-    once certified, its norm stops falling. The certificate's slack is absolute, so
-    near the origin it also holds at points up to ``slack / |x|`` farther from the
-    origin than the least-norm one: the result's error is bounded in absolute terms,
-    not relative to ``|x|``. As in :func:`_min_norm_points`, a row with no certified
-    point returns its iterate of least duality gap among those that separate the
-    origin, and 0 when none does. A full corral of positive weights holds the origin
-    in its simplex, which gives exactly 0. Wolfe's steps number a few times ``d`` in
+    major step keeps the row's least-norm point ``x`` that meets the certificate
+    ``min_k c_k . x >= |x|^2`` to a rounding slack of ``2 d eps``, and adds the
+    direction of least ``c_k . x`` while that is below ``|x|^2``. A minor step moves
+    ``x`` to the corral's least-norm affine point (by Gram-Schmidt in differences from
+    its heaviest direction, so nearly coincident directions keep their accuracy), or,
+    where a weight there is not positive, as far towards it as the weights stay
+    non-negative, and drops the directions whose weight reaches 0. The norm falls at
+    every major step in exact arithmetic. A row stops when the step would not
+    progress: no direction is below ``|x|^2``, the added direction is in the corral,
+    the corral is full, its system is singular, its norm rises beyond rounding, ``x``
+    repeats (were rounding to give an added direction a weight of at most 0, the row
+    would drop it and add it again), or, once certified, its norm stops falling. The
+    certificate's slack is absolute, so near the origin it also holds at points up to
+    ``slack / |x|`` farther from the origin than the least-norm one: the result's
+    error is bounded in absolute terms, not relative to ``|x|``. A row with no
+    certified point returns its iterate of least duality gap ``|x|^2 - min_k c_k .
+    x`` among those that separate the origin (``|x - x*| <= sqrt(2 gap)``), and 0
+    when none does. A full corral of positive weights holds the origin in its
+    simplex, which gives exactly 0. Wolfe's steps number a few times ``d`` in
     practice; their cap of ``64 (d + 1)`` only guards rounding cycles. The kernel is
     compiled without FMA contraction and sums in index order, so a row's result does
     not depend on its batch, and CPU and CUDA give the same bits."""
@@ -946,9 +893,10 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     (:func:`_min_norm_points`), ``(n_groups, d)``, zero for an empty group; the rows
     ``c`` ``(P, d)`` belong to the groups ``group`` ``(P,)``. The directions are
     de-duplicated and sorted per group, so each result is a function of its set.
-    The groups of each size that :func:`_enumerable` admits are enumerated together,
-    and the larger groups take :func:`_wolfe_min_norm` together, largest first, in
-    chunks within the budget, each padded to its largest group."""
+    Groups of one or two directions are solved together in closed form. The larger
+    groups take :func:`_wolfe_min_norm` together, largest first, in chunks within the
+    budget, each padded to its largest group and holding only groups of more than
+    half that size, so a few large ties do not pad many small ones."""
     out = c.new_zeros(n_groups, c.shape[1])
     if group.numel() == 0:
         return out
@@ -956,21 +904,20 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     group, c = rows[:, 0].long(), rows[:, 1:]
     ids, counts = torch.unique_consecutive(group, return_counts=True)
     start = torch.cumsum(counts, 0) - counts
-    large = []
-    for k in torch.unique(counts).tolist():
+    for k in (1, 2):
         here = (counts == k).nonzero()[:, 0]
-        if not _enumerable(k, c.shape[1]):
-            large.append(here)
-            continue
-        out[ids[here]] = _min_norm_points(c[start[here, None] + torch.arange(k, device=c.device)])
-    if large:
-        here = torch.cat(large[::-1])
-        sizes, s = counts[here].tolist(), 0
-        while s < len(sizes):
-            h = here[s : s + max(1, _SEARCH_PAIRS // 8 // sizes[s])]
-            k, j = counts[h, None], torch.arange(sizes[s], device=c.device)
-            out[ids[h]] = _wolfe_min_norm(c[start[h, None] + torch.minimum(j, k - 1)], j < k)
-            s += h.shape[0]
+        if here.numel():
+            out[ids[here]] = _min_norm_points(c[start[here, None] + torch.arange(k, device=c.device)])
+    here = (counts > 2).nonzero()[:, 0]
+    here = here[torch.argsort(counts[here], descending=True, stable=True)]
+    sizes, s = counts[here].tolist(), 0
+    smaller = [-size for size in sizes]
+    while s < len(sizes):
+        e = min(s + max(1, _SEARCH_PAIRS // 8 // sizes[s]), bisect.bisect_left(smaller, -(sizes[s] // 2), lo=s + 1))
+        h, j = here[s:e], torch.arange(sizes[s], device=c.device)
+        k = counts[h, None]
+        out[ids[h]] = _wolfe_min_norm(c[start[h, None] + torch.minimum(j, k - 1)], j < k)
+        s = e
     return out
 
 

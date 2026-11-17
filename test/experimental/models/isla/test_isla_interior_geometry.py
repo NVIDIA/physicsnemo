@@ -1212,6 +1212,60 @@ def _least_norm(c, tol: float = 1e-14):
     return best
 
 
+def _hull_candidates(cc, subsets):
+    """The candidates of :func:`_enumeration` for the rows ``cc`` ``(n, K, d)`` on the
+    subsets (one ``(S, m)`` tensor of indices per size ``m``): each subset's
+    least-norm affine point with non-negative weights ``(n, S, d)`` (infinite where
+    there is none), its norm where it meets the solver's certificate to its rounding
+    slack, and its duality gap where it separates the origin (each ``(n, S)``,
+    infinite elsewhere)."""
+    d = cc.shape[-1]
+    xs = []
+    for sub in subsets:
+        p = cc[:, sub]  # (n, S, m, d)
+        if sub.shape[1] == 2:
+            xs.append(0.5 * (p[:, :, 0] + p[:, :, 1]))
+            continue
+        gram = (p[..., :, None, :] * p[..., None, :, :]).sum(-1)
+        lam, info = torch.linalg.solve_ex(gram, p.new_ones(p.shape[:-1]))
+        ok = (info == 0) & torch.isfinite(lam).all(-1) & (lam >= 0).all(-1)
+        x = ((lam / lam.sum(-1, keepdim=True))[..., None] * p).sum(-2)
+        xs.append(torch.where(ok[..., None], x, torch.inf))
+    x = torch.cat(xs, 1)
+    slack = 2 * d * torch.finfo(cc.dtype).eps
+    low, sq = (cc[:, None] * x[:, :, None]).sum(-1).amin(-1), (x * x).sum(-1)
+    norm = torch.where(low >= sq - slack, x.norm(dim=-1), torch.inf)
+    gap = torch.where((low > slack) & torch.isfinite(sq), sq - low, torch.inf)
+    return x, norm, gap
+
+
+def _enumeration(c):
+    """The least-norm point of each row's hull by enumerating its faces, as the library
+    did before the active-set solver took every tie of 3 or more directions: the
+    least-norm face point (a pair's midpoint, or a face's least-norm affine point
+    with non-negative weights) that meets the solver's certificate, else the
+    separating one of least duality gap, else 0, in chunks of the rows."""
+    n, k, d = c.shape
+    if k == 1:
+        return c[:, 0]
+    sizes = range(2, min(k, d) + 1)
+    subsets = [
+        torch.tensor(list(itertools.combinations(range(k), m)), device=c.device)
+        for m in sizes
+    ]
+    total = sum(sub.shape[0] for sub in subsets)
+    chunk = max(1, 2**22 // (total * k))
+    out = []
+    for s in range(0, n, chunk):
+        x, norm, gap = _hull_candidates(c[s : s + chunk], subsets)
+        certified = torch.isfinite(norm).any(1)
+        pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
+        best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
+        found = certified | torch.isfinite(gap).any(1)
+        out.append(torch.where(found[:, None], best, 0.0))
+    return torch.cat(out)
+
+
 @pytest.mark.parametrize("dtype", [D, torch.float32])
 @pytest.mark.parametrize("surface", ["sphere", "torus", "ellipse", "sliver"])
 def test_tie_directions_take_the_exact_least_norm_point(surface, dtype, monkeypatch):
@@ -1240,14 +1294,20 @@ def test_tie_directions_take_the_exact_least_norm_point(surface, dtype, monkeypa
     pts = (pts @ R.T + t).to(dtype)
     q = torch.cat([pts[: mesh.n_points], pts[mesh.cells[:, :2]].mean(1)])
     calls = []
-    min_norm = geometry._min_norm_points
+    min_norm, solver = geometry._min_norm_points, geometry._wolfe_min_norm
 
     def recorded(c):
         x = min_norm(c)
         calls.append((c, x))
         return x
 
+    def solved(c, valid):
+        x = solver(c, valid)
+        calls.append((c, x))  # the padding repeats a valid direction
+        return x
+
     monkeypatch.setattr(geometry, "_min_norm_points", recorded)
+    monkeypatch.setattr(geometry, "_wolfe_min_norm", solved)
     exact_boundary_geometry(q, pts, cells)
     assert calls
     tol = 1e-6 if dtype == D else 1e-5
@@ -1295,15 +1355,13 @@ def _ring(k: int, eps: float, n: int, seed: int = 0):
     return torch.nn.functional.normalize(ring - q[:, None], dim=-1)
 
 
-### K = 100 is slow (the reference enumerates its 166,650 subsets one at a time);
-### K = 20 takes the same branch in the default tier, past a lowered budget.
+### K = 100 is slow (the reference enumerates its 166,650 subsets one at a time).
 @pytest.mark.parametrize("k", [20, pytest.param(100, marks=pytest.mark.slow)])
-def test_least_norm_point_of_many_directions_by_the_active_set_solver(k, monkeypatch):
-    """A hub vertex of many cells whose normals differ by rounding ties them all:
-    K directions give C(K, 3) triples, each compared with all K, more than one
-    pass holds. Such rows (a cap, the same read from float32, one spread by
-    rounding only, and a sphere, around the origin) take the active-set solver,
-    with no subset enumerated, and give the exact least-norm point to rounding:
+def test_least_norm_point_of_many_directions_by_the_active_set_solver(k):
+    """A hub vertex of many cells whose normals differ by rounding ties them all.
+    Such rows (a cap, the same read from float32, one spread by rounding only, and
+    a sphere, around the origin) take the active-set solver and give the exact
+    least-norm point to rounding:
     certified, and within 1e-12 of the float64 enumeration, or 1e-8 where the
     directions differ by 1e-7 (the problem's own conditioning). The float32 row's
     directions are unit only to 6e-8, so the enumeration's midpoints miss its
@@ -1318,10 +1376,6 @@ def test_least_norm_point_of_many_directions_by_the_active_set_solver(k, monkeyp
         rows.append(torch.unique(c.float().double() if f32 else c, dim=0))
     c = torch.stack(rows)
     assert c.shape == (4, k, 3)
-    if k < 51:
-        monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 8 * k * k)
-    assert not geometry._enumerable(k, 3)
-    monkeypatch.setattr(geometry, "_hull_candidates", None)
     x, exact = geometry._min_norm_points(c), _least_norm(c, tol=1e-12)
     err = (x - exact).norm(dim=-1)
     assert (err <= torch.tensor([1e-12, 1e-12, 1e-8, 0.0], dtype=D)).all()
@@ -1349,7 +1403,7 @@ def test_active_set_solver_matches_the_enumeration(dim):
             c = c[apart.flatten(1).amin(1) > 1e-3][:100]
             n = c.shape[0]
             x = geometry._wolfe_min_norm(c, torch.ones(n, k, dtype=torch.bool))
-            enumerated, exact = geometry._min_norm_points(c), _least_norm(c, 1e-12)
+            enumerated, exact = _enumeration(c), _least_norm(c, 1e-12)
             assert (x - exact).norm(dim=-1).max() <= 1e-12
             assert (enumerated - exact).norm(dim=-1).max() <= 1e-12
             assert _certified(c, x).all()
@@ -1367,24 +1421,20 @@ def test_active_set_solver_matches_the_enumeration(dim):
 
 
 @pytest.mark.parametrize("eps", [0.0, 1e-12, 1e-9, 1e-6, 1e-3, 0.1])
-def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps, monkeypatch):
+def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps):
     """A query on the axis of a body of revolution ties with a whole ring of cells.
     On the axis the 192 directions' least-norm point is (0, 0, 0.8) to rounding;
     near it, it moves with the query (by at most 2 eps here), within 2e-16 of
-    (0, 0, 0.8) at 1e-12 off. A ring of 56 directions, past the enumeration's
-    budget, gives the enumeration's point (its budget lifted) to 1e-13. Every
-    result is certified."""
+    (0, 0, 0.8) at 1e-12 off. A ring of 56 directions gives the enumeration's point
+    to 1e-13. Every result is certified."""
     c = _ring(192, eps, 16)
     x = geometry._min_norm_points(c)
     axis = torch.tensor([0.0, 0.0, 0.8], dtype=D)
     assert (x - axis).norm(dim=-1).max() <= 2 * eps + 2e-16
     assert _certified(c, x).all()
     c = _ring(56, eps, 16, seed=1)
-    assert not geometry._enumerable(56, 3)
     x = geometry._min_norm_points(c)
-    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
-    enumerated = geometry._min_norm_points(c)
-    assert (x - enumerated).norm(dim=-1).max() <= 1e-13
+    assert (x - _enumeration(c)).norm(dim=-1).max() <= 1e-13
     assert _certified(c, x).all()
 
 
@@ -1512,7 +1562,7 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     16 steps for all the rows, each certified. Its error bound is absolute, since
     near the origin the certificate also holds at points up to slack / h farther
     from the origin than the least-norm one: each row is within 2e-15 of the
-    enumeration's point (its budget lifted) at heights 0.3 and 0.8, and within 1e-11
+    enumeration's point at heights 0.3 and 0.8, and within 1e-11
     at 1e-4 and 1e-6 (3.6e-12 at delta = 1e-12, 1e-16 at the larger delta)."""
     g = torch.Generator().manual_seed(56)
     phi = (
@@ -1530,9 +1580,8 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     assert x.device == torch.device(device) or x.device.type == device
     x = x.cpu()
     assert _certified(c, x).all() and 0 < sum(steps) <= 16
-    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
     tol = 2e-15 if h > 0.1 else 1e-11
-    assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= tol
+    assert (x - _enumeration(c)).norm(dim=-1).max() <= tol
 
 
 def test_active_set_solver_on_degenerate_and_duplicate_directions():
@@ -1574,13 +1623,13 @@ def test_active_set_solver_on_degenerate_and_duplicate_directions():
 
 @pytest.mark.parametrize("device", _DEVICES)
 def test_grouped_least_norm_batches_the_large_groups(device, monkeypatch):
-    """Groups the enumeration admits keep their result bitwise; every larger group
-    (60 to 192 directions) takes the active-set solver in one padded batch, with
-    the result it gets alone, bitwise, on CUDA too. Under a smaller budget the large
-    groups go largest first in chunks within it, each padded to its largest group,
-    with the same results bitwise."""
+    """A pair takes the closed form. Every larger group (3 to 192 directions) takes the
+    active-set solver, largest first, in chunks padded to their largest group and
+    holding only groups of more than half its size, with the result it gets alone,
+    bitwise, on CUDA too. Under a smaller budget the chunks also keep within it, with
+    the same results bitwise."""
     g = torch.Generator().manual_seed(5)
-    sizes = [3, 60, 7, 192, 130, 60, 3]
+    sizes = [3, 60, 7, 192, 130, 60, 3, 2]
     rows = [_ring(k, 1e-3, 1, seed=i)[0].to(device) for i, k in enumerate(sizes)]
     group = torch.cat([torch.full((k,), i, device=device) for i, k in enumerate(sizes)])
     perm = torch.randperm(group.numel(), generator=g)
@@ -1592,21 +1641,21 @@ def test_grouped_least_norm_batches_the_large_groups(device, monkeypatch):
         return solver(c, valid)
 
     monkeypatch.setattr(geometry, "_wolfe_min_norm", recorded)
-    out = geometry._grouped_min_norm(group[perm], torch.cat(rows)[perm], 8)
-    assert calls == [(4, 192, 3)]
-    assert torch.equal(out[7], torch.zeros(3, dtype=D, device=device))
+    out = geometry._grouped_min_norm(group[perm], torch.cat(rows)[perm], 9)
+    assert calls == [(2, 192, 3), (2, 60, 3), (1, 7, 3), (2, 3, 3)]
+    assert torch.equal(out[8], torch.zeros(3, dtype=D, device=device))
     for i, row in enumerate(rows):
         row = torch.unique(row, dim=0)[None]
         expect = (
             geometry._min_norm_points(row)
-            if sizes[i] < 51
+            if sizes[i] < 3
             else solver(row, torch.ones(row.shape[:2], dtype=torch.bool, device=device))
         )
         assert torch.equal(out[i], expect[0])
     calls.clear()
-    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 8 * 400)
-    chunked = geometry._grouped_min_norm(group[perm], torch.cat(rows)[perm], 8)
-    assert calls == [(2, 192, 3), (2, 60, 3)]
+    monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 8 * 200)
+    chunked = geometry._grouped_min_norm(group[perm], torch.cat(rows)[perm], 9)
+    assert calls == [(1, 192, 3), (1, 130, 3), (2, 60, 3), (1, 7, 3), (2, 3, 3)]
     assert torch.equal(chunked, out)
 
 
@@ -1619,7 +1668,6 @@ def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(
     directions (seconds per row, minutes for the axis of a slice); the active-set
     solver enumerates no subset and takes at most 16 steps for all 8 rows at once."""
     c = _ring(192, 1e-9, 8)
-    monkeypatch.setattr(geometry, "_hull_candidates", None)
     steps = _counted_steps(monkeypatch)
     x = geometry._min_norm_points(c.to(device)).cpu()
     assert 0 < sum(steps) <= 16 and _certified(c, x).all()
