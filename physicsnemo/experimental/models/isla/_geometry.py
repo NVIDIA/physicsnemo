@@ -731,8 +731,9 @@ def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     direction is below ``|x|^2``, the added direction is in the corral, the corral is
     full, its system is singular, its norm rises beyond rounding, ``x`` repeats, or,
     once certified, its norm stops falling. The certificate's slack is absolute, so
-    near the origin it also holds on faces up to ``slack / |x|`` above the optimal
-    one: the result's error is bounded in absolute terms, not relative to ``|x|``. As
+    near the origin it also holds at points up to ``slack / |x|`` farther from the
+    origin than the least-norm one: the result's error is bounded in absolute terms,
+    not relative to ``|x|``. As
     in :func:`_min_norm_points`, a row with no certified point returns its iterate of
     least duality gap among those that separate the origin, and 0 when none does. A
     full corral of positive weights holds the origin in its simplex, which gives

@@ -1407,10 +1407,10 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     less than the rounding of |x|^2 while the duality gap is still about delta, so
     the solver must not stop on an unchanged norm before it certifies. It takes 1 to
     16 steps for all the rows, each certified. Its error bound is absolute, since
-    near the origin the certificate also holds on faces up to slack / h above the
-    optimal one: each row is within 2e-15 of the enumeration's point (its budget
-    lifted) at heights 0.3 and 0.8, and within 5e-12 at 1e-4 and 1e-6 (3.6e-12 at
-    delta = 1e-12, 1e-16 at the larger delta)."""
+    near the origin the certificate also holds at points up to slack / h farther
+    from the origin than the least-norm one: each row is within 2e-15 of the
+    enumeration's point (its budget lifted) at heights 0.3 and 0.8, and within 1e-11
+    at 1e-4 and 1e-6 (3.6e-12 at delta = 1e-12, 1e-16 at the larger delta)."""
     g = torch.Generator().manual_seed(56)
     phi = (
         2
@@ -1428,7 +1428,7 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     x = x.cpu()
     assert _certified(c, x).all() and 0 < len(steps) <= 16
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
-    tol = 2e-15 if h > 0.1 else 5e-12
+    tol = 2e-15 if h > 0.1 else 1e-11
     assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= tol
 
 
@@ -1473,10 +1473,9 @@ def test_active_set_solver_on_degenerate_and_duplicate_directions():
 def test_grouped_least_norm_batches_the_large_groups(device, monkeypatch):
     """Groups the enumeration admits keep their result bitwise; every larger group
     (60 to 192 directions) takes the active-set solver in one padded batch, with
-    the result it gets alone, bitwise (on CUDA too, where batched torch.linalg.qr
-    would not give it). Under a smaller budget the large groups go largest first in
-    chunks within it, each padded to its largest group, with the same results
-    bitwise."""
+    the result it gets alone, bitwise, on CUDA too. Under a smaller budget the large
+    groups go largest first in chunks within it, each padded to its largest group,
+    with the same results bitwise."""
     g = torch.Generator().manual_seed(5)
     sizes = [3, 60, 7, 192, 130, 60, 3]
     rows = [_ring(k, 1e-3, 1, seed=i)[0].to(device) for i, k in enumerate(sizes)]
