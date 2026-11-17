@@ -658,6 +658,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   took minutes at DrivAerML sizes.
 - The GLOBE examples' requirements no longer downgrade PyVista and Matplotlib
   below the versions PhysicsNeMo requires.
+- `compute_stats.py` in the `diffusion_fwi` example no longer overstates the
+  mean and std of `vx` and `vz` in `stats.json`: their sums were not divided
+  by the number of shots. The corrected statistics normalize those inputs
+  differently, so a model trained with an older `stats.json` must keep using
+  that file.
 - `signed_distance_field`, in `physicsnemo.nn.functional` and
   `physicsnemo.mesh.spatial`, supports backpropagation: the signed distance is
   differentiable with respect to the mesh vertices and the query points.
