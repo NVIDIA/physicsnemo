@@ -89,7 +89,7 @@ class _RotaryLinearCrossAttentionND(nn.Module):
         Even channel counts within ``dim_head``, one per spatial axis. Entry
         ``i`` is rotated by coordinate ``i`` of ``pos_q`` and ``pos_kv``.
         Defaults to ``[dim_head]``.
-    max_freq : float, optional, default=64.0
+    max_freq : float, optional, default=200.0
         RoPE frequency scale.
     scale : float, optional, default=1.0
         Additional RoPE coordinate multiplier (per-layer decay factor).
@@ -105,9 +105,9 @@ class _RotaryLinearCrossAttentionND(nn.Module):
         Query coordinates of shape :math:`(B, L_q, n_{axes})`.
     pos_kv : torch.Tensor
         Key/value coordinates of shape :math:`(B, L_{kv}, n_{axes})`.
-    padding_kv : torch.Tensor, optional
+    mask_kv : torch.Tensor, optional
         Boolean or float mask of shape :math:`(B, L_{kv})` or
-        :math:`(B, L_{kv}, 1)`. Any nonzero entry marks a valid token. Padded
+        :math:`(B, L_{kv}, 1)`. True (nonzero) marks a real token. Padded
         tokens are excluded from :math:`K^\top V` and from :math:`N`.
 
     Outputs
@@ -122,7 +122,7 @@ class _RotaryLinearCrossAttentionND(nn.Module):
         dim_head: int = 128,
         num_heads: int = 4,
         axis_slices: list[int] | None = None,
-        max_freq: float = 64.0,
+        max_freq: float = 200.0,
         scale: float = 1.0,
     ) -> None:
         super().__init__()
@@ -200,7 +200,7 @@ class _RotaryLinearCrossAttentionND(nn.Module):
         x_kv: Float[torch.Tensor, "batch len_kv dim"],
         pos_q: Float[torch.Tensor, "batch len_q axes"],
         pos_kv: Float[torch.Tensor, "batch len_kv axes"],
-        padding_kv: Shaped[torch.Tensor, "batch len_kv ..."] | None = None,
+        mask_kv: Shaped[torch.Tensor, "batch len_kv ..."] | None = None,
     ) -> Float[torch.Tensor, "batch len_q dim"]:
         B, L_q, E = x_q.shape
         L_kv = x_kv.shape[1]
@@ -227,13 +227,13 @@ class _RotaryLinearCrossAttentionND(nn.Module):
                     f"Expected pos_kv of shape ({B}, {L_kv}, {self.n_axes}) "
                     f"but got tensor of shape {tuple(pos_kv.shape)}"
                 )
-            if padding_kv is not None and padding_kv.shape not in (
+            if mask_kv is not None and mask_kv.shape not in (
                 (B, L_kv),
                 (B, L_kv, 1),
             ):
                 raise ValueError(
-                    f"Expected padding_kv of shape ({B}, {L_kv}) or ({B}, {L_kv}, 1) "
-                    f"but got tensor of shape {tuple(padding_kv.shape)}"
+                    f"Expected mask_kv of shape ({B}, {L_kv}) or ({B}, {L_kv}, 1) "
+                    f"but got tensor of shape {tuple(mask_kv.shape)}"
                 )
 
         q = self.q_proj(x_q)
@@ -261,18 +261,20 @@ class _RotaryLinearCrossAttentionND(nn.Module):
         # masked_fill keeps the dtype of k/v and also clears non-finite values,
         # but in the forward pass only: the backward of k_norm and kv_proj can
         # still produce NaN gradients from non-finite padded inputs.
-        if padding_kv is not None:
-            valid = padding_kv.reshape(B, 1, L_kv, 1) != 0
+        if mask_kv is not None:
+            valid = mask_kv.reshape(B, 1, L_kv, 1) != 0
             k = k.masked_fill(~valid, 0.0)
             v = v.masked_fill(~valid, 0.0)
-            # Integer count. Dividing by it keeps the dtype of the output.
+            # Integer count. Dividing by it keeps the dtype of k.
             n_valid = valid.sum(dim=-2, keepdim=True).clamp(min=1)  # (B, 1, 1, 1)
         else:
             n_valid = float(max(L_kv, 1))
 
-        # Linear attention: Q (K^T V) / N, no softmax.
-        kv = torch.matmul(k.transpose(-1, -2), v)  # (B, H, dim_head, dim_head)
-        out = torch.matmul(q, kv) / n_valid  # (B, H, L_q, dim_head)
+        # Linear attention: Q (K^T V) / N, no softmax. K is divided by N before
+        # the sum over tokens so that K^T V cannot overflow fp16 on large clouds.
+        # kv has shape (B, H, dim_head, dim_head).
+        kv = torch.matmul((k / n_valid).transpose(-1, -2), v)
+        out = torch.matmul(q, kv)  # (B, H, L_q, dim_head)
 
         out = rearrange(out, "b h l d -> b l (h d)")
         return self.out_proj(out)
@@ -372,7 +374,7 @@ class _MultiLayerCrossAttention(nn.Module):
         Per-axis RoPE channel split. See :class:`_RotaryLinearCrossAttentionND`.
     dropout : float, optional, default=0.0
         Dropout probability inside the feed-forward blocks.
-    max_freq : float, optional, default=64.0
+    max_freq : float, optional, default=200.0
         RoPE frequency scale.
     use_relu_mlp : bool, optional, default=False
         If ``True``, use ReLU feed-forward blocks. Otherwise use GEGLU.
@@ -387,8 +389,9 @@ class _MultiLayerCrossAttention(nn.Module):
         Query coordinates of shape :math:`(B, L_q, n_{axes})`.
     pos_kv : torch.Tensor
         Key/value coordinates of shape :math:`(B, L_{kv}, n_{axes})`.
-    padding_kv : torch.Tensor, optional
-        Key/value padding mask. See :class:`_RotaryLinearCrossAttentionND`.
+    mask_kv : torch.Tensor, optional
+        Key/value mask (True = real token). See
+        :class:`_RotaryLinearCrossAttentionND`.
 
     Outputs
     -------
@@ -405,14 +408,16 @@ class _MultiLayerCrossAttention(nn.Module):
         dim_mlp: int = 256,
         axis_slices: list[int] | None = None,
         dropout: float = 0.0,
-        max_freq: float = 64.0,
+        max_freq: float = 200.0,
         use_relu_mlp: bool = False,
     ) -> None:
         super().__init__()
 
         def _ffn() -> nn.Module:
             if use_relu_mlp:
-                return Mlp(dim_inout, dim_mlp, dim_inout, act_layer="relu", drop=dropout)
+                return Mlp(
+                    dim_inout, dim_mlp, dim_inout, act_layer="relu", drop=dropout
+                )
             return _FeedForward(dim_inout, dim_mlp, dropout=dropout)
 
         self.layers = nn.ModuleList(
@@ -438,9 +443,9 @@ class _MultiLayerCrossAttention(nn.Module):
         x_kv: Float[torch.Tensor, "batch len_kv dim"],
         pos_q: Float[torch.Tensor, "batch len_q axes"],
         pos_kv: Float[torch.Tensor, "batch len_kv axes"],
-        padding_kv: Shaped[torch.Tensor, "batch len_kv ..."] | None = None,
+        mask_kv: Shaped[torch.Tensor, "batch len_kv ..."] | None = None,
     ) -> Float[torch.Tensor, "batch len_q dim"]:
         for attn, ffn in self.layers:
-            x_q = attn(x_q, x_kv, pos_q, pos_kv, padding_kv=padding_kv) + x_q
+            x_q = attn(x_q, x_kv, pos_q, pos_kv, mask_kv=mask_kv) + x_q
             x_q = ffn(x_q) + x_q
         return x_q

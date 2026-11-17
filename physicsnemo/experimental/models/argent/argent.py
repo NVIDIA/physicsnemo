@@ -20,6 +20,16 @@ Implements the cross-attention variant of ArGEnT (`Chen et al., 2026
 <https://arxiv.org/abs/2602.11626>`_): a geometry-aware transformer trunk that
 attends from query points to a geometry point cloud, optionally fused with a
 DeepONet-style branch over non-geometric operator parameters.
+
+Based on the reference implementation by the paper's authors (PNNL),
+`pnnl/ArGEnT <https://github.com/pnnl/ArGEnT>`_. Differences from it:
+
+- Every V head of the attention gets the orthogonal-plus-identity
+  initialization. The reference indexes the V blocks of ``kv_proj`` at
+  ``2 * h * dim_head``, which leaves some V heads at the default init.
+- RoPE rotates adjacent channel pairs rather than the two halves of each axis
+  slice. The two layouts are equivalent up to a fixed channel permutation.
+- Only the cross-attention variant is implemented.
 """
 
 from __future__ import annotations
@@ -102,13 +112,13 @@ class ArGEnTGeometry(NamedTuple):
     pos : torch.Tensor
         Geometry coordinates used by RoPE, of shape
         :math:`(B, N_{kv}, \text{dim\_pos})`.
-    padding : torch.Tensor or None
-        The key/value padding mask passed to :meth:`ArGEnT.encode_geometry`.
+    mask : torch.Tensor or None
+        The key/value mask passed to :meth:`ArGEnT.encode_geometry`.
     """
 
     tokens: torch.Tensor
     pos: torch.Tensor
-    padding: torch.Tensor | None
+    mask: torch.Tensor | None
 
 
 @dataclass
@@ -161,9 +171,10 @@ class ArGEnT(Module):
         Number of attention heads.
     depth : int, optional, default=2
         Number of cross-attention layers.
-    max_freq : float, optional, default=64.0
+    max_freq : float, optional, default=200.0
         RoPE frequency scale. At layer :math:`d`, coordinates are multiplied by
         :math:`\text{max\_freq}^2 / 2^d` before the RoPE frequency schedule.
+        The default matches the example configs of pnnl/ArGEnT.
     use_mfnn : bool, optional, default=False
         If ``True``, use the modified FNN of Wang et al. (2021) for the
         embedding and output MLPs instead of a plain feed-forward stack.
@@ -185,12 +196,13 @@ class ArGEnT(Module):
         Query tokens of shape :math:`(B, N_q, D_q)`.
     x_kv : torch.Tensor
         Key/value tokens of shape :math:`(B, N_{kv}, D_{kv})`.
-    padding_kv : torch.Tensor, optional
+    mask_kv : torch.Tensor, optional
         Boolean or float mask of shape :math:`(B, N_{kv})` or
-        :math:`(B, N_{kv}, 1)`. Any nonzero entry marks a valid token. Padded
-        tokens are excluded from the attention. Padded entries of ``x_kv``
-        may hold any value, including NaN, because they are zeroed before
-        embedding.
+        :math:`(B, N_{kv}, 1)`. True (nonzero) marks a real token and False
+        (zero) a padded one, the opposite of the ``key_padding_mask``
+        convention of :class:`torch.nn.MultiheadAttention`. Padded tokens are
+        excluded from the attention. Padded entries of ``x_kv`` may hold any
+        value, including NaN, because they are zeroed before embedding.
 
     Outputs
     -------
@@ -226,7 +238,7 @@ class ArGEnT(Module):
         dim_emb: int = 128,
         num_heads: int = 4,
         depth: int = 2,
-        max_freq: float = 64.0,
+        max_freq: float = 200.0,
         use_mfnn: bool = False,
         activation: str = "relu",
         use_relu_mlp: bool = False,
@@ -291,7 +303,7 @@ class ArGEnT(Module):
     def encode_geometry(
         self,
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
-        padding_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
+        mask_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
     ) -> ArGEnTGeometry:
         r"""Embed a geometry point cloud for reuse across query evaluations.
 
@@ -299,13 +311,13 @@ class ArGEnT(Module):
         ----------
         x_kv : torch.Tensor
             Key/value tokens of shape :math:`(B, N_{kv}, D_{kv})`.
-        padding_kv : torch.Tensor, optional
-            Key/value padding mask. See :class:`ArGEnT`.
+        mask_kv : torch.Tensor, optional
+            Key/value mask (True = real token). See :class:`ArGEnT`.
 
         Returns
         -------
         ArGEnTGeometry
-            Embedded geometry tokens, their coordinates and the padding mask.
+            Embedded geometry tokens, their coordinates and the mask.
         """
         ### Input validation
         if not torch.compiler.is_compiling():
@@ -315,23 +327,23 @@ class ArGEnT(Module):
                     f"but got tensor of shape {tuple(x_kv.shape)}"
                 )
             B, N_kv = x_kv.shape[:2]
-            if padding_kv is not None and padding_kv.shape not in (
+            if mask_kv is not None and mask_kv.shape not in (
                 (B, N_kv),
                 (B, N_kv, 1),
             ):
                 raise ValueError(
-                    f"Expected padding_kv of shape ({B}, {N_kv}) or ({B}, {N_kv}, 1) "
-                    f"but got tensor of shape {tuple(padding_kv.shape)}"
+                    f"Expected mask_kv of shape ({B}, {N_kv}) or ({B}, {N_kv}, 1) "
+                    f"but got tensor of shape {tuple(mask_kv.shape)}"
                 )
 
         # Zero padded geometry so that non-finite padding values cannot reach
         # the embeddings, the RoPE tables, or the gradients.
-        if padding_kv is not None:
-            x_kv = x_kv.masked_fill(padding_kv.reshape(*x_kv.shape[:2], 1) == 0, 0.0)
+        if mask_kv is not None:
+            x_kv = x_kv.masked_fill(mask_kv.reshape(*x_kv.shape[:2], 1) == 0, 0.0)
 
         # The activation is also applied after the last embedding layer.
         tokens = self.activation(self.kv_to_embedding(x_kv))
-        return ArGEnTGeometry(tokens, x_kv[..., : self.dim_pos], padding_kv)
+        return ArGEnTGeometry(tokens, x_kv[..., : self.dim_pos], mask_kv)
 
     def decode_queries(
         self,
@@ -372,7 +384,7 @@ class ArGEnT(Module):
             geometry.tokens,
             x_query[..., : self.dim_pos],
             geometry.pos,
-            padding_kv=geometry.padding,
+            mask_kv=geometry.mask,
         )
         return self.to_out(x_query_emb)
 
@@ -380,9 +392,9 @@ class ArGEnT(Module):
         self,
         x_query: Float[torch.Tensor, "batch nq dim_query"],
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
-        padding_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
+        mask_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
     ) -> Float[torch.Tensor, "batch nq dim_out"]:
-        return self.decode_queries(x_query, self.encode_geometry(x_kv, padding_kv))
+        return self.decode_queries(x_query, self.encode_geometry(x_kv, mask_kv))
 
 
 class ArGEnTDeepONet(Module):
@@ -419,7 +431,7 @@ class ArGEnTDeepONet(Module):
         Number of attention heads.
     depth : int, optional, default=2
         Number of cross-attention layers.
-    max_freq : float, optional, default=64.0
+    max_freq : float, optional, default=200.0
         RoPE frequency scale. See :class:`ArGEnT`.
     use_mfnn : bool, optional, default=False
         If ``True``, use the modified FNN for the trunk MLPs and the branch.
@@ -439,8 +451,8 @@ class ArGEnTDeepONet(Module):
     op_params : torch.Tensor
         Operator parameters of shape :math:`(B, D_{op})` or
         :math:`(B, 1, D_{op})`.
-    padding_kv : torch.Tensor, optional
-        Key/value padding mask. See :class:`ArGEnT`.
+    mask_kv : torch.Tensor, optional
+        Key/value mask (True = real token). See :class:`ArGEnT`.
 
     Outputs
     -------
@@ -471,7 +483,7 @@ class ArGEnTDeepONet(Module):
         dim_emb: int = 128,
         num_heads: int = 4,
         depth: int = 2,
-        max_freq: float = 64.0,
+        max_freq: float = 200.0,
         use_mfnn: bool = False,
         activation: str = "relu",
         use_relu_mlp: bool = False,
@@ -513,10 +525,10 @@ class ArGEnTDeepONet(Module):
     def encode_geometry(
         self,
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
-        padding_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
+        mask_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
     ) -> ArGEnTGeometry:
         r"""Embed a geometry point cloud. See :meth:`ArGEnT.encode_geometry`."""
-        return self.argent.encode_geometry(x_kv, padding_kv)
+        return self.argent.encode_geometry(x_kv, mask_kv)
 
     def decode_queries(
         self,
@@ -565,8 +577,8 @@ class ArGEnTDeepONet(Module):
         x_query: Float[torch.Tensor, "batch nq dim_query"],
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
         op_params: Float[torch.Tensor, "batch ..."],
-        padding_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
+        mask_kv: Shaped[torch.Tensor, "batch nkv ..."] | None = None,
     ) -> Float[torch.Tensor, "batch nq dim_out"]:
         return self.decode_queries(
-            x_query, self.encode_geometry(x_kv, padding_kv), op_params
+            x_query, self.encode_geometry(x_kv, mask_kv), op_params
         )

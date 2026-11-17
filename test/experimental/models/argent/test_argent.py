@@ -75,7 +75,7 @@ def test_argent_deeponet_constructor(config):
         assert trunk.dim_query == trunk.dim_kv == trunk.dim_pos == 2
         assert trunk.num_heads == 4
         assert trunk.depth == 2
-        assert trunk.max_freq == 64.0
+        assert trunk.max_freq == 200.0
         assert trunk.axis_slices == [64, 64]
         assert not trunk.use_mfnn and not trunk.use_relu_mlp
         assert hasattr(model, "branch_net")
@@ -160,9 +160,9 @@ def test_argent_forward_accuracy(device, name):
     else:
         model = ArGEnT(dim_query=3, dim_kv=3, dim_pos=2, dim_out=2, dim_emb=32)
         x_query, x_kv, _ = _inputs(3, 3, 0, device)
-        padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
-        padding_kv[1, NKV // 2 :] = False
-        args = (x_query, x_kv, padding_kv)
+        mask_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+        mask_kv[1, NKV // 2 :] = False
+        args = (x_query, x_kv, mask_kv)
 
     assert validate_forward_accuracy(
         _seed_params(model).to(device),
@@ -180,7 +180,7 @@ def test_argent_deeponet_checkpoint(device):
 
 
 @pytest.mark.parametrize("junk", ["random", "nan", "inf"])
-def test_argent_padding_kv_ignores_padded_tokens(device, junk):
+def test_argent_mask_kv_ignores_padded_tokens(device, junk):
     """Padded key/value tokens, finite or not, do not affect the output."""
     # Seeded weights give a nonzero LayerNorm bias, so masking before the norm
     # would change the output.
@@ -193,17 +193,15 @@ def test_argent_padding_kv_ignores_padded_tokens(device, junk):
     else:
         pad = torch.full((B, 16, 3), float(junk))
     x_kv_padded = torch.cat([x_kv, pad.to(device)], dim=1)
-    padding_kv = torch.ones(B, NKV + 16, dtype=torch.bool, device=device)
-    padding_kv[:, NKV:] = False
+    mask_kv = torch.ones(B, NKV + 16, dtype=torch.bool, device=device)
+    mask_kv[:, NKV:] = False
 
     out = model(x_query, x_kv, op_params)
-    out_padded = model(x_query, x_kv_padded, op_params, padding_kv=padding_kv)
+    out_padded = model(x_query, x_kv_padded, op_params, mask_kv=mask_kv)
     torch.testing.assert_close(out_padded, out, rtol=1e-5, atol=1e-5)
 
     # Nonzero float masks behave like the boolean mask.
-    out_float = model(
-        x_query, x_kv_padded, op_params, padding_kv=2.0 * padding_kv.float()
-    )
+    out_float = model(x_query, x_kv_padded, op_params, mask_kv=2.0 * mask_kv.float())
     torch.testing.assert_close(out_float, out, rtol=1e-5, atol=1e-5)
 
     # Non-finite padding must not leak into the gradients either.
@@ -213,7 +211,7 @@ def test_argent_padding_kv_ignores_padded_tokens(device, junk):
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_argent_padding_kv_reduced_precision(device, dtype):
+def test_argent_mask_kv_reduced_precision(device, dtype):
     """Padding works when the model and inputs are cast to reduced precision.
 
     Casting the inputs rounds the coordinates before the RoPE scaling
@@ -223,14 +221,14 @@ def test_argent_padding_kv_reduced_precision(device, dtype):
     """
     model = ArGEnTDeepONet(**_LID_DRIVEN).to(device=device, dtype=dtype)
     x_query, x_kv, op_params = _inputs(3, 3, 1, device)
-    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
-    padding_kv[1, NKV // 2 :] = False
+    mask_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    mask_kv[1, NKV // 2 :] = False
 
     out = model(
         x_query.to(dtype),
         x_kv.to(dtype),
         op_params.to(device=device, dtype=dtype),
-        padding_kv=padding_kv,
+        mask_kv=mask_kv,
     )
     assert out.dtype == dtype
     assert torch.isfinite(out).all()
@@ -246,14 +244,25 @@ def test_argent_autocast_accuracy(device, dtype, rtol):
     model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
     x_query, x_kv, op_params = _inputs(3, 3, 1, device)
     op_params = op_params.to(device)
-    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
-    padding_kv[1, NKV // 2 :] = False
+    mask_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    mask_kv[1, NKV // 2 :] = False
 
-    ref = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+    ref = model(x_query, x_kv, op_params, mask_kv=mask_kv)
     with torch.autocast(device_type=torch.device(device).type, dtype=dtype):
-        out = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+        out = model(x_query, x_kv, op_params, mask_kv=mask_kv)
     rel_err = (out.float() - ref).norm() / ref.norm()
     assert rel_err < rtol, f"relative L2 error {rel_err:.2e} exceeds {rtol:.1e}"
+
+
+def test_argent_fp16_large_geometry(device):
+    """K^T V over a large geometry cloud does not overflow fp16 under autocast."""
+    model = ArGEnT(dim_query=3, dim_kv=3, dim_pos=3, dim_emb=32, num_heads=1)
+    gen = torch.Generator().manual_seed(0)
+    x_query = torch.rand(1, 64, 3, generator=gen).to(device)
+    x_kv = torch.rand(1, 100_000, 3, generator=gen).to(device)
+    with torch.autocast(device_type=torch.device(device).type, dtype=torch.float16):
+        out = model.to(device)(x_query, x_kv)
+    assert torch.isfinite(out).all()
 
 
 def test_argent_compile_matches_eager(device):
@@ -261,12 +270,12 @@ def test_argent_compile_matches_eager(device):
     model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
     x_query, x_kv, op_params = _inputs(3, 3, 1, device)
     op_params = op_params.to(device)
-    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
-    padding_kv[1, NKV // 2 :] = False
+    mask_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    mask_kv[1, NKV // 2 :] = False
 
-    eager = model(x_query, x_kv, op_params, padding_kv=padding_kv)
+    eager = model(x_query, x_kv, op_params, mask_kv=mask_kv)
     compiled = torch.compile(model, fullgraph=True)(
-        x_query, x_kv, op_params, padding_kv=padding_kv
+        x_query, x_kv, op_params, mask_kv=mask_kv
     )
     torch.testing.assert_close(compiled, eager, rtol=1e-5, atol=1e-5)
 
@@ -276,11 +285,11 @@ def test_argent_geometry_reuse(device):
     model = _seed_params(ArGEnTDeepONet(**_LID_DRIVEN)).to(device)
     x_query, x_kv, op_params = _inputs(3, 3, 1, device)
     op_params = op_params.to(device)
-    padding_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
-    padding_kv[1, NKV // 2 :] = False
+    mask_kv = torch.ones(B, NKV, dtype=torch.bool, device=device)
+    mask_kv[1, NKV // 2 :] = False
 
-    out = model(x_query, x_kv, op_params, padding_kv=padding_kv)
-    geometry = model.encode_geometry(x_kv, padding_kv=padding_kv)
+    out = model(x_query, x_kv, op_params, mask_kv=mask_kv)
+    geometry = model.encode_geometry(x_kv, mask_kv=mask_kv)
     chunks = [
         model.decode_queries(chunk, geometry, op_params)
         for chunk in x_query.split(NQ // 4, dim=1)
@@ -288,14 +297,14 @@ def test_argent_geometry_reuse(device):
     torch.testing.assert_close(torch.cat(chunks, dim=1), out, rtol=1e-5, atol=1e-5)
 
     # op_params of shape (B, dim_op) is accepted as well as (B, 1, dim_op).
-    out_2d = model(x_query, x_kv, op_params[:, 0], padding_kv=padding_kv)
+    out_2d = model(x_query, x_kv, op_params[:, 0], mask_kv=mask_kv)
     torch.testing.assert_close(out_2d, out)
 
 
-def test_argent_padding_kv_shape_validation(device):
+def test_argent_mask_kv_shape_validation(device):
     """A padding mask with the wrong layout is rejected."""
     model = ArGEnT(dim_query=3, dim_kv=3, dim_pos=2, dim_emb=32).to(device)
     x_query, x_kv, _ = _inputs(3, 3, 0, device)
-    padding_kv = torch.ones(NKV, B, dtype=torch.bool, device=device)
-    with pytest.raises(ValueError, match="padding_kv"):
-        model(x_query, x_kv, padding_kv=padding_kv)
+    mask_kv = torch.ones(NKV, B, dtype=torch.bool, device=device)
+    with pytest.raises(ValueError, match="mask_kv"):
+        model(x_query, x_kv, mask_kv=mask_kv)
