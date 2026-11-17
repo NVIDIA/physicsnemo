@@ -487,11 +487,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the mesh on the field's device, so a CUDA field no longer makes a
   round trip through host memory and `coords` on a CUDA device no longer raise
   a device error. CPU fields run as before.
-- `FunctionSpec.warp_stream_scope` reuses one Warp guard stream per device
-  instead of creating one on every call. Back-to-back calls of every Warp
-  wrapper that uses the helper no longer stall the host on the guard stream's
-  frees: `marching_cubes` at 256³ drops from about 60 ms to about 14 ms per call
-  on an RTX 4090 Laptop GPU.
 
 ### Deprecated
 

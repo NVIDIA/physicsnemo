@@ -16,7 +16,7 @@
 
 import inspect
 import warnings
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from typing import Literal, get_type_hints
 
 import pytest
@@ -385,7 +385,6 @@ def test_warp_stream_scope_forwards_sync_options(monkeypatch, sync_enter, sync_e
 
     monkeypatch.setattr(function_spec.wp, "Stream", DummyGuard)
     monkeypatch.setattr(function_spec.wp, "ScopedStream", scoped_stream)
-    monkeypatch.setattr(function_spec, "_WARP_GUARD_STREAMS", {})
 
     stream = DummyStream()
     with FunctionSpec.warp_stream_scope(
@@ -399,31 +398,6 @@ def test_warp_stream_scope_forwards_sync_options(monkeypatch, sync_enter, sync_e
         ("body",),
         ("wait", stream),
     ]
-
-
-def test_warp_stream_scope_reuses_one_guard_per_device(monkeypatch):
-    created = []
-
-    class DummyStream:
-        def __init__(self, device):
-            self.device = device
-
-    class DummyGuard:
-        def __init__(self, device):
-            created.append(device)
-
-        def wait_stream(self, stream):
-            pass
-
-    monkeypatch.setattr(function_spec.wp, "Stream", DummyGuard)
-    monkeypatch.setattr(function_spec.wp, "ScopedStream", lambda *a, **k: nullcontext())
-    monkeypatch.setattr(function_spec, "_WARP_GUARD_STREAMS", {})
-
-    for device in ["cuda:0", "cuda:0", "cuda:1", "cuda:0", "cuda:1"]:
-        with FunctionSpec.warp_stream_scope(DummyStream(device)):
-            pass
-
-    assert created == ["cuda:0", "cuda:1"]
 
 
 def test_dispatch_compatible_with_torch_compile():
