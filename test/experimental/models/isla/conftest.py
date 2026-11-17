@@ -35,8 +35,24 @@ import os
 from pathlib import Path
 
 import pytest
+import torch
 
 _HERE = Path(__file__).parent
+
+
+@pytest.fixture
+def no_tf32_matmul():
+    """Run the test with full float32 matmuls (no TF32), then restore the setting.
+
+    Uses ``torch.set_float32_matmul_precision`` rather than
+    ``monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)``: on
+    newer torch, monkeypatch's undo deletes ``allow_tf32`` instead of restoring it,
+    which fails at teardown and leaves the precision setting half-changed for the
+    tests that follow."""
+    previous = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision("highest")
+    yield
+    torch.set_float32_matmul_precision(previous)
 
 
 def pytest_configure(config):
