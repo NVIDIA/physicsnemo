@@ -1388,16 +1388,29 @@ def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps, monkeypatch):
     assert _certified(c, x).all()
 
 
+def _counted_steps(monkeypatch):
+    """The active-set solver's steps, one per solve of its corral, as they run."""
+    steps, solve = [], geometry._affine_min_norm
+    monkeypatch.setattr(
+        geometry, "_affine_min_norm", lambda *a: steps.append(1) or solve(*a)
+    )
+    return steps
+
+
 @pytest.mark.parametrize("device", _DEVICES)
 @pytest.mark.parametrize("delta", [1e-12, 1e-9, 1e-7])
-@pytest.mark.parametrize("h", [0.8, 0.3])
+@pytest.mark.parametrize("h", [0.8, 0.3, 1e-4, 1e-6])
 def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     """Directions to a regular ring from its axis, each moved by about delta (a
     float64 body of revolution with slightly noisy vertices), span a nearly flat
-    hull. Wolfe's norm then falls by less than the rounding of |x|^2 while the
-    duality gap is still about delta, so the solver must not stop on an unchanged
-    norm before it certifies: every row is certified and within 2e-15 of the
-    enumeration's point (its budget lifted), with at most 16 steps."""
+    hull at height h, the norm of its least-norm point. Wolfe's norm then falls by
+    less than the rounding of |x|^2 while the duality gap is still about delta, so
+    the solver must not stop on an unchanged norm before it certifies. It takes 1 to
+    16 steps for all the rows, each certified. Its error bound is absolute, since
+    near the origin the certificate also holds on faces up to slack / h above the
+    optimal one: each row is within 2e-15 of the enumeration's point (its budget
+    lifted) at heights 0.3 and 0.8, and within 5e-12 at 1e-4 and 1e-6 (3.6e-12 at
+    delta = 1e-12, 1e-16 at the larger delta)."""
     g = torch.Generator().manual_seed(56)
     phi = (
         2
@@ -1409,14 +1422,14 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     c = torch.nn.functional.normalize(
         c + delta * torch.randn(c.shape, dtype=D, generator=g), dim=-1
     )
-    steps, qr = [], torch.linalg.qr
-    monkeypatch.setattr(torch.linalg, "qr", lambda a: steps.append(1) or qr(a))
+    steps = _counted_steps(monkeypatch)
     x = geometry._min_norm_points(c.to(device))
     assert x.device == torch.device(device) or x.device.type == device
     x = x.cpu()
-    assert _certified(c, x).all() and len(steps) <= 16
+    assert _certified(c, x).all() and 0 < len(steps) <= 16
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
-    assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= 2e-15
+    tol = 2e-15 if h > 0.1 else 5e-12
+    assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= tol
 
 
 def test_active_set_solver_on_degenerate_and_duplicate_directions():
@@ -1456,16 +1469,18 @@ def test_active_set_solver_on_degenerate_and_duplicate_directions():
     assert (x.norm(dim=-1) > 1 - 1e-15).all() and (gap <= 1e-15).all()
 
 
-def test_grouped_least_norm_batches_the_large_groups(monkeypatch):
+@pytest.mark.parametrize("device", _DEVICES)
+def test_grouped_least_norm_batches_the_large_groups(device, monkeypatch):
     """Groups the enumeration admits keep their result bitwise; every larger group
     (60 to 192 directions) takes the active-set solver in one padded batch, with
-    each group's own result, bitwise. Under a smaller budget the large groups go
-    largest first in chunks within it, each padded to its largest group, with the
-    same results bitwise."""
+    the result it gets alone, bitwise (on CUDA too, where batched torch.linalg.qr
+    would not give it). Under a smaller budget the large groups go largest first in
+    chunks within it, each padded to its largest group, with the same results
+    bitwise."""
     g = torch.Generator().manual_seed(5)
     sizes = [3, 60, 7, 192, 130, 60, 3]
-    rows = [_ring(k, 1e-3, 1, seed=i)[0] for i, k in enumerate(sizes)]
-    group = torch.cat([torch.full((k,), i) for i, k in enumerate(sizes)])
+    rows = [_ring(k, 1e-3, 1, seed=i)[0].to(device) for i, k in enumerate(sizes)]
+    group = torch.cat([torch.full((k,), i, device=device) for i, k in enumerate(sizes)])
     perm = torch.randperm(group.numel(), generator=g)
     calls = []
     solver = geometry._wolfe_min_norm
@@ -1477,13 +1492,13 @@ def test_grouped_least_norm_batches_the_large_groups(monkeypatch):
     monkeypatch.setattr(geometry, "_wolfe_min_norm", recorded)
     out = geometry._grouped_min_norm(group[perm], torch.cat(rows)[perm], 8)
     assert calls == [(4, 192, 3)]
-    assert torch.equal(out[7], torch.zeros(3, dtype=D))
+    assert torch.equal(out[7], torch.zeros(3, dtype=D, device=device))
     for i, row in enumerate(rows):
         row = torch.unique(row, dim=0)[None]
         expect = (
             geometry._min_norm_points(row)
             if sizes[i] < 51
-            else solver(row, torch.ones(row.shape[:2], dtype=torch.bool))
+            else solver(row, torch.ones(row.shape[:2], dtype=torch.bool, device=device))
         )
         assert torch.equal(out[i], expect[0])
     calls.clear()
@@ -1503,10 +1518,28 @@ def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(
     solver enumerates no subset and takes at most 16 steps for all 8 rows at once."""
     c = _ring(192, 1e-9, 8)
     monkeypatch.setattr(geometry, "_hull_candidates", None)
-    steps, qr = [], torch.linalg.qr
-    monkeypatch.setattr(torch.linalg, "qr", lambda a: steps.append(1) or qr(a))
+    steps = _counted_steps(monkeypatch)
     x = geometry._min_norm_points(c.to(device)).cpu()
     assert 0 < len(steps) <= 16 and _certified(c, x).all()
+
+
+def test_active_set_solver_stops_when_its_iterate_repeats(monkeypatch):
+    """Were rounding to give a newly added direction a weight of at most 0, the
+    minor step would drop it and the major step add it again, up to the step cap:
+    the solver stops once x repeats, with its best iterate. (The rounding is
+    simulated: in a corral of three directions, all but the heaviest get weights
+    of at most 0.)"""
+    c = _ring(192, 1e-9, 2)
+    steps, solve = [], geometry._affine_min_norm
+
+    def rounded(a, q, free):
+        steps.append(1)
+        y, v = solve(a, q, free)
+        return y, torch.where(free & (free.sum(1, keepdim=True) > 1), -v.abs(), v)
+
+    monkeypatch.setattr(geometry, "_affine_min_norm", rounded)
+    x = geometry._wolfe_min_norm(c, torch.ones(c.shape[:2], dtype=torch.bool))
+    assert len(steps) <= 8 and (x.norm(dim=-1) > 0.5).all()
 
 
 @pytest.mark.parametrize("device", _DEVICES)
@@ -1515,7 +1548,8 @@ def test_tie_direction_on_the_axis_of_a_torus(device, monkeypatch):
     tie with the whole ring of its inner equator's edges (their midpoints, at a
     radius of 0.7 cos(pi / 192)): their 192 directions take the active-set solver,
     and the result points along the axis (to the rounding of the float32
-    vertices), the least-norm point of the ring's directions, z / d."""
+    vertices), the least-norm point of the ring's directions, z / d. Each query
+    alone gets the same d and u, bitwise."""
     t = torus.load(n_major=192, n_minor=8)
     z = torch.linspace(-0.2, 0.2, 5)
     q = torch.stack([torch.zeros_like(z), torch.zeros_like(z), z], -1)
@@ -1524,11 +1558,13 @@ def test_tie_direction_on_the_axis_of_a_torus(device, monkeypatch):
     monkeypatch.setattr(
         geometry, "_wolfe_min_norm", lambda c, v: calls.append(c.shape) or solver(c, v)
     )
-    d, u = exact_boundary_geometry(
-        q.to(device), t.points.to(device), t.cells.to(device)
-    )
+    pts, cells = t.points.to(device), t.cells.to(device)
+    d, u = exact_boundary_geometry(q.to(device), pts, cells)
     d, u = d.cpu(), u.cpu()
     assert calls == [(5, 192, 3)]
+    alone = [exact_boundary_geometry(p[None].to(device), pts, cells) for p in q]
+    assert torch.equal(torch.cat([a[0] for a in alone]).cpu(), d)
+    assert torch.equal(torch.cat([a[1] for a in alone]).cpu(), u)
     rho = 0.7 * math.cos(math.pi / 192)
     assert torch.allclose(d, (rho**2 + z * z).sqrt(), atol=1e-6, rtol=0)
     assert (u[:, :2].norm(dim=-1) <= 1e-8).all()
