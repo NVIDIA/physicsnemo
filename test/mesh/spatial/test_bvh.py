@@ -665,6 +665,32 @@ class TestBVHCorrectness:
         candidates_list = candidates.to_list()
         assert len(candidates_list[0]) >= 1
 
+    @pytest.mark.parametrize("leaf_size", [1, 4])
+    def test_find_overlapping_cells_matches_brute_force(self, leaf_size):
+        """Box queries return the cells whose boxes overlap or touch (exactly
+        those with one cell per leaf, and the rest of each hit leaf otherwise)."""
+        gen = torch.Generator().manual_seed(0)
+        points = torch.rand(300, 3, generator=gen)
+        cells = torch.randint(0, 300, (100, 3), generator=gen)
+        mesh = Mesh(points=points, cells=cells)
+        bvh = BVH.from_mesh(mesh, leaf_size=leaf_size)
+        cell_min = points[cells].amin(dim=1)
+        cell_max = points[cells].amax(dim=1)
+
+        lo = torch.rand(50, 3, generator=gen) * 0.8
+        hi = lo + torch.rand(50, 3, generator=gen) * 0.2
+        # A box that touches a cell box only on its face
+        lo[0], hi[0] = cell_max[0], cell_max[0] + 1.0
+
+        overlap = (lo[:, None] <= cell_max[None]) & (hi[:, None] >= cell_min[None])
+        expected = [torch.where(row)[0].tolist() for row in overlap.all(dim=-1)]
+        found = bvh.find_overlapping_cells(lo, hi).to_list()
+        assert 0 in expected[0]
+        if leaf_size == 1:
+            assert found == expected
+        else:
+            assert all(set(e) <= set(f) for e, f in zip(expected, found))
+
 
 ### Parametrized Tests for Exhaustive Dimensional Coverage ###
 

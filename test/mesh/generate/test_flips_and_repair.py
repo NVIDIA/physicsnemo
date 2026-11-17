@@ -277,6 +277,24 @@ def test_clean_mesh_is_untouched():
     assert torch.equal(new_cells, cells)
 
 
+@pytest.mark.parametrize("valence", [64, 66, 200])
+def test_high_valence_manifold_vertex_is_not_split(valence):
+    """The apexes of a closed bipyramid are manifold at any valence: the star
+    components must converge however long the ring around a vertex is."""
+    angles = 2 * math.pi * torch.arange(valence, dtype=torch.float64) / valence
+    ring = torch.stack([angles.cos(), angles.sin(), torch.zeros_like(angles)], dim=1)
+    apexes = torch.tensor([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]], dtype=torch.float64)
+    points = torch.cat([ring, apexes])
+    i = torch.arange(valence)
+    j = (i + 1) % valence
+    top = torch.stack([i, j, torch.full_like(i, valence)], dim=1)
+    bottom = torch.stack([j, i, torch.full_like(i, valence + 1)], dim=1)
+    cells = torch.cat([top, bottom])
+    new_points, new_cells, n_split = split_pinched_vertices(points, cells)
+    assert n_split == 0
+    assert torch.equal(new_cells, cells)
+
+
 def test_peel_followed_by_split_repairs_vertex_pinch():
     """Peeling a bridging sliver can expose a boundary pinched at a
     VERTEX, which the ridge-pairing manifoldness check inside the peel
