@@ -87,6 +87,9 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
 
     >>> adj[torch.tensor([2, 0])].to_list()
     [[12, 13], [10, 11]]
+
+    On an adjacency with batch dimensions, such as a stack of adjacencies,
+    indexing selects along the batch instead, as for other tensorclasses.
     """
 
     # n_sources_plus_one == n_sources + 1; the trailing offset is len(indices).
@@ -95,8 +98,8 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
 
     def __post_init__(self) -> None:
         # Runs on construction and load, but not when tensordict rebuilds an
-        # existing adjacency (clone, to): the offsets read below synchronize a
-        # CUDA device.
+        # existing adjacency (clone, to, batch indexing): the offsets read below
+        # synchronize a CUDA device.
         if not is_tracing():
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
@@ -201,6 +204,12 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
     def __getitem__(self, sources: SourceSelection) -> "Adjacency":
         """Select sources and return their neighbor lists.
 
+        Batch indexing works as on other tensorclasses: on an adjacency with
+        batch dimensions, such as a stack of adjacencies, indexing selects
+        along the batch, and an index that holds ``None`` or ``...`` acts on
+        the batch shape. So indexing a TensorDict that holds adjacencies, as in
+        ``td[0]`` or ``td[None]``, indexes them with its other entries.
+
         Parameters
         ----------
         sources : SourceSelection
@@ -225,7 +234,13 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         [[6, 7, 8], [0, 1, 2], [6, 7, 8]]
         >>> adj[1:3].to_list()
         [[3, 4], [5]]
+        >>> torch.stack([adj, adj])[1].to_list()
+        [[0, 1, 2], [3, 4], [5], [6, 7, 8]]
         """
+        parts = sources if isinstance(sources, tuple) else (sources,)
+        if self.batch_dims or any(p is None or p is Ellipsis for p in parts):
+            return super().__getitem__(sources)
+
         from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
         ids = _selected_ids(sources, self.n_sources, self.offsets.device)
@@ -365,9 +380,10 @@ def _selected_ids(
         return (
             torch.arange(len(selected), device=device) * selected.step + selected.start
         )
-    if not isinstance(sources, torch.Tensor) and len(sources) == 0:
-        return torch.empty(0, dtype=torch.long, device=device)
-    sources = torch.as_tensor(sources, device=device)
+    if not isinstance(sources, torch.Tensor):
+        sources = torch.as_tensor(sources, device=device)
+        if sources.numel() == 0:  # torch reads an empty list or tuple as floats
+            sources = sources.long()
     if sources.ndim != 1:
         raise IndexError("source indices or masks must be one-dimensional")
     if sources.dtype not in (torch.bool, torch.uint8):

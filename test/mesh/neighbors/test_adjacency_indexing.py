@@ -18,6 +18,7 @@
 
 import pytest
 import torch
+from tensordict import TensorDict, lazy_stack
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.neighbors import Adjacency
@@ -60,6 +61,32 @@ def test_indexing_takes_the_selections_of_a_tensor(device):
         empty = adjacency[nothing]
         assert empty.n_sources == 0
         assert empty.indices.dtype == adjacency.indices.dtype
+
+
+def test_batched_adjacencies_index_their_batch(device):
+    """A stack of adjacencies, and a TensorDict that holds them, index the batch."""
+    first = Adjacency(
+        offsets=torch.tensor([0, 3, 4, 4, 6], device=device),
+        indices=torch.tensor([0, 1, 2, 3, 4, 5], device=device),
+    )
+    second = Adjacency(offsets=first.offsets, indices=first.indices + 10)
+    stacked = torch.stack([first, second])
+    samples = torch.stack(
+        [TensorDict({"mesh": TensorDict({"adjacency": a})}) for a in (first, second)]
+    )
+
+    for picked in (stacked[1], samples[1]["mesh", "adjacency"]):
+        assert picked.batch_size == ()
+        assert picked.to_list() == second.to_list()
+    assert stacked[1:].batch_size == (1,)
+    assert stacked[1:][0].to_list() == second.to_list()
+    assert lazy_stack([first, first[1:]])[1].to_list() == first[1:].to_list()
+    ### None and ... act on the batch shape of a single adjacency too
+    holder = TensorDict({"adjacency": first})
+    for unsqueezed in (first[None], holder[None]["adjacency"]):
+        assert unsqueezed.batch_size == (1,)
+        assert unsqueezed[0].to_list() == first.to_list()
+    assert first[...].to_list() == first.to_list()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -149,6 +176,7 @@ def test_invalid_selections_raise(device):
     for bad, error in (
         (short_mask, IndexError),
         (matrix, IndexError),
+        (0, IndexError),  # not one-dimensional
         (slice(None, None, -1), ValueError),  # as for a tensor
     ):
         with pytest.raises(error):

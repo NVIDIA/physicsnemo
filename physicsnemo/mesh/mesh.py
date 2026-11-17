@@ -2844,7 +2844,9 @@ class Mesh(
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
-            contain point ``i``. Isolated points (not in any cells) have empty lists.
+            contain point ``i``. With ``indices``, list ``i`` belongs to the
+            ``i``-th selected point. The cell indices are those of this mesh
+            either way. Isolated points (not in any cells) have empty lists.
 
         Examples
         --------
@@ -2883,7 +2885,9 @@ class Mesh(
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
-            share a cell (edge) with point ``i``. Isolated points have empty lists.
+            share a cell (edge) with point ``i``. With ``indices``, list ``i``
+            belongs to the ``i``-th selected point. The point indices are those
+            of this mesh either way. Isolated points have empty lists.
 
         Examples
         --------
@@ -2892,9 +2896,9 @@ class Mesh(
         >>> adj = mesh.get_point_to_points_adjacency()
         >>> # Get neighbors of point 0
         >>> neighbors_of_point_0 = adj.to_list()[0]
-        >>> # The same list, built from only the cells around point 0
-        >>> two_triangles_2d.load().get_point_to_points_adjacency(indices=[0]).to_list()
-        [[1, 2]]
+        >>> # The lists of points 1, 0, and 1, built from only the cells around them
+        >>> two_triangles_2d.load().get_point_to_points_adjacency(indices=[1, 0, 1]).to_list()
+        [[0, 2, 3], [1, 2], [0, 2, 3]]
         """
         from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
 
@@ -2939,7 +2943,9 @@ class Mesh(
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
-            share a k-codimension facet with cell ``i``.
+            share a k-codimension facet with cell ``i``. With ``indices``, list
+            ``i`` belongs to the ``i``-th selected cell. The cell indices are
+            those of this mesh either way.
 
         Examples
         --------
@@ -2980,8 +2986,10 @@ class Mesh(
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
-            are vertices of cell ``i``. For simplicial meshes, all cells have the same
-            number of vertices (``n_manifold_dims + 1``).
+            are vertices of cell ``i``. With ``indices``, list ``i`` belongs to
+            the ``i``-th selected cell. The point indices are those of this mesh
+            either way. For simplicial meshes, all cells have the same number of
+            vertices (``n_manifold_dims + 1``).
 
         Examples
         --------
