@@ -1389,11 +1389,15 @@ def test_least_norm_point_on_and_near_the_axis_of_a_ring(eps, monkeypatch):
 
 
 def _counted_steps(monkeypatch):
-    """The active-set solver's steps, one per solve of its corral, as they run."""
-    steps, solve = [], geometry._affine_min_norm
-    monkeypatch.setattr(
-        geometry, "_affine_min_norm", lambda *a: steps.append(1) or solve(*a)
-    )
+    """The active-set solver's steps per call, those of its slowest row."""
+    steps, solve = [], geometry._wolfe_steps
+
+    def counted(c, valid):
+        x, n = solve(c, valid)
+        steps.append(int(n.max()))
+        return x, n
+
+    monkeypatch.setattr(geometry, "_wolfe_steps", counted)
     return steps
 
 
@@ -1426,7 +1430,7 @@ def test_least_norm_point_of_a_nearly_flat_ring(h, delta, device, monkeypatch):
     x = geometry._min_norm_points(c.to(device))
     assert x.device == torch.device(device) or x.device.type == device
     x = x.cpu()
-    assert _certified(c, x).all() and 0 < len(steps) <= 16
+    assert _certified(c, x).all() and 0 < sum(steps) <= 16
     monkeypatch.setattr(geometry, "_SEARCH_PAIRS", 2**40)
     tol = 2e-15 if h > 0.1 else 1e-11
     assert (x - geometry._min_norm_points(c)).norm(dim=-1).max() <= tol
@@ -1519,7 +1523,7 @@ def test_least_norm_point_of_a_ring_of_192_directions_takes_few_steps(
     monkeypatch.setattr(geometry, "_hull_candidates", None)
     steps = _counted_steps(monkeypatch)
     x = geometry._min_norm_points(c.to(device)).cpu()
-    assert 0 < len(steps) <= 16 and _certified(c, x).all()
+    assert 0 < sum(steps) <= 16 and _certified(c, x).all()
 
 
 def test_active_set_solver_stops_when_its_iterate_repeats(monkeypatch):
@@ -1527,7 +1531,7 @@ def test_active_set_solver_stops_when_its_iterate_repeats(monkeypatch):
     minor step would drop it and the major step add it again, up to the step cap:
     the solver stops once x repeats, with its best iterate. (The rounding is
     simulated: in a corral of three directions, all but the heaviest get weights
-    of at most 0.)"""
+    of at most 0, in the torch reference of the kernel's steps.)"""
     c = _ring(192, 1e-9, 2)
     steps, solve = [], geometry._affine_min_norm
 
@@ -1537,8 +1541,30 @@ def test_active_set_solver_stops_when_its_iterate_repeats(monkeypatch):
         return y, torch.where(free & (free.sum(1, keepdim=True) > 1), -v.abs(), v)
 
     monkeypatch.setattr(geometry, "_affine_min_norm", rounded)
-    x = geometry._wolfe_min_norm(c, torch.ones(c.shape[:2], dtype=torch.bool))
+    x = geometry._wolfe_min_norm_torch(c, torch.ones(c.shape[:2], dtype=torch.bool))
     assert len(steps) <= 8 and (x.norm(dim=-1) > 0.5).all()
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+def test_active_set_kernel_takes_the_torch_reference_s_steps(device):
+    """The Warp kernel, a thread per row, takes the torch reference's steps: on
+    caps of every spread and rings in 2D and 3D, padded, its points are within
+    1e-15 of the reference's on CPU (torch's float64 sqrt is not correctly rounded;
+    with a correctly rounded one they agree bitwise), and the same bits on CUDA as
+    on CPU (no FMA contraction, sums in index order)."""
+    g = torch.Generator().manual_seed(17)
+    for dim in (2, 3):
+        for k, spread in ((5, 3.0), (20, 0.4), (60, 1e-3), (192, 1e-7)):
+            c = torch.randn(32, 1, dim, dtype=D, generator=g)
+            c = c + spread * torch.randn(32, k, dim, dtype=D, generator=g)
+            c = torch.cat([c, torch.randn(32, 3, dim, dtype=D, generator=g)], 1)
+            c = torch.nn.functional.normalize(c, dim=-1)
+            perm = torch.randperm(k + 3, generator=g)
+            c, valid = c[:, perm], (perm < k).expand(32, -1)
+            x = geometry._wolfe_min_norm(c.to(device), valid.to(device)).cpu()
+            ref = geometry._wolfe_min_norm_torch(c, valid)
+            assert (x - ref).norm(dim=-1).max() <= 1e-15
+            assert torch.equal(x, geometry._wolfe_min_norm(c, valid))
 
 
 @pytest.mark.parametrize("device", _DEVICES)
