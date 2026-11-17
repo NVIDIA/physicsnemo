@@ -497,6 +497,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package's only export. Legacy import shims keep the old
   `physicsnemo.experimental.models.globe` paths and saved checkpoints working
   and emit a `LegacyFeatureWarning`.
+- `FunctionSpec.warp_stream_scope` reuses one Warp guard stream per device
+  instead of creating one on every call, so back-to-back calls of the Warp
+  wrappers that use it no longer stall the host.
 
 ### Deprecated
 
