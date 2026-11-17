@@ -1015,6 +1015,32 @@ def save_checkpoint(
         checkpoint_logging.success(f"Saved training checkpoint: {output_filename}")
 
 
+def _move_step_counts_to_cpu(state_dict: Any) -> None:
+    """Move a non-fused, non-capturable optimizer's step counts to the CPU, in place.
+
+    ``Optimizer.load_state_dict`` moves the other state tensors to their
+    parameters' devices but leaves these where they were loaded. A fresh AdamW
+    keeps them on the CPU; on a GPU, every later step reads them back with host
+    syncs. Handles nested state dicts, such as ``CombinedOptimizer``'s.
+    """
+    if isinstance(state_dict, dict) and "param_groups" in state_dict:
+        state = state_dict.get("state", {})
+        for group in state_dict["param_groups"]:
+            if group.get("fused") or group.get("capturable"):
+                continue
+            for param_id in group["params"]:
+                entry = state.get(param_id)
+                step = entry.get("step") if isinstance(entry, dict) else None
+                if torch.is_tensor(step):
+                    entry["step"] = step.cpu()
+    elif isinstance(state_dict, dict):
+        for value in state_dict.values():
+            _move_step_counts_to_cpu(value)
+    elif isinstance(state_dict, (list, tuple)):
+        for value in state_dict:
+            _move_step_counts_to_cpu(value)
+
+
 def load_checkpoint(
     path: Path | str,
     models: torch.nn.Module | list[torch.nn.Module] | None = None,
@@ -1059,13 +1085,10 @@ def load_checkpoint(
         If a ``dict`` is provided, it is updated **in-place** with any
         metadata that was persisted by :func:`save_checkpoint`.
     device : str | torch.device, optional
-        Device onto which plain PyTorch model weights are mapped during
-        loading (``.mdlus`` models load onto their own device).  By default
-        ``"cpu"``.  Outside distributed mode the training state is read on
-        the CPU: the optimizer's ``load_state_dict`` places its state tensors
-        as it does for a fresh optimizer, and other tensors (in the
-        scheduler, scaler, metadata and the optimizer's ``param_groups``)
-        stay on the CPU.
+        Device onto which plain PyTorch model weights and the training state
+        are mapped during loading (``.mdlus`` models load onto their own
+        device).  By default ``"cpu"``.  The step counts of a non-fused,
+        non-capturable optimizer stay on the CPU.
     optimizer_model : torch.nn.Module | None, optional
         The model whose parameters the ``optimizer`` is tracking.
         Required by the DCP ``set_optimizer_state_dict`` helper when
@@ -1219,16 +1242,14 @@ def load_checkpoint(
         )
         return 0
 
-    # Read the training state on the CPU: the optimizer's load_state_dict moves
-    # each state tensor to its parameter's device itself, except a non-fused,
-    # non-capturable optimizer's "step" (AdamW's default), which it keeps where
-    # it was loaded. On a GPU, that step costs every later optimizer step two host
-    # syncs per parameter (the .item() calls of its bias corrections).
     file_to_load = _cache_if_needed(checkpoint_filename)
-    checkpoint_dict = torch.load(file_to_load, map_location="cpu", weights_only=False)
-    checkpoint_logging.success(f"Loaded checkpoint file {checkpoint_filename}")
+    checkpoint_dict = torch.load(file_to_load, map_location=device, weights_only=False)
+    checkpoint_logging.success(
+        f"Loaded checkpoint file {checkpoint_filename} to device {device}"
+    )
 
     if optimizer and "optimizer_state_dict" in checkpoint_dict:
+        _move_step_counts_to_cpu(checkpoint_dict["optimizer_state_dict"])
         optimizer.load_state_dict(checkpoint_dict["optimizer_state_dict"])
         checkpoint_logging.success("Loaded optimizer state dictionary")
 
