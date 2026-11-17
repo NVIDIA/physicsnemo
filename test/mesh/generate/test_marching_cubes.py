@@ -252,13 +252,20 @@ class TestDevice:
 
     @pytest.mark.cuda
     def test_cuda_field_on_side_stream(self):
+        # The field's producer is still running on the side stream when
+        # marching_cubes launches, so Warp must run on torch's current stream to
+        # read the finished field: read early, it sees no surface at all.
         sdf, coords = _sphere_sdf(resolution=24)
         reference = marching_cubes(sdf, coords=(coords, coords, coords))
+        src = sdf.cuda()
+        torch.cuda.synchronize()
 
         with torch.cuda.stream(torch.cuda.Stream()):
-            field = sdf.cuda()
+            field = torch.full_like(src, 1.0)  # no surface if read too early
+            torch.cuda._sleep(200_000_000)  # keep the producer pending
+            field.copy_(src)
             mesh = marching_cubes(field, coords=(coords.cuda(),) * 3)
-            torch.cuda.current_stream().synchronize()
+        torch.cuda.synchronize()
 
         assert mesh.points.device == field.device
         assert torch.equal(mesh.cells.cpu(), reference.cells)
