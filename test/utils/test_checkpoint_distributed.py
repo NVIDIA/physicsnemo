@@ -2039,7 +2039,10 @@ def test_fsdp2_multiple_models_checkpoint(shared_tmp_dir):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-def test_fsdp2_auxiliary_optimizer_model_checkpoint(shared_tmp_dir, monkeypatch):
+@pytest.mark.parametrize("load_on_gpu", [False, True])
+def test_fsdp2_auxiliary_optimizer_model_checkpoint(
+    shared_tmp_dir, monkeypatch, load_on_gpu
+):
     """Every rank restores the optimizer of a non-distributed optimizer model."""
     dm = DistributedManager()
     if dm.world_size < 2:
@@ -2079,6 +2082,7 @@ def test_fsdp2_auxiliary_optimizer_model_checkpoint(shared_tmp_dir, monkeypatch)
         models=[main2, aux2],
         optimizer=optimizer2,
         optimizer_model=aux2,
+        device=device if load_on_gpu else "cpu",
     )
 
     for p, p2 in zip(aux.parameters(), aux2.parameters()):
@@ -2086,6 +2090,8 @@ def test_fsdp2_auxiliary_optimizer_model_checkpoint(shared_tmp_dir, monkeypatch)
         assert loaded.keys() == saved.keys()
         for key, value in saved.items():
             torch.testing.assert_close(loaded[key], value, check_device=False)
+            # Nothing lands on another rank's GPU.
+            assert loaded[key].device in (torch.device("cpu"), device)
         assert loaded["exp_avg"].device == device
         assert loaded["exp_avg_sq"].device == device
 
