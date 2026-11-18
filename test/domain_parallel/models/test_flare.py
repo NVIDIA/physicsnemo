@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Domain-parallel tests for FLARE (DDP strategy).
+r"""Domain-parallel tests for FLARE and FLARE++ (DDP strategy).
 
 FLARE attention makes two SDPA passes with mixed placements (op-level
 coverage in ``test/domain_parallel/ops/test_sdpa.py``):
@@ -26,7 +26,12 @@ coverage in ``test/domain_parallel/ops/test_sdpa.py``):
 
 The per-head query/key norms (RMSNorm or LayerNorm over the head dim) and the
 identity-initialized K/V projections are token-wise, so they keep the token
-sharding. FLARE++ does not support token-sharded inputs yet and must raise.
+sharding.
+
+FLARE++ adds a query-synthesis pass ``sdpa(Q0_replicated, k0_sharded,
+v0_sharded)`` (the same placement pattern as FLARE's pass 1); its output and
+the fixed queries are replicated, so the fp32 gated mix stays replicated and
+the routing passes are FLARE's.
 """
 
 import pytest
@@ -42,9 +47,9 @@ from test.domain_parallel.models.harness import (
 )
 
 
-def _build_flare(**kwargs):
+def _build_flare(cls=FLARE, **kwargs):
     def build(device):
-        model = FLARE(
+        model = cls(
             functional_dim=3,
             out_dim=2,
             embedding_dim=5,
@@ -79,7 +84,7 @@ def _shard_irregular(args, kwargs, mesh):
     return (sharded_fx,), {"embedding": sharded_embedding}
 
 
-def _irregular_case(name="flare-irregular", **model_kwargs):
+def _irregular_case(name="flare-irregular", cls=FLARE, **model_kwargs):
     n_points = 16384
 
     def build_inputs(device):
@@ -89,7 +94,7 @@ def _irregular_case(name="flare-irregular", **model_kwargs):
 
     return DomainParallelModelCase(
         name=name,
-        build_model=_build_flare(**model_kwargs),
+        build_model=_build_flare(cls, **model_kwargs),
         build_inputs=build_inputs,
         shard_inputs=_shard_irregular,
         strategy="ddp",
@@ -105,6 +110,23 @@ _CASES = [
         "flare-irregular-qk-norm-layernorm", qk_norm=True, use_rmsnorm=False
     ),
     _irregular_case("flare-irregular-no-qk-norm", qk_norm=False),
+    _irregular_case("flarepp-irregular", FLAREPlusPlus),
+    _irregular_case(
+        "flarepp-irregular-unshared-layernorm",
+        FLAREPlusPlus,
+        share_k0_v0=False,
+        use_rmsnorm=False,
+    ),
+    _irregular_case(
+        "flarepp-irregular-unshared-rmsnorm", FLAREPlusPlus, share_k0_v0=False
+    ),
+    _irregular_case(
+        "flarepp-irregular-shared-layernorm",
+        FLAREPlusPlus,
+        use_rmsnorm=False,
+        k_norm=False,
+        q_fixed_norm=False,
+    ),
 ]
 
 
@@ -113,28 +135,3 @@ _CASES = [
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c.name)
 def test_flare_distributed(distributed_mesh, case):
     run_domain_parallel_model_check(case, mesh=distributed_mesh)
-
-
-@pytest.mark.multigpu_static
-@pytest.mark.timeout(600)
-def test_flare_plus_plus_rejects_token_sharded_inputs(distributed_mesh):
-    r"""FLARE++ raises on token-sharded inputs instead of computing wrong results."""
-    from physicsnemo.distributed import DistributedManager
-
-    device = DistributedManager().device
-    model = FLAREPlusPlus(
-        functional_dim=3,
-        out_dim=2,
-        embedding_dim=5,
-        n_layers=1,
-        n_hidden=32,
-        n_head=4,
-        slice_num=8,
-    ).to(device)
-    fx = torch.randn(1, 64, 3, device=device)
-    embedding = torch.randn(1, 64, 5, device=device)
-    (sharded_fx,), kwargs = _shard_irregular(
-        (fx,), {"embedding": embedding}, distributed_mesh
-    )
-    with pytest.raises(NotImplementedError, match="token-sharded"):
-        model(sharded_fx, **kwargs)

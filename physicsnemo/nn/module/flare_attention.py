@@ -382,6 +382,11 @@ class FLARE(_FLAREMixerBase):
     should be optimized without weight decay (the latent queries). Training
     code should use it to build optimizer parameter groups.
 
+    With ``use_te=False``, token-sharded
+    :class:`~physicsnemo.domain_parallel.ShardTensor` inputs are supported and
+    the output keeps the token sharding. ``use_te=True`` does not support
+    token-sharded inputs.
+
     Examples
     --------
     >>> import torch
@@ -529,6 +534,12 @@ class FLAREPlusPlus(_FLAREMixerBase):
     should be optimized without weight decay (seeds, fixed queries and gate
     logits).
 
+    With ``use_te=False``, token-sharded
+    :class:`~physicsnemo.domain_parallel.ShardTensor` inputs are supported: the
+    query-synthesis pass attends replicated seeds over the sharded tokens, the
+    gated mix stays replicated, and the output keeps the token sharding.
+    ``use_te=True`` does not support token-sharded inputs.
+
     Examples
     --------
     >>> import torch
@@ -610,12 +621,13 @@ class FLAREPlusPlus(_FLAREMixerBase):
                 raise ValueError(
                     f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
                 )
-            # The query-synthesis pass normalizes over all tokens; token-sharded
-            # inputs are not supported yet.
-            if hasattr(x, "redistribute"):
+            # Token-sharded inputs are supported through the SDPA kernels'
+            # ShardTensor dispatch; Transformer Engine attention is not
+            # ShardTensor aware and would attend over the local shard only.
+            if self.use_te and hasattr(x, "redistribute"):
                 raise NotImplementedError(
-                    "FLAREPlusPlus does not yet support token-sharded inputs; "
-                    "use replicated inputs with data parallelism."
+                    "FLAREPlusPlus(use_te=True) does not support token-sharded "
+                    "inputs; use use_te=False for domain parallelism."
                 )
         batch = x.shape[0]
 

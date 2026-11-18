@@ -263,9 +263,10 @@ class _TokenSharded(torch.Tensor):
         raise AssertionError
 
 
-def test_flare_use_te_rejects_token_sharded_inputs():
-    """FLARE's TE attention is not ShardTensor aware, so sharded inputs must raise."""
-    mixer = FLARE(dim=32, heads=4)
+@pytest.mark.parametrize("cls", [FLARE, FLAREPlusPlus])
+def test_flare_use_te_rejects_token_sharded_inputs(cls):
+    """TE attention is not ShardTensor aware, so sharded inputs must raise."""
+    mixer = cls(dim=32, heads=4)
     x = torch.randn(1, 8, 32).as_subclass(_TokenSharded)
     mixer.use_te = True  # the check runs before any TE module is touched
     with pytest.raises(NotImplementedError, match="use_te=True"):
