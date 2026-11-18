@@ -367,7 +367,7 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
 def _selected_ids(
     sources: SourceSelection, n_sources: int, device: torch.device
 ) -> Int[torch.Tensor, " n_selected"]:
-    """Return the ids of the sources that ``sources`` selects, in order.
+    """Return the ids, on ``device``, of the sources that ``sources`` selects, in order.
 
     A list or tuple is one selection, as a tensor is, where torch would read a
     tuple as one index per dimension. An empty one selects no sources. Negative
@@ -381,9 +381,10 @@ def _selected_ids(
             torch.arange(len(selected), device=device) * selected.step + selected.start
         )
     if not isinstance(sources, torch.Tensor):
-        sources = torch.as_tensor(sources, device=device)
+        sources = torch.as_tensor(sources)
         if sources.numel() == 0:  # torch reads an empty list or tuple as floats
             sources = sources.long()
+    sources = sources.to(device)
     if sources.ndim != 1:
         raise IndexError("source indices or masks must be one-dimensional")
     if sources.dtype not in (torch.bool, torch.uint8):

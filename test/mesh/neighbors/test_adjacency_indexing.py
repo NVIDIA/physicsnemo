@@ -53,6 +53,7 @@ def test_indexing_takes_the_selections_of_a_tensor(device):
     mask = torch.tensor([True, False, False, True], device=device)
 
     assert adjacency[[2, 0]].to_list() == [[], [0, 1, 2]]
+    assert adjacency[[-1, 0, -1]].to_list() == [[4, 5], [0, 1, 2], [4, 5]]
     assert adjacency[(2, 0)].to_list() == [[], [0, 1, 2]]
     assert adjacency[1:].to_list() == [[3], [], [4, 5]]
     assert adjacency[mask].to_list() == [[0, 1, 2], [4, 5]]
@@ -166,6 +167,27 @@ def test_indices_gives_the_lists_of_the_full_adjacency(device, load, kind):
                 assert got.indices.dtype == want.indices.dtype
             if kind != "cell_to_points":  # the cells array itself, cached in full
                 assert not _topology_keys(fresh)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("mesh_device", ["cuda", "cpu"])
+@pytest.mark.parametrize(
+    "kind", ["point_to_points", "point_to_cells", "cell_to_cells", "cell_to_points"]
+)
+def test_selections_on_another_device(mesh_device, kind):
+    """A selection on the other device gives the lists on the mesh's device."""
+    mesh = _tetrahedra(mesh_device)
+    other = "cpu" if mesh_device == "cuda" else "cuda"
+    n_sources = mesh.n_points if kind.startswith("point") else mesh.n_cells
+    full = getattr(mesh, f"get_{kind}_adjacency")()
+    ids = torch.tensor([n_sources - 1, 0, -1])
+    for indices in (ids, torch.arange(n_sources) % 3 == 0):
+        want = full[indices.to(mesh_device)]
+        fresh = Mesh(points=mesh.points, cells=mesh.cells)  # nothing cached
+        for source in (fresh, mesh):
+            got = getattr(source, f"get_{kind}_adjacency")(indices=indices.to(other))
+            assert torch.equal(got.offsets, want.offsets)
+            assert torch.equal(got.indices, want.indices)
 
 
 def test_invalid_selections_raise(device):
