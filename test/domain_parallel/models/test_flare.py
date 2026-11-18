@@ -66,9 +66,9 @@ def _build_flare(cls=FLARE, **kwargs):
     return build
 
 
-def _check_output(n_points):
+def _check_output(n_points, batch=1):
     def check(output):
-        assert output.shape == (1, n_points, 2)
+        assert output.shape == (batch, n_points, 2)
         assert output._spec.placements == (Shard(1),)
 
     return check
@@ -84,12 +84,12 @@ def _shard_irregular(args, kwargs, mesh):
     return (sharded_fx,), {"embedding": sharded_embedding}
 
 
-def _irregular_case(name="flare-irregular", cls=FLARE, **model_kwargs):
-    n_points = 16384
-
+def _irregular_case(
+    name="flare-irregular", cls=FLARE, batch=1, n_points=16384, **model_kwargs
+):
     def build_inputs(device):
-        fx = torch.randn(1, n_points, 3, device=device)
-        embedding = torch.randn(1, n_points, 5, device=device)
+        fx = torch.randn(batch, n_points, 3, device=device)
+        embedding = torch.randn(batch, n_points, 5, device=device)
         return (fx,), {"embedding": embedding}
 
     return DomainParallelModelCase(
@@ -98,7 +98,7 @@ def _irregular_case(name="flare-irregular", cls=FLARE, **model_kwargs):
         build_inputs=build_inputs,
         shard_inputs=_shard_irregular,
         strategy="ddp",
-        output_check_fn=_check_output(n_points),
+        output_check_fn=_check_output(n_points, batch),
         atol=1e-4,
         rtol=1e-4,
     )
@@ -126,6 +126,16 @@ _CASES = [
         use_rmsnorm=False,
         k_norm=False,
         q_fixed_norm=False,
+    ),
+    # Batch > 1 and a token count that does not split evenly across ranks.
+    _irregular_case("flare-irregular-uneven", batch=2, n_points=1001),
+    _irregular_case(
+        "flarepp-irregular-uneven-unshared-layernorm",
+        FLAREPlusPlus,
+        batch=3,
+        n_points=777,
+        share_k0_v0=False,
+        use_rmsnorm=False,
     ),
 ]
 
