@@ -99,8 +99,9 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
     def __post_init__(self) -> None:
         # Runs on construction and load, but not when tensordict rebuilds an
         # existing adjacency (clone, to, batch indexing): the offsets read below
-        # synchronize a CUDA device.
-        if not is_tracing():
+        # synchronize a CUDA device. The checks are for a single adjacency, so a
+        # stack, whose adjacencies were checked when built, skips them on load.
+        if not is_tracing() and not self.batch_dims:
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
             if len(self.offsets) < 1:

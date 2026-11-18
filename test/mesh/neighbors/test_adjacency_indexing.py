@@ -90,6 +90,19 @@ def test_batched_adjacencies_index_their_batch(device):
     assert first[...].to_list() == first.to_list()
 
 
+def test_saved_stacks_of_adjacencies_load(tmp_path):
+    """A stack of adjacencies, alone or in a TensorDict, loads after a save."""
+    first = Adjacency(offsets=torch.tensor([0, 3, 4, 4, 6]), indices=torch.arange(6))
+    second = Adjacency(offsets=first.offsets, indices=first.indices + 10)
+    torch.stack([first, second]).memmap(tmp_path / "stack")
+    samples = torch.stack([TensorDict({"adjacency": a}) for a in (first, second)])
+    samples.save(tmp_path / "samples")
+
+    assert Adjacency.load_memmap(tmp_path / "stack")[1].to_list() == second.to_list()
+    loaded = TensorDict.load(tmp_path / "samples")
+    assert loaded[1]["adjacency"].to_list() == second.to_list()
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_indexing_sync_budget():
     """Only the output size and the validation of the result synchronize."""

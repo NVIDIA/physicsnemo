@@ -542,6 +542,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Mesh.save` and `DomainMesh.save` can write a mesh read from disk to a new
   path. They used to raise unless `copy_existing=True` was passed, because the
   loaded tensors are memory-mapped to the original files.
+- A stack of mesh `Adjacency` objects saved with `memmap` or `TensorDict.save`,
+  alone or inside a stacked `TensorDict`, now loads. Loading used to fail the
+  checks for a single adjacency.
 - The container build compiles NATTEN from source with C++20 when no
   prebuilt NATTEN wheel is supplied, so it builds on PyTorch 2.15 base
   images, whose headers require C++20.
