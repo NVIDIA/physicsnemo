@@ -22,8 +22,7 @@ points' built-in signed distance and direction to the boundary *surface*, from
 the exact closest point on its cells. Both are built from differences of
 positions only, so they refer to no frame origin."""
 
-import itertools
-import math
+import bisect
 from typing import Any
 
 import torch
@@ -39,9 +38,9 @@ from physicsnemo.mesh.spatial.cluster_tree import _WARP_MAX_ELEMENTS as WARP_MAX
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
 
 ### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,
-### subset) pairs per chunk of the least-norm solve: a bound on their blocks. Both
-### run in a custom op, so their loops over chunks do not specialize a dynamic query
-### count under torch.compile.
+### direction) pairs per chunk of the least-norm solver: a bound on their blocks.
+### Both run in a custom op, so their loops over chunks do not specialize a dynamic
+### query count under torch.compile.
 _SEARCH_PAIRS = 2**23
 
 #: The softening of the logarithmic length channels, in the frame's length unit
@@ -610,104 +609,293 @@ def _covered(cells: torch.Tensor, flat: torch.Tensor, n_vertices: int) -> torch.
     return flat & torch.where(v0 == v2, vertex[v0], segment)
 
 
-def _hull_candidates(cc: torch.Tensor, subsets: list[torch.Tensor]):
-    """The candidates of :func:`_min_norm_points` for the rows ``cc`` ``(n, K, d)``
-    on the subsets (one ``(S, m)`` tensor of indices per size ``m``): each subset's
-    least-norm affine point with non-negative weights ``(n, S, d)`` (infinite where
-    there is none), its norm where it meets the optimality condition to rounding,
-    and its duality gap where it separates the origin (each ``(n, S)``, infinite
-    elsewhere)."""
-    d = cc.shape[-1]
-    xs = []
-    for sub in subsets:
-        p = cc[:, sub]  # (n, S, m, d)
-        if sub.shape[1] == 2:
-            xs.append(0.5 * (p[:, :, 0] + p[:, :, 1]))
-            continue
-        ### (elementwise products, not matmuls: the matrices are 3 x 3)
-        gram = (p[..., :, None, :] * p[..., None, :, :]).sum(-1)
-        lam, info = torch.linalg.solve_ex(gram, p.new_ones(p.shape[:-1]))
-        ok = (info == 0) & torch.isfinite(lam).all(-1) & (lam >= 0).all(-1)
-        x = ((lam / lam.sum(-1, keepdim=True))[..., None] * p).sum(-2)
-        xs.append(torch.where(ok[..., None], x, torch.inf))
-    x = torch.cat(xs, 1)
-    ### Rounding of a d-term dot product of unit vectors, on each side.
-    slack = 2 * d * torch.finfo(cc.dtype).eps
-    low, sq = (cc[:, None] * x[:, :, None]).sum(-1).amin(-1), (x * x).sum(-1)
-    norm = torch.where(low >= sq - slack, x.norm(dim=-1), torch.inf)
-    gap = torch.where((low > slack) & torch.isfinite(sq), sq - low, torch.inf)
-    return x, norm, gap
-
-
 def _min_norm_points(c: torch.Tensor) -> torch.Tensor:
     """For each row of ``c`` ``(n, K, d)`` (``K`` distinct unit vectors), the point
-    of their convex hull closest to the origin ``(n, d)``. That point lies in the
-    relative interior of a face spanned by at most ``d`` of them (Caratheodory), where
-    it is the face's least-norm affine point with non-negative weights, and every
-    such point lies in the hull. So it is the least-norm one over those faces (a
-    pair's midpoint, since the vectors have equal norms; the first in the enumeration
-    at equal norms) that meets the optimality condition ``c_k . x >= |x|^2``. Only
-    the hull's least-norm point meets it; other faces' points can match its norm to
-    rounding where vectors nearly coincide. When none meets it to rounding, the
-    origin is outside the hull exactly when a candidate separates it (``c_k . x > 0``
-    for every ``k``; the least-norm point does). The result is then the candidate
-    with the least duality gap ``g = |x|^2 - min_k c_k . x`` (``|x - x*| <= sqrt(2
-    g)``), and otherwise 0. ``c`` comes in a canonical order, so the result is a
-    function of the set. The work is chunked over the rows. Where one row's subsets
-    and directions overflow a chunk (a vertex shared by hundreds of cells), it runs
-    one row at a time over chunks of its subsets, with the same result. The work
-    grows as ``K**(d + 1)``: a query tied with hundreds of cells (on the axis of a
-    faceted tube, at a sphere's centre) takes seconds. An active-set solver (Wolfe's)
-    over every tied row at once, certified as here, would remove that term; it is a
-    follow-up."""
+    of their convex hull closest to the origin ``(n, d)``. One direction is its own
+    point, and a pair's is its midpoint, since the vectors have equal norms: the
+    midpoint where it meets the optimality condition ``c_k . x >= |x|^2`` to the
+    rounding slack of :func:`_wolfe_min_norm`'s certificate or separates the origin
+    (``c_k . x`` above the slack for both), and 0 otherwise (a pair antipodal to
+    rounding). Rows of 3 or more directions take :func:`_wolfe_min_norm`, certified
+    and with the same fallbacks, in chunks of the rows."""
     n, k, d = c.shape
     if k == 1:
         return c[:, 0]
-    sizes, budget = range(2, min(k, d) + 1), _SEARCH_PAIRS // 8
-    total = sum(math.comb(k, m) for m in sizes)
-    if total * k <= budget:
-        subsets = [torch.tensor(list(itertools.combinations(range(k), m)), device=c.device) for m in sizes]
-        chunk = max(1, budget // total)
-        out = []
-        for s in range(0, n, chunk):
-            x, norm, gap = _hull_candidates(c[s : s + chunk], subsets)
-            certified = torch.isfinite(norm).any(1)
-            pick = torch.where(certified, norm.argmin(1), gap.argmin(1))
-            best = x.gather(1, pick[:, None, None].expand(-1, 1, d))[:, 0]
-            out.append(torch.where((certified | torch.isfinite(gap).any(1))[:, None], best, 0.0))
-        return torch.cat(out)
-    ### The subsets are generated in the same order, a chunk at a time, and the first
-    ### least norm and the first least gap kept (a later chunk only when smaller).
-    out = []
-    for cc in c.split(1):
-        least = [c.new_full((1,), torch.inf), c.new_full((1,), torch.inf)]
-        best = [c.new_zeros(1, d), c.new_zeros(1, d)]
-        for m in sizes:
-            subsets = itertools.combinations(range(k), m)
-            while sub := list(itertools.islice(subsets, max(1, budget // k))):
-                x, *scores = _hull_candidates(cc, [torch.tensor(sub, device=c.device)])
-                for j, score in enumerate(scores):
-                    i = score.argmin(1, keepdim=True)
-                    value = score.gather(1, i)[:, 0]
-                    smaller = value < least[j]
-                    least[j] = torch.where(smaller, value, least[j])
-                    point = x.gather(1, i[..., None].expand(-1, 1, d))[:, 0]
-                    best[j] = torch.where(smaller[:, None], point, best[j])
-        out.append(
-            torch.where(
-                torch.isfinite(least[0])[:, None],
-                best[0],
-                torch.where(torch.isfinite(least[1])[:, None], best[1], 0.0),
-            )
+    if k > 2:
+        rows = c.split(max(1, _SEARCH_PAIRS // 8 // k))
+        return torch.cat([_wolfe_min_norm(r, r.new_ones(r.shape[:2], dtype=torch.bool)) for r in rows])
+    x = 0.5 * (c[:, 0] + c[:, 1])
+    low, sq = (c * x[:, None]).sum(-1).amin(-1), (x * x).sum(-1)
+    slack = 2 * d * torch.finfo(c.dtype).eps
+    return torch.where(((low >= sq - slack) | (low > slack))[:, None], x, 0.0)
+
+
+_mat43d = wp.types.matrix(shape=(4, 3), dtype=wp.float64)
+
+
+### (no FMA contraction, so the steps round as torch's do, on CPU and CUDA alike)
+@wp.kernel(enable_backward=False, module="unique", module_options={"fuse_fp": False})
+def _wolfe_kernel(
+    c: wp.array3d(dtype=wp.float64),
+    valid: wp.array2d(dtype=wp.bool),
+    d: int,
+    slack: wp.float64,
+    out: wp.array2d(dtype=wp.float64),
+    steps: wp.array(dtype=wp.int32),
+):
+    """Row ``tid`` of :func:`_wolfe_min_norm`: its whole active-set loop, sums in index
+    order; ``steps`` gets the number of steps it began."""
+    r = wp.tid()
+    k = c.shape[1]
+    m = d + 1
+    zero = wp.float64(0.0)
+    one = wp.float64(1.0)
+    inf = wp.float64(wp.inf)
+    tiny = wp.float64(2.2250738585072014e-308)
+    first = int(0)
+    active = bool(False)
+    for i in range(k):
+        if valid[r, i]:
+            first = i
+            active = True
+            break
+    corral = wp.vec4i(first, first, first, first)
+    used = wp.vec4i(1, 0, 0, 0)
+    w = wp.vec4d(one, zero, zero, zero)
+    x = wp.vec3d()
+    for i in range(d):
+        x[i] = c[r, first, i]
+    x_major = wp.vec3d(wp.float64(wp.nan))
+    best = wp.vec3d()
+    best_x = wp.vec3d()
+    last = inf
+    best_sq = inf
+    best_gap = inf
+    major = bool(True)
+    n = int(0)
+    for _ in range(64 * m):
+        if not active:
+            break
+        n += 1
+        if major:
+            low = inf
+            j = int(0)
+            for kk in range(k):
+                if valid[r, kk]:
+                    dot = zero
+                    for i in range(d):
+                        dot += c[r, kk, i] * x[i]
+                    if dot < low:
+                        low = dot
+                        j = kk
+            sq = zero
+            for i in range(d):
+                sq += x[i] * x[i]
+            ok = low >= sq - slack
+            if ok and sq < best_sq:
+                best_sq = sq
+                best = x
+            if not ok and low > slack and sq - low < best_gap:
+                best_gap = sq - low
+                best_x = x
+            repeat = bool(True)
+            for i in range(d):
+                if x[i] != x_major[i]:
+                    repeat = False
+            stuck = sq > last + slack or (ok and sq >= last) or repeat or low >= sq
+            n_used = int(0)
+            slot = int(-1)
+            for s in range(m):
+                if used[s] != 0:
+                    n_used += 1
+                    if corral[s] == j:
+                        stuck = True
+                elif slot < 0:
+                    slot = s
+            last = sq
+            x_major = x
+            if stuck or n_used == m:
+                active = False
+                break
+            corral[slot] = j
+            used[slot] = 1
+        anchor = int(0)
+        for s in range(1, m):
+            if w[s] > w[anchor]:
+                anchor = s
+        a = wp.vec3d()
+        for i in range(d):
+            a[i] = c[r, corral[anchor], i]
+        y = a
+        ### The corral's least-norm affine point y = a + sum_s v_s (c_s - a), from its
+        ### heaviest direction a, by modified Gram-Schmidt on the differences and a (as
+        ### stable for least squares as Householder QR, Bjorck 1967; the normal equations
+        ### would square the condition number). y is the residual of a, projected once
+        ### more, so it is orthogonal to the corral to the rounding of |y|, not of |a|:
+        ### near the origin the next major step's c_k . y keep their accuracy.
+        e = _mat43d()
+        rr = wp.mat44d()
+        coef = wp.vec4d()
+        v = wp.vec4d()
+        all_used = bool(True)
+        for s in range(m):
+            free = used[s] != 0 and s != anchor
+            all_used = all_used and used[s] != 0
+            u = wp.vec3d()
+            if free:
+                for i in range(d):
+                    u[i] = c[r, corral[s], i] - a[i]
+            for t in range(s):
+                col = zero
+                for i in range(d):
+                    col += e[t, i] * u[i]
+                for i in range(d):
+                    u[i] = u[i] - col * e[t, i]
+                rr[s, t] = col
+            norm = zero
+            for i in range(d):
+                norm += u[i] * u[i]
+            norm = wp.sqrt(norm)
+            rr[s, s] = one
+            if free:
+                rr[s, s] = norm
+                for i in range(d):
+                    e[s, i] = u[i] / norm
+            cs = zero
+            for i in range(d):
+                cs += e[s, i] * y[i]
+            for i in range(d):
+                y[i] = y[i] - cs * e[s, i]
+            coef[s] = cs
+        for t in range(m):
+            dt = zero
+            for i in range(d):
+                dt += e[t, i] * y[i]
+            for i in range(d):
+                y[i] = y[i] - dt * e[t, i]
+        for tt in range(m):
+            t = m - 1 - tt
+            acc = zero
+            for s in range(t + 1, m):
+                acc += rr[s, t] * v[s]
+            v[t] = (-coef[t] - acc) / rr[t, t]
+        total = zero
+        for s in range(m):
+            total += v[s]
+        v[anchor] = v[anchor] + (one - total)
+        if all_used:
+            y = wp.vec3d()
+        positive = bool(True)
+        for s in range(m):
+            if not wp.isfinite(v[s]):
+                active = False
+            if used[s] != 0 and not (v[s] > zero):
+                positive = False
+        if not active:
+            break
+        if positive:
+            x = y
+            for s in range(m):
+                w[s] = zero
+                if used[s] != 0:
+                    w[s] = v[s]
+        else:
+            ### The last point from w to v with non-negative weights, less a zero weight.
+            theta = inf
+            drop = int(0)
+            for s in range(m):
+                if used[s] != 0 and v[s] <= zero:
+                    ratio = w[s] / wp.max(w[s] - v[s], tiny)
+                    if ratio < theta:
+                        theta = ratio
+                        drop = s
+            theta = wp.min(theta, one)
+            total = zero
+            for s in range(m):
+                us = theta * v[s] + (one - theta) * w[s]
+                if used[s] != 0 and us > zero and s != drop:
+                    w[s] = us
+                else:
+                    w[s] = zero
+                    used[s] = 0
+                total += w[s]
+            x = wp.vec3d()
+            for s in range(m):
+                f = w[s] / total
+                for i in range(d):
+                    x[i] += f * c[r, corral[s], i]
+        major = positive
+    result = wp.vec3d()
+    if best_sq < inf:
+        result = best
+    elif best_gap < inf:
+        result = best_x
+    for i in range(d):
+        out[r, i] = result[i]
+    steps[r] = wp.int32(n)
+
+
+def _wolfe_steps(c: torch.Tensor, valid: torch.Tensor):
+    """:func:`_wolfe_min_norm`'s points ``(n, d)`` and each row's number of steps
+    ``(n,)`` (int32)."""
+    n, k, d = c.shape
+    if c.dtype != torch.float64 or d not in (2, 3):
+        raise ValueError(f"the active-set solver takes float64 directions in 2 or 3 dimensions, not {c.dtype} in {d}")
+    x = c.new_empty(n, d)
+    steps = torch.empty(n, dtype=torch.int32, device=c.device)
+    device, stream = FunctionSpec.warp_launch_context(c)
+    with FunctionSpec.warp_stream_scope(stream):
+        wp.init()
+        wp.launch(
+            _wolfe_kernel,
+            dim=n,
+            inputs=[wp.from_torch(c.contiguous()), wp.from_torch(valid.contiguous()), d, 2 * d * torch.finfo(c.dtype).eps],
+            outputs=[wp.from_torch(x), wp.from_torch(steps)],
+            device=device,
+            stream=stream,
         )
-    return torch.cat(out)
+    return x, steps
+
+
+def _wolfe_min_norm(c: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    """The least-norm point of the hull of each row's directions ``c`` ``(n, K, d)``
+    (float64, ``d`` 2 or 3) where ``valid`` ``(n, K)`` (padding elsewhere), ``(n,
+    d)``, by Wolfe's active-set method (1976), one Warp kernel with a thread per row.
+    Each row keeps a corral of at most ``d + 1`` directions and their weights. A
+    major step keeps the row's least-norm point ``x`` that meets the certificate
+    ``min_k c_k . x >= |x|^2`` to a rounding slack of ``2 d eps``, and adds the
+    direction of least ``c_k . x`` while that is below ``|x|^2``. A minor step moves
+    ``x`` to the corral's least-norm affine point (by Gram-Schmidt in differences from
+    its heaviest direction, so nearly coincident directions keep their accuracy), or,
+    where a weight there is not positive, as far towards it as the weights stay
+    non-negative, and drops the directions whose weight reaches 0. The norm falls at
+    every major step in exact arithmetic. A row stops when the step would not
+    progress: no direction is below ``|x|^2``, the added direction is in the corral,
+    the corral is full, its system is singular, its norm rises beyond rounding, ``x``
+    repeats (were rounding to give an added direction a weight of at most 0, the row
+    would drop it and add it again), or, once certified, its norm stops falling. The
+    certificate's slack is absolute, so near the origin it also holds at points up to
+    ``slack / |x|`` farther from the origin than the least-norm one: the result's
+    error is bounded in absolute terms, not relative to ``|x|``. A row with no
+    certified point returns its iterate of least duality gap ``|x|^2 - min_k c_k .
+    x`` among those that separate the origin (``|x - x*| <= sqrt(2 gap)``), and 0
+    when none does. A full corral of positive weights holds the origin in its
+    simplex, which gives exactly 0. Wolfe's steps number a few times ``d`` in
+    practice; their cap of ``64 (d + 1)`` only guards rounding cycles. The kernel is
+    compiled without FMA contraction and sums in index order, so a row's result does
+    not depend on its batch, and CPU and CUDA give the same bits."""
+    return _wolfe_steps(c, valid)[0]
 
 
 def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> torch.Tensor:
     """The least-norm point of the hull of each group's distinct directions
     (:func:`_min_norm_points`), ``(n_groups, d)``, zero for an empty group; the rows
     ``c`` ``(P, d)`` belong to the groups ``group`` ``(P,)``. The directions are
-    de-duplicated and sorted per group, so each result is a function of its set."""
+    de-duplicated and sorted per group, so each result is a function of its set.
+    Groups of one or two directions are solved together in closed form. The larger
+    groups take :func:`_wolfe_min_norm` together, largest first, in chunks within the
+    budget, each padded to its largest group and holding only groups of more than
+    half that size, so a few large ties do not pad many small ones."""
     out = c.new_zeros(n_groups, c.shape[1])
     if group.numel() == 0:
         return out
@@ -715,9 +903,21 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     group, c = rows[:, 0].long(), rows[:, 1:]
     ids, counts = torch.unique_consecutive(group, return_counts=True)
     start = torch.cumsum(counts, 0) - counts
-    for k in torch.unique(counts).tolist():
+    for k in (1, 2):
         here = (counts == k).nonzero()[:, 0]
-        out[ids[here]] = _min_norm_points(c[start[here, None] + torch.arange(k, device=c.device)])
+        if here.numel():
+            out[ids[here]] = _min_norm_points(c[start[here, None] + torch.arange(k, device=c.device)])
+    here = (counts > 2).nonzero()[:, 0]
+    here = here[torch.argsort(counts[here], descending=True, stable=True)]
+    sizes, s = counts[here].tolist(), 0
+    smaller = [-size for size in sizes]
+    while s < len(sizes):
+        half = bisect.bisect_left(smaller, -(sizes[s] // 2), lo=s + 1)
+        e = min(s + max(1, _SEARCH_PAIRS // 8 // sizes[s]), half)
+        h, j = here[s:e], torch.arange(sizes[s], device=c.device)
+        k = counts[h, None]
+        out[ids[h]] = _wolfe_min_norm(c[start[h, None] + torch.minimum(j, k - 1)], j < k)
+        s = e
     return out
 
 
