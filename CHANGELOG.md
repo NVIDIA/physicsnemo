@@ -222,6 +222,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- &#9888;&#65039; **BC-breaking:** Rewrites FLARE and FLARE++.
+  `physicsnemo.nn.FLARE` / `FLAREPlusPlus` now use attention scale
+  `dim_head**-0.5`, latent queries initialized from N(0, 0.02), `dim x dim`
+  key/value projections initialized to identity plus small noise, and per-head
+  RMSNorm (`use_rmsnorm=True`, or LayerNorm). FLARE adds `qk_norm`. FLARE++
+  adds normalized query synthesis, gated fixed plus dynamic queries and shared
+  synthesis keys/values (`k_norm`, `share_k0_v0`, `q_fixed_norm`,
+  `gate_logit_init`). Both mixers expose `no_weight_decay()` for their latent
+  parameters. `physicsnemo.models.flare.FLARE` / `FLAREPlusPlus` are now
+  standalone pre-norm models (no longer Transolver subclasses) with RMSNorm by
+  default and tanh-approximate GELU (new `"gelu_tanh"` activation); the
+  `unified_pos`, `ref`, `structured_shape`, `time_input` and `use_te` arguments
+  and the mixers' `use_te` / `attn_scale` arguments are removed. Inputs must be
+  `(B, N, C)`. Checkpoints of the previous FLARE / FLARE++ do not load.
+  GeoTransolver's `"GALE_FPP"` backend keeps the previous FLARE++ attention.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit

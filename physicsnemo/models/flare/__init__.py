@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""FLARE Transolver: Transolver with FLARE attention.
+r"""FLARE and FLARE++ models.
 
-This module provides standalone Transolver variants using FLARE and FLARE++
-low-rank attention.
+Standalone pre-norm transformers with FLARE and FLARE++
+attention mixers.
 """
 
 from .flare import FLARE, FLAREPlusPlus

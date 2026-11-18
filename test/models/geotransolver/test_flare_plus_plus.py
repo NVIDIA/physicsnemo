@@ -26,8 +26,8 @@ from physicsnemo.models.geotransolver import GeoTransolver
 from physicsnemo.models.geotransolver.flare_plus_plus import (
     _FLAREPlusPlusAttention,
     _FLAREPlusPlusBlock,
+    _FLAREPlusPlusMixer,
 )
-from physicsnemo.nn import FLAREPlusPlus
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -92,7 +92,7 @@ def test_constructor_uses_model_specific_backend():
 def test_attention_without_context_matches_standalone(device):
     """The context-free adapter is exactly the standalone FLARE++ layer."""
     torch.manual_seed(42)
-    standalone = FLAREPlusPlus(
+    standalone = _FLAREPlusPlusMixer(
         dim=32,
         heads=4,
         dim_head=8,

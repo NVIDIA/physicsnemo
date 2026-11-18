@@ -14,309 +14,230 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for FLARE attention layer."""
+"""Tests for the FLARE and FLARE++ attention layers."""
 
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import FLARE, FLAREPlusPlus
-from test.conftest import requires_module
+
+_MIXERS = {
+    "flare": (FLARE, {}),
+    "flare_qk_norm": (FLARE, {"qk_norm": True}),
+    "flarepp": (FLAREPlusPlus, {}),
+    "flarepp_unshared": (
+        FLAREPlusPlus,
+        {"share_k0_v0": False, "k_norm": False, "q_fixed_norm": False},
+    ),
+}
 
 
-def _load_or_create_output_reference(
-    file_name: str, output: torch.Tensor
-) -> torch.Tensor:
-    """Load a local golden output, or create it and require a second run."""
-    reference_path = Path(__file__).parent / "data" / file_name
-    if not reference_path.exists():
-        torch.save({"output": output.detach().cpu()}, reference_path)
-        raise IOError(
-            f"Golden output {reference_path} was missing and has been created; "
-            "commit it and re-run the test."
-        )
-    reference = torch.load(reference_path, weights_only=True)
-    return next(iter(reference.values())).to(output.device)
+def _projections(mixer: nn.Module) -> list[nn.Linear]:
+    names = ("k0_proj", "v0_proj", "k_proj", "v_proj")
+    return [getattr(mixer, n) for n in names if getattr(mixer, n, None) is not None]
 
 
-def test_flare_forward(device):
-    """Test FLARE forward pass and output shape."""
-    torch.manual_seed(42)
-    flare = FLARE(dim=64, heads=4, dim_head=16, n_global_queries=32, use_te=False).to(
-        device
-    )
-    x = torch.randn(2, 100, 64).to(device)
-    out = flare(x)
-    assert out.shape == (2, 100, 64)
-    assert not torch.isnan(out).any()
-
-
-@pytest.mark.parametrize("heads,dim_head", [(2, 32), (8, 8), (4, 16)])
-def test_flare_configs(device, heads, dim_head):
-    """Test FLARE with different head configurations."""
-    torch.manual_seed(42)
-    dim = heads * dim_head
-    flare = FLARE(
-        dim=dim, heads=heads, dim_head=dim_head, n_global_queries=16, use_te=False
+@pytest.mark.parametrize("name", list(_MIXERS))
+@pytest.mark.parametrize("use_rmsnorm", [True, False])
+def test_forward_backward(device, name, use_rmsnorm):
+    """Shapes, finite outputs and gradients to the input and every parameter."""
+    cls, kwargs = _MIXERS[name]
+    torch.manual_seed(0)
+    mixer = cls(
+        dim=32, heads=4, n_global_queries=6, use_rmsnorm=use_rmsnorm, **kwargs
     ).to(device)
-    x = torch.randn(2, 50, dim).to(device)
-    out = flare(x)
+    x = torch.randn(2, 19, 32, device=device, requires_grad=True)
+    out = mixer(x)
     assert out.shape == x.shape
+    assert torch.isfinite(out).all()
+    out.square().mean().backward()
+    assert torch.isfinite(x.grad).all()
+    for pname, param in mixer.named_parameters():
+        assert param.grad is not None, pname
+        assert torch.isfinite(param.grad).all(), pname
 
 
-@requires_module("transformer_engine>=2.14.0")
-def test_flare_use_te_forward_backward(device):
-    """Test TE cross-attention with unequal global and token sequence lengths."""
-    if device == "cpu":
-        pytest.skip("Transformer Engine requires CUDA")
-
-    torch.manual_seed(42)
-    flare = FLARE(
-        dim=64,
-        heads=4,
-        dim_head=16,
-        dropout=0.25,
-        n_global_queries=7,
-        use_te=True,
-    ).to(device)
-    x = torch.randn(2, 19, 64, device=device, requires_grad=True)
-
-    assert flare.attn_fn.attention_dropout == 0.0
-    assert flare.out_dropout.p == 0.25
-
-    out = flare(x)
-    assert out.shape == x.shape
-    assert not torch.isnan(out).any()
-
-    out.sum().backward()
-    assert x.grad is not None
-    assert not torch.isnan(x.grad).any()
+@pytest.mark.parametrize("name", list(_MIXERS))
+def test_norm_type(name):
+    """use_rmsnorm selects RMSNorm (eps 1e-6) or LayerNorm for the head norms."""
+    cls, kwargs = _MIXERS[name]
+    for use_rmsnorm, norm_cls in ((True, nn.RMSNorm), (False, nn.LayerNorm)):
+        mixer = cls(dim=32, heads=4, use_rmsnorm=use_rmsnorm, **kwargs)
+        norms = [
+            m for m in mixer.modules() if isinstance(m, (nn.RMSNorm, nn.LayerNorm))
+        ]
+        assert all(type(m) is norm_cls for m in norms)
+        assert norms or name == "flare"
+        if use_rmsnorm:
+            assert all(m.eps == 1e-6 for m in norms)
 
 
-def test_flare_gradient_flow(device):
-    """Test gradient flow through FLARE."""
-    torch.manual_seed(42)
-    flare = FLARE(dim=32, heads=4, dim_head=8, use_te=False).to(device)
-    x = torch.randn(2, 20, 32, device=device, requires_grad=True)
-    out = flare(x)
-    loss = out.sum()
-    loss.backward()
-    assert x.grad is not None
-    assert not torch.isnan(x.grad).any()
+def test_flare_qk_norm_modules():
+    """qk_norm adds affine per-head norms on latent queries and keys."""
+    plain = FLARE(dim=32, heads=4)
+    assert isinstance(plain.q_norm, nn.Identity)
+    assert isinstance(plain.k_norm, nn.Identity)
+    normed = FLARE(dim=32, heads=4, qk_norm=True)
+    for norm in (normed.q_norm, normed.k_norm):
+        assert isinstance(norm, nn.RMSNorm)
+        assert norm.normalized_shape == (8,)
+        assert norm.weight is not None
+
+
+def test_flarepp_norm_modules():
+    """FLARE++ norm layout: q0/k affine, k0/v0/q_fixed without affine."""
+    mixer = FLAREPlusPlus(dim=32, heads=4)
+    assert mixer.q0_norm.weight is not None
+    assert mixer.k_norm.weight is not None
+    for norm in (mixer.k0_norm, mixer.v0_norm, mixer.q_fixed_norm):
+        assert isinstance(norm, nn.RMSNorm) and norm.weight is None
+    assert mixer.v0_proj is None
+    off = FLAREPlusPlus(dim=32, heads=4, k_norm=False, q_fixed_norm=False)
+    assert isinstance(off.k_norm, nn.Identity)
+    assert isinstance(off.q_fixed_norm, nn.Identity)
+
+
+@pytest.mark.parametrize("name", list(_MIXERS))
+def test_identity_plus_noise_init(name):
+    """K/V projections start at identity plus small noise with zero bias."""
+    cls, kwargs = _MIXERS[name]
+    torch.manual_seed(0)
+    mixer = cls(dim=64, heads=4, **kwargs)
+    projections = _projections(mixer)
+    assert projections
+    for proj in projections:
+        noise = proj.weight - torch.eye(64)
+        assert noise.abs().max() < 0.15
+        assert 0.015 < noise.std() < 0.025
+        assert torch.all(proj.bias == 0)
+        assert proj._skip_weight_init
+
+
+def test_latent_init_and_shapes():
+    """Latent queries are N(0, 0.02) with shape (heads, M, dim_head)."""
+    torch.manual_seed(0)
+    flare = FLARE(dim=128, heads=8, n_global_queries=64)
+    assert flare.latent_q.shape == (8, 64, 16)
+    assert 0.018 < flare.latent_q.std() < 0.022
+    mixer = FLAREPlusPlus(dim=128, heads=8, n_global_queries=64, gate_logit_init=0.5)
+    assert mixer.latent_q0.shape == mixer.latent_q_fixed.shape == (8, 64, 16)
+    torch.testing.assert_close(mixer.gate_logit, torch.full((8,), 0.5))
+
+
+def test_no_weight_decay():
+    """Each mixer declares its latent parameters as no-weight-decay."""
+    flare = FLARE(dim=32, heads=4)
+    assert flare.no_weight_decay() == {"latent_q"}
+    mixer = FLAREPlusPlus(dim=32, heads=4)
+    assert mixer.no_weight_decay() == {"latent_q0", "latent_q_fixed", "gate_logit"}
+    for module in (flare, mixer):
+        params = dict(module.named_parameters(recurse=False))
+        assert module.no_weight_decay() <= params.keys()
+
+
+def test_flare_matches_reference():
+    """FLARE equals the two-pass SDPA reference computation."""
+    torch.manual_seed(0)
+    flare = FLARE(dim=32, heads=4, n_global_queries=5, qk_norm=True).eval()
+    x = torch.randn(2, 11, 32)
+
+    def heads(t):
+        return t.reshape(2, 11, 4, 8).transpose(1, 2)
+
+    k = flare.k_norm(heads(flare.k_proj(x)))
+    v = heads(flare.v_proj(x))
+    q = flare.q_norm(flare.latent_q).expand(2, -1, -1, -1)
+    z = F.scaled_dot_product_attention(q, k, v, scale=8**-0.5)
+    y = F.scaled_dot_product_attention(k, q, z, scale=8**-0.5)
+    expected = flare.out_proj(y.transpose(1, 2).reshape(2, 11, 32))
+    torch.testing.assert_close(flare(x), expected)
+
+
+def test_flarepp_gate_mixes_dynamic_queries():
+    """A very negative gate logit reduces FLARE++ to fixed-query FLARE routing."""
+    torch.manual_seed(0)
+    mixer = FLAREPlusPlus(dim=32, heads=4, n_global_queries=5).eval()
+    x = torch.randn(2, 11, 32)
+    with torch.no_grad():
+        mixer.gate_logit.fill_(-1e4)
+
+    def heads(t):
+        return t.reshape(2, 11, 4, 8).transpose(1, 2)
+
+    k = mixer.k_norm(heads(mixer.k_proj(x)))
+    v = heads(mixer.v_proj(x))
+    q = mixer.q_fixed_norm(mixer.latent_q_fixed).expand(2, -1, -1, -1)
+    z = F.scaled_dot_product_attention(q, k, v, scale=8**-0.5)
+    y = F.scaled_dot_product_attention(k, q, z, scale=8**-0.5)
+    expected = mixer.out_proj(y.transpose(1, 2).reshape(2, 11, 32))
+    torch.testing.assert_close(mixer(x), expected)
+    with torch.no_grad():
+        mixer.gate_logit.fill_(0.25)
+    assert not torch.allclose(mixer(x), expected)
+
+
+@pytest.mark.parametrize("name", list(_MIXERS))
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_autocast(device, name, dtype):
+    """Half-precision autocast forward and backward stay finite."""
+    if device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 autocast is CUDA-only")
+    cls, kwargs = _MIXERS[name]
+    torch.manual_seed(0)
+    mixer = cls(dim=32, heads=4, **kwargs).to(device)
+    x = torch.randn(2, 19, 32, device=device)
+    with torch.autocast(device_type=torch.device(device).type, dtype=dtype):
+        out = mixer(x)
+    assert out.dtype == dtype
+    assert torch.isfinite(out).all()
+    out.float().sum().backward()
+
+
+@pytest.mark.parametrize("name", list(_MIXERS))
+def test_low_precision_module(device, name):
+    """The mixers run with half-precision parameters and inputs."""
+    cls, kwargs = _MIXERS[name]
+    mixer = cls(dim=32, heads=4, **kwargs).to(device=device, dtype=torch.bfloat16)
+    out = mixer(torch.randn(2, 19, 32, device=device, dtype=torch.bfloat16))
+    assert out.dtype == torch.bfloat16 and torch.isfinite(out).all()
 
 
 @pytest.mark.parametrize(
-    "kwargs,expected",
+    "kwargs, match",
     [
-        ({"dim": 64}, (8, 64, 64, 64**-0.5)),
-        (
-            {
-                "dim": 24,
-                "heads": 3,
-                "dim_head": 8,
-                "n_global_queries": 5,
-                "attn_scale": 0.25,
-            },
-            (3, 8, 5, 0.25),
-        ),
+        ({"dim": 32, "heads": 4, "dim_head": 16}, "heads \\* dim_head"),
+        ({"dim": 30, "heads": 4}, "divisible"),
+        ({"dim": 32, "heads": 4, "n_global_queries": 0}, "n_global_queries"),
     ],
-    ids=("defaults", "custom"),
 )
-def test_flare_plus_plus_constructor(kwargs, expected):
-    """Default and custom constructor values are exposed consistently."""
-    attention = FLAREPlusPlus(**kwargs)
-    heads, dim_head, n_queries, scale = expected
-
-    assert attention.dim == kwargs["dim"]
-    assert attention.heads == heads
-    assert attention.dim_head == dim_head
-    assert attention.n_global_queries == n_queries
-    assert attention.scale == pytest.approx(scale)
-    assert attention.q_seed.shape == (1, heads, n_queries, dim_head)
-    assert attention.in_projection.out_features == 4 * heads * dim_head
-    assert attention.out_linear.in_features == heads * dim_head
-    if heads * dim_head == kwargs["dim"]:
-        projection_weights = (
-            attention.in_projection.weight.numel() + attention.out_linear.weight.numel()
-        )
-        assert projection_weights == 5 * kwargs["dim"] ** 2
+@pytest.mark.parametrize("cls", [FLARE, FLAREPlusPlus])
+def test_invalid_arguments(cls, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        cls(**kwargs)
 
 
-def test_flare_plus_plus_forward_accuracy(device):
-    """A freshly initialized FLARE++ attention layer matches its golden output."""
-    torch.manual_seed(1234)
-    attention = FLAREPlusPlus(
-        dim=24,
-        heads=3,
-        dim_head=8,
-        n_global_queries=5,
-    ).to(device)
-    x = torch.randn(2, 17, 24).to(device)
-    with torch.no_grad():
-        output = attention(x)
-    reference = _load_or_create_output_reference(
-        "flare_plus_plus_attention_output.pth", output
-    )
-
-    torch.testing.assert_close(output, reference, atol=1e-3, rtol=1e-3)
+def test_flarepp_invalid_gate():
+    with pytest.raises(ValueError, match="gate_logit_init"):
+        FLAREPlusPlus(dim=32, heads=4, gate_logit_init=float("nan"))
 
 
-def test_flare_plus_plus_matches_paper_equations(device):
-    """FLARE++ matches the three-SDPA formulation from the paper."""
-    torch.manual_seed(7)
-    attention = FLAREPlusPlus(
-        dim=24,
-        heads=3,
-        dim_head=8,
-        n_global_queries=5,
-        dropout=0.0,
-    ).to(device)
-    attention.eval()
-    x = torch.randn(2, 11, 24, device=device)
-
-    actual = attention(x)
-    query_k, query_v, physical_k, physical_v = attention.in_projection(x).chunk(
-        4, dim=-1
-    )
-
-    def split_heads(tensor):
-        return tensor.reshape(2, 11, 3, 8).transpose(1, 2)
-
-    query_k, query_v, physical_k, physical_v = map(
-        split_heads, (query_k, query_v, physical_k, physical_v)
-    )
-    queries = F.scaled_dot_product_attention(
-        attention.q_seed.expand(2, -1, -1, -1),
-        query_k,
-        query_v,
-        scale=attention.scale,
-    )
-    routed_values = F.scaled_dot_product_attention(
-        queries, physical_k, physical_v, scale=attention.scale
-    )
-    expected = F.scaled_dot_product_attention(
-        physical_k, queries, routed_values, scale=attention.scale
-    )
-    expected = expected.transpose(1, 2).reshape(2, 11, 24)
-    expected = attention.out_dropout(attention.out_linear(expected))
-
-    torch.testing.assert_close(actual, expected)
-
-
-def test_flare_plus_plus_routing_is_input_conditioned(device):
-    """Different samples synthesize different routing queries."""
-    torch.manual_seed(11)
-    attention = FLAREPlusPlus(
-        dim=16,
-        heads=2,
-        dim_head=8,
-        n_global_queries=4,
-    ).to(device)
-    x = torch.stack(
-        (
-            torch.zeros(9, 16, device=device),
-            torch.ones(9, 16, device=device),
-        )
-    )
-    query_k, query_v, _, _ = attention.in_projection(x).chunk(4, dim=-1)
-    query_k = query_k.reshape(2, 9, 2, 8).transpose(1, 2)
-    query_v = query_v.reshape(2, 9, 2, 8).transpose(1, 2)
-    queries = F.scaled_dot_product_attention(
-        attention.q_seed.expand(2, -1, -1, -1),
-        query_k,
-        query_v,
-        scale=attention.scale,
-    )
-
-    assert not torch.allclose(queries[0], queries[1])
-
-
-def test_flare_plus_plus_eval_is_rng_free(device):
-    """Standalone FLARE++ attention is deterministic during evaluation."""
-    torch.manual_seed(43)
-    attention = FLAREPlusPlus(
-        dim=32,
-        heads=4,
-        dim_head=8,
-        n_global_queries=7,
-        dropout=0.4,
-    ).to(device)
-    x = torch.randn(2, 23, 32, device=device)
-
-    attention.eval()
-    model_device = next(attention.parameters()).device
-    cpu_rng_before = torch.random.get_rng_state().clone()
-    cuda_rng_before = (
-        torch.cuda.get_rng_state(model_device).clone()
-        if model_device.type == "cuda"
-        else None
-    )
-    with torch.no_grad():
-        output_1 = attention(x)
-        output_2 = attention(x)
-
-    assert torch.equal(output_1, output_2)
-    assert torch.equal(torch.random.get_rng_state(), cpu_rng_before)
-    if cuda_rng_before is not None:
-        assert torch.equal(torch.cuda.get_rng_state(model_device), cuda_rng_before)
-
-
-def test_flare_plus_plus_gradient_flow(device):
-    """Gradients reach the input, learned seeds, and fused projections."""
-    attention = FLAREPlusPlus(
-        dim=32,
-        heads=4,
-        dim_head=8,
-        n_global_queries=7,
-    ).to(device)
-    x = torch.randn(2, 20, 32, device=device, requires_grad=True)
-    attention(x).square().mean().backward()
-
-    assert x.grad is not None
-    assert torch.isfinite(x.grad).all()
-    for parameter in (
-        attention.q_seed,
-        attention.in_projection.weight,
-        attention.out_linear.weight,
-    ):
-        assert parameter.grad is not None
-        assert torch.isfinite(parameter.grad).all()
-
-
-def test_flare_plus_plus_validates_options():
-    """Unsupported backends and invalid scales fail during construction."""
-    with pytest.raises(ValueError, match="does not support Transformer Engine"):
-        FLAREPlusPlus(dim=32, use_te=True)
-
-    for scale in (0.0, -1.0, float("inf"), float("nan")):
-        with pytest.raises(ValueError, match="attn_scale"):
-            FLAREPlusPlus(dim=32, attn_scale=scale)
-
-
-def test_flare_plus_plus_torch_compile_fullgraph(device):
-    """FLARE++ can be captured by torch.compile with fullgraph enabled."""
-    torch._dynamo.config.error_on_recompile = True
-    attention = FLAREPlusPlus(
-        dim=16,
-        heads=2,
-        dim_head=8,
-        n_global_queries=4,
-    ).to(device)
-    x = torch.randn(2, 13, 16, device=device)
-    expected = attention(x)
-    backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
-    compiled = torch.compile(attention, backend=backend, fullgraph=True)
-
-    actual = compiled(x)
-    repeated = compiled(x)
-    torch.testing.assert_close(actual, expected)
-    torch.testing.assert_close(repeated, expected)
+@pytest.mark.parametrize("name", list(_MIXERS))
+def test_torch_compile(device, name):
+    """torch.compile(fullgraph=True) matches eager."""
+    cls, kwargs = _MIXERS[name]
+    torch.manual_seed(0)
+    mixer = cls(dim=32, heads=4, **kwargs).to(device).eval()
+    x = torch.randn(2, 19, 32, device=device)
+    expected = mixer(x)
+    compiled = torch.compile(mixer, fullgraph=True)
+    torch.testing.assert_close(compiled(x), expected, atol=1e-5, rtol=1e-4)
 
 
 def test_flare_attention_legacy_import_paths():
