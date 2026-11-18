@@ -203,11 +203,19 @@ def test_forward_without_embedding(device):
 def test_embedding_validation():
     model = FLARE(**_SMALL)
     fx, embedding = _inputs("cpu")
-    with pytest.raises(ValueError, match="embedding is required"):
+    with pytest.raises(ValueError, match="3 channels.*got none"):
         model(fx)
+    with pytest.raises(ValueError, match="3 channels.*got 2"):
+        model(fx, embedding=fx)
     no_emb = FLARE(**{**_SMALL, "embedding_dim": None, "functional_dim": 5})
-    with pytest.raises(ValueError, match="without embedding_dim"):
+    with pytest.raises(ValueError, match="0 channels.*got 3"):
         no_emb(torch.randn(1, 7, 5), embedding=torch.randn(1, 7, 3))
+    # A zero-width embedding is accepted.
+    assert no_emb(torch.randn(1, 7, 5), embedding=torch.randn(1, 7, 0)).shape == (
+        1,
+        7,
+        2,
+    )
     with pytest.raises(ValueError, match="divisible"):
         FLARE(functional_dim=2, out_dim=1, n_hidden=30, n_head=4)
 

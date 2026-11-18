@@ -218,7 +218,7 @@ class _FLAREBackbone(Module):
         embedding : torch.Tensor | None, optional
             Embedding (e.g. coordinates) of shape :math:`(B, N, C_{emb})`,
             concatenated in front of ``fx``. Required when the model was
-            built with ``embedding_dim``.
+            built with a nonzero ``embedding_dim``.
 
         Returns
         -------
@@ -230,13 +230,12 @@ class _FLAREBackbone(Module):
                 raise ValueError(
                     f"Expected fx of shape (B, N, C), got shape {tuple(fx.shape)}"
                 )
-            if self.embedding_dim and embedding is None:
+            width = 0 if embedding is None else embedding.shape[-1]
+            if width != (self.embedding_dim or 0):
                 raise ValueError(
-                    f"embedding is required (embedding_dim={self.embedding_dim})"
-                )
-            if not self.embedding_dim and embedding is not None:
-                raise ValueError(
-                    "embedding was given but the model was built without embedding_dim"
+                    f"Expected an embedding with {self.embedding_dim or 0} channels "
+                    f"(embedding_dim={self.embedding_dim}), got "
+                    f"{'none' if embedding is None else width}"
                 )
         if embedding is not None:
             fx = torch.cat((embedding, fx), dim=-1)
