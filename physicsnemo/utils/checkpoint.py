@@ -1518,9 +1518,22 @@ def _load_checkpoint_distributed(
                     opt_model, optimizer, optim_sd, options=broadcast_options
                 )
             checkpoint_logging.success("Loaded optimizer state dictionary")
-        elif optim_sd:
-            optimizer.load_state_dict(optim_sd)
-            checkpoint_logging.success("Loaded optimizer state dictionary")
+        else:
+            # Non-distributed optimizer model (e.g. a small auxiliary model
+            # beside an FSDP model): broadcast the state as bytes, since
+            # pickled CUDA tensors unpickle on rank 0's device, and let each
+            # rank load the tensors onto its own device.
+            buffer = io.BytesIO()
+            if is_rank0:
+                torch.save(optim_sd, buffer)
+            osd_list = [buffer.getvalue()]
+            torch.distributed.broadcast_object_list(osd_list, src=0)
+            optim_sd = torch.load(
+                io.BytesIO(osd_list[0]), map_location=device, weights_only=False
+            )
+            if optim_sd:
+                optimizer.load_state_dict(optim_sd)
+                checkpoint_logging.success("Loaded optimizer state dictionary")
 
     # Broadcast remaining training state (scheduler, scaler, epoch, metadata)
     rest: dict[str, Any] = {}
