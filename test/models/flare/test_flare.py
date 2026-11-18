@@ -409,6 +409,34 @@ def test_use_te_matches_pytorch(device, name, use_rmsnorm):
     )
 
 
+@requires_module("transformer_engine>=2.14.0")
+@pytest.mark.parametrize("use_rmsnorm", [True, False])
+def test_use_te_fused_module_init(device, use_rmsnorm):
+    """Fused TE MLPs and head get trunc_normal(0.02) weights, zero biases, unit norms."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+    torch.manual_seed(0)
+    model = FLARE(
+        **dict(_SMALL, n_hidden=128, out_dim=64, mlp_ratio=4),
+        use_rmsnorm=use_rmsnorm,
+        use_te=True,
+    ).to(device)
+    params = dict(model.named_parameters())
+    weights = [n for n in params if n.endswith(("fc1_weight", "fc2_weight"))]
+    assert len(weights) == 2 * _SMALL["n_layers"]
+    for name in [*weights, "head.weight"]:
+        # TE's own default is normal(0, 0.023).
+        assert abs(params[name].std().item() - 0.02) < 1e-3, name
+    for name, param in params.items():
+        if (
+            name.endswith(("fc1_bias", "fc2_bias", "layer_norm_bias"))
+            or name == "head.bias"
+        ):
+            assert torch.all(param == 0), name
+        if name.endswith("layer_norm_weight"):
+            assert torch.all(param == 1), name
+
+
 def test_use_te_rejects_unsupported_activation():
     """Transformer Engine's fused MLP only supports a few activations."""
     import physicsnemo.models.flare.flare as flare_module

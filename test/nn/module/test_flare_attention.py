@@ -256,6 +256,22 @@ def test_use_te_requires_transformer_engine(name, monkeypatch):
         cls(dim=32, heads=4, use_te=True, **kwargs)
 
 
+class _TokenSharded(torch.Tensor):
+    """Stand-in for a token-sharded ShardTensor (only ``redistribute`` matters)."""
+
+    def redistribute(self, *args, **kwargs):  # pragma: no cover - never called
+        raise AssertionError
+
+
+def test_flare_use_te_rejects_token_sharded_inputs():
+    """FLARE's TE attention is not ShardTensor aware, so sharded inputs must raise."""
+    mixer = FLARE(dim=32, heads=4)
+    x = torch.randn(1, 8, 32).as_subclass(_TokenSharded)
+    mixer.use_te = True  # the check runs before any TE module is touched
+    with pytest.raises(NotImplementedError, match="use_te=True"):
+        mixer(x)
+
+
 @requires_module("transformer_engine>=2.14.0")
 @pytest.mark.parametrize("name", list(_MIXERS))
 @pytest.mark.parametrize("use_rmsnorm", [True, False])

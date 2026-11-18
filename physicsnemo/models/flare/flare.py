@@ -259,6 +259,20 @@ class _FLAREBackbone(Module):
                 nn.init.ones_(m.weight)
             if getattr(m, "bias", None) is not None:
                 nn.init.zeros_(m.bias)
+        elif self.use_te and isinstance(m, (te.LayerNormMLP, te.LayerNormLinear)):
+            # Fused TE modules hold their parameters directly (no Linear
+            # children): same trunc_normal / zero-bias / unit-norm init.
+            if isinstance(m, te.LayerNormMLP):
+                weights, biases = ("fc1_weight", "fc2_weight"), ("fc1_bias", "fc2_bias")
+            else:
+                weights, biases = ("weight",), ("bias",)
+            for name in weights:
+                nn.init.trunc_normal_(getattr(m, name), std=0.02)
+            for name in (*biases, "layer_norm_bias"):
+                param = getattr(m, name, None)
+                if isinstance(param, nn.Parameter) and param.numel():
+                    nn.init.zeros_(param)
+            nn.init.ones_(m.layer_norm_weight)
 
     def no_weight_decay(self) -> set[str]:
         r"""Fully qualified names of parameters to train without weight decay.
