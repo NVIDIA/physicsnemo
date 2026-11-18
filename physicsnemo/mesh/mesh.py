@@ -1032,8 +1032,9 @@ class Mesh(
         For example: edges in 2D/3D, triangles in 2D/3D/4D, tetrahedra in 3D/4D, etc.
 
         Uses dimension-specific closed-form expressions for n <= 3 (Lagrange
-        identity, scalar triple product, etc.) and falls back to the Gram
-        determinant for higher dimensions.  See
+        identity, scalar triple product, etc.) and the determinant of the edge
+        vectors for n-simplices in n-space, and falls back to the Gram
+        determinant otherwise.  See
         :func:`~physicsnemo.mesh.geometry._cell_areas.compute_cell_areas` for
         details.
 

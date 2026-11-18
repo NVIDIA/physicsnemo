@@ -24,12 +24,13 @@ dimension-specific closed-form expressions where possible:
   other spatial dimensions, with a rescaled norm.
 - **Tetrahedra** (n=3): scalar triple product in 3-space, or the norm of the
   3x3 minors of the edge vectors for higher spatial dimensions.
-- **General** (n>=4): Gram determinant via ``torch.det``.
+- **General** (n>=4): determinant of the edge vectors in n-space, or the Gram
+  determinant via ``torch.det`` for higher spatial dimensions.
 
 All branches compute in at least float32 and cast the volumes back to the
 input dtype once, since the determinants and cross products of float16 edge
-vectors can overflow even when the volume fits in float16. The general
-fallback disables ``torch.autocast`` to keep ``torch.matmul`` in that dtype,
+vectors can overflow even when the volume fits in float16. The Gram
+determinant disables ``torch.autocast`` to keep ``torch.matmul`` in that dtype,
 since ``torch.det`` dispatches to cuBLAS LU factorization which does not
 support reduced-precision dtypes.
 """
@@ -55,7 +56,8 @@ def compute_cell_areas(
         \text{vol} = \frac{1}{n!} \sqrt{\lvert \det(E E^T) \rvert}
 
     where :math:`E` is the matrix whose rows are the edge vectors. Specialized
-    closed-form expressions are used for :math:`n \le 3` (see module docstring).
+    expressions are used for :math:`n \le 3` and for n-simplices in n-space
+    (see module docstring).
 
     Parameters
     ----------
@@ -105,7 +107,7 @@ def compute_cell_areas(
         case 3:
             result = _tetrahedron_volumes(vectors)
         case _:
-            result = _gram_det_volumes(vectors)
+            result = _simplex_volumes(vectors)
     return result.to(relative_vectors.dtype)
 
 
@@ -195,16 +197,37 @@ def _tetrahedron_volumes_general(
     return scaled.norm(dim=-1) * (scale / 6)
 
 
+def _simplex_volumes(
+    relative_vectors: Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"],
+) -> Float[torch.Tensor, " n_cells"]:
+    r"""n-simplex volume (n >= 4), dispatching on spatial dimension.
+
+    In n-space the edge vectors form a square matrix :math:`E`, and
+
+    .. math::
+        V = \frac{1}{n!} \lvert \det E \rvert
+
+    as for tetrahedra in 3-space. The Gram determinant
+    :math:`\det(E E^T) = (\det E)^2` would square the condition number of
+    :math:`E`, so in float32 nearly flat cells would lose their volume to
+    cancellation.
+    """
+    n_manifold_dims, n_spatial_dims = relative_vectors.shape[-2:]
+    if n_spatial_dims == n_manifold_dims:
+        return small_det(relative_vectors).abs() / math.factorial(n_manifold_dims)
+    return _gram_det_volumes(relative_vectors)
+
+
 def _gram_det_volumes(
     relative_vectors: Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"],
 ) -> Float[torch.Tensor, " n_cells"]:
-    r"""General n-simplex volume via Gram determinant (n >= 4).
+    r"""n-simplex volume via the Gram determinant (n >= 4, d > n).
 
-    Falls back to ``torch.matmul`` + ``torch.det`` for manifold dimensions
-    that lack a closed-form specialization. Disables ``torch.autocast`` so
-    that ``matmul`` operates in the native dtype of the input, because
-    ``torch.det`` dispatches to cuBLAS LU factorization which does not
-    support reduced-precision dtypes (bfloat16, float16).
+    Falls back to ``torch.matmul`` + ``torch.det`` for n-simplices in more
+    than n spatial dimensions. Disables ``torch.autocast`` so that ``matmul``
+    operates in the native dtype of the input, because ``torch.det``
+    dispatches to cuBLAS LU factorization which does not support
+    reduced-precision dtypes (bfloat16, float16).
     """
     with torch.autocast(device_type=relative_vectors.device.type, enabled=False):
         gram_matrix = torch.matmul(

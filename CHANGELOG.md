@@ -792,6 +792,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finite. Before, their cross products, determinants, and sums of positions
   overflowed float16 to `inf` or `nan`, and `scale` gave finite areas only if
   they were cached before the call.
+- `cell_areas` of n-simplices in n-space with n >= 4, such as 4-simplices in
+  4D, take the determinant of the edge vectors directly. Before, the Gram
+  determinant squared the condition number of the edge vectors, so nearly flat
+  cells lost their float32 volume to cancellation.
 - `sample_random_points_on_cells` with `alpha` other than 1 works on float16
   and bfloat16 meshes on CPU. Before, it raised an error.
 - Anisotropic maps with a small overall scale are no longer taken for
