@@ -53,7 +53,7 @@ _SMALL = dict(
 )
 
 _MODELS = {
-    "flare": (FLARE, {}),
+    "flare": (FLARE, {"qk_norm": False}),
     "flare_qk_norm": (FLARE, {"qk_norm": True}),
     "flarepp": (FLAREPlusPlus, {}),
 }
@@ -110,7 +110,7 @@ def test_flare_constructor_defaults():
     block = model.blocks[0]
     assert isinstance(block.mixer, FLAREAttention)
     assert block.mixer.heads == 8 and block.mixer.n_global_queries == 32
-    assert isinstance(block.mixer.q_norm, nn.Identity)
+    assert isinstance(block.mixer.q_norm, nn.RMSNorm)  # qk_norm=True by default
     # PN input projection C_in -> 2C -> C, tanh-GELU, block MLP ratio 4.
     linears = [m for m in model.preprocess.modules() if isinstance(m, nn.Linear)]
     assert [(m.in_features, m.out_features) for m in linears] == [

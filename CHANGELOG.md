@@ -226,7 +226,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.nn.FLARE` / `FLAREPlusPlus` now use attention scale
   `dim_head**-0.5`, latent queries initialized from N(0, 0.02), `dim x dim`
   key/value projections initialized to identity plus small noise, and per-head
-  RMSNorm (`use_rmsnorm=True`, or LayerNorm). FLARE adds `qk_norm`. FLARE++
+  RMSNorm (`use_rmsnorm=True`, or LayerNorm). FLARE adds `qk_norm`, on by default (on DrivAerML,
+  FLARE with QK-norm beat the previous FLARE in all 4 tested settings; without
+  it, it was worse in 3 of 4). FLARE++
   adds normalized query synthesis, gated fixed plus dynamic queries and shared
   synthesis keys/values (`k_norm`, `share_k0_v0`, `q_fixed_norm`,
   `gate_logit_init`). Both mixers expose `no_weight_decay()` for their latent

@@ -30,7 +30,7 @@ from physicsnemo.nn import FLARE, FLAREPlusPlus
 from test.conftest import requires_module
 
 _MIXERS = {
-    "flare": (FLARE, {}),
+    "flare": (FLARE, {"qk_norm": False}),
     "flare_qk_norm": (FLARE, {"qk_norm": True}),
     "flarepp": (FLAREPlusPlus, {}),
     "flarepp_unshared": (
@@ -82,10 +82,10 @@ def test_norm_type(name):
 
 def test_flare_qk_norm_modules():
     """qk_norm adds affine per-head norms on latent queries and keys."""
-    plain = FLARE(dim=32, heads=4)
+    plain = FLARE(dim=32, heads=4, qk_norm=False)
     assert isinstance(plain.q_norm, nn.Identity)
     assert isinstance(plain.k_norm, nn.Identity)
-    normed = FLARE(dim=32, heads=4, qk_norm=True)
+    normed = FLARE(dim=32, heads=4)
     for norm in (normed.q_norm, normed.k_norm):
         assert isinstance(norm, nn.RMSNorm)
         assert norm.normalized_shape == (8,)

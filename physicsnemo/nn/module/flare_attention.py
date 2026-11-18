@@ -356,7 +356,9 @@ class FLARE(_FLAREMixerBase):
     n_global_queries : int, optional
         Number of latent queries :math:`M` per head. Default is 64.
     qk_norm : bool, optional
-        Normalize latent queries and keys per head (affine). Default is ``False``.
+        Normalize latent queries and keys per head (affine). Default is ``True``:
+        on DrivAerML, FLARE with QK-norm beat the previous FLARE in all 4 tested
+        settings, and FLARE without it was worse in 3 of 4.
     use_rmsnorm : bool, optional
         Use RMSNorm (``eps=1e-6``) for the per-head norms; ``False`` uses
         LayerNorm. Default is ``True``.
@@ -395,7 +397,7 @@ class FLARE(_FLAREMixerBase):
         dim_head: int | None = None,
         dropout: float = 0.0,
         n_global_queries: int = 64,
-        qk_norm: bool = False,
+        qk_norm: bool = True,
         use_rmsnorm: bool = True,
         use_te: bool = False,
     ) -> None:

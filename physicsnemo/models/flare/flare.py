@@ -413,7 +413,7 @@ class FLARE(_FLAREBackbone):
         + r"""
     qk_norm : bool, optional
         Normalize latent queries and keys per head in each mixer. Default is
-        ``False``.
+        ``True`` (see :class:`~physicsnemo.nn.FLARE`).
 """
         + _COMMON_IO_DOC
         + r"""
@@ -442,7 +442,7 @@ class FLARE(_FLAREBackbone):
         mlp_ratio: int = 4,
         slice_num: int = 32,
         use_rmsnorm: bool = True,
-        qk_norm: bool = False,
+        qk_norm: bool = True,
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
         use_te: bool = False,

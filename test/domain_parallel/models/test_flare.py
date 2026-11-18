@@ -104,6 +104,7 @@ _CASES = [
     _irregular_case(
         "flare-irregular-qk-norm-layernorm", qk_norm=True, use_rmsnorm=False
     ),
+    _irregular_case("flare-irregular-no-qk-norm", qk_norm=False),
 ]
 
 
