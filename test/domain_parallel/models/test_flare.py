@@ -23,6 +23,10 @@ coverage in ``test/domain_parallel/ops/test_sdpa.py``):
   queries attend to the sharded point cloud.
 - pass 2: ``sdpa(q_sharded, K_replicated, V_replicated)`` — embarrassingly
   parallel over the query shards.
+
+The per-head query/key norms (RMSNorm or LayerNorm over the head dim) and the
+identity-initialized K/V projections are token-wise, so they keep the token
+sharding. FLARE++ does not support token-sharded inputs yet and must raise.
 """
 
 import pytest
@@ -31,14 +35,14 @@ import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.models.flare import FLARE
+from physicsnemo.models.flare import FLARE, FLAREPlusPlus
 from test.domain_parallel.models.harness import (
     DomainParallelModelCase,
     run_domain_parallel_model_check,
 )
 
 
-def _build_flare():
+def _build_flare(**kwargs):
     def build(device):
         model = FLARE(
             functional_dim=3,
@@ -50,6 +54,7 @@ def _build_flare():
             n_head=4,
             mlp_ratio=1,
             slice_num=8,
+            **kwargs,
         )
         return model.to(device)
 
@@ -64,7 +69,17 @@ def _check_output(n_points):
     return check
 
 
-def _irregular_case():
+def _shard_irregular(args, kwargs, mesh):
+    (fx,) = args
+    src = dist.get_global_rank(mesh.get_group(), 0)
+    sharded_fx = scatter_tensor(fx, src, mesh, (Shard(1),), requires_grad=False)
+    sharded_embedding = scatter_tensor(
+        kwargs["embedding"], src, mesh, (Shard(1),), requires_grad=False
+    )
+    return (sharded_fx,), {"embedding": sharded_embedding}
+
+
+def _irregular_case(name="flare-irregular", **model_kwargs):
     n_points = 16384
 
     def build_inputs(device):
@@ -72,20 +87,11 @@ def _irregular_case():
         embedding = torch.randn(1, n_points, 5, device=device)
         return (fx,), {"embedding": embedding}
 
-    def shard_inputs(args, kwargs, mesh):
-        (fx,) = args
-        src = dist.get_global_rank(mesh.get_group(), 0)
-        sharded_fx = scatter_tensor(fx, src, mesh, (Shard(1),), requires_grad=False)
-        sharded_embedding = scatter_tensor(
-            kwargs["embedding"], src, mesh, (Shard(1),), requires_grad=False
-        )
-        return (sharded_fx,), {"embedding": sharded_embedding}
-
     return DomainParallelModelCase(
-        name="flare-irregular",
-        build_model=_build_flare(),
+        name=name,
+        build_model=_build_flare(**model_kwargs),
         build_inputs=build_inputs,
-        shard_inputs=shard_inputs,
+        shard_inputs=_shard_irregular,
         strategy="ddp",
         output_check_fn=_check_output(n_points),
         atol=1e-4,
@@ -93,7 +99,12 @@ def _irregular_case():
     )
 
 
-_CASES = [_irregular_case()]
+_CASES = [
+    _irregular_case(),
+    _irregular_case(
+        "flare-irregular-qk-norm-layernorm", qk_norm=True, use_rmsnorm=False
+    ),
+]
 
 
 @pytest.mark.multigpu_static
@@ -101,3 +112,28 @@ _CASES = [_irregular_case()]
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c.name)
 def test_flare_distributed(distributed_mesh, case):
     run_domain_parallel_model_check(case, mesh=distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(600)
+def test_flare_plus_plus_rejects_token_sharded_inputs(distributed_mesh):
+    r"""FLARE++ raises on token-sharded inputs instead of computing wrong results."""
+    from physicsnemo.distributed import DistributedManager
+
+    device = DistributedManager().device
+    model = FLAREPlusPlus(
+        functional_dim=3,
+        out_dim=2,
+        embedding_dim=5,
+        n_layers=1,
+        n_hidden=32,
+        n_head=4,
+        slice_num=8,
+    ).to(device)
+    fx = torch.randn(1, 64, 3, device=device)
+    embedding = torch.randn(1, 64, 5, device=device)
+    (sharded_fx,), kwargs = _shard_irregular(
+        (fx,), {"embedding": embedding}, distributed_mesh
+    )
+    with pytest.raises(NotImplementedError, match="token-sharded"):
+        model(sharded_fx, **kwargs)

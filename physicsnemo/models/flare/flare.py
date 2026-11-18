@@ -27,6 +27,11 @@ attention:
         x = x + Mixer(Norm(x))                        # FLARE / FLARE++
         x = x + Mlp(Norm(x))                          # C -> mlp_ratio * C -> C
     y = Linear(Norm(x))                               # C -> C_out
+
+With ``use_te=True`` the linear layers, norms and attention run on Transformer
+Engine, mirroring :class:`~physicsnemo.models.transolver.Transolver`'s TE
+blocks: ``Norm + Mlp`` is one ``te.LayerNormMLP`` and the head is one
+``te.LayerNormLinear``.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.utils.activation_checkpointing import (
     resolve_checkpointing_ratio,
     run_checkpoint,
@@ -47,6 +53,12 @@ from physicsnemo.models.utils.activation_checkpointing import (
 from physicsnemo.nn import FLARE as FLAREAttention
 from physicsnemo.nn import FLAREPlusPlus as FLAREPlusPlusAttention
 from physicsnemo.nn import Mlp
+
+te = OptionalImport("transformer_engine.pytorch")
+
+# Transformer Engine LayerNormMLP activation names; TE's "gelu" is the tanh
+# approximation (as in TransolverBlock, whose TE MLP always uses it).
+_TE_ACTIVATIONS = {"gelu_tanh": "gelu", "gelu": "gelu", "relu": "relu", "silu": "silu"}
 
 
 @dataclass
@@ -67,12 +79,34 @@ class MetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-def _norm(dim: int, use_rmsnorm: bool) -> nn.Module:
+def _norm(dim: int, use_rmsnorm: bool, use_te: bool = False) -> nn.Module:
+    if use_te:
+        return te.RMSNorm(dim, eps=1e-6) if use_rmsnorm else te.LayerNorm(dim)
     return nn.RMSNorm(dim, eps=1e-6) if use_rmsnorm else nn.LayerNorm(dim)
 
 
+def _te_norm_kwargs(use_rmsnorm: bool) -> dict:
+    r"""``normalization`` / ``eps`` for Transformer Engine fused norm modules."""
+    if use_rmsnorm:
+        return {"normalization": "RMSNorm", "eps": 1e-6}
+    return {"normalization": "LayerNorm", "eps": 1e-5}
+
+
+def _te_activation(act: str) -> str:
+    if act not in _TE_ACTIVATIONS:
+        raise ValueError(
+            f"act={act!r} is not supported with use_te=True; choose one of "
+            f"{sorted(_TE_ACTIVATIONS)}"
+        )
+    return _TE_ACTIVATIONS[act]
+
+
 class _FLAREBlock(nn.Module):
-    r"""Pre-norm residual block: ``x + mixer(norm1(x))``, then ``x + mlp(norm2(x))``."""
+    r"""Pre-norm residual block: ``x + mixer(norm1(x))``, then ``x + mlp(norm2(x))``.
+
+    With ``use_te=True`` the MLP branch is one fused ``te.LayerNormMLP``
+    (``ln_mlp``) instead of ``norm2`` + ``mlp``.
+    """
 
     def __init__(
         self,
@@ -81,21 +115,33 @@ class _FLAREBlock(nn.Module):
         mlp_ratio: int,
         act: str,
         use_rmsnorm: bool,
+        use_te: bool = False,
     ) -> None:
         super().__init__()
-        self.norm1 = _norm(hidden_dim, use_rmsnorm)
+        self.use_te = use_te
+        self.norm1 = _norm(hidden_dim, use_rmsnorm, use_te)
         self.mixer = mixer
-        self.norm2 = _norm(hidden_dim, use_rmsnorm)
-        self.mlp = Mlp(
-            in_features=hidden_dim,
-            hidden_features=hidden_dim * mlp_ratio,
-            out_features=hidden_dim,
-            act_layer=act,
-        )
+        if use_te:
+            self.ln_mlp = te.LayerNormMLP(
+                hidden_size=hidden_dim,
+                ffn_hidden_size=hidden_dim * mlp_ratio,
+                activation=_te_activation(act),
+                **_te_norm_kwargs(use_rmsnorm),
+            )
+        else:
+            self.norm2 = _norm(hidden_dim, use_rmsnorm)
+            self.mlp = Mlp(
+                in_features=hidden_dim,
+                hidden_features=hidden_dim * mlp_ratio,
+                out_features=hidden_dim,
+                act_layer=act,
+            )
 
     def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
         r"""Apply the mixer and MLP residual branches."""
         x = x + self.mixer(self.norm1(x))
+        if self.use_te:
+            return x + self.ln_mlp(x)
         return x + self.mlp(self.norm2(x))
 
 
@@ -115,10 +161,18 @@ class _FLAREBackbone(Module):
         mlp_ratio: int,
         slice_num: int,
         use_rmsnorm: bool,
+        use_te: bool,
         activation_checkpointing: bool,
         checkpointing_ratio: float,
     ) -> None:
         super().__init__(meta=MetaData())
+        if use_te and not te.available:
+            raise ImportError(
+                f"{type(self).__name__}(use_te=True) requires Transformer Engine. "
+                "Install it with `pip install transformer-engine`, or set use_te=False."
+            )
+        if use_te:
+            _te_activation(act)
         if n_layers <= 0:
             raise ValueError(f"n_layers must be positive, got {n_layers}")
         if n_hidden % n_head != 0:
@@ -130,6 +184,7 @@ class _FLAREBackbone(Module):
         self.embedding_dim = embedding_dim
         self.out_dim = out_dim
         self.n_hidden = n_hidden
+        self.use_te = use_te
         self._activation_checkpointing_ratio = resolve_checkpointing_ratio(
             activation_checkpointing, checkpointing_ratio
         )
@@ -140,6 +195,7 @@ class _FLAREBackbone(Module):
             hidden_features=2 * n_hidden,
             out_features=n_hidden,
             act_layer=act,
+            use_te=use_te,
         )
         self.blocks = nn.ModuleList(
             [
@@ -150,18 +206,27 @@ class _FLAREBackbone(Module):
                         dropout=dropout,
                         n_global_queries=slice_num,
                         use_rmsnorm=use_rmsnorm,
+                        use_te=use_te,
                     ),
                     hidden_dim=n_hidden,
                     mlp_ratio=mlp_ratio,
                     act=act,
                     use_rmsnorm=use_rmsnorm,
+                    use_te=use_te,
                 )
                 for _ in range(n_layers)
             ]
         )
-        self.head = nn.Sequential(
-            _norm(n_hidden, use_rmsnorm), nn.Linear(n_hidden, out_dim)
-        )
+        if use_te:
+            self.head = te.LayerNormLinear(
+                in_features=n_hidden,
+                out_features=out_dim,
+                **_te_norm_kwargs(use_rmsnorm),
+            )
+        else:
+            self.head = nn.Sequential(
+                _norm(n_hidden, use_rmsnorm), nn.Linear(n_hidden, out_dim)
+            )
         self.initialize_weights()
 
     def _build_mixer(self, **kwargs) -> nn.Module:
@@ -177,15 +242,19 @@ class _FLAREBackbone(Module):
         """
         self.apply(self._init_weights)
 
-    @staticmethod
-    def _init_weights(m: nn.Module) -> None:
-        if isinstance(m, nn.Linear):
+    def _init_weights(self, m: nn.Module) -> None:
+        linear_layers: tuple[type, ...] = (nn.Linear,)
+        norm_layers: tuple[type, ...] = (nn.LayerNorm, nn.RMSNorm)
+        if self.use_te:
+            linear_layers += (te.Linear,)
+            norm_layers += (te.LayerNorm, te.RMSNorm)
+        if isinstance(m, linear_layers):
             if getattr(m, "_skip_weight_init", False):
                 return
             nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
-        elif isinstance(m, (nn.LayerNorm, nn.RMSNorm)):
+        elif isinstance(m, norm_layers):
             if m.weight is not None:
                 nn.init.ones_(m.weight)
             if getattr(m, "bias", None) is not None:
@@ -248,7 +317,7 @@ class _FLAREBackbone(Module):
                 self._activation_checkpointing_ratio,
                 training=self.training,
             ):
-                x = run_checkpoint(block, x, use_te=False, te_module=None)
+                x = run_checkpoint(block, x, use_te=self.use_te, te_module=te)
             else:
                 x = block(x)
         return self.head(x)
@@ -285,6 +354,12 @@ _COMMON_PARAMS_DOC = r"""
     use_rmsnorm : bool, optional
         Use RMSNorm (``eps=1e-6``) for every norm (block, output and the
         mixers' per-head norms); ``False`` uses LayerNorm. Default is ``True``.
+    use_te : bool, optional
+        Use Transformer Engine layers (linear, norms, fused norm + MLP,
+        fused norm + linear head, ``DotProductAttention``; CUDA only). With
+        ``use_te=True``, ``act`` must be one of ``"gelu_tanh"``, ``"gelu"``
+        (both tanh-approximate GELU in Transformer Engine), ``"relu"`` or
+        ``"silu"``. Default is ``False``.
     activation_checkpointing : bool, optional
         Checkpoint blocks during training. Default is ``False``.
     checkpointing_ratio : float, optional
@@ -356,6 +431,7 @@ class FLARE(_FLAREBackbone):
         qk_norm: bool = False,
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
+        use_te: bool = False,
     ) -> None:
         self._qk_norm = qk_norm
         super().__init__(
@@ -370,6 +446,7 @@ class FLARE(_FLAREBackbone):
             mlp_ratio=mlp_ratio,
             slice_num=slice_num,
             use_rmsnorm=use_rmsnorm,
+            use_te=use_te,
             activation_checkpointing=activation_checkpointing,
             checkpointing_ratio=checkpointing_ratio,
         )
@@ -430,6 +507,7 @@ class FLAREPlusPlus(_FLAREBackbone):
         gate_logit_init: float = 0.25,
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
+        use_te: bool = False,
     ) -> None:
         self._mixer_kwargs = dict(
             k_norm=k_norm,
@@ -449,6 +527,7 @@ class FLAREPlusPlus(_FLAREBackbone):
             mlp_ratio=mlp_ratio,
             slice_num=slice_num,
             use_rmsnorm=use_rmsnorm,
+            use_te=use_te,
             activation_checkpointing=activation_checkpointing,
             checkpointing_ratio=checkpointing_ratio,
         )

@@ -48,5 +48,6 @@ model:
   act: "gelu"
   mlp_ratio: 4
   slice_num: 256          # n_global_queries for FLARE attention
+  use_te: false
   activation_checkpointing: false
   checkpointing_ratio: 1.0

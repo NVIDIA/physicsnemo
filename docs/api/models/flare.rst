@@ -16,8 +16,12 @@ an MLP as residual branches:
 The mixer is :class:`~physicsnemo.nn.FLARE` (learned latent queries) or
 :class:`~physicsnemo.nn.FLAREPlusPlus` (routing queries synthesized from the
 block input). Norms are RMSNorm by default (``use_rmsnorm=True``) and LayerNorm
-otherwise. Inputs are flattened to ``(B, N, C)``; structured grids, unified
-position embeddings and Transformer Engine are not supported.
+otherwise. Inputs are flattened to ``(B, N, C)``; structured grids and unified
+position embeddings are not supported. ``use_te=True`` runs the linear layers,
+norms (fused ``LayerNormMLP`` / ``LayerNormLinear``) and attention on
+Transformer Engine. FLARE also accepts token-sharded
+:class:`~physicsnemo.domain_parallel.ShardTensor` inputs (domain parallelism);
+FLARE++ does not yet.
 
 The latent queries and gate logits should be trained without weight decay:
 ``model.no_weight_decay()`` returns their fully qualified parameter names.

@@ -39,6 +39,7 @@ from test.common import (
     validate_onnx_export,
     validate_onnx_runtime,
 )
+from test.conftest import requires_module
 
 _SMALL = dict(
     functional_dim=2,
@@ -314,6 +315,106 @@ def test_torch_compile_fullgraph(device, name):
     backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
     compiled = torch.compile(model, backend=backend, fullgraph=True)
     torch.testing.assert_close(compiled(fx, embedding), expected, atol=1e-5, rtol=1e-4)
+
+
+def _torch_to_te_state_dict(state_dict: dict) -> dict:
+    r"""Map a ``use_te=False`` state dict onto the fused TE block MLPs and head."""
+    rename = {
+        "norm2.weight": "ln_mlp.layer_norm_weight",
+        "norm2.bias": "ln_mlp.layer_norm_bias",
+        "mlp.layers.0.weight": "ln_mlp.fc1_weight",
+        "mlp.layers.0.bias": "ln_mlp.fc1_bias",
+        "mlp.layers.2.weight": "ln_mlp.fc2_weight",
+        "mlp.layers.2.bias": "ln_mlp.fc2_bias",
+    }
+    head = {
+        "head.0.weight": "head.layer_norm_weight",
+        "head.0.bias": "head.layer_norm_bias",
+        "head.1.weight": "head.weight",
+        "head.1.bias": "head.bias",
+    }
+    out = {}
+    for key, value in state_dict.items():
+        new = head.get(key, key)
+        for old_suffix, new_suffix in rename.items():
+            if key.startswith("blocks.") and key.endswith("." + old_suffix):
+                new = key[: -len(old_suffix)] + new_suffix
+        out[new] = value
+    return out
+
+
+@pytest.mark.parametrize("name", list(_MODELS))
+def test_use_te_requires_transformer_engine(name, monkeypatch):
+    """use_te=True fails clearly when Transformer Engine is missing."""
+    import physicsnemo.models.flare.flare as flare_module
+    import physicsnemo.nn.module.flare_attention as fa
+
+    class _Missing:
+        available = False
+
+    monkeypatch.setattr(flare_module, "te", _Missing())
+    monkeypatch.setattr(fa, "te", _Missing())
+    cls, kwargs = _MODELS[name]
+    with pytest.raises(ImportError, match="Transformer Engine"):
+        cls(**_SMALL, use_te=True, **kwargs)
+
+
+@requires_module("transformer_engine>=2.14.0")
+@pytest.mark.parametrize("name", list(_MODELS))
+@pytest.mark.parametrize("use_rmsnorm", [True, False])
+def test_use_te_matches_pytorch(device, name, use_rmsnorm):
+    """use_te=True builds TE layers and matches the PyTorch backend."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+    import transformer_engine.pytorch as te
+
+    cls, kwargs = _MODELS[name]
+    small = dict(_SMALL, n_hidden=32)
+    torch.manual_seed(0)
+    ref = cls(**small, use_rmsnorm=use_rmsnorm, **kwargs).to(device)
+    model = cls(**small, use_rmsnorm=use_rmsnorm, use_te=True, **kwargs).to(device)
+    assert model.use_te and all(block.mixer.use_te for block in model.blocks)
+    assert isinstance(model.blocks[0].ln_mlp, te.LayerNormMLP)
+    assert isinstance(model.head, te.LayerNormLinear)
+    assert isinstance(model.preprocess.layers[0], te.Linear)
+
+    result = model.load_state_dict(
+        _torch_to_te_state_dict(ref.state_dict()), strict=False
+    )
+    assert not result.unexpected_keys
+    assert all(k.endswith("_extra_state") for k in result.missing_keys)
+
+    fx, embedding = _inputs(device)
+    out_ref, out_te = ref(fx, embedding), model(fx, embedding)
+    torch.testing.assert_close(out_te, out_ref, atol=5e-3, rtol=5e-3)
+    out_te.square().mean().backward()
+    for pname, param in model.named_parameters():
+        assert param.grad is not None and torch.isfinite(param.grad).all(), pname
+
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = model(fx, embedding)
+    assert torch.isfinite(out).all()
+
+    checkpointed = cls(
+        **small,
+        use_rmsnorm=use_rmsnorm,
+        use_te=True,
+        activation_checkpointing=True,
+        **kwargs,
+    ).to(device)
+    checkpointed.load_state_dict(model.state_dict())
+    checkpointed.train()
+    torch.testing.assert_close(
+        checkpointed(fx, embedding), out_te, atol=1e-5, rtol=1e-5
+    )
+
+
+def test_use_te_rejects_unsupported_activation():
+    """Transformer Engine's fused MLP only supports a few activations."""
+    import physicsnemo.models.flare.flare as flare_module
+
+    with pytest.raises(ValueError, match="not supported with use_te=True"):
+        flare_module._te_activation("tanh")
 
 
 def test_flare_optims(device):

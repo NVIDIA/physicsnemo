@@ -10,6 +10,12 @@ noise; ``qk_norm=True`` normalizes queries and keys per head (RMSNorm by
 default, LayerNorm with ``use_rmsnorm=False``). ``no_weight_decay()`` names the
 latent parameters to train without weight decay.
 
+Both mixers run their attention passes through the shared FLARE kernels:
+``torch.nn.functional.scaled_dot_product_attention`` (which also handles
+token-sharded :class:`~physicsnemo.domain_parallel.ShardTensor` inputs), or,
+with ``use_te=True``, Transformer Engine ``Linear``, norm and
+``DotProductAttention`` modules.
+
 For details of the method, see the `FLARE paper
 <https://arxiv.org/abs/2508.12594>`__.
 

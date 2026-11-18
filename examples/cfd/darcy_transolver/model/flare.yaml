@@ -30,5 +30,6 @@ n_head: 4
 act: gelu
 mlp_ratio: 4
 slice_num: 64
+use_te: False
 activation_checkpointing: False
 checkpointing_ratio: 1.0

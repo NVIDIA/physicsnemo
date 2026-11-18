@@ -27,6 +27,7 @@ import torch.nn.functional as F
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import FLARE, FLAREPlusPlus
+from test.conftest import requires_module
 
 _MIXERS = {
     "flare": (FLARE, {}),
@@ -238,6 +239,60 @@ def test_torch_compile(device, name):
     expected = mixer(x)
     compiled = torch.compile(mixer, fullgraph=True)
     torch.testing.assert_close(compiled(x), expected, atol=1e-5, rtol=1e-4)
+
+
+@pytest.mark.parametrize("name", list(_MIXERS))
+def test_use_te_requires_transformer_engine(name, monkeypatch):
+    """use_te=True fails clearly when Transformer Engine is missing."""
+    import physicsnemo.nn.module.flare_attention as fa
+
+    cls, kwargs = _MIXERS[name]
+
+    class _Missing:
+        available = False
+
+    monkeypatch.setattr(fa, "te", _Missing())
+    with pytest.raises(ImportError, match="Transformer Engine"):
+        cls(dim=32, heads=4, use_te=True, **kwargs)
+
+
+@requires_module("transformer_engine>=2.14.0")
+@pytest.mark.parametrize("name", list(_MIXERS))
+@pytest.mark.parametrize("use_rmsnorm", [True, False])
+def test_use_te_matches_pytorch(device, name, use_rmsnorm):
+    """The Transformer Engine backend computes the same mixer as the SDPA backend."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+    import transformer_engine.pytorch as te
+
+    cls, kwargs = _MIXERS[name]
+    torch.manual_seed(0)
+    common = dict(dim=64, heads=4, n_global_queries=7, use_rmsnorm=use_rmsnorm)
+    ref = cls(**common, **kwargs).to(device)
+    mixer = cls(**common, use_te=True, **kwargs).to(device)
+    assert mixer.use_te and isinstance(mixer.attn_fn, te.DotProductAttention)
+    for proj in _projections(mixer):
+        assert isinstance(proj, te.Linear) and proj._skip_weight_init
+        noise = proj.weight.detach() - torch.eye(64, device=device)
+        assert noise.abs().max() < 0.15
+
+    # Parameter names are backend independent; TE adds only _extra_state.
+    result = mixer.load_state_dict(ref.state_dict(), strict=False)
+    assert not result.unexpected_keys
+    assert all(k.endswith("_extra_state") for k in result.missing_keys)
+
+    x = torch.randn(2, 19, 64, device=device)
+    x_ref, x_te = x.clone().requires_grad_(True), x.clone().requires_grad_(True)
+    out_ref, out_te = ref(x_ref), mixer(x_te)
+    torch.testing.assert_close(out_te, out_ref, atol=2e-3, rtol=2e-3)
+    out_ref.square().mean().backward()
+    out_te.square().mean().backward()
+    torch.testing.assert_close(x_te.grad, x_ref.grad, atol=2e-3, rtol=2e-3)
+
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        out = mixer(x)
+    assert out.dtype == torch.bfloat16 and torch.isfinite(out).all()
+    torch.testing.assert_close(out.float(), out_ref.detach(), atol=5e-2, rtol=5e-2)
 
 
 def test_flare_attention_legacy_import_paths():

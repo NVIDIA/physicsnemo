@@ -233,9 +233,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameters. `physicsnemo.models.flare.FLARE` / `FLAREPlusPlus` are now
   standalone pre-norm models (no longer Transolver subclasses) with RMSNorm by
   default and tanh-approximate GELU (new `"gelu_tanh"` activation); the
-  `unified_pos`, `ref`, `structured_shape`, `time_input` and `use_te` arguments
-  and the mixers' `use_te` / `attn_scale` arguments are removed. Inputs must be
-  `(B, N, C)`. Checkpoints of the previous FLARE / FLARE++ do not load.
+  `unified_pos`, `ref`, `structured_shape` and `time_input` arguments and the
+  FLARE++ mixer's `attn_scale` argument are removed. Inputs must be
+  `(B, N, C)`. `use_te=True` keeps the Transformer Engine backend (TE linear
+  layers and norms, fused `LayerNormMLP` / `LayerNormLinear`, and
+  `DotProductAttention` through the shared FLARE attention kernels), now also
+  for FLARE++; token-sharded (`ShardTensor`) inputs keep working for FLARE. Checkpoints of the previous FLARE / FLARE++ do not load.
   GeoTransolver's `"GALE_FPP"` backend keeps the previous FLARE++ attention.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
