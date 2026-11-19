@@ -21,9 +21,10 @@ across the shard seams) and runs a recipe-style chain -- centering,
 augmentations, normalization, cell normals, a no-op subsample, a centroid
 interior -- on its plain local mesh; the wrapped ShardTensor sample must
 equal the unsharded pipeline: bit for bit when the transforms run on the
-host, and to float32 reduction-order rounding on the GPU (the reader
-computes the center on the host). The loader must issue no collectives:
-the profiler sees none, and rank 0 iterates alone.
+host, and to float32 rounding on the GPU. The whole-sample center is a
+partial-sum all-reduce, so center-dependent geometry matches to rounding. A
+chain without CenterMesh issues no collectives; CenterMesh adds exactly one
+all_reduce per sample.
 
 Run with ``torchrun --nproc-per-node {2,4} -m pytest --multigpu-static``.
 """
@@ -104,15 +105,16 @@ def root_and_fmt(request, tmp_path_factory, distributed_mesh):
     return holder[0], request.param
 
 
-def _chain(augment: bool, area_weighted: bool = False):
+def _chain(augment: bool, area_weighted: bool = False, center: bool = True):
     fields = {
         "pressure": {"type": "scalar", "mean": 0.5, "std": 2.0},
         "wss": {"type": "vector", "mean": [1.0, 0.0, 0.0], "std": 0.5},
     }
     chain = [
         DropMeshFields(global_data=["Re"]),
-        CenterMesh(use_area_weighting=area_weighted),
     ]
+    if center:
+        chain.append(CenterMesh(use_area_weighting=area_weighted))
     if augment:
         chain += [
             RandomRotateMesh(
@@ -159,12 +161,20 @@ def _dataset(root_and_fmt, device, *, chain, device_mesh=None, layout="local"):
     return dataset
 
 
-def _assert_matches(sample: DomainMesh, reference: DomainMesh, world: int, exact: bool):
+def _assert_matches(
+    sample: DomainMesh,
+    reference: DomainMesh,
+    world: int,
+    exact: bool,
+    centered: bool = False,
+):
     device = sample.interior.points._local_tensor.device
     reference = reference.to(device)
 
-    def check(actual, expected):
-        if exact:
+    def check(actual, expected, geometry=False):
+        # The center is a partial-sum all-reduce: equal to the unsharded one
+        # up to float rounding, so only center-dependent geometry is relaxed.
+        if exact and not (centered and geometry):
             assert torch.equal(actual, expected)
         else:
             # The reader computes the center on the host; the unsharded
@@ -177,7 +187,7 @@ def _assert_matches(sample: DomainMesh, reference: DomainMesh, world: int, exact
     assert interior.points._spec.placements == (Shard(0),)
     sizes = [s[0] for s in interior.points._spec.sharding_shapes(0)]
     assert sizes == compute_split_shapes(_WINDOW, world)
-    check(interior.points.full_tensor(), reference.interior.points)
+    check(interior.points.full_tensor(), reference.interior.points, True)
     for key in reference.interior.point_data.keys():
         check(
             interior.point_data[key].full_tensor(), reference.interior.point_data[key]
@@ -189,16 +199,18 @@ def _assert_matches(sample: DomainMesh, reference: DomainMesh, world: int, exact
     bnd, ref_bnd = sample.boundaries["vehicle"], reference.boundaries["vehicle"]
     assert isinstance(bnd.cells, ShardTensor)
     assert bnd.n_cells == ref_bnd.n_cells
-    check(bnd.cell_data["normals"].full_tensor(), ref_bnd.cell_data["normals"])
+    check(bnd.cell_data["normals"].full_tensor(), ref_bnd.cell_data["normals"], True)
     check(
         bnd.points.full_tensor()[bnd.cells.full_tensor()],
         ref_bnd.points[ref_bnd.cells],
+        True,
     )
     # Recomputed on the device on both sides (the reference's cached
     # centroids were computed on the host).
     check(
         bnd.cell_centroids.full_tensor(),
         ref_bnd.points[ref_bnd.cells].mean(dim=1),
+        True,
     )
     assert "Re" not in sample.global_data.keys()
     check(sample.global_data["U_inf"], reference.global_data["U_inf"])
@@ -223,7 +235,11 @@ def test_local_layout_matches_unsharded(
             sample, _ = sharded._consume(payload)
             expected, _ = reference[i]
             _assert_matches(
-                sample, expected, distributed_mesh.size(0), exact=not on_device
+                sample,
+                expected,
+                distributed_mesh.size(0),
+                exact=not on_device,
+                centered=True,
             )
     finally:
         sharded.close()
@@ -238,7 +254,9 @@ def test_local_layout_area_weighted_center(root_and_fmt, distributed_mesh):
     try:
         sample, _ = sharded[1]
         expected, _ = reference[1]
-        _assert_matches(sample, expected, distributed_mesh.size(0), exact=True)
+        _assert_matches(
+            sample, expected, distributed_mesh.size(0), exact=True, centered=True
+        )
     finally:
         sharded.close()
         reference.close()
@@ -263,17 +281,20 @@ def _collective_events(dataset, indices) -> list[str]:
     return sorted({e.name for e in prof.events() if _COLLECTIVE.search(e.name)})
 
 
-def test_local_layout_issues_no_collectives(root_and_fmt, distributed_mesh):
-    r"""Read, transforms and wrap run without communication; the global
-    layout on the same chain is the positive control of the detector."""
+def test_local_layout_no_collectives_without_center(root_and_fmt, distributed_mesh):
+    r"""A chain without CenterMesh reads, transforms and wraps with no
+    communication; the global layout is the positive control of the detector."""
     dm = DistributedManager()
     local = _dataset(
-        root_and_fmt, dm.device, chain=_chain(True), device_mesh=distributed_mesh
+        root_and_fmt,
+        dm.device,
+        chain=_chain(True, center=False),
+        device_mesh=distributed_mesh,
     )
     global_ = _dataset(
         root_and_fmt,
         dm.device,
-        chain=_chain(True),
+        chain=_chain(True, center=False),
         device_mesh=distributed_mesh,
         layout="global",
     )
@@ -285,14 +306,49 @@ def test_local_layout_issues_no_collectives(root_and_fmt, distributed_mesh):
         global_.close()
 
 
+@pytest.mark.parametrize("area_weighted", [False, True])
+@pytest.mark.parametrize("on_device", [False, True])
+def test_local_layout_center_is_one_all_reduce(
+    root_and_fmt, distributed_mesh, area_weighted, on_device
+):
+    r"""CenterMesh costs exactly one all_reduce per sample and nothing else,
+    also when the shard is on the CPU (buffer moved to the mesh's device)."""
+    dm = DistributedManager()
+    dataset = _dataset(
+        root_and_fmt,
+        dm.device if on_device else None,
+        chain=_chain(False, area_weighted),
+        device_mesh=distributed_mesh,
+    )
+    try:
+        for i in range(_N_SAMPLES):
+            events = _collective_events(dataset, [i])
+            assert len(events) >= 1, events
+            assert all(re.search(r"all_?reduce", e, re.I) for e in events), events
+            with torch.profiler.profile() as prof:
+                dataset._consume(dataset._load_host(i))
+            n = sum(
+                1
+                for e in prof.events()
+                if re.search(r"c10d::allreduce_|c10d::all_reduce", e.name, re.I)
+            )
+            assert n == 1, n
+    finally:
+        dataset.close()
+
+
 def test_rank_zero_iterates_alone(root_and_fmt, distributed_mesh):
     r"""Rank 0 loads every sample while the other ranks wait at a barrier: a
-    collective inside the loader would never complete."""
+    collective inside the loader would never complete. Holds only for chains
+    without CenterMesh (centering all-reduces its partial sums)."""
     dm = DistributedManager()
     dist.barrier()
     if dm.rank == 0:
         dataset = _dataset(
-            root_and_fmt, dm.device, chain=_chain(True), device_mesh=distributed_mesh
+            root_and_fmt,
+            dm.device,
+            chain=_chain(True, center=False),
+            device_mesh=distributed_mesh,
         )
         result: list = []
 
