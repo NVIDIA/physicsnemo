@@ -117,6 +117,20 @@ def test_remesh_changes_a_mesh_at_its_own_point_count(device):
     assert float(upper_fraction) > 0.6
 
 
+def test_remesh_keeps_a_strip_thinner_than_the_cluster_spacing():
+    # Refined, the strip has no face spanning three of the four clusters
+    points = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0e-7, 0.0], [0.0, 1.0e-7, 0.0]],
+        dtype=torch.float64,
+    )
+    source = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+
+    output = remesh(source, 4, max_iterations=0)
+
+    assert output.n_points == 4
+    assert output.n_cells == 2
+
+
 def test_remesh_public_signatures():
     remesh_signature = inspect.signature(remesh)
     assert tuple(remesh_signature.parameters) == (
