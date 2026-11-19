@@ -4,10 +4,11 @@ Repair
 .. currentmodule:: physicsnemo.mesh.repair
 
 ``physicsnemo.mesh.repair`` fixes common mesh problems, such as duplicate
-points, degenerate cells, inconsistent winding, and holes. Each repair
-function returns the repaired mesh and a ``dict`` of statistics.
+points, degenerate cells, T-junctions, non-manifold edges, inconsistent
+winding, and holes. Each repair function returns the repaired mesh and a
+``dict`` of statistics.
 
-:bdg-success:`GPU` :bdg-warning:`hole filling for triangle meshes only`
+:bdg-success:`GPU` :bdg-warning:`T-junctions, non-manifold edges, and hole filling for triangle meshes only`
 
 .. figure:: ../../img/mesh/mesh_defects.png
    :alt: A grid of ten panels in two rows, each a small square triangle mesh.
@@ -85,6 +86,12 @@ The single repairs are the following functions:
      - Cells with zero area or volume, or with a repeated point
    * - :func:`remove_isolated_points`
      - Points that no cell uses
+   * - :func:`stitch_t_junctions`
+     - Open edges of a triangle mesh with a vertex of another open edge on
+       them (T-junctions)
+   * - :func:`split_nonmanifold_edges`
+     - Edges of a triangle mesh in 3D that three or more triangles use. It
+       also drops fins, pillows, and reversed copies of faces
    * - :func:`fix_orientation`
      - Cells whose winding disagrees with their neighbors
    * - :func:`fill_holes`
@@ -94,9 +101,11 @@ The single repairs are the following functions:
      - Duplicates and unused points, as tensor-level steps that take
        ``points``, ``cells``, and data, not a ``Mesh``
 
-By default, :func:`repair_mesh` merges duplicate points, removes degenerate
-cells, and removes isolated points. Pass ``fix_orientation=True`` or
-``fill_holes=True`` to add the other two.
+By default, :func:`repair_mesh` merges duplicate points, removes duplicate
+triangles that are wound the same way, removes degenerate cells, stitches
+T-junctions, and removes isolated points, in that order. Pass
+``split_nonmanifold_edges=True``, ``fix_orientation=True``, or
+``fill_holes=True`` to add the other three.
 
 Example
 -------
@@ -127,7 +136,8 @@ sphere, then fills a hole in it:
     print(stats["n_cells_before_dedup"], stats["n_cells_after_dedup"])  # 160 80
 
     repaired, repair_stats = repair_mesh(cleaned, fix_orientation=True)
-    print(list(repair_stats))  # ['merge_points', 'clean', 'degenerates', 'isolated', 'orientation']
+    print(list(repair_stats))
+    # ['merge_points', 'clean', 'duplicates', 'degenerates', 't_junctions', 'isolated', 'orientation']
 
     # Cut one triangle out, then fill the hole.
     holed = cleaned.slice_cells(torch.arange(1, cleaned.n_cells))
@@ -138,7 +148,12 @@ sphere, then fills a hole in it:
 .. code-block:: text
    :caption: Output
 
-   {'n_holes_detected': 1, 'n_holes_filled': 1, 'n_holes_skipped': 0, 'n_faces_added': 3, 'n_points_added': 1}
+   {'n_holes_detected': 1, 'n_holes_filled': 1, 'n_holes_skipped': 0, 'n_holes_zero_area': 0,
+    'n_edges_untraced': 0, 'n_faces_added': 1, 'n_points_added': 0}
+
+The hole is flat, so :func:`fill_holes` closes it with a triangle in its
+plane and adds no point. A loop that is not flat gets a fan of triangles
+around a new center point.
 
 Choosing a Function
 -------------------
@@ -148,14 +163,27 @@ Use the following guidelines to choose a function:
 - To remove duplicates after a merge or a file import, use ``mesh.clean()``.
   It merges points closer than ``tolerance`` (default ``1e-12``).
 - To repair a mesh from an outside source, use :func:`repair_mesh`. Its
-  ``tolerance`` default is ``1e-6``.
+  ``tolerance`` defaults to ``max(1e-6, 100 * eps)`` times the bounding-box
+  diagonal of the mesh, where ``eps`` is the machine epsilon of the point
+  dtype, and its ``area_tolerance`` to ``tolerance`` raised to the manifold
+  dimension.
+- To close the slits that open where one cell edge meets two shorter ones,
+  use :func:`stitch_t_junctions`. It splits triangles at those vertices and
+  moves no point.
 - :func:`fill_holes` works only on meshes with a manifold dimension of 2,
   and only closes loops of at most ``max_hole_edges`` edges (default 10).
+  It leaves slits to :func:`stitch_t_junctions`.
 
 .. note::
 
-   :func:`repair_mesh` does not remove duplicate cells. Run
-   :func:`clean_mesh` first if the mesh can have them.
+   :func:`repair_mesh` leaves edges that three or more triangles use, unless
+   you pass ``split_nonmanifold_edges=True``. That step is off by default
+   because it deletes geometry: it drops thin open sheets attached along an
+   edge, such as baffles and zero-thickness plates, as fins. A triangle
+   repeated with the opposite winding also stays unless that step runs,
+   which it does only in 3D. On meshes of other cells, :func:`repair_mesh`
+   removes no duplicate cells, so run :func:`clean_mesh` first if the mesh
+   can have them.
 
 Summary
 -------
@@ -167,6 +195,8 @@ Summary
    repair_mesh
    remove_degenerate_cells
    remove_isolated_points
+   stitch_t_junctions
+   split_nonmanifold_edges
    fix_orientation
    fill_holes
    merge_duplicate_points
@@ -192,6 +222,10 @@ API Reference
 .. autofunction:: remove_degenerate_cells
 
 .. autofunction:: remove_isolated_points
+
+.. autofunction:: stitch_t_junctions
+
+.. autofunction:: split_nonmanifold_edges
 
 .. autofunction:: fix_orientation
 

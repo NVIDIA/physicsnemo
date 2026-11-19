@@ -187,3 +187,86 @@ class TestMarchingCubesValidation:
 
         assert mesh.n_points > 0
         assert mesh.points.dtype == torch.float32
+
+
+class TestDevice:
+    """The mesh comes back on the field's device, with coords on any device."""
+
+    def test_returns_on_field_device(self, device):
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+
+        field = sdf.to(device)
+        mesh = marching_cubes(
+            field, coords=(coords.to(device), coords, coords.to(device))
+        )
+
+        assert mesh.points.device == field.device
+        assert mesh.cells.device == field.device
+        assert torch.equal(mesh.cells.cpu(), reference.cells)
+        torch.testing.assert_close(mesh.points.cpu(), reference.points)
+
+    def test_cpu_field_with_coords_on_device(self, device):
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+
+        mesh = marching_cubes(sdf, coords=(coords.to(device),) * 3)
+
+        assert mesh.points.device == sdf.device
+        torch.testing.assert_close(mesh.points, reference.points)
+
+    @pytest.mark.cuda
+    def test_field_on_second_gpu(self):
+        if torch.cuda.device_count() < 2:
+            pytest.skip("needs two GPUs")
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+        field = sdf.to("cuda:1")  # the current device stays cuda:0
+
+        mesh = marching_cubes(field, coords=(coords.to("cuda:0"), coords, coords))
+
+        assert torch.cuda.current_device() == 0
+        assert mesh.points.device == field.device
+        assert mesh.cells.device == field.device
+        assert torch.equal(mesh.cells.cpu(), reference.cells)
+        torch.testing.assert_close(mesh.points.cpu(), reference.points)
+
+    def test_bfloat16_field_on_device(self, device):
+        sdf, _ = _sphere_sdf(resolution=16)
+
+        field = sdf.to(device=device, dtype=torch.bfloat16)
+        mesh = marching_cubes(field)
+
+        assert mesh.n_cells > 0
+        assert mesh.points.dtype == torch.float32
+        assert mesh.points.device == field.device
+
+    def test_empty_surface_on_device(self, device):
+        sdf, _ = _sphere_sdf(resolution=16)
+
+        field = sdf.to(device)
+        mesh = marching_cubes(field, threshold=10.0)
+
+        assert mesh.n_points == 0 and mesh.n_cells == 0
+        assert mesh.points.device == field.device
+
+    @pytest.mark.cuda
+    def test_cuda_field_on_side_stream(self):
+        # The field's producer is still running on the side stream when
+        # marching_cubes launches, so Warp must run on torch's current stream to
+        # read the finished field: read early, it sees no surface at all.
+        sdf, coords = _sphere_sdf(resolution=24)
+        reference = marching_cubes(sdf, coords=(coords, coords, coords))
+        src = sdf.cuda()
+        torch.cuda.synchronize()
+
+        with torch.cuda.stream(torch.cuda.Stream()):
+            field = torch.full_like(src, 1.0)  # no surface if read too early
+            torch.cuda._sleep(200_000_000)  # keep the producer pending
+            field.copy_(src)
+            mesh = marching_cubes(field, coords=(coords.cuda(),) * 3)
+        torch.cuda.synchronize()
+
+        assert mesh.points.device == field.device
+        assert torch.equal(mesh.cells.cpu(), reference.cells)
+        torch.testing.assert_close(mesh.points.cpu(), reference.points)
