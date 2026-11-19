@@ -27,6 +27,8 @@ import torch.nn as nn
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.optim import CombinedOptimizer
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 from test.conftest import requires_module
 
 
@@ -513,6 +515,7 @@ def test_compiled_model_checkpointing(
 @pytest.mark.parametrize(
     "kwargs, step_device",
     [({}, "cpu"), ({"fused": True}, "cuda"), ({"capturable": True}, "cuda")],
+    ids=("default", "fused", "capturable"),
 )
 def test_load_checkpoint_keeps_adam_step_on_cpu(tmp_path, kwargs, step_device):
     """A resumed AdamW keeps its step counts where a fresh one keeps them.
@@ -521,8 +524,6 @@ def test_load_checkpoint_keeps_adam_step_on_cpu(tmp_path, kwargs, step_device):
     would read each count back with a host sync. The rest of the state is restored
     bitwise on the parameters' device.
     """
-    from physicsnemo.utils import load_checkpoint, save_checkpoint
-
     source = nn.Linear(8, 8).cuda()
     optimizer = torch.optim.AdamW(source.parameters(), **kwargs)
     source(torch.randn(4, 8, device="cuda")).sum().backward()
@@ -551,8 +552,6 @@ def test_load_checkpoint_combined_optimizer_placement(tmp_path):
     Other tensors still land on ``device``, such as the tensor ``lr`` that a
     capturable AdamW keeps in its ``param_groups``.
     """
-    from physicsnemo.optim import CombinedOptimizer
-    from physicsnemo.utils import load_checkpoint, save_checkpoint
 
     def make():
         model = nn.Linear(8, 8).cuda()
