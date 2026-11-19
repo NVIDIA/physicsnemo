@@ -135,8 +135,11 @@ def _assert_matches(
     assert sizes == compute_split_shapes(WINDOW, world)
     check(interior.points.full_tensor(), reference.interior.points, True)
     for key in reference.interior.point_data.keys():
+        # Cell areas come from the centered (then augmented) points.
         check(
-            interior.point_data[key].full_tensor(), reference.interior.point_data[key]
+            interior.point_data[key].full_tensor(),
+            reference.interior.point_data[key],
+            key == "_effective_measure",
         )
 
     # The surface: its cells index this rank's copy of their vertices on the
@@ -169,6 +172,7 @@ def _assert_matches(
         (False, False, True),
         (True, True, False),
         (False, True, False),
+        (False, True, True),
     ],
 )
 def test_local_layout_matches_unsharded(

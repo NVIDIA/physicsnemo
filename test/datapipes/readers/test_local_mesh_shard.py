@@ -212,15 +212,16 @@ def test_shares_reproduce_unsharded_read(source, world, windowed):
         )
 
 
-def test_statistics_only_on_request(pmsh_source):
+def test_statistics_only_on_request(pmsh_source, tmp_path):
     r"""No statistics unless asked for; unknown names raise."""
     open_source, full = pmsh_source
     window, _ = _window_and_reference(full, True)
     (share,) = _shares(open_source, 1, window)
     assert len(share.stats.keys()) == 0
+    write_sample(grid_mesh(), tmp_path, "s", "pmsh")
+    reader = MeshReader(tmp_path, pattern="*.pmsh")
     with pytest.raises(ValueError, match="unknown shard statistics"):
-        # Validation lives in the reader's request; it needs no instance state.
-        MeshReader.request_shard_stats(object(), {"median"})
+        reader.request_shard_stats({"median"})
 
 
 def test_cached_point_sizes_read_only_own_cells(pmsh_source):
