@@ -119,7 +119,7 @@ def main() -> None:
             if f"sum_{var_name}" not in train_stats:
                 _init_stats(var_name, train_stats)
                 _VARIABLES.add(var_name)
-            nb_points: int = math.prod(v.shape[-2:])
+            nb_points: int = math.prod(v.shape[1:])
             train_stats[f"sum_{var_name}"] += v.sum() / nb_points
             train_stats[f"sum_{var_name}2"] += (v**2).sum() / nb_points
             train_stats[f"min_{var_name}"] = torch.minimum(
@@ -144,7 +144,7 @@ def main() -> None:
         for var_name, v in batch.items():
             if f"sum_{var_name}" not in test_stats:
                 _init_stats(var_name, test_stats)
-            nb_points: int = math.prod(v.shape[-2:])
+            nb_points: int = math.prod(v.shape[1:])
             test_stats[f"sum_{var_name}"] += v.sum() / nb_points
             test_stats[f"sum_{var_name}2"] += (v**2).sum() / nb_points
             test_stats[f"min_{var_name}"] = torch.minimum(
