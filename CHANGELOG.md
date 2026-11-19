@@ -635,6 +635,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percentile decisions and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
+- `group_norm` on a `ShardTensor` sharded along the batch dimension returns
+  the same result as on the dense tensor. On hosts with CUDA, it used to
+  combine the statistics of different samples and return wrong values with no
+  error. Backpropagation through this layout is not supported and raises.
 - `torch.compile` with ShardTensor: neighborhood attention (`na1d`/`na2d`/
   `na3d`) keeps its halo exchange when compiled, `select` handles a negative
   `dim`, dynamic shapes no longer fail in the spec hash, a plain DTensor
