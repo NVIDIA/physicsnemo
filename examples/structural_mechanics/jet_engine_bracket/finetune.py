@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Recipe 3: adapt the DeepJEB-trained model to SimJEB with LoRA (:mod:`physicsnemo.experimental.peft`).
+r"""Recipe 2: adapt the DeepJEB-trained model to SimJEB with LoRA (:mod:`physicsnemo.experimental.peft`).
 
 The pre-trained model is frozen; low-rank adapters on every linear layer are the only trainable
 parameters (``lora_B`` starts at zero, so training starts from the pre-trained model), trained

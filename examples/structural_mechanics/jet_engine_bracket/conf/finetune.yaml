@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Recipe 3: adapt the DeepJEB-trained model to SimJEB with LoRA (finetune.py).
+# Recipe 2: adapt the DeepJEB-trained model to SimJEB with LoRA (finetune.py).
 checkpoint: outputs/deepjeb/model.mdlus
 data:
   root: ???                        # converted SimJEB

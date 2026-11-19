@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests of the deck reader, the sample layout, the datapipe and the latent Mahalanobis distance."""
+"""Tests of the deck reader, the sample layout, the datapipe and the GeoTransolverSDF inputs."""
 
 import sys
 from pathlib import Path
