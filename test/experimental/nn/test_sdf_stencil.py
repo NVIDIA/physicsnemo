@@ -155,18 +155,29 @@ def test_forward_rejects_shapes():
         layer(torch.zeros(1, 4, 3), v, f[None])
 
 
-def test_probe_limit_smaller_than_the_stencil(device):
-    # max_probes_per_call below the probes of one point still splits the distance calls
+def test_probe_limit_smaller_than_the_stencil(device, monkeypatch):
+    # max_probes_per_call below the probes of one point still bounds every distance call
+    from physicsnemo.experimental.nn import sdf_stencil
+
     v, f = _cube(device)
     points = torch.rand(1, 5, 3, device=device) - 0.5
     full = SignedDistanceStencil(spacings=(0.1, 0.3), out_features=4).to(device)
+    expected = full.probe_values(points, v[None], f[None])
+
+    sizes = []
+    distance = sdf_stencil.signed_distance_field
+
+    def counting(vertices, faces, probes, **kwargs):
+        sizes.append(probes.shape[0])
+        return distance(vertices, faces, probes, **kwargs)
+
+    monkeypatch.setattr(sdf_stencil, "signed_distance_field", counting)
     small = SignedDistanceStencil(
         spacings=(0.1, 0.3), out_features=4, max_probes_per_call=8
     ).to(device)
-    torch.testing.assert_close(
-        small.probe_values(points, v[None], f[None]),
-        full.probe_values(points, v[None], f[None]),
-    )
+    values = small.probe_values(points, v[None], f[None])
+    assert sizes and max(sizes) <= 8
+    torch.testing.assert_close(values, expected)
 
 
 def test_empty_points(device):
