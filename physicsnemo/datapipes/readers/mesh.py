@@ -961,10 +961,11 @@ def read_local_cell_shard(
     stop = start + cell_sizes[rank]
 
     # Every rank's vertex count (for the communication-free wrap of the point
-    # axis) and the statistics need the whole window's connectivity; integers,
-    # read sequentially. Without a window and statistics, a cached count
-    # lets this rank read only its own cells.
-    need_all = cell_window is not None or point_sizes is None or bool(stats)
+    # axis) and the point-mean statistic (seam-vertex ownership) need the whole
+    # window's connectivity; integers, read sequentially. Without a window or
+    # POINT_MEAN, a cached count lets this rank read only its own cells (the
+    # area-weighted partials use only this rank's cells).
+    need_all = cell_window is not None or point_sizes is None or POINT_MEAN in stats
     if need_all:
         all_cells = _source_rows(src, cells_src, cell_window, n_src_cells)
         own_cells = all_cells[start:stop]

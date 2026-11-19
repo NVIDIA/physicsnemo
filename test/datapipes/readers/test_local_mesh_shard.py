@@ -244,6 +244,48 @@ def test_cached_point_sizes_read_only_own_cells(pmsh_source):
         assert torch.equal(a.mesh.cells, b.mesh.cells)
 
 
+def test_area_weighted_only_with_cached_sizes_reads_only_own_cells(
+    pmsh_source, monkeypatch
+):
+    r"""Unwindowed + cached ``point_sizes`` + area-weighted stats alone: no
+    rank reads the whole connectivity, and the center is unchanged."""
+    import physicsnemo.datapipes.readers.mesh as mesh_mod
+
+    open_source, full = pmsh_source
+    world = 3
+    sizes = _shares(open_source, world, None)[0].info.point_sizes
+    real = mesh_mod._source_rows
+    reads = []
+
+    def spy(src, leaf, selection, n):
+        reads.append(selection)
+        return real(src, leaf, selection, n)
+
+    monkeypatch.setattr(mesh_mod, "_source_rows", spy)
+    shares = []
+    for r in range(world):
+        reads.clear()
+        shares.append(
+            read_local_cell_shard(
+                open_source(),
+                device_mesh=None,
+                rank=r,
+                world_size=world,
+                point_sizes=sizes,
+                stats={AREA_WEIGHTED_CENTER},
+            )
+        )
+        # Only own-cell slice and own-point index reads; never "every row".
+        assert all(sel is not None for sel in reads)
+        assert any(isinstance(sel, slice) for sel in reads)
+    reduced = _reduced_stats(shares)
+    torch.testing.assert_close(
+        reduced[AREA_WEIGHTED_CENTER].to(full.points.dtype),
+        CenterMesh(use_area_weighting=True)._compute_com(full),
+        **_TOL,
+    )
+
+
 def test_too_few_cells_for_the_ranks_raises(pmsh_source):
     open_source, _ = pmsh_source
     with pytest.raises(ValueError, match="cannot split 3 cells over 4 ranks"):
