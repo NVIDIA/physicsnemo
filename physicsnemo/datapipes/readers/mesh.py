@@ -990,21 +990,16 @@ def read_local_cell_shard(
 
     referenced = None
     if need_all:
-        mask = torch.zeros(n_src_points, dtype=torch.bool)
-        union = torch.zeros(n_src_points, dtype=torch.bool)
         sizes = []
         offset = 0
         for size in cell_sizes:
-            mask.zero_()
-            mask[all_cells[offset : offset + size].reshape(-1)] = True
-            union |= mask
-            sizes.append(int(mask.sum()))
+            chunk = all_cells[offset : offset + size].reshape(-1)
+            sizes.append(torch.unique(chunk).numel())
             offset += size
         point_sizes = tuple(sizes)
         if cell_window is not None:
             # The unsharded read compacts onto the window's vertices.
-            referenced = union.nonzero().squeeze(1)
-        del mask, union
+            referenced = torch.unique(all_cells.reshape(-1))
     n_points = n_src_points if referenced is None else len(referenced)
 
     local_ids, local_cells = torch.unique(own_cells, return_inverse=True)
