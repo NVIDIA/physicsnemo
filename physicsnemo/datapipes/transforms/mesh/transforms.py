@@ -270,31 +270,24 @@ class CenterMesh(MeshTransform):
     def __call__(self, mesh: Mesh) -> Mesh:
         return self._center(mesh, self._compute_com(mesh))
 
+    @property
+    def _stat_key(self) -> str:
+        return AREA_WEIGHTED_CENTER if self.use_area_weighting else POINT_MEAN
+
     def required_shard_stats(self) -> frozenset[str]:
-        """The whole-sample center, reduced from per-rank partial sums."""
-        return frozenset(
-            {AREA_WEIGHTED_CENTER if self.use_area_weighting else POINT_MEAN}
-        )
+        """The whole-sample center statistic."""
+        return frozenset({self._stat_key})
 
     def apply_local_shard(self, data: Mesh, shard: LocalMeshShard) -> Mesh:
-        """Center a rank's share by the whole sample's center.
-
-        Under the ``"local"`` layout ``MeshDataset`` has already combined the
-        reader's per-rank partial sums with one all-reduce; the center
-        equals :meth:`_compute_com` on the unsharded sample up to rounding.
-        """
+        """Center a rank's share by the (already reduced) whole-sample center."""
         if not isinstance(data, Mesh):
             raise NotImplementedError(
-                "CenterMesh under the local domain-parallel mesh layout centers a "
-                f"Mesh, got {type(data).__name__}; place it before the transform "
-                "that converts the mesh"
+                f"CenterMesh needs a Mesh under the local layout, got {type(data).__name__}"
             )
-        key = AREA_WEIGHTED_CENTER if self.use_area_weighting else POINT_MEAN
         if self.use_area_weighting:
-            # As _compute_com does: the cached cell areas and centroids are
-            # then translated with the mesh, rounding as they would unsharded.
+            # As _compute_com does: cache areas/centroids before translating.
             data.cell_areas, data.cell_centroids  # noqa: B018
-        return self._center(data, shard.stats[key].to(data.points.dtype))
+        return self._center(data, shard.stats[self._stat_key].to(data.points.dtype))
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Translate a :class:`DomainMesh` so its interior center of mass is at the origin.
@@ -420,23 +413,15 @@ class SubsampleMesh(MeshTransform):
         return mesh
 
     def apply_local_shard(self, data: Mesh, shard: LocalMeshShard) -> Mesh:
-        """No-op when it would not subsample the whole sample; else unsupported.
-
-        Under the ``"local"`` layout a rank holds a share of the sample, so
-        the sizes are compared with the whole sample's. A draw over the
-        whole sample cannot be made per share without communication.
-        """
+        """No-op if it would not subsample the whole sample; else unsupported."""
         info = shard.info
         if (self.n_cells is None or self.n_cells >= info.n_cells) and (
             self.n_points is None or self.n_points >= info.n_points
         ):
             return data
         raise NotImplementedError(
-            f"SubsampleMesh(n_cells={self.n_cells}, n_points={self.n_points}) "
-            f"would subsample the {info.n_cells}-cell sample, which the local "
-            "domain-parallel mesh layout cannot do per rank; subsample in the "
-            "reader (subsample_n_cells) or use "
-            'domain_parallel={"mesh_layout": "global"}'
+            "SubsampleMesh would subsample the whole sample, unsupported in the "
+            'local layout; subsample in the reader or use mesh_layout "global"'
         )
 
     def extra_repr(self) -> str:
@@ -1002,11 +987,8 @@ class ComputeSurfaceNormals(MeshTransform):
         """Cell normals are per cell; point normals need the neighbouring ranks."""
         if self.store_as == "point_data":
             raise NotImplementedError(
-                "ComputeSurfaceNormals(store_as='point_data') averages the normals "
-                "of every cell around a vertex, which the local domain-parallel "
-                "mesh layout does not hold for vertices on a rank's seam; use "
-                "store_as='cell_data' or domain_parallel="
-                '{"mesh_layout": "global"}'
+                "point_data normals need cells across the rank seam; use cell_data "
+                'or mesh_layout "global"'
             )
         return super().apply_local_shard(data, shard)
 
@@ -1208,9 +1190,7 @@ class BoundaryCellsToPoints(MeshTransform):
     def apply_local_shard(self, data: DomainMesh, shard: LocalMeshShard) -> DomainMesh:
         """Unsupported: the cells are drawn over the whole boundary."""
         raise NotImplementedError(
-            "BoundaryCellsToPoints draws cells over the whole boundary, which the "
-            "local domain-parallel mesh layout cannot do per rank; use "
-            'domain_parallel={"mesh_layout": "global"}'
+            'BoundaryCellsToPoints is unsupported in the local layout; use mesh_layout "global"'
         )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:

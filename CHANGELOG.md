@@ -222,19 +222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Domain-parallel `MeshReader` reads a mesh with cells in a new `"local"`
-  layout by default (`domain_parallel: {mesh_layout: local}`): each rank reads
-  its contiguous share of the (windowed) cells with exactly the vertices they
-  reference, renumbered locally. `MeshDataset` runs the transforms on that
-  plain mesh and then wraps the sample into ShardTensors without
-  communication, so centering, normals, centroids and areas no longer need a
-  routed gather each. The whole-sample center for `CenterMesh` comes from
-  per-rank partial sums and one small all-reduce (the loader issues no other
-  collectives), cell-axis outputs equal the unsharded sample, and the
-  per-step data wait of the DrivAerML surface recipe drops from ~40 ms to
-  ~8-11 ms (median, 2-8 GPUs). Seam vertices appear on every rank holding one of
-  their cells. `mesh_layout: global` keeps the previous layout, which
-  `DomainMeshReader` still uses.
+- Domain-parallel `MeshReader` now defaults to a `"local"` layout: each rank
+  reads its contiguous cells and their vertices, transforms run locally with
+  no routed gathers, and `CenterMesh` needs one small all-reduce.
+  `domain_parallel: {mesh_layout: global}` keeps the old layout, which
+  `DomainMeshReader` still uses. The unified external aero recipe now
+  prefetches 8 samples.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit

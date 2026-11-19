@@ -514,11 +514,8 @@ torchrun --nproc-per-node 4 src/train.py model=geotransolver_volume \
 ```
 
 The other keys in the `domain_parallelism` block (`auto_shard_size`,
-`placements`, and optionally `mesh_layout`) are the readers' sharding policy.
-The surface datasets read each rank's share of the surface cells with their
-vertices and preprocess it without communication (`mesh_layout: local`, the
-`MeshReader` default); `mesh_layout: global` restores the previous layout.
-See the
+`placements`, `mesh_layout`) are the readers' sharding policy; surface
+datasets default to `mesh_layout: local`, `global` restores the old layout. See the
 [Domain Parallelism Guide](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/domain_parallelism_entry_point.html)
 for more information on domain parallelism.
 
