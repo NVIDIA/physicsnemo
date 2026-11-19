@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Domain-parallel SDPA with replicated queries and sharded keys/values now uses
+  flash attention (with log-sum-exp) for fp16/bf16 CUDA inputs where PyTorch
+  reports flash as usable (`torch.backends.cuda.can_use_flash_attention`,
+  honoring `sdpa_kernel` / `flash_sdp_enabled()`), and memory-efficient
+  attention otherwise; override with `PHYSICSNEMO_DP_SDPA_BACKEND` (`auto`,
+  `flash`, `efficient`).
+
 - Unified external aero recipe: adds AB-UPT surface, volume, and joint
   configurations calling the library model directly, configurable independent
   point-set sampling in `DomainMeshReader`, and grouped tensor outputs for

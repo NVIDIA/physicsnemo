@@ -814,3 +814,129 @@ def test_compile_sdpa_plain_q_sharded_kv(distributed_mesh, learnable, backend):
     )
     for got, want in zip(compiled_grads, eager_grads):
         torch.testing.assert_close(got, want, atol=1e-5, rtol=1e-5)
+
+
+class PlainQuerySDPA(torch.nn.Module):
+    r"""Learned plain queries attending over sharded K/V (``ReplicatedQSDPA``)."""
+
+    def __init__(self, q: torch.Tensor):
+        super().__init__()
+        self.q = torch.nn.Parameter(q)
+
+    def forward(self, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        q = self.q.expand(k.shape[0], -1, -1, -1)
+        return torch.nn.functional.scaled_dot_product_attention(q, k, v)
+
+
+def _compile_recording(module: torch.nn.Module, backend: str):
+    r"""Compile ``module`` and return ``(compiled, run_and_record)``.
+
+    ``run_and_record(fn)`` calls ``fn()`` and returns ``(result, code)`` where
+    ``code`` is the text of the forward and backward graphs (``aot_eager``) or
+    the generated code (``inductor``) produced during that call.
+    """
+    torch._dynamo.reset()
+    if backend == "aot_eager":
+        from functorch.compile import make_boxed_func
+        from torch._dynamo.backends.common import aot_autograd
+
+        graphs: list[str] = []
+
+        def record(gm, _example_inputs):
+            graphs.append(gm.code)
+            return make_boxed_func(gm.forward)
+
+        compiled = torch.compile(
+            module,
+            backend=aot_autograd(fw_compiler=record, bw_compiler=record),
+            fullgraph=True,
+            dynamic=False,
+        )
+
+        def run_and_record(fn):
+            graphs.clear()
+            result = fn()
+            return result, "\n".join(graphs)
+
+    else:
+        from torch._inductor.utils import run_and_get_code
+
+        compiled = torch.compile(module, backend=backend, fullgraph=True, dynamic=False)
+
+        def run_and_record(fn):
+            result, codes = run_and_get_code(fn)
+            return result, "\n".join(codes)
+
+    return compiled, run_and_record
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("backend", ["aot_eager", "inductor"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16], ids=str)
+def test_compile_sdpa_plain_q_sharded_kv_flash(
+    distributed_mesh, monkeypatch, dtype, backend
+):
+    r"""Half-precision ``torch.compile`` of plain ``q`` vs Shard(2) ``k``/``v``.
+
+    ``auto`` must select the flash kernel (forward and backward) inside the
+    compiled graph, with no graph break (``fullgraph=True``), and the compiled
+    output and ``q``/``k``/``v`` gradients must match eager.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    from physicsnemo.domain_parallel.shard_utils.attention_patches import (
+        replicated_q_sdpa_backend,
+    )
+
+    monkeypatch.setenv("PHYSICSNEMO_DP_SDPA_BACKEND", "auto")
+    dm = DistributedManager()
+    batch_size, num_heads, n_latents, seq_len, head_dim = 2, 4, 16, 1001, 32
+    torch.manual_seed(11)
+    mk = lambda b, s: torch.randn(  # noqa: E731
+        b, num_heads, s, head_dim, device=dm.device, dtype=dtype
+    )
+    q, k, v = mk(1, n_latents), mk(batch_size, seq_len), mk(batch_size, seq_len)
+    k_s = scatter_tensor(k, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+    v_s = scatter_tensor(v, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+
+    k_loc = k_s.to_local()
+    q_loc = q.expand(batch_size, -1, -1, -1)
+    if replicated_q_sdpa_backend(q_loc, k_loc, k_loc) != "flash":
+        pytest.skip(f"flash-ineligible on this device/build for {dtype}")
+
+    module = PlainQuerySDPA(q).to(dm.device)
+
+    def run(fn):
+        for t in (k_s, v_s, *module.parameters()):
+            t.grad = None
+        out = fn(k_s, v_s)
+        out.float().square().sum().backward()
+        return out, [module.q.grad, k_s.grad.to_local(), v_s.grad.to_local()]
+
+    eager_out, eager_grads = run(module)
+    from torch._functorch import config as functorch_config
+    from torch._inductor import config as inductor_config
+
+    compiled, run_and_record = _compile_recording(module, backend)
+    # Compile for real (no cache hits) so the recorded graphs / code are complete.
+    with (
+        inductor_config.patch(fx_graph_cache=False),
+        functorch_config.patch(enable_autograd_cache=False),
+    ):
+        _, code = run_and_record(lambda: run(compiled))
+    assert "_scaled_dot_product_flash_attention" in code
+    assert "_scaled_dot_product_flash_attention_backward" in code
+    assert "_scaled_dot_product_efficient_attention" not in code
+    # Second call exercises guards on the compiled graph.
+    compiled_out, compiled_grads = run(compiled)
+
+    assert isinstance(compiled_out, type(eager_out))
+    assert compiled_out.dtype == dtype
+    torch.testing.assert_close(
+        compiled_out.to_local(), eager_out.to_local(), rtol=2e-2, atol=2e-3
+    )
+    for name, got, want in zip("qkv", compiled_grads, eager_grads):
+        got, want = got.float(), want.float()
+        err = ((got - want).norm() / want.norm().clamp_min(1e-12)).item()
+        assert err <= 2e-2, f"grad_{name} rel err {err:.3e} > 2e-2"
