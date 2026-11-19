@@ -63,11 +63,9 @@ def _assert_even_closed_and_outward(output: Mesh, max_area_ratio: float) -> None
     directed = torch.cat([cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]])
     unique_directed = torch.unique(directed, dim=0)
     assert unique_directed.shape[0] == directed.shape[0]
-    reversed_ids = unique_directed.flip(1) @ unique_directed.new_tensor(
-        [cells.max() + 1, 1]
-    )
-    ids = unique_directed @ unique_directed.new_tensor([cells.max() + 1, 1])
-    assert torch.isin(reversed_ids, ids).all()
+    starts, ends = unique_directed.T
+    n_points = output.n_points
+    assert torch.isin(ends * n_points + starts, starts * n_points + ends).all()
     vertices = output.points.double()[cells]
     signed_volume = (
         vertices[:, 0] * torch.linalg.cross(vertices[:, 1], vertices[:, 2])

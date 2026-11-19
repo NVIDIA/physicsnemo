@@ -285,67 +285,105 @@ def _split_long_edges(
     return points, cells, fields
 
 
-def _close_and_orient(output: Mesh, source: Mesh, source_faces: torch.Tensor) -> Mesh:
-    """Close a closed source's remesh and wind each component like the source.
+def _fill_holes(mesh: Mesh) -> Mesh:
+    """Fill every hole, giving each new centroid its boundary's mean point data."""
+    from physicsnemo.mesh.repair import fill_holes
 
-    Holes are filled only when the source is watertight. Filled-in centroid
-    points take the mean point data of their hole's boundary. After
-    :func:`~physicsnemo.mesh.repair.fix_orientation` winds each component
-    consistently, a component is reversed when its normals mostly oppose
-    those of the source faces its vertices were projected onto.
-    """
-    from physicsnemo.mesh.boundaries import is_watertight
-    from physicsnemo.mesh.repair import fill_holes, fix_orientation
+    n_points = mesh.n_points
+    mesh = fill_holes(mesh, max_hole_edges=n_points)[0]
+    if mesh.n_points == n_points or len(mesh.point_data.keys()) == 0:
+        return mesh
+    # Each fan face holds one centroid and two boundary points
+    is_new = mesh.cells >= n_points
+    fans = is_new.any(dim=1)
+    centroid = mesh.cells[fans].max(dim=1).values
+    boundary = mesh.cells[fans][~is_new[fans]].reshape(-1, 2)
+    counts = 2 * torch.bincount(centroid, minlength=mesh.n_points)
+
+    def boundary_mean(values: torch.Tensor) -> torch.Tensor:
+        wide = _widen(values)
+        sums = torch.zeros_like(wide).index_add(0, centroid, wide[boundary].sum(1))
+        means = sums / counts.reshape((-1,) + (1,) * (values.ndim - 1))
+        return torch.cat([values[:n_points], means[n_points:].to(values.dtype)])
+
+    return mesh.with_data(point_data=mesh.point_data.apply(boundary_mean))
+
+
+def _orient_like(mesh: Mesh, vertex_normals: torch.Tensor) -> Mesh:
+    """Wind each component consistently, then like most of ``vertex_normals``."""
+    from physicsnemo.mesh.repair import fix_orientation
     from physicsnemo.mesh.repair.orientation import _facet_pairs
     from physicsnemo.mesh.utilities._duplicate_detection import (
         vectorized_connected_components,
     )
 
-    n_points, n_cells = output.n_points, output.n_cells
-    if is_watertight(source):
-        output = fill_holes(output, max_hole_edges=n_points)[0]
-        if output.n_points > n_points and len(output.point_data.keys()) > 0:
-            # Each fan face holds one centroid and two boundary points
-            is_new = output.cells >= n_points
-            fans = is_new.any(dim=1)
-            centroid = output.cells[fans].max(dim=1).values
-            boundary = output.cells[fans][~is_new[fans]].reshape(-1, 2)
-            counts = 2 * torch.bincount(centroid, minlength=output.n_points)
-
-            def boundary_mean(values: torch.Tensor) -> torch.Tensor:
-                wide = _widen(values)
-                sums = torch.zeros_like(wide).index_add(
-                    0, centroid, wide[boundary].sum(1)
-                )
-                means = sums / counts.reshape((-1,) + (1,) * (values.ndim - 1))
-                return torch.cat([values[:n_points], means[n_points:].to(values.dtype)])
-
-            output = output.with_data(point_data=output.point_data.apply(boundary_mean))
-    output = fix_orientation(output)[0]
-
-    _, first, second, _, _ = _facet_pairs(output.cells, output.n_points)
+    mesh = fix_orientation(mesh)[0]
+    _, first, second, _, _ = _facet_pairs(mesh.cells, mesh.n_points)
     component = vectorized_connected_components(
-        torch.stack([first // 3, second // 3], dim=1), output.n_cells
+        torch.stack([first // 3, second // 3], dim=1), mesh.n_cells
     )
+    # Points added by hole filling have no source normal
+    vertex_normals = torch.nn.functional.pad(
+        vertex_normals, (0, 0, 0, mesh.n_points - vertex_normals.shape[0])
+    )
+    vertices = mesh.points[mesh.cells].float()
+    normals = torch.linalg.cross(
+        vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0], dim=1
+    )
+    agreement = (normals * vertex_normals[mesh.cells].sum(dim=1)).sum(dim=1)
+    votes = torch.zeros_like(agreement).index_add(0, component, agreement)
+    flip = votes[component] < 0
+    if not bool(flip.any()):
+        return mesh
+    return mesh.with_cells(
+        torch.where(flip[:, None], mesh.cells[:, [0, 2, 1]], mesh.cells)
+    )
+
+
+def _close_and_orient(output: Mesh, source: Mesh, source_faces: torch.Tensor) -> Mesh:
+    """Close a closed source's remesh and wind each component like the source.
+
+    When the source is watertight, holes are filled, and faces on edges that
+    no winding can make consistent, such as those of a fold, are replaced by
+    hole fills. After :func:`~physicsnemo.mesh.repair.fix_orientation` winds
+    each component consistently, a component is reversed when its normals
+    mostly oppose those of the source faces its vertices were projected onto.
+    """
+    from physicsnemo.mesh.boundaries import is_watertight
+    from physicsnemo.mesh.repair import remove_isolated_points, split_nonmanifold_edges
+
     source_vertices = source.points[source.cells[source_faces]].float()
-    source_normals = torch.linalg.cross(
+    vertex_normals = torch.linalg.cross(
         source_vertices[:, 1] - source_vertices[:, 0],
         source_vertices[:, 2] - source_vertices[:, 0],
         dim=1,
     )
-    vertices = output.points[output.cells[:n_cells]].float()
-    normals = torch.linalg.cross(
-        vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0], dim=1
-    )
-    agreement = (normals * source_normals[output.cells[:n_cells]].sum(dim=1)).sum(1)
-    votes = torch.zeros(output.n_cells, device=agreement.device).index_add(
-        0, component[:n_cells], agreement
-    )
-    flip = votes[component] < 0
-    if bool(flip.any()):
-        cells = torch.where(flip[:, None], output.cells[:, [0, 2, 1]], output.cells)
-        output = output.with_cells(cells)
-    return output
+    if not is_watertight(source):
+        return _orient_like(output, vertex_normals)
+    output = _orient_like(_fill_holes(output), vertex_normals)
+    # A fill can itself make a bad edge, so cut and fill up to three times
+    for _ in range(3):
+        # Edges in more than two faces, or run the same way by two
+        cells = output.cells
+        starts, ends = cells.T.reshape(-1), cells.roll(-1, dims=1).T.reshape(-1)
+        keys = torch.minimum(starts, ends) * output.n_points + torch.maximum(
+            starts, ends
+        )
+        _, edge_ids, counts = torch.unique(
+            keys, return_inverse=True, return_counts=True
+        )
+        direction = torch.where(starts < ends, 1, -1)
+        winding = torch.zeros_like(counts).index_add(0, edge_ids, direction)
+        is_bad = (counts > 2) | ((counts == 2) & (winding != 0))
+        bad_faces = is_bad[edge_ids].reshape(3, -1).any(dim=0)
+        if not bool(bad_faces.any()):
+            break
+        output = _fill_holes(output.slice_cells(~bad_faces))
+        output = _orient_like(output, vertex_normals)
+    # Where two sheets still share an edge, give each its own copy of it.
+    # Isolated points go last, so that vertex_normals stay aligned.
+    output = split_nonmanifold_edges(output, drop_fins=False)[0]
+    return remove_isolated_points(output)[0]
 
 
 def remesh(
