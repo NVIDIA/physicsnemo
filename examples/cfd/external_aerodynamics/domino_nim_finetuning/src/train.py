@@ -53,11 +53,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
-from physicsnemo.datapipes.cae.domino_datapipe import (
-    DoMINODataPipe,
-    compute_scaling_factors,
-    create_domino_dataset,
-)
+from domino_data import collate_domino_samples, prepare_datasets
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.models.domino.utils import *
 
@@ -762,11 +758,6 @@ def main(cfg: DictConfig) -> None:
 
     gpu_handle = nvmlDeviceGetHandleByIndex(dist.device.index)
 
-    compute_scaling_factors(
-        cfg=cfg,
-        input_path=cfg.data.input_dir,
-        use_cache=cfg.data_processor.use_cache,
-    )
     model_type = cfg.model.model_type
 
     logger = PythonLogger("Train")
@@ -818,20 +809,12 @@ def main(cfg: DictConfig) -> None:
         else:
             raise ValueError(f"Unknown global parameter type")
 
-    vol_save_path = os.path.join(
-        "outputs", cfg.project.name, "volume_scaling_factors.npy"
+    train_dataset, val_dataset, vol_factors, surf_factors = prepare_datasets(cfg)
+    vol_factors_tensor = (
+        torch.from_numpy(vol_factors).to(dist.device)
+        if add_physics_loss and vol_factors is not None
+        else None
     )
-    surf_save_path = os.path.join(
-        "outputs", cfg.project.name, "surface_scaling_factors.npy"
-    )
-    if os.path.exists(vol_save_path):
-        vol_factors = np.load(vol_save_path)
-        vol_factors_tensor = (
-            torch.from_numpy(vol_factors).to(dist.device) if add_physics_loss else None
-        )
-    else:
-        vol_factors = None
-        vol_factors_tensor = None
 
     bounding_box = None
     if add_physics_loss:
@@ -843,28 +826,6 @@ def main(cfg: DictConfig) -> None:
             .to(vol_factors_tensor.dtype)
             .to(dist.device)
         )
-
-    if os.path.exists(surf_save_path):
-        surf_factors = np.load(surf_save_path)
-    else:
-        surf_factors = None
-
-    train_dataset = create_domino_dataset(
-        cfg,
-        phase="train",
-        volume_variable_names=volume_variable_names,
-        surface_variable_names=surface_variable_names,
-        vol_factors=vol_factors,
-        surf_factors=surf_factors,
-    )
-    val_dataset = create_domino_dataset(
-        cfg,
-        phase="val",
-        volume_variable_names=volume_variable_names,
-        surface_variable_names=surface_variable_names,
-        vol_factors=vol_factors,
-        surf_factors=surf_factors,
-    )
 
     train_sampler = DistributedSampler(
         train_dataset,
@@ -883,12 +844,22 @@ def main(cfg: DictConfig) -> None:
     train_dataloader = DataLoader(
         train_dataset,
         sampler=train_sampler,
-        **cfg.train.dataloader,
+        collate_fn=collate_domino_samples,
+        **{
+            key: value
+            for key, value in cfg.train.dataloader.items()
+            if key != "preload_depth"
+        },
     )
     val_dataloader = DataLoader(
         val_dataset,
         sampler=val_sampler,
-        **cfg.val.dataloader,
+        collate_fn=collate_domino_samples,
+        **{
+            key: value
+            for key, value in cfg.val.dataloader.items()
+            if key != "preload_depth"
+        },
     )
 
     model = DoMINO(

@@ -83,6 +83,8 @@ data: # Input directory for training and validation data
     max: [4.2 , 1.2  , 1.3]
   gpu_preprocessing: true
   gpu_output: true
+  volume_sample_from_disk: false
+  max_samples_for_statistics: 20
 
 # ┌───────────────────────────────────────────┐
 # │          Domain Parallelism Settings      │
@@ -178,6 +180,7 @@ train: # Training configurable parameters
   epochs: 1000
   checkpoint_interval: 1
   dataloader:
+    preload_depth: 1
     batch_size: 1
     pin_memory: false # if the preprocessing is outputing GPU data, set this to false
   sampler:
@@ -192,6 +195,7 @@ train: # Training configurable parameters
 # └───────────────────────────────────────────┘  
 val: # Validation configurable parameters
   dataloader:
+    preload_depth: 1
     batch_size: 1
     pin_memory: false # if the preprocessing is outputing GPU data, set this to false
   sampler:

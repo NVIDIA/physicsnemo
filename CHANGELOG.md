@@ -578,6 +578,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Restores DoMINO cache generation, validation, and NIM fine-tuning data setup
+  after the datapipe API migration. Cached training now uses the same batch,
+  device, epoch-index, and output-unscaling interface as uncached training.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,

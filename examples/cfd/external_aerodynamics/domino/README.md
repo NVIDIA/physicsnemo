@@ -117,6 +117,26 @@ cases where the **STL surface meshes are upwards of 30 million cells**.
 Data processing is parallelized and takes a couple of hours to write all the
 processed files.
 
+Compute scaling factors with `src/compute_statistics.py` before caching. Both
+cache scripts load the structured statistics file at `data.scaling_factors`.
+For each training or validation directory, run the following from `src`, using
+the same model, bounding boxes, and normalization settings as training:
+
+```bash
+python cache_data.py data_processor.use_cache=true \
+  data_processor.output_dir=/path/to/processed/train \
+  data_processor.cached_dir=/path/to/cached/train
+python validate_cache.py data_processor.use_cache=true \
+  data_processor.output_dir=/path/to/processed/train \
+  data_processor.cached_dir=/path/to/cached/train
+```
+
+Repeat for validation data, preserving the training statistics. Set
+`data.input_dir` and `data.input_dir_val` in `conf/cached.yaml` to the generated
+cache directories. Validation compares all unsampled tensors by source filename
+and exits with an error for missing or mismatched data. Regenerate caches from
+older datapipe versions before using this workflow.
+
 The final processed dataset should be divided and saved into 2 directories,
 for training and validation.
 
