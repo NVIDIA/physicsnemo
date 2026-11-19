@@ -25,12 +25,15 @@ use the underlying TensorDict API:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 
 from physicsnemo.datapipes._rng import derive_seed
 from physicsnemo.mesh import DomainMesh, Mesh
+
+if TYPE_CHECKING:
+    from physicsnemo.datapipes._local_shard import LocalMeshShard
 
 
 class MeshTransform(ABC):
@@ -41,6 +44,12 @@ class MeshTransform(ABC):
     container (``TensorDict[str, Mesh]``), use the TensorDict API
     directly: ``td.apply(transform, call_on_nested=True)``.
     """
+
+    #: Whether the transform leaves ``points`` and the cells' geometry
+    #: unchanged (field ops, normals, renames). The ``"local"``
+    #: domain-parallel layout consults it: statistics the reader computed
+    #: from the read stay valid only until a transform moves the geometry.
+    preserves_geometry: bool = False
 
     def __init__(self) -> None:
         self._device: Optional[torch.device] = None
@@ -84,6 +93,44 @@ class MeshTransform(ABC):
             Transformed domain mesh.
         """
         return domain.apply_to_meshes(self)
+
+    def required_shard_stats(self) -> frozenset[str]:
+        """Whole-sample statistics :meth:`apply_local_shard` needs.
+
+        Under the ``"local"`` domain-parallel mesh layout (see
+        :mod:`physicsnemo.datapipes._local_shard`) the reader computes these
+        for every rank from the same read, so the transform does not have
+        to communicate. Names are from
+        :data:`physicsnemo.datapipes._local_shard.SHARD_STATS`. Default: none.
+        """
+        return frozenset()
+
+    def apply_local_shard(self, data: Any, shard: LocalMeshShard) -> Any:
+        """Apply this transform to one rank's share under the ``"local"`` layout.
+
+        *data* is a plain rank-local ``Mesh`` (this rank's cells with the
+        vertices they reference), or whatever the preceding transforms made
+        of it; *shard* carries the global sizes and the statistics requested
+        by :meth:`required_shard_stats`. The default applies the transform
+        as usual, which is exact for per-point and per-cell transforms.
+        Override it in transforms that reduce over the whole mesh, and raise
+        in those that cannot work on a share.
+
+        Parameters
+        ----------
+        data : Mesh or DomainMesh or TensorDict
+            The local sample.
+        shard : LocalMeshShard
+            The read's payload (``info`` and ``stats``).
+
+        Returns
+        -------
+        Any
+            The transformed local sample.
+        """
+        if isinstance(data, DomainMesh):
+            return self.apply_to_domain(data)
+        return self(data)
 
     @property
     def stochastic(self) -> bool:

@@ -45,9 +45,18 @@ from physicsnemo.datapipes._domain_parallel import (
     register_proto_kind,
 )
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
+from physicsnemo.datapipes._local_shard import (
+    AREA_WEIGHTED_CENTER,
+    POINT_MEAN,
+    SHARD_STATS,
+    LocalMeshShard,
+    LocalShardInfo,
+    read_rows,
+)
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.datapipes.registry import register
+from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import (
     EFFECTIVE_MEASURE_KEY,
@@ -388,7 +397,13 @@ def _subsample_mesh(
 # - Point cloud (no cells): ``points`` / ``point_data`` chunk over the
 #   (windowed) point range; ``global_data`` replicates. A mesh with zero cells
 #   is laid out the same way, and keeps its empty ``cells`` and ``cell_data``.
-# - Mesh with cells: ``cells`` / ``cell_data`` chunk over the (windowed) cell
+# - Mesh with cells, ``mesh_layout: "local"`` (MeshReader default): this
+#   rank's chunk of the (windowed) cells with exactly the vertices they
+#   reference, renumbered locally, as a plain ``Mesh`` in a
+#   ``LocalMeshShard`` (``read_local_cell_shard``); transforms run on it and
+#   the dataset wraps the result (see ``physicsnemo.datapipes._local_shard``).
+# - Mesh with cells, ``mesh_layout: "global"`` (DomainMeshReader): ``cells``
+#   / ``cell_data`` chunk over the (windowed) cell
 #   range and ``points`` / ``point_data`` chunk over the point range -- after
 #   the same global compaction onto referenced vertices the eager reader
 #   performs when a cell window applies. Cells keep global vertex ids, so
@@ -867,6 +882,188 @@ def _read_prepared(
     return mesh_selection_to_proto(prep.src, plan, prefix)
 
 
+# ---- "local" layout: a rank's cells with exactly their vertices ------------------
+
+
+def _source_rows(
+    src: MeshSource, leaf: Any, selection: IndexSelection | None, n: int
+) -> torch.Tensor:
+    """Rows of one array of a lazy mesh or zarr group (``None``: every row)."""
+    if _is_zarr(src):
+        return _zarr_selection(leaf, slice(None) if selection is None else selection, n)
+    return read_rows(leaf, selection)
+
+
+def _source_tree(
+    src: MeshSource, name: str, selection: IndexSelection, n: int
+) -> TensorDict:
+    """Rows of every leaf under ``point_data`` / ``cell_data``."""
+    if _is_zarr(src):
+        return io_zarr._read_tree(
+            src, name, leaf_reader=lambda a: _zarr_selection(a, selection, n)
+        )
+    out = TensorDict({}, batch_size=[])
+    for key, value in getattr(src, name).items(include_nested=True, leaves_only=True):
+        out.set(key, read_rows(value, selection))
+    return out
+
+
+@dataclass
+class _LocalCellShard:
+    """Result of :func:`read_local_cell_shard` (plain host tensors)."""
+
+    mesh: Mesh
+    cell_sizes: tuple[int, ...]
+    point_sizes: tuple[int, ...]
+    n_points: int
+    stats: TensorDict
+
+
+def read_local_cell_shard(
+    src: MeshSource,
+    *,
+    rank: int,
+    world_size: int,
+    cell_window: torch.Tensor | None = None,
+    stats: frozenset[str] | set[str] = frozenset(),
+    point_sizes: tuple[int, ...] | None = None,
+) -> _LocalCellShard:
+    r"""Read rank *rank*'s ``"local"``-layout share of a mesh with cells.
+
+    The (windowed) cells are split ``torch.chunk``-style over *world_size*
+    ranks; this rank keeps its contiguous chunk and exactly the vertices it
+    references, sorted by global id, with the cells renumbered onto them.
+    Cell by cell this is the unsharded read (``_subsample_mesh_cells`` when a
+    window applies, including its Horvitz-Thompson measure factor), so
+    per-cell quantities computed on it are those of the unsharded sample.
+    Communication-free: every rank derives every rank's sizes from the read.
+
+    Parameters
+    ----------
+    src : Mesh or zarr group
+        Lazy memmap ``Mesh`` (read with sequential :func:`read_rows`) or zarr
+        mesh group.
+    rank, world_size : int
+        This rank and the number of ranks sharing the cells.
+    cell_window : Tensor, optional
+        Cell-subsample cyclic block (identical on every rank).
+    stats : set of str
+        Whole-sample statistics to compute (:data:`SHARD_STATS`), from the
+        same read and with the same operations as ``CenterMesh`` on the
+        unsharded sample.
+    point_sizes : tuple of int, optional
+        Per-rank vertex counts from an earlier read of the same sample
+        without a window; skips reading the other ranks' cells.
+
+    Returns
+    -------
+    _LocalCellShard
+        Local mesh, per-rank cell and vertex counts, the unsharded point
+        count and the requested statistics.
+    """
+    unknown = set(stats) - SHARD_STATS
+    if unknown:
+        raise ValueError(f"unknown shard statistics {sorted(unknown)}")
+    n_src_points, n_src_cells = _mesh_counts(src)
+    cells_src = src["cells"] if _is_zarr(src) else src.cells
+    points_src = src["points"] if _is_zarr(src) else src.points
+    n_cells = n_src_cells if cell_window is None else len(cell_window)
+    if n_cells < world_size:
+        raise ValueError(
+            f"cannot split {n_cells} cells over {world_size} ranks; use a larger "
+            "subsample_n_cells or replicate this mesh"
+        )
+    cell_sizes = tuple(compute_split_shapes(n_cells, world_size))
+    start = sum(cell_sizes[:rank])
+    stop = start + cell_sizes[rank]
+
+    # Every rank's vertex count (for the communication-free wrap of the point
+    # axis) and the statistics need the whole window's connectivity; integers,
+    # read sequentially. Without a window and statistics, a cached count
+    # lets this rank read only its own cells.
+    need_all = cell_window is not None or point_sizes is None or bool(stats)
+    if need_all:
+        all_cells = _source_rows(src, cells_src, cell_window, n_src_cells)
+        own_cells = all_cells[start:stop]
+    else:
+        own_cells = _source_rows(src, cells_src, slice(start, stop), n_src_cells)
+
+    referenced = None
+    if need_all:
+        mask = torch.zeros(n_src_points, dtype=torch.bool)
+        union = torch.zeros(n_src_points, dtype=torch.bool)
+        sizes = []
+        offset = 0
+        for size in cell_sizes:
+            mask.zero_()
+            mask[all_cells[offset : offset + size].reshape(-1)] = True
+            union |= mask
+            sizes.append(int(mask.sum()))
+            offset += size
+        point_sizes = tuple(sizes)
+        if cell_window is not None:
+            # The unsharded read compacts onto the window's vertices.
+            referenced = union.nonzero().squeeze(1)
+        del mask, union
+    n_points = n_src_points if referenced is None else len(referenced)
+
+    local_ids, local_cells = torch.unique(own_cells, return_inverse=True)
+    local_cells = local_cells.to(own_cells.dtype).reshape(own_cells.shape)
+
+    stat_values: dict[str, torch.Tensor] = {}
+    if stats:
+        # The unsharded sample's points, read once; this rank's vertices are
+        # a subset of them.
+        ref_points = _source_rows(src, points_src, referenced, n_src_points)
+        rows = (
+            local_ids
+            if referenced is None
+            else torch.searchsorted(referenced, local_ids)
+        )
+        points = ref_points[rows]
+        if POINT_MEAN in stats:
+            stat_values[POINT_MEAN] = ref_points.mean(dim=0)
+        if AREA_WEIGHTED_CENTER in stats:
+            ref_cells = (
+                all_cells
+                if referenced is None
+                else torch.searchsorted(referenced, all_cells).to(all_cells.dtype)
+            )
+            whole = Mesh(points=ref_points, cells=ref_cells)
+            areas, centroids = whole.cell_areas, whole.cell_centroids
+            stat_values[AREA_WEIGHTED_CENTER] = (centroids * areas.unsqueeze(-1)).sum(
+                dim=0
+            ) / areas.sum()
+        del ref_points
+    else:
+        points = _source_rows(src, points_src, local_ids, n_src_points)
+
+    cell_selection = (
+        slice(start, stop) if cell_window is None else cell_window[start:stop]
+    )
+    mesh = Mesh(
+        points=points,
+        cells=local_cells,
+        point_data=_source_tree(src, "point_data", local_ids, n_src_points),
+        cell_data=_source_tree(src, "cell_data", cell_selection, n_src_cells),
+        global_data=(
+            io_zarr._read_tree(src, "global_data")
+            if _is_zarr(src)
+            else _read_leaves(src.global_data)
+        ),
+    )
+    if cell_window is not None:
+        # Horvitz-Thompson factor of the window, as _subsample_mesh_cells.
+        scale_measures(mesh, n_src_cells / n_cells)
+    return _LocalCellShard(
+        mesh=mesh,
+        cell_sizes=cell_sizes,
+        point_sizes=tuple(point_sizes),
+        n_points=n_points,
+        stats=TensorDict(stat_values, batch_size=[]),
+    )
+
+
 # ---- rebuild (device side, after the ShardTensor wrap) --------------------------
 
 
@@ -1033,11 +1230,18 @@ class MeshReader(_MeshReaderBase):
             ``auto_shard_size`` or pinned via ``placements``
             (``{"points": "shard"}``). Composes with the ``subsample_*``
             options: a point cloud reads only this rank's chunk of the
-            (rank-consistent) subsample window; a mesh with cells is
-            subsampled in full first, since cell subsampling compacts the
-            point set globally. The sample returns as a proto payload that
-            ``MeshDataset`` assembles into a ShardTensor-backed ``Mesh`` on
-            the GPU.
+            (rank-consistent) subsample window. A mesh with sharded cells
+            follows ``mesh_layout``: under ``"local"`` (the default) each
+            rank reads its contiguous share of the (windowed) cells with
+            exactly the vertices they reference, renumbered locally, and
+            ``MeshDataset`` runs the transforms on that plain mesh before
+            wrapping the result into ShardTensors (no collectives; see
+            :mod:`physicsnemo.datapipes._local_shard`). Under ``"global"``
+            points and cells are sharded independently with global vertex
+            ids and the transforms run on the assembled ShardTensor mesh
+            (``points[cells]`` is a routed gather). Either way the sample
+            returns as a payload that ``MeshDataset`` turns into a
+            ShardTensor-backed ``Mesh`` on the device.
         device_mesh : torch.distributed.device_mesh.DeviceMesh, optional
             1-D device mesh for domain-parallel reading; required with
             ``domain_parallel``. Constructed and injected at runtime.
@@ -1049,6 +1253,10 @@ class MeshReader(_MeshReaderBase):
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
         self._init_common(domain_parallel, device_mesh)
+        # "local" layout: statistics the transforms need (request_shard_stats)
+        # and per-rank vertex counts of unwindowed samples.
+        self._shard_stats: frozenset[str] = frozenset()
+        self._point_sizes_cache: dict[tuple[int, int], tuple[int, ...]] = {}
 
         if not self._root.exists():
             raise FileNotFoundError(f"Path not found: {self._root}")
@@ -1088,8 +1296,55 @@ class MeshReader(_MeshReaderBase):
         # reach the dataset files, and readers on Lustre take no write locks.
         return Mesh.load(mesh_path, mode="r")
 
-    def _load_domain_parallel(self, index: int) -> ShardedProto:
-        """Rank-local read: this rank's share of the (windowed) mesh as a proto."""
+    def request_shard_stats(self, stats: set[str] | frozenset[str]) -> None:
+        """Compute these whole-sample statistics in ``"local"``-layout reads.
+
+        Called by :class:`~physicsnemo.datapipes.MeshDataset` with the union
+        of its transforms' ``required_shard_stats()``; see
+        :data:`physicsnemo.datapipes._local_shard.SHARD_STATS`.
+        """
+        unknown = set(stats) - SHARD_STATS
+        if unknown:
+            raise ValueError(f"unknown shard statistics {sorted(unknown)}")
+        self._shard_stats = frozenset(stats)
+
+    def _load_local_shard(self, index: int, prep: _PreparedSubmesh) -> LocalMeshShard:
+        """``"local"`` layout: this rank's cells with exactly their vertices."""
+        device_mesh = self._domain_parallel.device_mesh
+        rank, world_size = device_mesh.get_local_rank(0), device_mesh.size(0)
+        cache_key = (index, world_size)
+        shard = read_local_cell_shard(
+            prep.src,
+            rank=rank,
+            world_size=world_size,
+            cell_window=prep.cell_window,
+            stats=self._shard_stats,
+            # Without a window the per-rank vertex counts depend on the
+            # sample only; cache them so later epochs read just this rank's
+            # cells.
+            point_sizes=(
+                self._point_sizes_cache.get(cache_key)
+                if prep.cell_window is None
+                else None
+            ),
+        )
+        if prep.cell_window is None:
+            self._point_sizes_cache[cache_key] = shard.point_sizes
+        info = LocalShardInfo(
+            device_mesh=device_mesh,
+            rank=rank,
+            cell_sizes=shard.cell_sizes,
+            point_sizes=shard.point_sizes,
+            n_points=shard.n_points,
+        )
+        return LocalMeshShard(mesh=shard.mesh, info=info, stats=shard.stats)
+
+    def _load_domain_parallel(self, index: int) -> ShardedProto | LocalMeshShard:
+        """Rank-local read: this rank's share of the (windowed) mesh.
+
+        A mesh with sharded cells under the ``"local"`` layout returns a
+        :class:`LocalMeshShard`; everything else a :class:`ShardedProto`.
+        """
         mesh_path = self._paths[index]
         sub_kw = dict(
             n_cells_sub=self.subsample_n_cells,
@@ -1108,6 +1363,12 @@ class MeshReader(_MeshReaderBase):
         (shard_points, shard_cells) = resolve_mesh_placements(
             {"": (prep.n_points, prep.n_cells)}, self._domain_parallel
         )[""]
+        if (
+            prep.n_cells > 0
+            and shard_cells
+            and self._domain_parallel.mesh_layout != "global"
+        ):
+            return self._load_local_shard(index, prep)
         tensors, sharded = _read_prepared(prep, shard_points, shard_cells, device_mesh)
         return ShardedProto(
             tensors=tensors, sharded=sharded, device_mesh=device_mesh, kind="mesh"
@@ -1314,7 +1575,8 @@ class DomainMeshReader(_MeshReaderBase):
             ``boundaries.<name>.cells``, or ``boundaries.<name>`` for both.
             ``extra_boundaries`` are pinned to replicate by default (they
             exist for whole-geometry queries such as SDF) but an explicit
-            ``placements`` entry overrides that.
+            ``placements`` entry overrides that. Only the ``"global"``
+            ``mesh_layout`` is supported (the default here).
         device_mesh : torch.distributed.device_mesh.DeviceMesh, optional
             1-D device mesh for domain-parallel reading; required with
             ``domain_parallel``. Constructed and injected at runtime.
@@ -1361,6 +1623,13 @@ class DomainMeshReader(_MeshReaderBase):
             interior_n_points_range = (lo, hi)
         self.interior_n_points_range = interior_n_points_range
         self._init_common(domain_parallel, device_mesh)
+        if (
+            self._domain_parallel is not None
+            and self._domain_parallel.mesh_layout == "local"
+        ):
+            raise NotImplementedError(
+                'DomainMeshReader supports only domain_parallel mesh_layout "global"'
+            )
         self._extra_boundaries = extra_boundaries or {}
 
         if not self._root.exists():

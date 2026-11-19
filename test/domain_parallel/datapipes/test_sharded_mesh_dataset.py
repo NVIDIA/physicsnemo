@@ -87,7 +87,11 @@ def pmsh_root(request, tmp_path_factory, distributed_mesh):
 
 def _make_reader(root_and_fmt, distributed_mesh, **kwargs):
     root, fmt = root_and_fmt
-    kwargs.setdefault("domain_parallel", {"auto_shard_size": 2})
+    # The global layout (points and cells sharded independently); the local
+    # layout is covered in test_local_mesh_shard_dataset.py.
+    kwargs.setdefault(
+        "domain_parallel", {"auto_shard_size": 2, "mesh_layout": "global"}
+    )
     kwargs.setdefault("device_mesh", distributed_mesh)
     return MeshReader(root, pattern=f"**/*.{fmt}", **kwargs)
 

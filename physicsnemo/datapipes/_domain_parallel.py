@@ -35,6 +35,14 @@ Configuration
         # Optional overrides, keyed by axis name: "shard" | "replicate".
         # Anything not named falls back to the auto gate.
         "placements": {"interior.points": "shard", "boundaries.stl": "replicate"},
+        # Optional: how a sharded mesh with cells is laid out (MeshReader).
+        # "local" (MeshReader's default): each rank reads its contiguous
+        # share of the cells with exactly the vertices they reference,
+        # renumbered locally, and the transforms run on that plain local
+        # mesh; see physicsnemo.datapipes._local_shard. "global": points and
+        # cells are sharded independently, cells keep global vertex ids, and
+        # transforms run on the assembled ShardTensor mesh.
+        "mesh_layout": "local",
     }
 
 ``auto_shard_size`` looks at the length of dim 0 for each tensor, not the
@@ -48,9 +56,8 @@ axes shorter than the world size.
 Decisions are made per **batch axis**, not per tensor. Tensors that share a
 batch axis are co-indexed and placed together. A mesh has one batch axis:
 ``cells`` when it has cells (``cells``, every ``cell_data`` leaf, and its
-``points`` / ``point_data`` all chunk together; ``cells`` keeps global vertex
-ids and ``points[cells]`` is the routed gather), or ``points`` for a point
-cloud. For a flat dataset the axes are the groups of leaves that share a
+``points`` / ``point_data`` all follow it; how depends on ``mesh_layout``,
+see above), or ``points`` for a point cloud. For a flat dataset the axes are the groups of leaves that share a
 dim-0 length. For example, a zarr dataset with ``coords`` and ``fields``
 arrays of the same length shards both even if you only specify
 ``placements: {"coords": "shard"}``. Subsampling often forces the same dim-0
@@ -102,6 +109,10 @@ PLACEMENTS = (Shard(0),)
 # sharding anything point- or cell-sized.
 DEFAULT_AUTO_SHARD_SIZE = 1024
 
+# Layouts of a sharded mesh with cells (see the module docstring).
+MeshLayoutName = Literal["local", "global"]
+_VALID_MESH_LAYOUTS: tuple[MeshLayoutName, ...] = ("local", "global")
+
 # Placement names as they appear in configuration. The ``domain_parallel``
 # dict is parsed from YAML (Hydra), so overrides are strings rather than
 # ``torch.distributed`` ``Placement`` objects; they are promoted to the real
@@ -134,11 +145,16 @@ class DomainParallelConfig:
         User overrides, dotted axis name -> ``"shard"`` | ``"replicate"``;
         an entry applies to the axis it names and, by prefix, to every axis
         beneath it.
+    mesh_layout : {"local", "global"} or None
+        Layout of a sharded mesh with cells; ``None`` lets the reader pick
+        its default (``"local"`` for ``MeshReader``, ``"global"`` for
+        ``DomainMeshReader``, which supports only that one).
     """
 
     device_mesh: DeviceMesh
     auto_shard_size: int = DEFAULT_AUTO_SHARD_SIZE
     placements: Mapping[str, PlacementName] = field(default_factory=dict)
+    mesh_layout: MeshLayoutName | None = None
     # Override keys already warned about: warn once per key, not per sample.
     _warned: set[str] = field(
         default_factory=set, init=False, repr=False, compare=False
@@ -177,11 +193,11 @@ class DomainParallelConfig:
         if device_mesh.ndim != 1:
             raise ValueError(f"device_mesh must be 1-D, got {device_mesh.ndim} dims")
 
-        unknown = set(config) - {"auto_shard_size", "placements"}
+        unknown = set(config) - {"auto_shard_size", "placements", "mesh_layout"}
         if unknown:
             raise ValueError(
                 f"unknown domain_parallel keys {sorted(unknown)}; "
-                'expected "auto_shard_size" and/or "placements"'
+                'expected "auto_shard_size", "placements" and/or "mesh_layout"'
             )
         size = config.get("auto_shard_size", DEFAULT_AUTO_SHARD_SIZE)
         if not isinstance(size, int) or isinstance(size, bool) or size < 1:
@@ -195,8 +211,16 @@ class DomainParallelConfig:
         bad = {k: v for k, v in placements.items() if v not in _VALID_PLACEMENTS}
         if bad:
             raise ValueError(f'placements values must be "shard"|"replicate": {bad}')
+        mesh_layout = config.get("mesh_layout")
+        if mesh_layout is not None and mesh_layout not in _VALID_MESH_LAYOUTS:
+            raise ValueError(
+                f'mesh_layout must be "local" or "global", got {mesh_layout!r}'
+            )
         return cls(
-            device_mesh=device_mesh, auto_shard_size=size, placements=dict(placements)
+            device_mesh=device_mesh,
+            auto_shard_size=size,
+            placements=dict(placements),
+            mesh_layout=mesh_layout,
         )
 
     @property

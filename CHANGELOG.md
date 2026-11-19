@@ -222,6 +222,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Domain-parallel `MeshReader` reads a mesh with cells in a new `"local"`
+  layout by default (`domain_parallel: {mesh_layout: local}`): each rank reads
+  its contiguous share of the (windowed) cells with exactly the vertices they
+  reference, renumbered locally, with sequential reads of memory-mapped files.
+  `MeshDataset` runs the transforms on that plain mesh and then wraps the
+  sample into ShardTensors without communication, so centering, normals,
+  centroids and areas no longer need a routed gather each. The loader issues
+  no collectives, cell-axis outputs equal the unsharded sample, and the
+  per-sample main-thread cost of the DrivAerML surface chain drops from tens
+  of milliseconds to a few. Seam vertices appear on every rank holding one of
+  their cells. `mesh_layout: global` keeps the previous layout, which
+  `DomainMeshReader` still uses.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit

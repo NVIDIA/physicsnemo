@@ -27,6 +27,11 @@ import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._local_shard import (
+    AREA_WEIGHTED_CENTER,
+    POINT_MEAN,
+    LocalMeshShard,
+)
 from physicsnemo.datapipes.keys import (
     KEY_SEPARATOR,
     NestedKey,
@@ -254,14 +259,42 @@ class CenterMesh(MeshTransform):
             com = com.full_tensor()
         return com
 
-    def __call__(self, mesh: Mesh) -> Mesh:
-        com = self._compute_com(mesh)
+    def _center(self, mesh: Mesh, com: torch.Tensor) -> Mesh:
         centered = mesh.translate(-com)
         if self.store_center_as is not None:
             global_data = centered.global_data.copy()
             global_data[self.store_center_as] = com
             centered.global_data = global_data
         return centered
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        return self._center(mesh, self._compute_com(mesh))
+
+    def required_shard_stats(self) -> frozenset[str]:
+        """The center of the whole sample, computed by the local-layout reader."""
+        return frozenset(
+            {AREA_WEIGHTED_CENTER if self.use_area_weighting else POINT_MEAN}
+        )
+
+    def apply_local_shard(self, data: Mesh, shard: LocalMeshShard) -> Mesh:
+        """Center a rank's share by the whole sample's center (no communication).
+
+        Under the ``"local"`` layout the reader computed the center for
+        every rank from the same read, with the same operations as
+        :meth:`_compute_com` on the unsharded sample.
+        """
+        if not isinstance(data, Mesh):
+            raise NotImplementedError(
+                "CenterMesh under the local domain-parallel mesh layout centers a "
+                f"Mesh, got {type(data).__name__}; place it before the transform "
+                "that converts the mesh"
+            )
+        key = AREA_WEIGHTED_CENTER if self.use_area_weighting else POINT_MEAN
+        if self.use_area_weighting:
+            # As _compute_com does: the cached cell areas and centroids are
+            # then translated with the mesh, rounding as they would unsharded.
+            data.cell_areas, data.cell_centroids  # noqa: B018
+        return self._center(data, shard.stats[key].to(data.points.dtype))
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Translate a :class:`DomainMesh` so its interior center of mass is at the origin.
@@ -386,6 +419,26 @@ class SubsampleMesh(MeshTransform):
 
         return mesh
 
+    def apply_local_shard(self, data: Mesh, shard: LocalMeshShard) -> Mesh:
+        """No-op when it would not subsample the whole sample; else unsupported.
+
+        Under the ``"local"`` layout a rank holds a share of the sample, so
+        the sizes are compared with the whole sample's. A draw over the
+        whole sample cannot be made per share without communication.
+        """
+        info = shard.info
+        if (self.n_cells is None or self.n_cells >= info.n_cells) and (
+            self.n_points is None or self.n_points >= info.n_points
+        ):
+            return data
+        raise NotImplementedError(
+            f"SubsampleMesh(n_cells={self.n_cells}, n_points={self.n_points}) "
+            f"would subsample the {info.n_cells}-cell sample, which the local "
+            "domain-parallel mesh layout cannot do per rank; subsample in the "
+            "reader (subsample_n_cells) or use "
+            'domain_parallel={"mesh_layout": "global"}'
+        )
+
     def extra_repr(self) -> str:
         parts = []
         if self.n_cells is not None:
@@ -415,6 +468,8 @@ class DropMeshFields(MeshTransform):
     dropped from the domain-level ``global_data`` as well as from every
     sub-mesh's ``global_data``.
     """
+
+    preserves_geometry = True
 
     def __init__(
         self,
@@ -489,6 +544,8 @@ class RenameMeshFields(MeshTransform):
     renamed in the domain-level ``global_data`` as well as in every
     sub-mesh's ``global_data``.
     """
+
+    preserves_geometry = True
 
     def __init__(
         self,
@@ -588,6 +645,8 @@ class SetGlobalField(MeshTransform):
     ``global_data``.
     """
 
+    preserves_geometry = True
+
     def __init__(
         self,
         fields: Mapping[str, torch.Tensor | Sequence[float] | Mapping],
@@ -684,6 +743,8 @@ class NormalizeMeshFields(MeshTransform):
     (``"solution.pressure"``); the same spelling is used in ``stats_file``
     and in the ``target_config`` passed to :meth:`inverse_tensor`.
     """
+
+    preserves_geometry = True
 
     def __init__(
         self,
@@ -910,6 +971,8 @@ class ComputeSurfaceNormals(MeshTransform):
         Key under which to store the normals.  Default ``"normals"``.
     """
 
+    preserves_geometry = True
+
     def __init__(
         self,
         store_as: Literal["cell_data", "point_data"] = "cell_data",
@@ -934,6 +997,18 @@ class ComputeSurfaceNormals(MeshTransform):
             new_pd = mesh.point_data.clone()
             new_pd[self.field_name] = normals
             return mesh.with_data(point_data=new_pd)
+
+    def apply_local_shard(self, data: Mesh, shard: LocalMeshShard) -> Mesh:
+        """Cell normals are per cell; point normals need the neighbouring ranks."""
+        if self.store_as == "point_data":
+            raise NotImplementedError(
+                "ComputeSurfaceNormals(store_as='point_data') averages the normals "
+                "of every cell around a vertex, which the local domain-parallel "
+                "mesh layout does not hold for vertices on a rank's seam; use "
+                "store_as='cell_data' or domain_parallel="
+                '{"mesh_layout": "global"}'
+            )
+        return super().apply_local_shard(data, shard)
 
     def extra_repr(self) -> str:
         return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
@@ -987,6 +1062,8 @@ class FlipBoundaryOrientation(MeshTransform):
     >>> out.boundaries["wall"].cell_normals, out.boundaries["inlet"].cell_normals
     (tensor([[ 0.,  0., -1.]]), tensor([[0., 0., 1.]]))
     """
+
+    preserves_geometry = True
 
     def __init__(
         self, boundaries: Sequence[str] = (), normal_fields: Sequence[str] = ()
@@ -1127,6 +1204,14 @@ class BoundaryCellsToPoints(MeshTransform):
 
     def __call__(self, mesh: Mesh) -> Mesh:
         raise TypeError("BoundaryCellsToPoints needs a DomainMesh, not a Mesh")
+
+    def apply_local_shard(self, data: DomainMesh, shard: LocalMeshShard) -> DomainMesh:
+        """Unsupported: the cells are drawn over the whole boundary."""
+        raise NotImplementedError(
+            "BoundaryCellsToPoints draws cells over the whole boundary, which the "
+            "local domain-parallel mesh layout cannot do per rank; use "
+            'domain_parallel={"mesh_layout": "global"}'
+        )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Add the point-cloud boundary ``name`` (see the class docstring).

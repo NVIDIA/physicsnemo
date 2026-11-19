@@ -77,10 +77,20 @@ def test_validate_rejects_bad_config():
         DomainParallelConfig.from_dict({"placements": "auto"}, mesh)
     with pytest.raises(ValueError, match="shard"):
         DomainParallelConfig.from_dict({"placements": {"x": "banana"}}, mesh)
+    with pytest.raises(ValueError, match="mesh_layout"):
+        DomainParallelConfig.from_dict({"mesh_layout": "sideways"}, mesh)
     DomainParallelConfig.from_dict(
         {"auto_shard_size": 8, "placements": {"x": "shard"}}, mesh
     )
     DomainParallelConfig.from_dict({}, mesh)
+
+
+def test_mesh_layout_parses():
+    mesh = _StubMesh(2)
+    assert DomainParallelConfig.from_dict({}, mesh).mesh_layout is None
+    for layout in ("local", "global"):
+        config = DomainParallelConfig.from_dict({"mesh_layout": layout}, mesh)
+        assert config.mesh_layout == layout
 
 
 @pytest.mark.parametrize(

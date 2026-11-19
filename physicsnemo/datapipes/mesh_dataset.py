@@ -29,6 +29,7 @@ from typing import Any, Optional, Sequence, Union
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._local_shard import LocalMeshShard, wrap_local_sample
 from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.protocols import (
     DatasetBase,
@@ -93,7 +94,12 @@ class MeshDataset(DatasetBase):
             A reader configured for domain-parallel reading (its
             ``domain_parallel`` / ``device_mesh`` options) returns proto
             payloads that this dataset assembles into ShardTensor-backed
-            meshes after the device transfer.
+            meshes after the device transfer. Under the ``"local"`` mesh
+            layout (``MeshReader``'s default for meshes with cells) the
+            transforms run on the plain rank-local mesh, through
+            :meth:`MeshTransform.apply_local_shard`, and the result is wrapped
+            into ShardTensors afterwards; see
+            :mod:`physicsnemo.datapipes._local_shard`.
         transforms : sequence of MeshTransform, optional
             Transforms to apply in order. None means no transforms.
         device : str or torch.device, optional
@@ -138,6 +144,14 @@ class MeshDataset(DatasetBase):
             for t in self.transforms:
                 if hasattr(t, "to"):
                     t.to(self._device)
+
+        # Whole-sample statistics the transforms need under the "local"
+        # domain-parallel mesh layout, computed by the reader from its read.
+        if hasattr(self.reader, "request_shard_stats"):
+            stats: set[str] = set()
+            for t in self.transforms:
+                stats |= set(getattr(t, "required_shard_stats", frozenset)())
+            self.reader.request_shard_stats(stats)
 
     # ------------------------------------------------------------------
     # RNG management
@@ -211,6 +225,9 @@ class MeshDataset(DatasetBase):
             with torch.profiler.record_function("MeshDataset._load: data.to(device)"):
                 data = data.to(self._device)
 
+        if isinstance(data, LocalMeshShard):
+            return self._apply_local_shard(data), metadata
+
         data = self._assemble(data)
 
         for t in self.transforms:
@@ -223,6 +240,47 @@ class MeshDataset(DatasetBase):
                     data = t(data)
 
         return data, metadata
+
+    def _apply_local_shard(self, shard: LocalMeshShard) -> Any:
+        """Run the transforms on a ``"local"``-layout share, then wrap it.
+
+        Every transform sees the plain rank-local sample (no ShardTensor
+        dispatch, no collectives) through ``apply_local_shard``; reader
+        statistics are refused once a transform has moved the geometry they
+        were computed from. The result is wrapped into ``Shard(0)``
+        ShardTensors without communication.
+        """
+        data: Any = shard.mesh
+        geometry_moved = None
+        for t in self.transforms:
+            with torch.profiler.record_function(
+                f"MeshDataset: local-shard transform {type(t).__name__}"
+            ):
+                needs = getattr(t, "required_shard_stats", frozenset)()
+                if needs and geometry_moved is not None:
+                    raise ValueError(
+                        f"{type(t).__name__} needs whole-sample statistics "
+                        f"{sorted(needs)} that the reader computed from the read, "
+                        f"but {geometry_moved} ran before it and may have moved "
+                        "the geometry; reorder the transforms or use "
+                        'domain_parallel={"mesh_layout": "global"}'
+                    )
+                apply = getattr(t, "apply_local_shard", None)
+                if apply is not None:
+                    out = apply(data, shard)
+                elif isinstance(data, DomainMesh):
+                    out = t.apply_to_domain(data)
+                else:
+                    out = t(data)
+                if (
+                    geometry_moved is None
+                    and out is not data
+                    and not getattr(t, "preserves_geometry", False)
+                ):
+                    geometry_moved = type(t).__name__
+                data = out
+        with torch.profiler.record_function("MeshDataset: wrap local shard"):
+            return wrap_local_sample(data, shard.info)
 
     def __len__(self) -> int:
         return len(self.reader)
@@ -350,11 +408,14 @@ class MeshDataset(DatasetBase):
                     "MeshDataset._consume: data.to(device)"
                 ):
                     data = data.to(self._device, non_blocking=True)
-            data = self._assemble(data)
-            with torch.profiler.record_function(
-                "MeshDataset._consume: _apply_transforms"
-            ):
-                data = _apply_transforms(data)
+            if isinstance(data, LocalMeshShard):
+                data = self._apply_local_shard(data)
+            else:
+                data = self._assemble(data)
+                with torch.profiler.record_function(
+                    "MeshDataset._consume: _apply_transforms"
+                ):
+                    data = _apply_transforms(data)
 
         if use_stream:
             # The compute stream will read these tensors (collate + model);
