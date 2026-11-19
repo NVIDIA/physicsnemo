@@ -36,6 +36,7 @@ import physicsnemo.experimental.models.isla.model as isla_model
 from physicsnemo.experimental.models.isla import ISLA
 from physicsnemo.experimental.models.isla._tree_read import TREE_READ_THETA
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from test.experimental.models.isla._marks import requires_cuda_triton
 from test.experimental.models.isla._meshes import (
@@ -245,20 +246,28 @@ def test_query_chunks_with_the_draw_active_equal_the_forward_pass(theta, monkeyp
         assert torch.allclose(p.grad, ref[name], rtol=1e-9, atol=1e-12 * scale), name
 
 
-def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data():
+@pytest.mark.parametrize("measures", ["effective", "geometric"])
+def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data(
+    measures,
+):
     """With the boundary points and the global direction requiring gradients, three
     chunks' backward passes and QueryChunks.backward give both inputs the gradients of
     one forward pass, to 1e-12 of the largest (float64, another summation order): every
-    tensor the chunks share is a leaf, so no chunk's backward frees another's graph."""
+    tensor the chunks share is a leaf, so no chunk's backward frees another's graph.
+    With ``geometric`` measures (no ``_effective_measure``) the cells' measures are
+    their areas, so the read's sources' log measures depend on the points too."""
     m = _model()
     mesh, drv, q = _case()
+    cell_data = mesh.cell_data
+    if measures == "geometric":
+        cell_data = cell_data.exclude(EFFECTIVE_MEASURE_KEY)
 
     def grads(chunked):
         pts = mesh.points.detach().clone().requires_grad_()
         g = drv.detach().clone().requires_grad_()
         kw = {
             "boundary_meshes": {
-                "wall": Mesh(points=pts, cells=mesh.cells, cell_data=mesh.cell_data)
+                "wall": Mesh(points=pts, cells=mesh.cells, cell_data=cell_data)
             },
             "prediction_points": points_mesh(q),
             "global_data": {"g": g},

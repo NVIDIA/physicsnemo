@@ -578,6 +578,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ISLA's `query_chunks` gives the boundary vertices their gradients when the
+  cells' measures come from their geometry. It used to fail in the second
+  chunk's backward pass unless every mesh gave `_effective_measure`.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
