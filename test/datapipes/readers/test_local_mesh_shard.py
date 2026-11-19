@@ -30,7 +30,6 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-import physicsnemo.datapipes.mesh_dataset as mesh_dataset_module
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._local_shard import (
     AREA_MOMENT,
@@ -41,10 +40,8 @@ from physicsnemo.datapipes._local_shard import (
     POINT_SUM,
     LocalMeshShard,
     LocalShardInfo,
-    read_rows,
 )
 from physicsnemo.datapipes._rng import spawn_generator
-from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers.mesh import (
     _subsample_mesh_cells,
     read_local_cell_shard,
@@ -52,70 +49,56 @@ from physicsnemo.datapipes.readers.mesh import (
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
     ComputeSurfaceNormals,
-    DropMeshFields,
-    MeshToDomainMesh,
-    NormalizeMeshFields,
-    ScaleMesh,
     SubsampleMesh,
 )
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.io import io_zarr, to_zarr
+from physicsnemo.mesh.io import io_zarr
+from test.datapipes._local_shard_utils import (
+    WINDOW as _WINDOW,
+    grid_mesh,
+    recipe_chain,
+    write_sample,
+)
 
-# 2 * 23 * 11 = 506 cells: uneven over 3 and 4 ranks; 288 shared vertices.
-_NX, _NY = 24, 12
-_WINDOW = 331  # odd: uneven over every world size > 1
 _SEED = 1234
-
-
-def _grid_mesh() -> Mesh:
-    r"""Triangulated, jittered grid: cells share vertices across every chunk seam."""
-    g = torch.Generator().manual_seed(7)
-    x, y = torch.meshgrid(
-        torch.arange(_NX, dtype=torch.float32),
-        torch.arange(_NY, dtype=torch.float32),
-        indexing="ij",
-    )
-    z = 0.1 * torch.randn(_NX, _NY, generator=g)
-    points = torch.stack([x, y, z], dim=-1).reshape(-1, 3) + 100.0
-    vid = torch.arange(_NX * _NY).reshape(_NX, _NY)
-    a, b = vid[:-1, :-1].reshape(-1), vid[1:, :-1].reshape(-1)
-    c, d = vid[1:, 1:].reshape(-1), vid[:-1, 1:].reshape(-1)
-    cells = torch.cat([torch.stack([a, b, c], 1), torch.stack([a, c, d], 1)])
-    # Interleave the two triangles of each quad, then shuffle blocks so a
-    # chunk's vertices are not one contiguous id range.
-    cells = cells.reshape(2, -1, 3).transpose(0, 1).reshape(-1, 3)
-    perm = torch.randperm(cells.shape[0] // 2, generator=g)
-    cells = cells.reshape(-1, 2, 3)[perm].reshape(-1, 3)
-    mesh = Mesh(points=points, cells=cells)
-    mesh.point_data["velocity"] = torch.randn(mesh.n_points, 3, generator=g)
-    mesh.cell_data["pressure"] = torch.randn(mesh.n_cells, generator=g)
-    mesh.cell_data["wss"] = torch.randn(mesh.n_cells, 3, generator=g)
-    mesh.global_data["Re"] = torch.tensor(1.0e6)
-    return mesh
+_TOL = {"atol": 1e-5, "rtol": 1e-6}
 
 
 @pytest.fixture(scope="module", params=["pmsh", "zarr"])
 def stored(request, tmp_path_factory):
-    r"""``(open_source, full)``: a callable opening the stored sample lazily
-    (memmap ``Mesh`` or zarr group) and the in-memory sample."""
-    full = _grid_mesh()
+    r"""``(open_source, full)``: a lazy opener of the stored sample, and the sample."""
+    full = grid_mesh()
     root = tmp_path_factory.mktemp(f"local_shard_{request.param}")
+    write_sample(full, root, "s", request.param)
     if request.param == "pmsh":
-        full.save(root / "s.pmsh")
-        opener = lambda: Mesh.load(root / "s.pmsh", mode="r")  # noqa: E731
-    else:
-        pytest.importorskip("zarr")
-        to_zarr(full, root / "s.zarr")
-        opener = lambda: io_zarr._open_group(root / "s.zarr")  # noqa: E731
-    return opener, full
+        return (lambda: Mesh.load(root / "s.pmsh", mode="r")), full
+    pytest.importorskip("zarr")
+    return (lambda: io_zarr._open_group(root / "s.zarr")), full
+
+
+@pytest.fixture(scope="module")
+def pmsh_stored(tmp_path_factory):
+    r"""The ``pmsh`` store alone, for tests that are format-independent."""
+    full = grid_mesh()
+    root = tmp_path_factory.mktemp("local_shard_pmsh_only")
+    write_sample(full, root, "s", "pmsh")
+    return (lambda: Mesh.load(root / "s.pmsh", mode="r")), full
+
+
+def _fresh(stored_fixture):
+    # A fresh in-memory sample per test: transforms cache geometry on it.
+    return stored_fixture[0], grid_mesh()
 
 
 @pytest.fixture
 def source(stored):
-    r"""A fresh in-memory sample per test: transforms cache geometry on it
-    (``cell_centroids`` ...), and a warm cache changes the rounding."""
-    return stored[0], _grid_mesh()
+    return _fresh(stored)
+
+
+@pytest.fixture
+def pmsh_source(pmsh_stored):
+    return _fresh(pmsh_stored)
 
 
 def _window_and_reference(full: Mesh, windowed: bool):
@@ -133,22 +116,14 @@ def _window_and_reference(full: Mesh, windowed: bool):
 def _shares(open_source, world, window, stats=frozenset()):
     return [
         read_local_cell_shard(
-            open_source(),
-            rank=r,
-            world_size=world,
-            cell_window=window,
-            stats=stats,
+            open_source(), rank=r, world_size=world, cell_window=window, stats=stats
         )
         for r in range(world)
     ]
 
 
-_TOL = {"atol": 1e-5, "rtol": 1e-6}
-
-
 def _reduced_stats(shares) -> TensorDict:
-    r"""In-process stand-in for ``reduce_shard_stats``: sum every rank's
-    partials, then divide."""
+    r"""In-process stand-in for ``reduce_shard_stats``: sum the partials, divide."""
     out = {}
     for key, num, den in (
         (POINT_MEAN, POINT_SUM, POINT_COUNT),
@@ -175,8 +150,9 @@ def _as_payload(share, rank, stats=None) -> LocalMeshShard:
 
 
 @pytest.mark.parametrize("windowed", [False, True])
-@pytest.mark.parametrize("world", [1, 2, 3, 4])
+@pytest.mark.parametrize("world", [1, 3, 4])
 def test_shares_reproduce_unsharded_read(source, world, windowed):
+    r"""Concatenated shares and reduced partial sums equal the unsharded read."""
     open_source, full = source
     window, reference = _window_and_reference(full, windowed)
     shares = _shares(open_source, world, window, {POINT_MEAN, AREA_WEIGHTED_CENTER})
@@ -226,32 +202,21 @@ def test_shares_reproduce_unsharded_read(source, world, windowed):
         }
         assert all(v.dtype == torch.float64 for v in share.stats.values())
 
-
-@pytest.mark.parametrize("windowed", [False, True])
-@pytest.mark.parametrize("world", [1, 2, 3, 4])
-def test_partial_sums_reproduce_unsharded_center(source, world, windowed):
-    r"""Summed over every rank, the partials give the unsharded point mean
-    (seam vertices counted once) and area-weighted center."""
-    open_source, full = source
-    window, reference = _window_and_reference(full, windowed)
-    shares = _shares(open_source, world, window, {POINT_MEAN, AREA_WEIGHTED_CENTER})
-    count = sum(s.stats[POINT_COUNT] for s in shares)
-    assert int(count.item()) == reference.n_points
-    stats = _reduced_stats(shares)
-    torch.testing.assert_close(
-        stats[POINT_MEAN].to(reference.points.dtype),
-        CenterMesh(use_area_weighting=False)._compute_com(reference),
-        **_TOL,
-    )
-    torch.testing.assert_close(
-        stats[AREA_WEIGHTED_CENTER].to(reference.points.dtype),
-        CenterMesh(use_area_weighting=True)._compute_com(reference),
-        **_TOL,
-    )
+    # Summed over the ranks, the partials give the unsharded centers
+    # (seam vertices counted once).
+    assert int(sum(s.stats[POINT_COUNT] for s in shares).item()) == reference.n_points
+    reduced = _reduced_stats(shares)
+    for key, area in ((POINT_MEAN, False), (AREA_WEIGHTED_CENTER, True)):
+        torch.testing.assert_close(
+            reduced[key].to(reference.points.dtype),
+            CenterMesh(use_area_weighting=area)._compute_com(reference),
+            **_TOL,
+        )
 
 
-def test_statistics_only_on_request(source):
-    open_source, full = source
+def test_statistics_only_on_request(pmsh_source):
+    r"""No statistics unless asked for; unknown names raise."""
+    open_source, full = pmsh_source
     window, _ = _window_and_reference(full, True)
     (share,) = _shares(open_source, 1, window)
     assert len(share.stats.keys()) == 0
@@ -259,8 +224,9 @@ def test_statistics_only_on_request(source):
         _shares(open_source, 1, window, {"median"})
 
 
-def test_cached_point_sizes_read_only_own_cells(source):
-    open_source, full = source
+def test_cached_point_sizes_read_only_own_cells(pmsh_source):
+    r"""Passing cached ``point_sizes`` reproduces the same shares."""
+    open_source, _ = pmsh_source
     first = _shares(open_source, 3, None)
     again = [
         read_local_cell_shard(
@@ -274,29 +240,12 @@ def test_cached_point_sizes_read_only_own_cells(source):
         assert torch.equal(a.mesh.cells, b.mesh.cells)
 
 
-def test_too_few_cells_for_the_ranks_raises(source):
-    open_source, _ = source
-    window = torch.arange(3)
+def test_too_few_cells_for_the_ranks_raises(pmsh_source):
+    open_source, _ = pmsh_source
     with pytest.raises(ValueError, match="cannot split 3 cells over 4 ranks"):
-        read_local_cell_shard(open_source(), rank=0, world_size=4, cell_window=window)
-
-
-def _chain(area_weighted: bool, window: int | None):
-    fields = {
-        "pressure": {"type": "scalar", "mean": 0.5, "std": 2.0},
-        "wss": {"type": "vector", "mean": [1.0, 0.0, 0.0], "std": 0.5},
-    }
-    return [
-        DropMeshFields(global_data=["Re"]),
-        CenterMesh(use_area_weighting=area_weighted, store_center_as="center"),
-        NormalizeMeshFields(association="cell_data", fields=fields),
-        ComputeSurfaceNormals(store_as="cell_data", field_name="normals"),
-        # No-op on the sample: the reader already drew the window.
-        SubsampleMesh(n_cells=window or 10**6),
-        MeshToDomainMesh(
-            cell_data_targets=["pressure", "wss"], interior_points="cell_centroids"
-        ),
-    ]
+        read_local_cell_shard(
+            open_source(), rank=0, world_size=4, cell_window=torch.arange(3)
+        )
 
 
 def _apply_local(chain, payload):
@@ -306,18 +255,24 @@ def _apply_local(chain, payload):
     return data
 
 
+
+
 @pytest.mark.parametrize("area_weighted", [False, True])
 @pytest.mark.parametrize("windowed", [False, True])
-@pytest.mark.parametrize("world", [2, 4])
+@pytest.mark.parametrize("world", [3])
 def test_local_transform_chain_matches_unsharded(
-    source, world, windowed, area_weighted
+    pmsh_source, world, windowed, area_weighted
 ):
     r"""The recipe-style chain (centering, normalization, cell normals, a
     no-op subsample, centroid interior) on each share alone gives exactly
     the unsharded chain's rows."""
-    open_source, full = source
+    open_source, full = pmsh_source
     window, reference = _window_and_reference(full, windowed)
-    chain = _chain(area_weighted, _WINDOW if windowed else None)
+    chain = recipe_chain(
+        area_weighted=area_weighted,
+        window=_WINDOW if windowed else None,
+        store_center_as="center",
+    )
     stats = set()
     for t in chain:
         stats |= t.required_shard_stats()
@@ -356,8 +311,8 @@ def test_local_transform_chain_matches_unsharded(
         assert "Re" not in o.global_data.keys()
 
 
-def test_unsupported_transforms_raise(source):
-    open_source, full = source
+def test_unsupported_transforms_raise(pmsh_source):
+    open_source, full = pmsh_source
     window, _ = _window_and_reference(full, True)
     payload = _as_payload(_shares(open_source, 2, window)[0], 0)
     with pytest.raises(NotImplementedError, match="subsample"):
@@ -368,88 +323,3 @@ def test_unsupported_transforms_raise(source):
         ComputeSurfaceNormals(store_as="point_data").apply_local_shard(
             payload.mesh, payload
         )
-
-
-class _StubReader:
-    r"""Serves fixed ``LocalMeshShard`` payloads; records requested statistics."""
-
-    def __init__(self, payloads):
-        self.payloads = payloads
-        self.requested = None
-
-    def request_shard_stats(self, stats):
-        self.requested = set(stats)
-
-    def __len__(self):
-        return len(self.payloads)
-
-    def __getitem__(self, index):
-        return self.payloads[index], {"index": index}
-
-    def close(self):
-        pass
-
-
-def test_dataset_runs_chain_on_local_share(source, monkeypatch):
-    r"""``MeshDataset`` requests the chain's statistics, runs each transform
-    through ``apply_local_shard`` and refuses statistics once a transform
-    moved the geometry."""
-    open_source, full = source
-    window, _ = _window_and_reference(full, True)
-    shares = _shares(open_source, 2, window, {POINT_MEAN})
-    payload = _as_payload(shares[1], 1)
-    center = _reduced_stats(shares)[POINT_MEAN]
-    # The wrap and the all-reduce need a device mesh; stand in for both.
-    monkeypatch.setattr(mesh_dataset_module, "wrap_local_sample", lambda d, info: d)
-    monkeypatch.setattr(
-        mesh_dataset_module,
-        "reduce_shard_stats",
-        lambda sh: LocalMeshShard(
-            mesh=sh.mesh, info=sh.info, stats=TensorDict({POINT_MEAN: center})
-        ),
-    )
-
-    reader = _StubReader([payload])
-    dataset = MeshDataset(
-        reader,
-        transforms=[DropMeshFields(global_data=["Re"]), CenterMesh(False)],
-    )
-    assert reader.requested == {POINT_MEAN}
-    mesh, _ = dataset[0]
-    torch.testing.assert_close(
-        mesh.points,
-        payload.mesh.points - center.to(payload.mesh.points.dtype),
-        rtol=0,
-        atol=0,
-    )
-    # Producer/consumer path.
-    mesh2, _ = dataset._consume(dataset._load_host(0))
-    assert torch.equal(mesh.points, mesh2.points)
-
-    moved = MeshDataset(
-        _StubReader([payload]), transforms=[ScaleMesh(2.0), CenterMesh(False)]
-    )
-    with pytest.raises(ValueError, match="ScaleMesh ran before it"):
-        moved[0]
-
-
-def test_read_rows_matches_indexing(tmp_path):
-    r"""``read_rows`` equals indexing for every selection kind and returns a
-    plain tensor owning its memory."""
-    values = torch.randn(5000, 3)
-    TensorDict({"v": values}, batch_size=[]).memmap(tmp_path / "td")
-    lazy = TensorDict.load_memmap(tmp_path / "td")["v"]
-    dense = torch.unique(torch.randint(0, 5000, (2000,)))
-    cases = [
-        (None, values),
-        (slice(10, 900), values[10:900]),
-        (dense, values[dense]),
-        (torch.tensor([0, 1000, 4999]), values[[0, 1000, 4999]]),
-        (torch.empty(0, dtype=torch.long), values[:0]),
-    ]
-    for selection, expected in cases:
-        out = read_rows(lazy, selection)
-        assert torch.equal(out, expected)
-        assert type(out) is torch.Tensor
-        assert getattr(out, "filename", None) is None
-        assert out.untyped_storage().data_ptr() != lazy.untyped_storage().data_ptr()

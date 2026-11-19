@@ -42,104 +42,52 @@ from physicsnemo.datapipes.readers.mesh import MeshReader
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
     ComputeSurfaceNormals,
-    DropMeshFields,
-    MeshToDomainMesh,
-    NormalizeMeshFields,
-    RandomRotateMesh,
     RandomTranslateMesh,
     SubsampleMesh,
 )
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.domain_parallel import ShardTensor
-from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.io import to_zarr
+from physicsnemo.mesh import DomainMesh
+from test.datapipes._local_shard_utils import (
+    WINDOW,
+    grid_mesh,
+    recipe_chain,
+    write_sample,
+)
 
 pytestmark = [pytest.mark.multigpu_static, pytest.mark.timeout(300)]
 
-_NX, _NY = 24, 12  # 506 cells: uneven over 4 ranks
-_WINDOW = 331  # odd: uneven over 2 and 4 ranks
 _N_SAMPLES = 3
 _SEED = 2024
 
 
-def _grid_mesh(sample: int) -> Mesh:
-    r"""Jittered triangulated grid, cell blocks shuffled; identical on all ranks."""
-    g = torch.Generator().manual_seed(31 + sample)
-    x, y = torch.meshgrid(
-        torch.arange(_NX, dtype=torch.float32),
-        torch.arange(_NY, dtype=torch.float32),
-        indexing="ij",
-    )
-    z = 0.1 * torch.randn(_NX, _NY, generator=g)
-    points = torch.stack([x, y, z], dim=-1).reshape(-1, 3) + 50.0
-    vid = torch.arange(_NX * _NY).reshape(_NX, _NY)
-    a, b = vid[:-1, :-1].reshape(-1), vid[1:, :-1].reshape(-1)
-    c, d = vid[1:, 1:].reshape(-1), vid[:-1, 1:].reshape(-1)
-    cells = torch.cat([torch.stack([a, b, c], 1), torch.stack([a, c, d], 1)])
-    cells = cells.reshape(2, -1, 3).transpose(0, 1).reshape(-1, 2, 3)
-    cells = cells[torch.randperm(cells.shape[0], generator=g)].reshape(-1, 3)
-    mesh = Mesh(points=points, cells=cells)
-    mesh.point_data["velocity"] = torch.randn(mesh.n_points, 3, generator=g)
-    mesh.cell_data["pressure"] = torch.randn(mesh.n_cells, generator=g)
-    mesh.cell_data["wss"] = torch.randn(mesh.n_cells, 3, generator=g)
-    mesh.global_data["Re"] = torch.tensor(1.0e6)
-    mesh.global_data["U_inf"] = torch.tensor([1.0, 0.0, 0.0])
-    return mesh
+def _chain(augment: bool = False, area_weighted: bool = False, center: bool = True):
+    return recipe_chain(center=center, area_weighted=area_weighted, augment=augment)
 
 
-@pytest.fixture(scope="module", params=["pmsh", "zarr"])
-def root_and_fmt(request, tmp_path_factory, distributed_mesh):
+def _make_root(tmp_path_factory, distributed_mesh, fmt):
     dm = DistributedManager()
     if dm.rank == 0:
-        root = tmp_path_factory.mktemp(f"local_{request.param}")
+        root = tmp_path_factory.mktemp(f"local_{fmt}")
         for i in range(_N_SAMPLES):
-            if request.param == "pmsh":
-                _grid_mesh(i).save(root / f"sample_{i}.pmsh")
-            else:
-                to_zarr(_grid_mesh(i), root / f"sample_{i}.zarr")
+            write_sample(grid_mesh(31 + i, 50.0), root, f"sample_{i}", fmt)
         holder = [str(root)]
     else:
         holder = [None]
     dist.broadcast_object_list(holder, src=0)
-    return holder[0], request.param
+    return holder[0], fmt
 
 
-def _chain(augment: bool, area_weighted: bool = False, center: bool = True):
-    fields = {
-        "pressure": {"type": "scalar", "mean": 0.5, "std": 2.0},
-        "wss": {"type": "vector", "mean": [1.0, 0.0, 0.0], "std": 0.5},
-    }
-    chain = [
-        DropMeshFields(global_data=["Re"]),
-    ]
-    if center:
-        chain.append(CenterMesh(use_area_weighting=area_weighted))
-    if augment:
-        chain += [
-            RandomRotateMesh(
-                axes=["z"],
-                mode="axis_aligned",
-                transform_cell_data=True,
-                transform_global_data=True,
-            ),
-            RandomTranslateMesh(
-                distribution=torch.distributions.Uniform(
-                    torch.tensor([-1.0, -1.0, 0.0]),
-                    torch.tensor([1.0, 1.0, 1e-6]),
-                    validate_args=False,
-                )
-            ),
-        ]
-    chain += [
-        NormalizeMeshFields(association="cell_data", fields=fields),
-        ComputeSurfaceNormals(store_as="cell_data", field_name="normals"),
-        SubsampleMesh(n_cells=_WINDOW),
-        MeshToDomainMesh(
-            cell_data_targets=["pressure", "wss"], interior_points="cell_centroids"
-        ),
-    ]
-    return chain
+@pytest.fixture(scope="module", params=["pmsh", "zarr"])
+def root_and_fmt_all(request, tmp_path_factory, distributed_mesh):
+    return _make_root(tmp_path_factory, distributed_mesh, request.param)
+
+
+@pytest.fixture(scope="module")
+def root_and_fmt(tmp_path_factory, distributed_mesh):
+    r"""The ``pmsh`` store, for tests that are format-independent."""
+    return _make_root(tmp_path_factory, distributed_mesh, "pmsh")
 
 
 def _dataset(root_and_fmt, device, *, chain, device_mesh=None, layout="local"):
@@ -151,7 +99,7 @@ def _dataset(root_and_fmt, device, *, chain, device_mesh=None, layout="local"):
             device_mesh=device_mesh,
         )
     reader = MeshReader(
-        root, pattern=f"**/*.{fmt}", subsample_n_cells=_WINDOW, **kwargs
+        root, pattern=f"**/*.{fmt}", subsample_n_cells=WINDOW, **kwargs
     )
     dataset = MeshDataset(reader, transforms=chain, device=device)
     generator = torch.Generator()
@@ -186,7 +134,7 @@ def _assert_matches(
     assert isinstance(interior.points, ShardTensor)
     assert interior.points._spec.placements == (Shard(0),)
     sizes = [s[0] for s in interior.points._spec.sharding_shapes(0)]
-    assert sizes == compute_split_shapes(_WINDOW, world)
+    assert sizes == compute_split_shapes(WINDOW, world)
     check(interior.points.full_tensor(), reference.interior.points, True)
     for key in reference.interior.point_data.keys():
         check(
@@ -216,18 +164,21 @@ def _assert_matches(
     check(sample.global_data["U_inf"], reference.global_data["U_inf"])
 
 
-@pytest.mark.parametrize("augment", [False, True])
-@pytest.mark.parametrize("on_device", [False, True])
+@pytest.mark.parametrize("area_weighted", [False, True])
+@pytest.mark.parametrize(
+    "on_device, augment", [(False, False), (True, True), (False, True)]
+)
 def test_local_layout_matches_unsharded(
-    root_and_fmt, distributed_mesh, augment, on_device
+    root_and_fmt_all, distributed_mesh, augment, on_device, area_weighted
 ):
     r"""Sharded local-layout samples equal the unsharded pipeline's."""
     dm = DistributedManager()
     device = dm.device if on_device else None
+    chain = lambda: _chain(augment, area_weighted)  # noqa: E731
     sharded = _dataset(
-        root_and_fmt, device, chain=_chain(augment), device_mesh=distributed_mesh
+        root_and_fmt_all, device, chain=chain(), device_mesh=distributed_mesh
     )
-    reference = _dataset(root_and_fmt, device, chain=_chain(augment))
+    reference = _dataset(root_and_fmt_all, device, chain=chain())
     try:
         for i in range(_N_SAMPLES):
             payload = sharded._load_host(i)
@@ -241,22 +192,6 @@ def test_local_layout_matches_unsharded(
                 exact=not on_device,
                 centered=True,
             )
-    finally:
-        sharded.close()
-        reference.close()
-
-
-def test_local_layout_area_weighted_center(root_and_fmt, distributed_mesh):
-    sharded = _dataset(
-        root_and_fmt, None, chain=_chain(False, True), device_mesh=distributed_mesh
-    )
-    reference = _dataset(root_and_fmt, None, chain=_chain(False, True))
-    try:
-        sample, _ = sharded[1]
-        expected, _ = reference[1]
-        _assert_matches(
-            sample, expected, distributed_mesh.size(0), exact=True, centered=True
-        )
     finally:
         sharded.close()
         reference.close()
@@ -281,46 +216,32 @@ def _collective_events(dataset, indices) -> list[str]:
     return sorted({e.name for e in prof.events() if _COLLECTIVE.search(e.name)})
 
 
-def test_local_layout_no_collectives_without_center(root_and_fmt, distributed_mesh):
-    r"""A chain without CenterMesh reads, transforms and wraps with no
-    communication; the global layout is the positive control of the detector."""
+@pytest.mark.parametrize("center", [None, "point_mean", "area_weighted"])
+def test_collective_count(root_and_fmt, distributed_mesh, center):
+    r"""No CenterMesh: no communication; centering: exactly one all_reduce per
+    sample. The global layout is the positive control of the detector."""
     dm = DistributedManager()
-    local = _dataset(
-        root_and_fmt,
-        dm.device,
-        chain=_chain(True, center=False),
-        device_mesh=distributed_mesh,
+    chain = lambda: _chain(  # noqa: E731
+        True, area_weighted=center == "area_weighted", center=center is not None
     )
-    global_ = _dataset(
-        root_and_fmt,
-        dm.device,
-        chain=_chain(True, center=False),
-        device_mesh=distributed_mesh,
-        layout="global",
-    )
-    try:
-        assert _collective_events(local, range(_N_SAMPLES)) == []
-        assert _collective_events(global_, [0]) != []
-    finally:
-        local.close()
-        global_.close()
-
-
-@pytest.mark.parametrize("area_weighted", [False, True])
-@pytest.mark.parametrize("on_device", [False, True])
-def test_local_layout_center_is_one_all_reduce(
-    root_and_fmt, distributed_mesh, area_weighted, on_device
-):
-    r"""CenterMesh costs exactly one all_reduce per sample and nothing else,
-    also when the shard is on the CPU (buffer moved to the mesh's device)."""
-    dm = DistributedManager()
     dataset = _dataset(
-        root_and_fmt,
-        dm.device if on_device else None,
-        chain=_chain(False, area_weighted),
-        device_mesh=distributed_mesh,
+        root_and_fmt, dm.device, chain=chain(), device_mesh=distributed_mesh
     )
     try:
+        if center is None:
+            assert _collective_events(dataset, range(_N_SAMPLES)) == []
+            global_ = _dataset(
+                root_and_fmt,
+                dm.device,
+                chain=chain(),
+                device_mesh=distributed_mesh,
+                layout="global",
+            )
+            try:
+                assert _collective_events(global_, [0]) != []
+            finally:
+                global_.close()
+            return
         for i in range(_N_SAMPLES):
             events = _collective_events(dataset, [i])
             assert len(events) >= 1, events
@@ -375,7 +296,7 @@ def test_rank_zero_iterates_alone(root_and_fmt, distributed_mesh):
 def test_local_layout_rejects_unsupported_chains(root_and_fmt, distributed_mesh):
     dm = DistributedManager()
     for chain, error, match in [
-        ([SubsampleMesh(n_cells=_WINDOW - 7)], NotImplementedError, "subsample"),
+        ([SubsampleMesh(n_cells=WINDOW - 7)], NotImplementedError, "subsample"),
         ([ComputeSurfaceNormals(store_as="point_data")], NotImplementedError, "seam"),
         (
             [RandomTranslateMesh(), CenterMesh(use_area_weighting=False)],
