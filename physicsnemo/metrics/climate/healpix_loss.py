@@ -160,9 +160,6 @@ class OceanMSE(th.nn.MSELoss):
         self.open_dict = open_dict
         self.selection_dict = selection_dict
         self.lsm_tensor = None
-        self.lsm_sum_calculated = False
-        self.lsm_sum = None
-        self.lsm_var_sum = None
 
     def setup(self, trainer):
         """
@@ -177,19 +174,18 @@ class OceanMSE(th.nn.MSELoss):
         ).to(trainer.device)
 
     def forward(self, prediction, target, average_channels=True):
-        if not self.lsm_sum_calculated:
-            self.lsm_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum()
-            self.lsm_var_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum(
-                dim=(0, 1, 2, 4, 5)
-            )
-            self.lsm_sum_calculated = True
+        # Normalize by the ocean weight of *this* batch; the batch size can change
+        # between calls (e.g. a smaller final or validation batch).
+        lsm = th.broadcast_to(self.lsm_tensor, target.shape)
+        lsm_sum = lsm.sum()
+        lsm_var_sum = lsm.sum(dim=(0, 1, 2, 4, 5))
         # average weighted
         ocean_err = ((target - prediction) ** 2) * self.lsm_tensor
         ocean_mean_err = ocean_err.sum(dim=(0, 1, 2, 4, 5))
         if average_channels:
-            return th.sum(ocean_mean_err) / self.lsm_sum
+            return th.sum(ocean_mean_err) / lsm_sum
         else:
-            return ocean_mean_err / self.lsm_var_sum
+            return ocean_mean_err / lsm_var_sum
 
 
 class WeightedOceanMSE(th.nn.MSELoss):
@@ -214,9 +210,6 @@ class WeightedOceanMSE(th.nn.MSELoss):
         self.open_dict = open_dict
         self.selection_dict = selection_dict
         self.lsm_tensor = None
-        self.lsm_sum_calculated = False
-        self.lsm_sum = None
-        self.lsm_var_sum = None
         self.loss_weights = th.tensor(weights)
 
     def setup(self, trainer):
@@ -241,18 +234,17 @@ class WeightedOceanMSE(th.nn.MSELoss):
         self.loss_weights = self.loss_weights.to(device=trainer.device)
 
     def forward(self, prediction, target, average_channels=True):
-        if not self.lsm_sum_calculated:
-            self.lsm_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum()
-            self.lsm_var_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum(
-                dim=(0, 1, 2, 4, 5)
-            )
-            self.lsm_sum_calculated = True
+        # Normalize by the ocean weight of *this* batch; the batch size can change
+        # between calls (e.g. a smaller final or validation batch).
+        lsm = th.broadcast_to(self.lsm_tensor, target.shape)
+        lsm_sum = lsm.sum()
+        lsm_var_sum = lsm.sum(dim=(0, 1, 2, 4, 5))
         # average weighted
         ocean_err = ((target - prediction) ** 2) * self.lsm_tensor
         ocean_mean_err = ocean_err.sum(dim=(0, 1, 2, 4, 5))
         ocean_mean_err = ocean_mean_err * self.loss_weights
 
         if average_channels:
-            return th.sum(ocean_mean_err) / self.lsm_sum
+            return th.sum(ocean_mean_err) / lsm_sum
         else:
-            return ocean_mean_err / self.lsm_var_sum
+            return ocean_mean_err / lsm_var_sum
