@@ -400,11 +400,12 @@ def remesh(
     can land inside large faces. Warp then performs integration-mass-weighted
     centroidal clustering, projects cluster centers back to the source surface
     with a bounding volume hierarchy, and reconstructs compact triangle
-    connectivity. If the source is watertight, holes in the result are filled.
-    Each connected component is then wound consistently and like the source,
-    so a closed, outward-wound source gives a closed, outward-wound result. A
-    direct positive tensor or an attached point-data field can specify
-    relative local linear resolution.
+    connectivity. If the source is watertight, holes in the result are filled,
+    and faces that no winding can make consistent, such as those of a fold,
+    are cut out and filled again. Each connected component is then wound
+    consistently and like the source, so a closed, outward-wound source gives
+    a closed, outward-wound result. A direct positive tensor or an attached
+    point-data field can specify relative local linear resolution.
 
     Parameters
     ----------
