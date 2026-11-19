@@ -207,3 +207,49 @@ def test_flare_unified_pos_buffer_sharded(distributed_mesh_2d):
     run_domain_parallel_model_check(
         case, mesh=distributed_mesh_2d, ddp_mesh=ddp_mesh, domain_mesh=domain_mesh
     )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(600)
+def test_flare_compile_matches_eager(distributed_mesh):
+    r"""``torch.compile(FLARE)`` on token-sharded inputs matches eager.
+
+    FLARE's learned global queries are a plain parameter that meets the
+    sharded keys/values in SDPA; under tracing it reaches the ShardTensor
+    handler as a ``FakeTensor`` and must still be promoted to ``Replicate``.
+    Compares the compiled forward output and parameter gradients to eager on
+    the same sharded input.
+    """
+    n_points = 4096
+    device = torch.device("cuda", torch.cuda.current_device())
+    model = _build_flare(None)(device)
+    model.eval()
+
+    fx = torch.randn(1, n_points, 3, device=device)
+    embedding = torch.randn(1, n_points, 5, device=device)
+    src = dist.get_global_rank(distributed_mesh.get_group(), 0)
+    sharded_fx = scatter_tensor(
+        fx, src, distributed_mesh, (Shard(1),), requires_grad=False
+    )
+    sharded_embedding = scatter_tensor(
+        embedding, src, distributed_mesh, (Shard(1),), requires_grad=False
+    )
+
+    def run(fn):
+        model.zero_grad(set_to_none=True)
+        out = fn(sharded_fx, embedding=sharded_embedding)
+        out.float().pow(2).mean().backward()
+        return out, [p.grad.clone() for p in model.parameters() if p.grad is not None]
+
+    eager_out, eager_grads = run(model)
+    torch._dynamo.reset()
+    compiled_out, compiled_grads = run(torch.compile(model))
+
+    _check_output(n_points)(compiled_out)
+    torch.testing.assert_close(
+        compiled_out.to_local(), eager_out.to_local(), atol=1e-4, rtol=1e-4
+    )
+    assert len(compiled_grads) == len(eager_grads) > 0
+    for got, want in zip(compiled_grads, eager_grads):
+        assert type(got) is torch.Tensor
+        torch.testing.assert_close(got, want, atol=1e-4, rtol=1e-4)

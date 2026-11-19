@@ -200,6 +200,31 @@ class SDPAWrapper(torch.nn.Module):
         return torch.nn.functional.scaled_dot_product_attention(q, k, v)
 
 
+class PlainQueryGatherScatter(torch.nn.Module):
+    r"""FLARE-style gather/scatter: plain latent queries vs. sharded K/V.
+
+    ``q`` is a plain (replicated) tensor -- a learnable ``nn.Parameter`` or a
+    grad-free buffer -- that meets token-sharded keys/values in
+    ``F.scaled_dot_product_attention``. Pass 1 attends the plain queries over
+    the sharded tokens (``ReplicatedQSDPA``); pass 2 attends the sharded
+    tokens over the replicated latents. The plain ``q`` must be promoted to a
+    ``Replicate`` operand before the SDPA handler runs, under tracing as in
+    eager.
+    """
+
+    def __init__(self, q: torch.Tensor, learnable: bool):
+        super().__init__()
+        if learnable:
+            self.q = torch.nn.Parameter(q)
+        else:
+            self.register_buffer("q", q)
+
+    def forward(self, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        q = self.q.expand(k.shape[0], -1, -1, -1)
+        z = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        return torch.nn.functional.scaled_dot_product_attention(k, q, z)
+
+
 class BallQueryWrapper(torch.nn.Module):
     r"""``radius_search`` on sharded points/queries (exercises ``RingBallQuery``).
 
@@ -735,3 +760,57 @@ def test_compile_ring_ball_query(distributed_mesh):
 
     assert compiled_out._spec.placements == (Shard(1),)
     torch.testing.assert_close(compiled_out.to_local(), eager_out.to_local())
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("backend", ["aot_eager", "inductor"])
+@pytest.mark.parametrize("learnable", [True, False], ids=["param-q", "buffer-q"])
+def test_compile_sdpa_plain_q_sharded_kv(distributed_mesh, learnable, backend):
+    r"""``torch.compile`` of SDPA with a plain ``q`` and ShardTensor ``k``/``v``.
+
+    Under tracing the plain ``q`` reaches the ShardTensor SDPA handler as a
+    ``FakeTensor``; it used to skip auto-promotion and fail with
+    ``'FakeTensor' object has no attribute '_spec'``. Compiled forward and
+    gradients (``q``, ``k``, ``v``) must match eager.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    batch_size, num_heads, n_latents, seq_len, head_dim = 2, 4, 16, 256, 32
+    torch.manual_seed(11)
+    q = torch.randn(1, num_heads, n_latents, head_dim, device=dm.device)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim, device=dm.device)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim, device=dm.device)
+    k_s = scatter_tensor(k, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+    v_s = scatter_tensor(v, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+
+    module = PlainQueryGatherScatter(q, learnable).to(dm.device)
+
+    def run(fn):
+        for t in (k_s, v_s, *module.parameters()):
+            t.grad = None
+        out = fn(k_s, v_s)
+        _scalar_loss(out).backward()
+        grads = [k_s.grad.to_local(), v_s.grad.to_local()]
+        if learnable:
+            grads.append(module.q.grad)
+        return out, grads
+
+    eager_out, eager_grads = run(module)
+    torch._dynamo.reset()
+    compiled = torch.compile(module, backend=backend, fullgraph=True, dynamic=False)
+    for _ in range(2):  # second call exercises guards / recompiles
+        compiled_out, compiled_grads = run(compiled)
+
+    assert isinstance(compiled_out, type(eager_out))
+    assert compiled_out._spec.placements == (Shard(2),)
+    # The parameter gradient stays a plain (all-reduced) tensor, as in eager.
+    if learnable:
+        assert type(module.q.grad) is torch.Tensor
+    torch.testing.assert_close(
+        compiled_out.to_local(), eager_out.to_local(), atol=1e-5, rtol=1e-5
+    )
+    for got, want in zip(compiled_grads, eager_grads):
+        torch.testing.assert_close(got, want, atol=1e-5, rtol=1e-5)

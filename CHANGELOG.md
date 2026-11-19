@@ -581,6 +581,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - At `tree_read_theta > 0`, ISLA's reference boundary read holds each cluster's
   cell weights fixed in its means, as the fused CUDA kernel does, so both give
   the same derivatives in the boundary's vertices. They used to disagree there.
+- `torch.compile` now works when a plain tensor meets a `ShardTensor` in a
+  patched function, for example FLARE's learned global queries in
+  `scaled_dot_product_attention` against token-sharded keys and values.
+  Under tracing the plain tensor is a `FakeTensor` and was not promoted to
+  `Replicate`, so compiling FLARE on domain-parallel inputs failed with
+  `'FakeTensor' object has no attribute '_spec'`.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
