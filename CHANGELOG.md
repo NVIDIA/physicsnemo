@@ -620,6 +620,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right signs for DrivAerML and HighLiftAeroML. A dataset YAML now declares
   where its surface normals point and which side its wall shear stress acts
   on (`surface_normals_point`, `wall_shear_acts_on`).
+- `physicsnemo.sym` expressions with a constant term, such as a source term,
+  no longer raise `TypeError` when built with `freeze_terms`. `torch_lambdify`
+  now calls constants with the same arguments as other expressions.
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.

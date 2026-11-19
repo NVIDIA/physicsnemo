@@ -36,7 +36,13 @@ def torch_lambdify(f, r, separable=False):
     if isinstance(f, (float, int, bool)):
 
         def loop_lambda(constant):
-            return lambda **x: torch.zeros_like(next(iter(x.items()))[1]) + constant
+            # Take the same arguments as the sympy.lambdify function below: one
+            # list of tensors, or one tensor per variable when separable.
+            def constant_fn(*args):
+                tensors = args if separable else args[0]
+                return torch.zeros_like(tensors[0]) + constant
+
+            return constant_fn
 
         return loop_lambda(f)
 
