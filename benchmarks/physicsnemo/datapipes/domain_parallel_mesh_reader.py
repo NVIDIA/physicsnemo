@@ -42,6 +42,11 @@ Usage (on a GPU node)::
 
 ``--read-mode memmap`` disables the sequential reads of the local layout
 (memmap indexing instead), to isolate their effect.
+
+Before each sample's ``main`` step a ``torch.distributed.barrier()`` (not
+timed) keeps ranks in step, as in a training loop; otherwise the per-sample
+all_reduce of the local layout measures waiting for the slowest rank. Pass
+``--no-sync`` to disable it. Warmup samples also absorb NCCL first-use cost.
 """
 
 from __future__ import annotations
@@ -145,6 +150,8 @@ def _time_layout(args, root, pattern, layout, indices, device_mesh, device):
         if payload.error is not None:
             raise payload.error
         torch.cuda.synchronize()
+        if not args.no_sync:
+            dist.barrier()
         t2 = time.perf_counter()
         sample, _ = dataset._consume(payload)
         torch.cuda.synchronize()
@@ -173,6 +180,12 @@ def main() -> None:
     parser.add_argument("--n-cells", type=int, default=200_000, help="cell window")
     parser.add_argument("--samples", type=int, default=20, help="timed samples")
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="do not barrier before each main-thread step (default: barrier, "
+        "untimed, so ranks are in step like a training loop)",
+    )
     parser.add_argument("--layouts", default="global,local")
     parser.add_argument(
         "--read-mode", choices=["sequential", "memmap"], default="sequential"
