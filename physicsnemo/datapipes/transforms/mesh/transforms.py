@@ -1377,12 +1377,9 @@ class RestructureTensorDict(MeshTransform):
         self._groups = groups
 
     def apply_local_shard(self, data: TensorDict, shard: LocalMeshShard) -> TensorDict:
-        """Refuse to move ``cells``: its per-rank point offset is keyed on that name."""
-        if any(
-            as_nested_key(src) == as_nested_key("cells")
-            for mapping in self._groups.values()
-            for src in mapping.values()
-        ):
+        """Refuse to move any ``cells``: its per-rank point offset is keyed on that name."""
+        keys = [as_nested_key(s) for g in self._groups.values() for s in g.values()]
+        if any((k if isinstance(k, str) else k[-1]) == "cells" for k in keys):
             raise NotImplementedError(
                 "RestructureTensorDict cannot move 'cells' under the local layout "
                 '(rank-local vertex ids need the point offset); use mesh_layout "global"'

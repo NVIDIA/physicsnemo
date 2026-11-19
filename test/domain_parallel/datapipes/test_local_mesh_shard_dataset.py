@@ -322,6 +322,14 @@ def test_local_layout_rejects_unsupported_chains(root_and_fmt, distributed_mesh)
             NotImplementedError,
             "cannot move 'cells'",
         ),
+        (
+            [
+                MeshToTensorDict(),
+                RestructureTensorDict({"input": {"conn": "boundaries.vehicle.cells"}}),
+            ],
+            NotImplementedError,
+            "cannot move 'cells'",
+        ),
     ]:
         dataset = _dataset(
             root_and_fmt, dm.device, chain=chain, device_mesh=distributed_mesh
