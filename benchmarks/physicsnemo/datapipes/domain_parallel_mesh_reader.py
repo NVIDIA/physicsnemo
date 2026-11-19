@@ -165,6 +165,7 @@ def _time_layout(args, root, pattern, layout, indices, device_mesh, device):
 
 
 def main() -> None:
+    """Parse arguments, time each layout and print a markdown table on rank 0."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--data", help="directory of DrivAerML runs")
@@ -188,7 +189,13 @@ def main() -> None:
     if args.read_mode == "memmap":
         import physicsnemo.datapipes._local_shard as local_shard
 
-        local_shard._backing_file = lambda t: None
+        import physicsnemo.datapipes.readers.mesh as mesh_module
+
+        def _plain_read_rows(t, sel=None):
+            return torch.as_tensor(t if sel is None else t[sel]).clone()
+
+        local_shard.read_rows = _plain_read_rows
+        mesh_module.read_rows = _plain_read_rows
 
     tmp = None
     if args.synthetic:
