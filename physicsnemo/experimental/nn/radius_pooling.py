@@ -136,7 +136,7 @@ class RadiusPooledFeatures(Module):
         self,
         candidates: Float[torch.Tensor, "batch candidates 3"],
         queries: Float[torch.Tensor, "batch queries 3"],
-    ) -> list[tuple[Float[torch.Tensor, "batch queries cap 3"], Bool[torch.Tensor, "batch queries cap"]]]:
+    ) -> list[tuple[Float[torch.Tensor, "batch queries _cap 3"], Bool[torch.Tensor, "batch queries _cap"]]]:
         r"""The drawn neighbours of every query for each radius.
 
         Parameters
@@ -180,7 +180,7 @@ class RadiusPooledFeatures(Module):
 
     def pool(
         self,
-        neighbours: list[tuple[Float[torch.Tensor, "batch queries cap 3"], Bool[torch.Tensor, "batch queries cap"]]],
+        neighbours: list[tuple[Float[torch.Tensor, "batch queries _cap 3"], Bool[torch.Tensor, "batch queries _cap"]]],
         queries: Float[torch.Tensor, "batch queries 3"],
     ) -> tuple[Float[torch.Tensor, "batch queries hidden"], ...]:
         r"""Features of given neighbours: the differentiable part of :meth:`forward`.
