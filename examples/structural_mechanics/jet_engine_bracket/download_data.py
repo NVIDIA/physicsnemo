@@ -18,8 +18,9 @@ r"""Download and extract the parts of DeepJEB and SimJEB that this example reads
 
 - DeepJEB (Hugging Face ``KAIST-SmartDesignLab/DeepJEB``, ODC-By 1.0): the solver decks, the field
   tables and the split metadata, 77 GB.
-- SimJEB v4.0 (Harvard Dataverse ``doi:10.7910/DVN/XFUWJG``, CC0 1.0): the volume meshes, the
-  field tables and the solver decks, 7.1 GB.
+- SimJEB v4.0 (Harvard Dataverse ``doi:10.7910/DVN/XFUWJG``, ODC-By 1.0 according to the dataset's
+  README; the Dataverse record's license field says CC0 1.0): the volume meshes, the field tables and
+  the solver decks, 7.1 GB.
 
 Every archive is checked against its published checksum before extraction into
 ``<output>/<dataset>/extracted``.

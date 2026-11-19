@@ -4,8 +4,8 @@ This example trains a surrogate for the linear-elastic response of jet engine
 brackets and adapts it to a new family of designs:
 
 1. **Train** (`train.py`): predict the displacement and the von Mises stress at
-   every mesh node of a bracket under four load cases, trained on the 2,138
-   generated brackets of DeepJEB. The model is
+   every mesh node of a bracket under four load cases, trained on DeepJEB
+   (2,138 generated brackets, 1,740 of them for training). The model is
    `physicsnemo.experimental.models.geotransolver_sdf.GeoTransolverSDF`, a
    [GeoTransolver](https://arxiv.org/abs/2512.20399) in which every node also sees
    the neighbouring nodes and a stencil of signed distances to the surface, which
@@ -20,7 +20,10 @@ brackets and adapts it to a new family of designs:
 | Dataset | Designs | Mesh | Source and license |
 | --- | --- | --- | --- |
 | DeepJEB | 2,138 generated brackets | 10-node tetrahedra | [Hugging Face](https://huggingface.co/datasets/KAIST-SmartDesignLab/DeepJEB), ODC-By 1.0 |
-| SimJEB | 381 human-designed brackets | 4-node tetrahedra | [Harvard Dataverse](https://doi.org/10.7910/DVN/XFUWJG), CC0 1.0 |
+| SimJEB | 381 human-designed brackets | 4-node tetrahedra | [Harvard Dataverse](https://doi.org/10.7910/DVN/XFUWJG), ODC-By 1.0 according to the dataset's README, description and paper (the license field of the Dataverse record says CC0 1.0) |
+
+SimJEB's CAD files, which this example does not download, are licensed by GrabCAD
+for non-commercial use.
 
 Both datasets solve the GE jet engine bracket problem with the same material
 (Ti-6Al-4V, E = 113.8 GPa, ν = 0.342) and the same four load cases: vertical,
@@ -32,12 +35,19 @@ the displacement and the von Mises stress at every node.
 
 Splits (`splits/`): DeepJEB uses the dataset authors' "latent" split, 1,933
 training and 205 test designs, with a seeded 10% of the training designs held out
-for validation (1,740 / 193 / 205). SimJEB uses its official 77 test designs and
-59 validation designs drawn from the rest (241 / 59 / 77); four designs are
+for validation (1,740 / 193 / 205). SimJEB uses the 77 designs of the first of its
+three official test splits (`test_split_0`) and 59 validation designs drawn from
+the rest (241 / 59 / 77); four designs are
 excluded for defects of their mesh or deck, listed with the reason in
 `splits/simjeb.json`.
 
 ## Setup
+
+Running `download_data.py` automatically downloads data from
+[Hugging Face](https://huggingface.co/datasets/KAIST-SmartDesignLab/DeepJEB) and
+[Harvard Dataverse](https://doi.org/10.7910/DVN/XFUWJG). Before you run it, please
+confirm that the content of the datasets and their licensing are appropriate for
+your intended use.
 
 ```bash
 pip install -r requirements.txt
@@ -81,8 +91,12 @@ Training runs 100 epochs (every design under every load case, one sample per GPU
 and step) with Muon for the weight matrices and AdamW for the rest, a learning
 rate of 2e-3 for four GPUs with a two-epoch warm-up and a cosine decay to 10%,
 bfloat16 autocast and activation checkpointing. A rerun resumes from the latest
-checkpoint. `model=geotransolver` trains the stock GeoTransolver instead. For a
-quick test:
+checkpoint. `model=geotransolver output_dir=outputs/deepjeb_stock` trains the stock
+GeoTransolver instead. Give it its own folders in the later steps too, because
+their defaults are those of `GeoTransolverSDF`: pass
+`checkpoint=outputs/deepjeb_stock/model.mdlus` to `evaluate.py` and `finetune.py`,
+together with `output=outputs/deepjeb_stock/evaluation/<name>` for `evaluate.py`
+and `output_dir=outputs/simjeb_lora_stock` for `finetune.py`. For a quick test:
 
 `python train.py data.root=... data.max_designs=8 training.epochs=2`.
 
@@ -139,10 +153,9 @@ test stress error of 0.255, and LoRA reruns with two other seeds stayed within 0
 | + LoRA on SimJEB | | 0.224 / 0.326 | 0.76 |
 
 On the DeepJEB test designs `GeoTransolverSDF` reaches a median stress R² of 0.99.
-On SimJEB, designs unlike any DeepJEB design, the error is four to six times
-larger, and largest in members thinner than 3 mm, which DeepJEB hardly contains;
-LoRA with the 241 SimJEB training designs brings the test stress error below the
-0.295 of the same model trained from scratch on those designs.
+On the SimJEB test designs, without adaptation, its displacement error is about
+twelve times and its stress error about six times larger. LoRA with the 241 SimJEB
+training designs lowers them to 0.189 and 0.257.
 
 ## Files
 
