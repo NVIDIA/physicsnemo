@@ -243,7 +243,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layers and norms, fused `LayerNormMLP` / `LayerNormLinear`, and
   `DotProductAttention` through the shared FLARE attention kernels), now also
   for FLARE++; with `use_te=False`, token-sharded (`ShardTensor`) inputs keep
-  working for FLARE and are now supported for FLARE++. Checkpoints of the previous FLARE / FLARE++ do not load.
+  working for FLARE and are now supported for FLARE++. Checkpoints of the
+  previous FLARE / FLARE++ do not load.
   GeoTransolver's `"GALE_FPP"` backend keeps the previous FLARE++ attention.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
