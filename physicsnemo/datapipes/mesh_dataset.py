@@ -47,6 +47,12 @@ from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
 
+_GLOBAL_LAYOUT_BACKGROUND_ERROR = (
+    "background consume is not supported for domain-parallel samples on the "
+    'global mesh layout (mesh_layout "global", DomainMeshReader, or a sample '
+    "without cells): their collectives run inside ShardTensor ops"
+)
+
 
 @register()
 class MeshDataset(DatasetBase):
@@ -138,6 +144,7 @@ class MeshDataset(DatasetBase):
         self.transforms = list(transforms) if transforms else []
         self._device = torch.device(device) if isinstance(device, str) else device
         self._stats_group = None
+        self._background_consume = False
 
         if self._device is not None:
             for t in self.transforms:
@@ -240,6 +247,12 @@ class MeshDataset(DatasetBase):
 
         return data, metadata
 
+    def _domain_parallel_config(self):
+        config = getattr(self.reader, "_domain_parallel", None)
+        if config is None or getattr(config, "device_mesh", None) is None:
+            return None
+        return config
+
     def prepare_background_consume(self) -> None:
         """Prepare for :meth:`consume` on a background thread.
 
@@ -249,16 +262,12 @@ class MeshDataset(DatasetBase):
         the main thread. Under the ``"global"`` layout its collectives run
         inside ShardTensor ops on the mesh's groups, so this raises.
         """
-        config = getattr(self.reader, "_domain_parallel", None)
-        if config is None or getattr(config, "device_mesh", None) is None:
+        config = self._domain_parallel_config()
+        if config is None:
             return
-        if config.mesh_layout != "local":
-            raise ValueError(
-                "background consume is not supported with domain parallelism "
-                f"and mesh_layout={config.mesh_layout!r}: its collectives run "
-                "inside ShardTensor ops on the main thread; use "
-                'mesh_layout "local"'
-            )
+        if isinstance(self.reader, DomainMeshReader) or config.mesh_layout == "global":
+            raise ValueError(_GLOBAL_LAYOUT_BACKGROUND_ERROR)
+        self._background_consume = True
         if self._stats_group is None:
             self._stats_group = new_shard_stats_group(config.device_mesh)
 
@@ -431,6 +440,9 @@ class MeshDataset(DatasetBase):
             if isinstance(data, LocalMeshShard):
                 data = self._apply_local_shard(data)
             else:
+                if self._background_consume and self._domain_parallel_config():
+                    # e.g. a sample without cells: global-layout path.
+                    raise ValueError(_GLOBAL_LAYOUT_BACKGROUND_ERROR)
                 data = self._assemble(data)
                 with torch.profiler.record_function(
                     "MeshDataset._consume: _apply_transforms"
