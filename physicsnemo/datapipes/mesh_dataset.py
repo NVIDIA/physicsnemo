@@ -29,7 +29,11 @@ from typing import Any, Optional, Sequence, Union
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes._local_shard import LocalMeshShard, wrap_local_sample
+from physicsnemo.datapipes._local_shard import (
+    LocalMeshShard,
+    reduce_shard_stats,
+    wrap_local_sample,
+)
 from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.protocols import (
     DatasetBase,
@@ -244,12 +248,16 @@ class MeshDataset(DatasetBase):
     def _apply_local_shard(self, shard: LocalMeshShard) -> Any:
         """Run the transforms on a ``"local"``-layout share, then wrap it.
 
-        Every transform sees the plain rank-local sample (no ShardTensor
-        dispatch, no collectives) through ``apply_local_shard``; reader
+        The reader's partial statistics are first combined with one small
+        all-reduce (:func:`reduce_shard_stats`; none when no transform needs
+        them). Every transform then sees the plain rank-local sample (no
+        ShardTensor dispatch) through ``apply_local_shard``; reader
         statistics are refused once a transform has moved the geometry they
         were computed from. The result is wrapped into ``Shard(0)``
         ShardTensors without communication.
         """
+        with torch.profiler.record_function("MeshDataset: reduce shard stats"):
+            shard = reduce_shard_stats(shard)
         data: Any = shard.mesh
         geometry_moved = None
         for t in self.transforms:

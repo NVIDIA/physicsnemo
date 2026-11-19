@@ -46,8 +46,12 @@ from physicsnemo.datapipes._domain_parallel import (
 )
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._local_shard import (
+    AREA_MOMENT,
+    AREA_TOTAL,
     AREA_WEIGHTED_CENTER,
+    POINT_COUNT,
     POINT_MEAN,
+    POINT_SUM,
     SHARD_STATS,
     LocalMeshShard,
     LocalShardInfo,
@@ -937,6 +941,10 @@ def read_local_cell_shard(
     window applies, including its Horvitz-Thompson measure factor), so
     per-cell quantities computed on it are those of the unsharded sample.
     Communication-free: every rank derives every rank's sizes from the read.
+    Requested statistics are returned as per-rank partial sums
+    (:data:`POINT_SUM` / :data:`POINT_COUNT`, :data:`AREA_MOMENT` /
+    :data:`AREA_TOTAL`); :func:`reduce_shard_stats` combines them with one
+    all-reduce on the main thread.
 
     Parameters
     ----------
@@ -948,9 +956,8 @@ def read_local_cell_shard(
     cell_window : Tensor, optional
         Cell-subsample cyclic block (identical on every rank).
     stats : set of str
-        Whole-sample statistics to compute (:data:`SHARD_STATS`), from the
-        same read and with the same operations as ``CenterMesh`` on the
-        unsharded sample.
+        Whole-sample statistics (:data:`SHARD_STATS`) whose float64 partial
+        sums over this rank's owned vertices / own cells to return.
     point_sizes : tuple of int, optional
         Per-rank vertex counts from an earlier read of the same sample
         without a window; skips reading the other ranks' cells.
@@ -959,7 +966,7 @@ def read_local_cell_shard(
     -------
     _LocalCellShard
         Local mesh, per-rank cell and vertex counts, the unsharded point
-        count and the requested statistics.
+        count and the partial sums of the requested statistics.
     """
     unknown = set(stats) - SHARD_STATS
     if unknown:
@@ -1005,33 +1012,36 @@ def read_local_cell_shard(
     local_ids, local_cells = torch.unique(own_cells, return_inverse=True)
     local_cells = local_cells.to(own_cells.dtype).reshape(own_cells.shape)
 
+    points = _source_rows(src, points_src, local_ids, n_src_points)
+
     stat_values: dict[str, torch.Tensor] = {}
-    if stats:
-        # The unsharded sample's points, read once; this rank's vertices are
-        # a subset of them.
-        ref_points = _source_rows(src, points_src, referenced, n_src_points)
-        rows = (
-            local_ids
-            if referenced is None
-            else torch.searchsorted(referenced, local_ids)
+    if POINT_MEAN in stats:
+        # Partial sum over the vertices this rank owns: a vertex belongs to
+        # the lowest rank whose cells reference it, so seam vertices count
+        # once over all ranks. Every rank derives ownership from all_cells.
+        uniq, inverse = torch.unique(all_cells.reshape(-1), return_inverse=True)
+        verts_per_cell = all_cells.shape[1] if all_cells.ndim > 1 else 1
+        chunk_of_entry = torch.repeat_interleave(
+            torch.arange(world_size),
+            torch.tensor(cell_sizes) * verts_per_cell,
         )
-        points = ref_points[rows]
-        if POINT_MEAN in stats:
-            stat_values[POINT_MEAN] = ref_points.mean(dim=0)
-        if AREA_WEIGHTED_CENTER in stats:
-            ref_cells = (
-                all_cells
-                if referenced is None
-                else torch.searchsorted(referenced, all_cells).to(all_cells.dtype)
-            )
-            whole = Mesh(points=ref_points, cells=ref_cells)
-            areas, centroids = whole.cell_areas, whole.cell_centroids
-            stat_values[AREA_WEIGHTED_CENTER] = (centroids * areas.unsqueeze(-1)).sum(
-                dim=0
-            ) / areas.sum()
-        del ref_points
-    else:
-        points = _source_rows(src, points_src, local_ids, n_src_points)
+        owner = torch.full((len(uniq),), world_size, dtype=torch.long)
+        owner.scatter_reduce_(0, inverse.reshape(-1), chunk_of_entry, reduce="amin")
+        owned = uniq[owner == rank]
+        rows = torch.searchsorted(local_ids, owned)
+        point_sum = points[rows].to(torch.float64).sum(dim=0)
+        count = len(owned)
+        if referenced is None and len(uniq) < n_src_points and rank == 0:
+            # Without a window the sample is every source point; rank 0 also
+            # sums the ones no cell references.
+            mask = torch.ones(n_src_points, dtype=torch.bool)
+            mask[uniq] = False
+            loose = torch.nonzero(mask).squeeze(-1)
+            loose_points = _source_rows(src, points_src, loose, n_src_points)
+            point_sum = point_sum + loose_points.to(torch.float64).sum(dim=0)
+            count += len(loose)
+        stat_values[POINT_SUM] = point_sum
+        stat_values[POINT_COUNT] = torch.tensor([float(count)], dtype=torch.float64)
 
     cell_selection = (
         slice(start, stop) if cell_window is None else cell_window[start:stop]
@@ -1050,6 +1060,13 @@ def read_local_cell_shard(
     if cell_window is not None:
         # Horvitz-Thompson factor of the window, as _subsample_mesh_cells.
         scale_measures(mesh, n_src_cells / n_cells)
+    if AREA_WEIGHTED_CENTER in stats:
+        # Partial sums over this rank's own cells (cells are not duplicated);
+        # the window's uniform measure factor cancels in the ratio.
+        areas = mesh.cell_areas.to(torch.float64)
+        centroids = mesh.cell_centroids.to(torch.float64)
+        stat_values[AREA_MOMENT] = (centroids * areas.unsqueeze(-1)).sum(dim=0)
+        stat_values[AREA_TOTAL] = areas.sum().reshape(1)
     return _LocalCellShard(
         mesh=mesh,
         cell_sizes=cell_sizes,
@@ -1230,7 +1247,9 @@ class MeshReader(_MeshReaderBase):
             rank reads its contiguous share of the (windowed) cells with
             exactly the vertices they reference, renumbered locally, and
             ``MeshDataset`` runs the transforms on that plain mesh before
-            wrapping the result into ShardTensors (no collectives; see
+            wrapping the result into ShardTensors (no collectives, except
+            one small all-reduce of the partial sums when a transform needs
+            the whole-sample center; see
             :mod:`physicsnemo.datapipes._local_shard`). Under ``"global"``
             points and cells are sharded independently with global vertex
             ids and the transforms run on the assembled ShardTensor mesh
@@ -1292,7 +1311,7 @@ class MeshReader(_MeshReaderBase):
         return Mesh.load(mesh_path, mode="r")
 
     def request_shard_stats(self, stats: set[str] | frozenset[str]) -> None:
-        """Compute these whole-sample statistics in ``"local"``-layout reads.
+        """Compute partial sums for these whole-sample statistics in ``"local"`` reads.
 
         Called by :class:`~physicsnemo.datapipes.MeshDataset` with the union
         of its transforms' ``required_shard_stats()``; see

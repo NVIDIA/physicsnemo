@@ -271,17 +271,17 @@ class CenterMesh(MeshTransform):
         return self._center(mesh, self._compute_com(mesh))
 
     def required_shard_stats(self) -> frozenset[str]:
-        """The center of the whole sample, computed by the local-layout reader."""
+        """The whole-sample center, reduced from per-rank partial sums."""
         return frozenset(
             {AREA_WEIGHTED_CENTER if self.use_area_weighting else POINT_MEAN}
         )
 
     def apply_local_shard(self, data: Mesh, shard: LocalMeshShard) -> Mesh:
-        """Center a rank's share by the whole sample's center (no communication).
+        """Center a rank's share by the whole sample's center.
 
-        Under the ``"local"`` layout the reader computed the center for
-        every rank from the same read, with the same operations as
-        :meth:`_compute_com` on the unsharded sample.
+        Under the ``"local"`` layout ``MeshDataset`` has already combined the
+        reader's per-rank partial sums with one all-reduce; the center
+        equals :meth:`_compute_com` on the unsharded sample up to rounding.
         """
         if not isinstance(data, Mesh):
             raise NotImplementedError(

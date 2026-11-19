@@ -22,7 +22,7 @@ default), each rank of the 1-D device mesh reads its contiguous
 vertices those cells reference, renumbered so that its cells index its own
 points. The reader returns that plain, rank-local :class:`~physicsnemo.mesh.Mesh`
 in a :class:`LocalMeshShard`; ``MeshDataset`` runs the transform chain on it
-with plain tensors (no ShardTensor dispatch, no collectives) and only then
+with plain tensors (no ShardTensor dispatch) and only then
 wraps the result into ``Shard(0)`` ShardTensors with explicit shard shapes
 (:func:`wrap_local_sample`, communication-free).
 
@@ -51,8 +51,12 @@ from the rank-identical generators, cell normals / centroids / areas,
 transform that needs a statistic over the whole mesh implements
 ``required_shard_stats`` / ``apply_local_shard`` (see
 :class:`~physicsnemo.datapipes.transforms.mesh.base.MeshTransform`); the
-reader computes the requested statistics for every rank from the same read,
-so no rank ever communicates. :class:`~physicsnemo.datapipes.transforms.mesh.CenterMesh`
+reader computes per-rank float64 partial sums from data the rank already
+holds (the vertices it owns, i.e. those whose lowest referencing rank it is,
+and its own cells), and ``MeshDataset`` combines them with one small
+all-reduce (:func:`reduce_shard_stats`) before the transforms. Without
+requested statistics the loader issues no collectives. The center equals
+the unsharded one up to float rounding. :class:`~physicsnemo.datapipes.transforms.mesh.CenterMesh`
 is the built-in user. Transforms that aggregate over neighbouring cells of
 a vertex (point normals) or draw a global random subset (``SubsampleMesh``
 below the sample size) cannot run locally and raise; use
@@ -82,6 +86,18 @@ if TYPE_CHECKING:
 POINT_MEAN = "point_mean"
 AREA_WEIGHTED_CENTER = "area_weighted_center"
 SHARD_STATS = frozenset({POINT_MEAN, AREA_WEIGHTED_CENTER})
+
+# Per-rank float64 partial sums the reader returns for them, reduced by
+# :func:`reduce_shard_stats`: sum and count of the owned vertices, and the
+# area-weighted centroid sum and total area of the rank's own cells.
+POINT_SUM = "point_sum"
+POINT_COUNT = "point_count"
+AREA_MOMENT = "area_moment"
+AREA_TOTAL = "area_total"
+_PARTIALS = (
+    (POINT_MEAN, POINT_SUM, POINT_COUNT),
+    (AREA_WEIGHTED_CENTER, AREA_MOMENT, AREA_TOTAL),
+)
 
 Axis = Literal["cells", "points"]
 
@@ -159,8 +175,10 @@ class LocalMeshShard:
     info : LocalShardInfo
         Global sizes needed to wrap the transformed sample.
     stats : TensorDict
-        Whole-mesh statistics requested by the transforms (see
-        :data:`SHARD_STATS`), identical on every rank.
+        Per-rank partial sums for the statistics requested by the
+        transforms (:data:`POINT_SUM`, ...); after :func:`reduce_shard_stats`
+        the whole-mesh statistics (:data:`SHARD_STATS`), identical on every
+        rank.
     """
 
     mesh: Mesh
@@ -180,6 +198,49 @@ class LocalMeshShard:
         return LocalMeshShard(
             mesh=self.mesh.pin_memory(), info=self.info, stats=self.stats.pin_memory()
         )
+
+
+def reduce_shard_stats(shard: LocalMeshShard) -> LocalMeshShard:
+    r"""Combine the per-rank partial sums of *shard* into whole-sample statistics.
+
+    Issues one ``all_reduce`` (SUM) of a small float64 buffer over the
+    shard's device mesh group (on the mesh's device type, e.g. CUDA for
+    NCCL). A shard without statistics is returned unchanged, without any
+    collective.
+
+    Parameters
+    ----------
+    shard : LocalMeshShard
+        Payload whose ``stats`` hold partial keys (:data:`POINT_SUM`, ...).
+
+    Returns
+    -------
+    LocalMeshShard
+        The same shard with ``stats`` holding :data:`POINT_MEAN` and/or
+        :data:`AREA_WEIGHTED_CENTER` (float64).
+    """
+    keys = set(shard.stats.keys())
+    if not keys:
+        return shard
+    present = [p for p in _PARTIALS if p[1] in keys]
+    parts = [shard.stats[k].reshape(-1) for _, num, den in present for k in (num, den)]
+    sizes = [p.numel() for p in parts]
+    buffer = torch.cat([p.to(torch.float64) for p in parts])
+    out_device = buffer.device
+    device_mesh = shard.info.device_mesh
+    if buffer.device.type != device_mesh.device_type:
+        dev = torch.device(device_mesh.device_type)
+        if dev.type == "cuda":
+            dev = torch.device("cuda", torch.cuda.current_device())
+        buffer = buffer.to(dev)
+    torch.distributed.all_reduce(buffer, group=device_mesh.get_group())
+    values = buffer.to(out_device).split(sizes)
+    stats = {
+        key: values[2 * i] / values[2 * i + 1] for i, (key, _, _) in enumerate(present)
+    }
+    return LocalMeshShard(
+        mesh=shard.mesh, info=shard.info, stats=TensorDict(stats, batch_size=[])
+    )
 
 
 # ---------------------------------------------------------------------------

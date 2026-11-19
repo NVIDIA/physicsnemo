@@ -17,9 +17,11 @@
 r"""Single-process tests of the ``"local"`` domain-parallel mesh layout.
 
 Every rank's share is read and transformed here in one process, with no
-process group at all: a rank processes its share alone, so neither the read
-nor the transforms can communicate. Concatenated over the ranks, the shares
-must reproduce the unsharded read and transform chain bit for bit. The
+process group at all: a rank reads and transforms its share alone; the one
+all-reduce of the centering statistics' partial sums is done here by summing
+every rank's partials. Concatenated over the ranks, the shares must
+reproduce the unsharded read and transform chain (bit for bit, except the
+center and what depends on it, which match up to float rounding). The
 ShardTensor wrap and the multi-rank pipeline are covered in
 ``test/domain_parallel/datapipes/test_local_mesh_shard_dataset.py``.
 """
@@ -31,8 +33,12 @@ from tensordict import TensorDict
 import physicsnemo.datapipes.mesh_dataset as mesh_dataset_module
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._local_shard import (
+    AREA_MOMENT,
+    AREA_TOTAL,
     AREA_WEIGHTED_CENTER,
+    POINT_COUNT,
     POINT_MEAN,
+    POINT_SUM,
     LocalMeshShard,
     LocalShardInfo,
     read_rows,
@@ -137,7 +143,25 @@ def _shares(open_source, world, window, stats=frozenset()):
     ]
 
 
-def _as_payload(share, rank) -> LocalMeshShard:
+_TOL = {"atol": 1e-5, "rtol": 1e-6}
+
+
+def _reduced_stats(shares) -> TensorDict:
+    r"""In-process stand-in for ``reduce_shard_stats``: sum every rank's
+    partials, then divide."""
+    out = {}
+    for key, num, den in (
+        (POINT_MEAN, POINT_SUM, POINT_COUNT),
+        (AREA_WEIGHTED_CENTER, AREA_MOMENT, AREA_TOTAL),
+    ):
+        if num in shares[0].stats.keys():
+            out[key] = sum(s.stats[num] for s in shares) / sum(
+                s.stats[den] for s in shares
+            )
+    return TensorDict(out, batch_size=[])
+
+
+def _as_payload(share, rank, stats=None) -> LocalMeshShard:
     info = LocalShardInfo(
         device_mesh=None,  # never touched before the wrap
         rank=rank,
@@ -145,7 +169,9 @@ def _as_payload(share, rank) -> LocalMeshShard:
         point_sizes=share.point_sizes,
         n_points=share.n_points,
     )
-    return LocalMeshShard(mesh=share.mesh, info=info, stats=share.stats)
+    return LocalMeshShard(
+        mesh=share.mesh, info=info, stats=share.stats if stats is None else stats
+    )
 
 
 @pytest.mark.parametrize("windowed", [False, True])
@@ -190,17 +216,38 @@ def test_shares_reproduce_unsharded_read(source, world, windowed):
         )
     assert torch.equal(shares[0].mesh.global_data["Re"], reference.global_data["Re"])
 
-    # Whole-sample statistics: CenterMesh's own computation on the unsharded
-    # sample, identical on every rank.
+    # Only the partial sums, in float64.
     for share in shares:
-        assert torch.equal(
-            share.stats[POINT_MEAN],
-            CenterMesh(use_area_weighting=False)._compute_com(reference),
-        )
-        assert torch.equal(
-            share.stats[AREA_WEIGHTED_CENTER],
-            CenterMesh(use_area_weighting=True)._compute_com(reference),
-        )
+        assert set(share.stats.keys()) == {
+            POINT_SUM,
+            POINT_COUNT,
+            AREA_MOMENT,
+            AREA_TOTAL,
+        }
+        assert all(v.dtype == torch.float64 for v in share.stats.values())
+
+
+@pytest.mark.parametrize("windowed", [False, True])
+@pytest.mark.parametrize("world", [1, 2, 3, 4])
+def test_partial_sums_reproduce_unsharded_center(source, world, windowed):
+    r"""Summed over every rank, the partials give the unsharded point mean
+    (seam vertices counted once) and area-weighted center."""
+    open_source, full = source
+    window, reference = _window_and_reference(full, windowed)
+    shares = _shares(open_source, world, window, {POINT_MEAN, AREA_WEIGHTED_CENTER})
+    count = sum(s.stats[POINT_COUNT] for s in shares)
+    assert int(count.item()) == reference.n_points
+    stats = _reduced_stats(shares)
+    torch.testing.assert_close(
+        stats[POINT_MEAN].to(reference.points.dtype),
+        CenterMesh(use_area_weighting=False)._compute_com(reference),
+        **_TOL,
+    )
+    torch.testing.assert_close(
+        stats[AREA_WEIGHTED_CENTER].to(reference.points.dtype),
+        CenterMesh(use_area_weighting=True)._compute_com(reference),
+        **_TOL,
+    )
 
 
 def test_statistics_only_on_request(source):
@@ -275,13 +322,17 @@ def test_local_transform_chain_matches_unsharded(
     for t in chain:
         stats |= t.required_shard_stats()
     shares = _shares(open_source, world, window, stats)
-    outputs = [_apply_local(chain, _as_payload(s, r)) for r, s in enumerate(shares)]
+    reduced = _reduced_stats(shares)
+    outputs = [
+        _apply_local(chain, _as_payload(s, r, reduced)) for r, s in enumerate(shares)
+    ]
     for t in chain:
         reference = t(reference)
 
     cat = torch.cat
-    assert torch.equal(
-        cat([o.interior.points for o in outputs]), reference.interior.points
+    # Geometry is centered by the reduced center: equal up to rounding.
+    torch.testing.assert_close(
+        cat([o.interior.points for o in outputs]), reference.interior.points, **_TOL
     )
     for key in reference.interior.point_data.keys():
         assert torch.equal(
@@ -290,14 +341,18 @@ def test_local_transform_chain_matches_unsharded(
         )
     bnd = [o.boundaries["vehicle"] for o in outputs]
     ref_bnd = reference.boundaries["vehicle"]
-    assert torch.equal(
-        cat([b.cell_data["normals"] for b in bnd]), ref_bnd.cell_data["normals"]
+    torch.testing.assert_close(
+        cat([b.cell_data["normals"] for b in bnd]),
+        ref_bnd.cell_data["normals"],
+        **_TOL,
     )
-    assert torch.equal(
-        cat([b.points[b.cells] for b in bnd]), ref_bnd.points[ref_bnd.cells]
+    torch.testing.assert_close(
+        cat([b.points[b.cells] for b in bnd]), ref_bnd.points[ref_bnd.cells], **_TOL
     )
     for o in outputs:
-        assert torch.equal(o.global_data["center"], reference.global_data["center"])
+        torch.testing.assert_close(
+            o.global_data["center"], reference.global_data["center"], **_TOL
+        )
         assert "Re" not in o.global_data.keys()
 
 
@@ -341,12 +396,18 @@ def test_dataset_runs_chain_on_local_share(source, monkeypatch):
     moved the geometry."""
     open_source, full = source
     window, _ = _window_and_reference(full, True)
-    share = read_local_cell_shard(
-        open_source(), rank=1, world_size=2, cell_window=window, stats={POINT_MEAN}
-    )
-    payload = _as_payload(share, 1)
-    # The wrap needs a device mesh; this test stops before it.
+    shares = _shares(open_source, 2, window, {POINT_MEAN})
+    payload = _as_payload(shares[1], 1)
+    center = _reduced_stats(shares)[POINT_MEAN]
+    # The wrap and the all-reduce need a device mesh; stand in for both.
     monkeypatch.setattr(mesh_dataset_module, "wrap_local_sample", lambda d, info: d)
+    monkeypatch.setattr(
+        mesh_dataset_module,
+        "reduce_shard_stats",
+        lambda sh: LocalMeshShard(
+            mesh=sh.mesh, info=sh.info, stats=TensorDict({POINT_MEAN: center})
+        ),
+    )
 
     reader = _StubReader([payload])
     dataset = MeshDataset(
@@ -356,7 +417,10 @@ def test_dataset_runs_chain_on_local_share(source, monkeypatch):
     assert reader.requested == {POINT_MEAN}
     mesh, _ = dataset[0]
     torch.testing.assert_close(
-        mesh.points, payload.mesh.points - share.stats[POINT_MEAN], rtol=0, atol=0
+        mesh.points,
+        payload.mesh.points - center.to(payload.mesh.points.dtype),
+        rtol=0,
+        atol=0,
     )
     # Producer/consumer path.
     mesh2, _ = dataset._consume(dataset._load_host(0))

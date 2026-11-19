@@ -228,8 +228,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference, renumbered locally, with sequential reads of memory-mapped files.
   `MeshDataset` runs the transforms on that plain mesh and then wraps the
   sample into ShardTensors without communication, so centering, normals,
-  centroids and areas no longer need a routed gather each. The loader issues
-  no collectives, cell-axis outputs equal the unsharded sample, and the
+  centroids and areas no longer need a routed gather each. The whole-sample
+  center for `CenterMesh` comes from per-rank partial sums and one small
+  all-reduce (the loader issues no other collectives), cell-axis outputs equal the unsharded sample, and the
   per-sample main-thread cost of the DrivAerML surface chain drops from tens
   of milliseconds to a few. Seam vertices appear on every rank holding one of
   their cells. `mesh_layout: global` keeps the previous layout, which
