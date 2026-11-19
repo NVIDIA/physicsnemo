@@ -125,11 +125,3 @@ def predict(
     r"""Normalized prediction :math:`(N, 4)` for a batch of one sample."""
     with autocast(device, precision):
         return model(**model_inputs(batch, device))[0].float()
-
-
-def newest(directory: str | Path, pattern: str) -> Path:
-    r"""The most recently modified file matching ``pattern`` in ``directory``."""
-    files = sorted(Path(directory).glob(pattern), key=lambda p: p.stat().st_mtime)
-    if not files:
-        raise FileNotFoundError(f"No {pattern} in {directory}")
-    return files[-1]
