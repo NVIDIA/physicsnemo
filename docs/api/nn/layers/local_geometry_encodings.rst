@@ -1,4 +1,4 @@
-Local Geometry Encodings (experimental)
+Local Geometry Encodings (Experimental)
 =======================================
 
 Two layers that tell each query point about the geometry around it, for

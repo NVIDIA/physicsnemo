@@ -111,7 +111,7 @@ cross-attention adapter. The core FLARE++ implementation therefore remains
 shared with the standalone model rather than being duplicated in
 GeoTransolver.
 
-GeoTransolver with local geometry encodings (experimental)
+GeoTransolver with local geometry encodings (Experimental)
 ----------------------------------------------------------
 
 :class:`~physicsnemo.experimental.models.geotransolver_sdf.GeoTransolverSDF`
