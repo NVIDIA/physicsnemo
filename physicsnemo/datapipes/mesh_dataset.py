@@ -31,6 +31,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes._local_shard import (
     LocalMeshShard,
+    new_shard_stats_group,
     reduce_shard_stats,
     wrap_local_sample,
 )
@@ -136,6 +137,7 @@ class MeshDataset(DatasetBase):
         self._host_cache_index_locks: dict[int, threading.Lock] = {}
         self.transforms = list(transforms) if transforms else []
         self._device = torch.device(device) if isinstance(device, str) else device
+        self._stats_group = None
 
         if self._device is not None:
             for t in self.transforms:
@@ -238,6 +240,28 @@ class MeshDataset(DatasetBase):
 
         return data, metadata
 
+    def prepare_background_consume(self) -> None:
+        """Prepare for :meth:`consume` on a background thread.
+
+        Call on the main thread, on all ranks. Under the ``"local"`` layout,
+        creates (once) a dedicated process group over the device mesh's ranks
+        for the centering all-reduce, so it does not share a communicator with
+        the main thread. Under the ``"global"`` layout its collectives run
+        inside ShardTensor ops on the mesh's groups, so this raises.
+        """
+        config = getattr(self.reader, "_domain_parallel", None)
+        if config is None or getattr(config, "device_mesh", None) is None:
+            return
+        if config.mesh_layout != "local":
+            raise ValueError(
+                "background consume is not supported with domain parallelism "
+                f"and mesh_layout={config.mesh_layout!r}: its collectives run "
+                "inside ShardTensor ops on the main thread; use "
+                'mesh_layout "local"'
+            )
+        if self._stats_group is None:
+            self._stats_group = new_shard_stats_group(config.device_mesh)
+
     def _apply_local_shard(self, shard: LocalMeshShard) -> Any:
         """Run the transforms on a ``"local"``-layout share, then wrap it.
 
@@ -245,7 +269,7 @@ class MeshDataset(DatasetBase):
         local sample, and the result is wrapped into ShardTensors.
         """
         with torch.profiler.record_function("MeshDataset: reduce shard stats"):
-            shard = reduce_shard_stats(shard)
+            shard = reduce_shard_stats(shard, group=self._stats_group)
         data: Any = shard.mesh
         geometry_moved = None
         for t in self.transforms:

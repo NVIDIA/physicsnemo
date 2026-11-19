@@ -137,7 +137,25 @@ class LocalMeshShard:
         )
 
 
-def reduce_shard_stats(shard: LocalMeshShard) -> LocalMeshShard:
+def new_shard_stats_group(device_mesh):
+    r"""Create a process group with the same ranks as ``device_mesh``'s group.
+
+    Collective over the whole world: every rank must call it. Ranks gather
+    every domain group's rank list, then all create all groups in the same
+    order (``new_group`` requires that); this rank keeps its own.
+    """
+    mine = tuple(torch.distributed.get_process_group_ranks(device_mesh.get_group()))
+    gathered = [None] * torch.distributed.get_world_size()
+    torch.distributed.all_gather_object(gathered, mine)
+    mine_group = None
+    for ranks in sorted(set(gathered)):
+        group = torch.distributed.new_group(ranks=list(ranks))
+        if ranks == mine:
+            mine_group = group
+    return mine_group
+
+
+def reduce_shard_stats(shard: LocalMeshShard, group=None) -> LocalMeshShard:
     r"""Combine the per-rank partial sums of *shard* into whole-sample statistics.
 
     One float64 ``all_reduce`` (SUM); no collective if there are no stats.
@@ -146,6 +164,8 @@ def reduce_shard_stats(shard: LocalMeshShard) -> LocalMeshShard:
     ----------
     shard : LocalMeshShard
         Payload whose ``stats`` hold partial keys (:data:`POINT_SUM`, ...).
+    group : ProcessGroup, optional
+        Group to reduce over; default the device mesh's group.
 
     Returns
     -------
@@ -167,7 +187,9 @@ def reduce_shard_stats(shard: LocalMeshShard) -> LocalMeshShard:
         if dev.type == "cuda":
             dev = torch.device("cuda", torch.cuda.current_device())
         buffer = buffer.to(dev)
-    torch.distributed.all_reduce(buffer, group=device_mesh.get_group())
+    torch.distributed.all_reduce(
+        buffer, group=group if group is not None else device_mesh.get_group()
+    )
     values = buffer.to(out_device).split(sizes)
     stats = {
         key: values[2 * i] / values[2 * i + 1] for i, (key, _, _) in enumerate(present)
