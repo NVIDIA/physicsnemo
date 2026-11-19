@@ -582,10 +582,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fresh AdamW keeps them, unless the optimizer is fused or capturable. Step
   counts on the GPU forced host syncs in every later eager optimizer step and
   slowed resumed training.
+- At `tree_read_theta > 0`, ISLA's reference boundary read holds each cluster's
+  cell weights fixed in its means, as the fused CUDA kernel does, so both give
+  the same derivatives in the boundary's vertices. They used to disagree there.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
   repeated triangles or stray triangles.
+- ISLA's `query_chunks` works when the cells' measures require gradients,
+  whether they come from the boundary vertices or from a given
+  `_effective_measure`. It used to raise in a later chunk's backward pass or
+  in `QueryChunks.backward`.
 - Distributed `load_checkpoint` restores the optimizer state on every rank when
   `optimizer_model` is not distributed, such as a small model trained beside an
   FSDP model. Before, only rank 0 restored it, and the other ranks silently kept
