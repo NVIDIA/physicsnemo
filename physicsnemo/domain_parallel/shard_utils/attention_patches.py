@@ -16,6 +16,9 @@
 
 from __future__ import annotations
 
+import functools
+import os
+import warnings
 from typing import Any, Callable
 
 import torch
@@ -24,6 +27,7 @@ import torch.distributed._functional_collectives as funcol
 from torch.autograd.profiler import record_function
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor.placement_types import Replicate
+from torch.utils._python_dispatch import _disable_current_modes
 
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel._shard_tensor_spec import validate_aligned_sharding
@@ -908,6 +912,160 @@ def ring_sdpa(
     return x
 
 
+_DP_SDPA_BACKEND_ENV = "PHYSICSNEMO_DP_SDPA_BACKEND"
+
+
+@functools.lru_cache(maxsize=None)
+def _flash_attention_supported(
+    device_index: int,
+    capability: tuple[int, int],
+    dtype: torch.dtype,
+    head_dim: int,
+    square: bool,
+    has_mask: bool,
+    has_dropout: bool,
+    is_causal: bool,
+    flash_enabled: bool,
+) -> tuple[bool, str]:
+    r"""Ask PyTorch whether its flash kernel runs for this configuration.
+
+    Probes :func:`torch.backends.cuda.can_use_flash_attention` once per key
+    with tiny real tensors of the same device, dtype and head dim (requiring
+    grad, as the backward kernel runs too). ``capability`` and
+    ``flash_enabled`` (:func:`torch.backends.cuda.flash_sdp_enabled`) are not
+    used directly; they are part of the cache key so a different GPU or a
+    ``sdpa_kernel`` context that toggles flash gets its own answer.
+
+    Returns
+    -------
+    tuple[bool, str]
+        Whether flash is usable and, if not, PyTorch's reasons.
+    """
+    if not flash_enabled:
+        return False, "flash SDPA is disabled (torch.backends.cuda.flash_sdp_enabled())"
+    if not hasattr(torch.backends.cuda, "can_use_flash_attention"):
+        return False, "torch.backends.cuda.can_use_flash_attention is unavailable"
+    device = torch.device("cuda", device_index)
+    s_q, s_kv = (8, 8) if square else (8, 16)
+
+    def mk(s: int) -> torch.Tensor:
+        return torch.zeros(
+            1, 1, s, head_dim, device=device, dtype=dtype, requires_grad=True
+        )
+
+    # Real tensors even if reached while a fake / proxy dispatch mode is active.
+    with _disable_current_modes(), warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        q, k, v = mk(s_q), mk(s_kv), mk(s_kv)
+        mask = torch.zeros(s_q, s_kv, device=device, dtype=dtype) if has_mask else None
+        params = torch.backends.cuda.SDPAParams(
+            q, k, v, mask, 0.1 if has_dropout else 0.0, is_causal, False
+        )
+        ok = bool(torch.backends.cuda.can_use_flash_attention(params, True))
+    reason = "; ".join(str(w.message) for w in caught) or "unsupported"
+    return ok, ("" if ok else reason)
+
+
+@torch.compiler.assume_constant_result
+def _select_replicated_q_backend(
+    device_type: str,
+    device_index: int | None,
+    dtypes: tuple[torch.dtype, torch.dtype, torch.dtype],
+    head_dims: tuple[int, int, int],
+    square: bool,
+    has_mask: bool,
+    has_dropout: bool,
+    is_causal: bool,
+) -> str:
+    r"""Resolve the backend from metadata only (a compile-time constant).
+
+    Marked :func:`torch.compiler.assume_constant_result`: under
+    ``torch.compile`` it runs once at trace time on Python values and the
+    resulting string is baked into the graph, so the environment lookup,
+    the flag query and the capability probe never enter the graph.
+    """
+    mode = os.environ.get(_DP_SDPA_BACKEND_ENV, "auto").strip().lower()
+    if mode not in ("auto", "flash", "efficient"):
+        raise ValueError(
+            f"{_DP_SDPA_BACKEND_ENV} must be auto, flash or efficient; got {mode!r}"
+        )
+    if mode == "efficient":
+        return "efficient"
+
+    reasons = []
+    dtype = dtypes[0]
+    head_dim = head_dims[0]
+    if device_type != "cuda":
+        reasons.append("inputs must be CUDA")
+    if not (
+        dtypes[0] == dtypes[1] == dtypes[2] and dtype in (torch.float16, torch.bfloat16)
+    ):
+        reasons.append("q/k/v must share dtype fp16 or bf16")
+    # The raw flash op does not pad the head dim (the public SDPA does).
+    if head_dim > 256 or head_dim % 8 != 0 or len(set(head_dims)) != 1:
+        reasons.append("head_dim must be <= 256 and a multiple of 8 (q, k, v equal)")
+    if not reasons:
+        index = torch.cuda.current_device() if device_index is None else device_index
+        ok, why = _flash_attention_supported(
+            index,
+            torch.cuda.get_device_capability(index),
+            dtype,
+            head_dim,
+            square,
+            has_mask,
+            has_dropout,
+            is_causal,
+            torch.backends.cuda.flash_sdp_enabled(),
+        )
+        if not ok:
+            reasons.append(why)
+    if reasons:
+        if mode == "flash":
+            raise RuntimeError("flash backend ineligible: " + "; ".join(reasons))
+        return "efficient"
+    return "flash"
+
+
+def replicated_q_sdpa_backend(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    attn_mask: torch.Tensor | None = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+) -> str:
+    r"""Choose the local kernel for :class:`ReplicatedQSDPA`.
+
+    ``PHYSICSNEMO_DP_SDPA_BACKEND`` in ``{auto, flash, efficient}`` (default
+    ``auto``). Flash is eligible when the inputs are CUDA fp16/bf16 with equal
+    head dims (<= 256, a multiple of 8), flash SDPA is enabled
+    (:func:`torch.backends.cuda.flash_sdp_enabled`, so an enclosing
+    ``sdpa_kernel`` context that excludes flash is honored), and PyTorch's own
+    :func:`torch.backends.cuda.can_use_flash_attention` accepts the
+    configuration on this device (e.g. not on pre-sm80 GPUs or builds without
+    flash). ``auto`` falls back to ``"efficient"`` when ineligible; ``flash``
+    raises with the reasons; ``efficient`` always uses the efficient kernel.
+
+    The decision uses tensor metadata only and is cached per configuration;
+    under ``torch.compile`` it is a trace-time constant (no graph break).
+
+    Returns
+    -------
+    str
+        ``"flash"`` or ``"efficient"``.
+    """
+    return _select_replicated_q_backend(
+        q.device.type,
+        q.device.index,
+        (q.dtype, k.dtype, v.dtype),
+        (int(q.shape[-1]), int(k.shape[-1]), int(v.shape[-1])),
+        bool((not is_causal) or q.shape[-2] == k.shape[-2]),
+        attn_mask is not None,
+        dropout_p > 0.0,
+        bool(is_causal),
+    )
+
+
 class ReplicatedQSDPA(torch.autograd.Function):
     r"""SDPA with replicated queries against sequence-sharded keys/values.
 
@@ -917,8 +1075,10 @@ class ReplicatedQSDPA(torch.autograd.Function):
     flash-attention reduction: gather the per-block normalizers, form the
     global log-sum-exp, rescale each partial output, and all-reduce.
 
-    The backward mirrors :class:`RingSDPABlocking`'s per-block step: the
-    efficient-attention backward kernel with the *global* output and
+    The local kernel is flash attention or memory-efficient attention, per
+    :func:`replicated_q_sdpa_backend`. The backward mirrors
+    :class:`RingSDPABlocking`'s per-block step: the matching backward kernel
+    with the *global* output and
     log-sum-exp against the *local* K/V block yields exact block gradients.
     ``grad_q`` is a sum of per-block contributions (all-reduce); ``grad_k`` /
     ``grad_v`` stay local to the block.
@@ -940,22 +1100,39 @@ class ReplicatedQSDPA(torch.autograd.Function):
         Returns ``(output, global_log_sumexp, philox_seed, philox_offset)``;
         the extras are consumed by backward and marked non-differentiable.
         """
-        (
-            output,
-            log_sumexp,
-            philox_seed,
-            philox_offset,
-        ) = aten._scaled_dot_product_efficient_attention(
+        backend = replicated_q_sdpa_backend(
             q,
             k,
             v,
             None,
-            compute_log_sumexp=True,
-            **attn_args,
+            attn_args.get("dropout_p", 0.0),
+            attn_args.get("is_causal", False),
         )
+        if backend == "flash":
+            # flash lse is (B, H, S_q) fp32, unpadded; philox state is returned
+            # as tensors (dropout is rejected upstream).
+            flash_out = aten._scaled_dot_product_flash_attention(
+                q, k, v, return_debug_mask=False, **attn_args
+            )
+            output, log_sumexp = flash_out[0], flash_out[1]
+            philox_seed, philox_offset = flash_out[6], flash_out[7]
+        else:
+            (
+                output,
+                log_sumexp,
+                philox_seed,
+                philox_offset,
+            ) = aten._scaled_dot_product_efficient_attention(
+                q,
+                k,
+                v,
+                None,
+                compute_log_sumexp=True,
+                **attn_args,
+            )
 
-        # The kernel pads log_sumexp's sequence dim to an alignment multiple;
-        # combine over the valid region only.
+        # The efficient kernel pads log_sumexp's sequence dim to an alignment
+        # multiple; combine over the valid region only.
         s_q = q.shape[2]
         valid_lse = log_sumexp[..., :s_q]
 
@@ -1001,6 +1178,17 @@ class ReplicatedQSDPA(torch.autograd.Function):
         )
         ctx.mesh = mesh
         ctx.attn_args = attn_args
+        ctx.use_flash = (
+            replicated_q_sdpa_backend(
+                q,
+                k,
+                v,
+                None,
+                attn_args.get("dropout_p", 0.0),
+                attn_args.get("is_causal", False),
+            )
+            == "flash"
+        )
         ctx.mark_non_differentiable(global_log_sumexp, philox_seed, philox_offset)
 
     @staticmethod
@@ -1013,24 +1201,43 @@ class ReplicatedQSDPA(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None]:
         q, k, v, output, log_sumexp, philox_seed, philox_offset = ctx.saved_tensors
 
-        (
-            grad_q,
-            grad_k,
-            grad_v,
-            _grad_attn_mask,
-        ) = aten._scaled_dot_product_efficient_attention_backward(
-            grad_output.contiguous(),
-            q,
-            k,
-            v,
-            None,
-            output,
-            log_sumexp,
-            philox_seed,
-            philox_offset,
-            grad_input_mask=(True, True, True, False),
-            **ctx.attn_args,
-        )
+        if ctx.use_flash:
+            grad_q, grad_k, grad_v = aten._scaled_dot_product_flash_attention_backward(
+                grad_output.contiguous(),
+                q,
+                k,
+                v,
+                output,
+                log_sumexp,
+                None,
+                None,
+                q.shape[2],
+                k.shape[2],
+                ctx.attn_args.get("dropout_p", 0.0),
+                ctx.attn_args.get("is_causal", False),
+                philox_seed,
+                philox_offset,
+                scale=ctx.attn_args.get("scale"),
+            )
+        else:
+            (
+                grad_q,
+                grad_k,
+                grad_v,
+                _grad_attn_mask,
+            ) = aten._scaled_dot_product_efficient_attention_backward(
+                grad_output.contiguous(),
+                q,
+                k,
+                v,
+                None,
+                output,
+                log_sumexp,
+                philox_seed,
+                philox_offset,
+                grad_input_mask=(True, True, True, False),
+                **ctx.attn_args,
+            )
 
         # Every K/V block contributes to the (replicated) queries' gradient.
         grad_q = funcol.all_reduce(grad_q.contiguous(), "sum", (ctx.mesh, 0))
