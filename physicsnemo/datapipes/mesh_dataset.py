@@ -95,15 +95,8 @@ class MeshDataset(DatasetBase):
         ----------
         reader : MeshReader or DomainMeshReader
             Mesh reader; returns (Mesh, metadata) or (DomainMesh, metadata).
-            A reader configured for domain-parallel reading (its
-            ``domain_parallel`` / ``device_mesh`` options) returns proto
-            payloads that this dataset assembles into ShardTensor-backed
-            meshes after the device transfer. Under the ``"local"`` mesh
-            layout (``MeshReader``'s default for meshes with cells) the
-            transforms run on the plain rank-local mesh, through
-            :meth:`MeshTransform.apply_local_shard`, and the result is wrapped
-            into ShardTensors afterwards; see
-            :mod:`physicsnemo.datapipes._local_shard`.
+            A domain-parallel reader returns payloads assembled into
+            ShardTensor-backed meshes (see :mod:`physicsnemo.datapipes._local_shard`).
         transforms : sequence of MeshTransform, optional
             Transforms to apply in order. None means no transforms.
         device : str or torch.device, optional
@@ -248,13 +241,8 @@ class MeshDataset(DatasetBase):
     def _apply_local_shard(self, shard: LocalMeshShard) -> Any:
         """Run the transforms on a ``"local"``-layout share, then wrap it.
 
-        The reader's partial statistics are first combined with one small
-        all-reduce (:func:`reduce_shard_stats`; none when no transform needs
-        them). Every transform then sees the plain rank-local sample (no
-        ShardTensor dispatch) through ``apply_local_shard``; reader
-        statistics are refused once a transform has moved the geometry they
-        were computed from. The result is wrapped into ``Shard(0)``
-        ShardTensors without communication.
+        Partial statistics are all-reduced first; transforms run on the plain
+        local sample, and the result is wrapped into ShardTensors.
         """
         with torch.profiler.record_function("MeshDataset: reduce shard stats"):
             shard = reduce_shard_stats(shard)

@@ -16,51 +16,19 @@
 
 r"""The ``"local"`` domain-parallel layout of a mesh with cells.
 
-Under ``domain_parallel={"mesh_layout": "local"}`` (the ``MeshReader``
-default), each rank of the 1-D device mesh reads its contiguous
-``torch.chunk``-style share of the (windowed) cells together with exactly the
-vertices those cells reference, renumbered so that its cells index its own
-points. The reader returns that plain, rank-local :class:`~physicsnemo.mesh.Mesh`
-in a :class:`LocalMeshShard`; ``MeshDataset`` runs the transform chain on it
-with plain tensors (no ShardTensor dispatch) and only then
-wraps the result into ``Shard(0)`` ShardTensors with explicit shard shapes
+Each rank reads its ``torch.chunk``-style share of the (windowed) cells plus
+the vertices they reference, renumbered locally, as a plain
+:class:`LocalMeshShard`. ``MeshDataset`` runs the transforms on it without
+ShardTensor dispatch, then wraps the result into ``Shard(0)`` ShardTensors
 (:func:`wrap_local_sample`, communication-free).
 
-Layout of the wrapped sample
-----------------------------
-- **Cell axis**: ``cells``, ``cell_data`` and every per-cell output of the
-  transforms (cell centroids as an interior point cloud, a
-  ``[n_cells, C]`` feature tensor, ...) are ``Shard(0)`` over the global
-  (windowed) cell count with ``torch.chunk`` shard sizes, exactly the rows of
-  the unsharded sample.
-- **Point axis**: ``points`` / ``point_data`` are each rank's referenced
-  vertices, sorted by their global id. Vertices shared by cells on two ranks
-  (the seam) appear on both, so the global point axis is the concatenation of
-  the per-rank vertex sets, *not* the unsharded point set: reductions over the
-  points count seam vertices once per rank holding them. ``cells`` are offset
-  into this concatenated axis, so ``points[cells]`` on the wrapped mesh still
-  resolves every cell's own vertices (the routed gather finds them on the
-  same rank).
-
-Transforms
-----------
-Transforms see the plain local mesh. Per-point and per-cell transforms
-(field ops, normalization, affine maps, augmentations whose parameters come
-from the rank-identical generators, cell normals / centroids / areas,
-``MeshToDomainMesh``) give exactly the rows of the unsharded result. A
-transform that needs a statistic over the whole mesh implements
-``required_shard_stats`` / ``apply_local_shard`` (see
-:class:`~physicsnemo.datapipes.transforms.mesh.base.MeshTransform`); the
-reader computes per-rank float64 partial sums from data the rank already
-holds (the vertices it owns, i.e. those whose lowest referencing rank it is,
-and its own cells), and ``MeshDataset`` combines them with one small
-all-reduce (:func:`reduce_shard_stats`) before the transforms. Without
-requested statistics the loader issues no collectives. The center equals
-the unsharded one up to float rounding. :class:`~physicsnemo.datapipes.transforms.mesh.CenterMesh`
-is the built-in user. Transforms that aggregate over neighbouring cells of
-a vertex (point normals) or draw a global random subset (``SubsampleMesh``
-below the sample size) cannot run locally and raise; use
-``mesh_layout: "global"`` for those chains.
+Cells and per-cell outputs are ``Shard(0)`` over the global cell count. The
+point axis is the concatenation of each rank's referenced vertices (sorted by
+global id): seam vertices appear on every rank holding them, so reductions over
+points count them once per rank. ``cells`` are offset into that axis, so
+``points[cells]`` still resolves locally. Transforms needing whole-mesh
+statistics implement ``required_shard_stats`` / ``apply_local_shard``; point
+normals and random ``SubsampleMesh`` cannot run locally (use ``"global"``).
 """
 
 from __future__ import annotations
@@ -78,18 +46,12 @@ from physicsnemo.mesh import DomainMesh, Mesh
 if TYPE_CHECKING:
     from torch.distributed.device_mesh import DeviceMesh
 
-# Whole-mesh statistics a local-layout reader can compute for the transforms.
-# ``point_mean``: mean of the sample's points (the window's referenced
-# vertices under cell subsampling). ``area_weighted_center``: cell-area
-# weighted mean of the cell centroids. Both are what ``CenterMesh`` computes
-# on the unsharded sample.
+# Whole-mesh statistics a local-layout reader can compute (as ``CenterMesh`` does).
 POINT_MEAN = "point_mean"
 AREA_WEIGHTED_CENTER = "area_weighted_center"
 SHARD_STATS = frozenset({POINT_MEAN, AREA_WEIGHTED_CENTER})
 
-# Per-rank float64 partial sums the reader returns for them, reduced by
-# :func:`reduce_shard_stats`: sum and count of the owned vertices, and the
-# area-weighted centroid sum and total area of the rank's own cells.
+# Per-rank float64 partial sums, combined by :func:`reduce_shard_stats`.
 POINT_SUM = "point_sum"
 POINT_COUNT = "point_count"
 AREA_MOMENT = "area_moment"
@@ -100,31 +62,6 @@ _PARTIALS = (
 )
 
 Axis = Literal["cells", "points"]
-
-
-# ---------------------------------------------------------------------------
-# Row reads
-# ---------------------------------------------------------------------------
-
-
-def read_rows(
-    t: torch.Tensor, selection: slice | torch.Tensor | None = None
-) -> torch.Tensor:
-    r"""``t[selection]`` (all rows for ``None``) materialized in host memory.
-
-    Parameters
-    ----------
-    t : torch.Tensor
-        Source tensor, typically a lazily loaded memmap leaf.
-    selection : slice or Tensor or None
-        Slice, 1-D integer index, or ``None`` for every row.
-
-    Returns
-    -------
-    torch.Tensor
-        A plain tensor owning its memory.
-    """
-    return torch.as_tensor(t if selection is None else t[selection]).clone()
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +140,7 @@ class LocalMeshShard:
 def reduce_shard_stats(shard: LocalMeshShard) -> LocalMeshShard:
     r"""Combine the per-rank partial sums of *shard* into whole-sample statistics.
 
-    Issues one ``all_reduce`` (SUM) of a small float64 buffer over the
-    shard's device mesh group (on the mesh's device type, e.g. CUDA for
-    NCCL). A shard without statistics is returned unchanged, without any
-    collective.
+    One float64 ``all_reduce`` (SUM); no collective if there are no stats.
 
     Parameters
     ----------
@@ -315,77 +249,51 @@ def _mesh_axes(
     return _axis_of_length(n_points, info, f"{what} points"), False
 
 
-def _wrap_mesh(mesh: Mesh, info: LocalShardInfo, what: str) -> Mesh:
-    points_axis, cells_sharded = _mesh_axes(mesh.n_points, mesh.n_cells, info, what)
+def _wrap_parts(points, cells, point_data, cell_data, info, what):
+    """Wrap the points / cells / point_data / cell_data of a (sub-)mesh."""
+    n_cells = 0 if cells is None else cells.shape[0]
+    points_axis, cells_sharded = _mesh_axes(points.shape[0], n_cells, info, what)
     point_offset = sum(info.point_sizes[: info.rank])
+    if points_axis is not None:
+        points = _shard(points, _sizes(points_axis, info), info)
+        if point_data is not None:
+            point_data = _wrap_tree(point_data, points_axis, info)
+    if cells_sharded:
+        # Offset into the concatenated point axis.
+        cells = _shard(cells + point_offset, info.cell_sizes, info)
+        if cell_data is not None:
+            cell_data = _wrap_tree(cell_data, "cells", info)
+    return points, cells, point_data, cell_data
 
-    def points_leaf(t):
-        return t if points_axis is None else _shard(t, _sizes(points_axis, info), info)
 
+def _wrap_mesh(mesh: Mesh, info: LocalShardInfo, what: str) -> Mesh:
+    points, cells, point_data, cell_data = _wrap_parts(
+        mesh.points, mesh.cells, mesh.point_data, mesh.cell_data, info, what
+    )
     return Mesh(
-        points=points_leaf(mesh.points),
-        # Offset into the concatenated point axis: each cell's vertices are
-        # rows of its own rank's points.
-        cells=(
-            _shard(mesh.cells + point_offset, info.cell_sizes, info)
-            if cells_sharded
-            else mesh.cells
-        ),
-        point_data=(
-            mesh.point_data
-            if points_axis is None
-            else _wrap_tree(mesh.point_data, points_axis, info)
-        ),
-        cell_data=(
-            _wrap_tree(mesh.cell_data, "cells", info)
-            if cells_sharded
-            else mesh.cell_data
-        ),
+        points=points,
+        cells=cells,
+        point_data=point_data,
+        cell_data=cell_data,
         global_data=mesh.global_data,
     )
 
 
 def _wrap_tensordict(td: TensorDict, info: LocalShardInfo) -> TensorDict:
     """A ``MeshToTensorDict``-style layout is wrapped like a mesh; other leaves by length."""
-    keys = set(td.keys())
-    if "points" in keys and not isinstance(td["points"], TensorDict):
-        cells = td.get("cells", None)
-        n_cells = 0 if cells is None else cells.shape[0]
-        points_axis, cells_sharded = _mesh_axes(
-            td["points"].shape[0], n_cells, info, "tensordict"
+    out: dict[str, Any] = {}
+    if "points" in td.keys() and not isinstance(td["points"], TensorDict):
+        pd, cd = td.get("point_data", None), td.get("cell_data", None)
+        pd = pd if isinstance(pd, TensorDict) else None
+        cd = cd if isinstance(cd, TensorDict) else None
+        points, cells, pd, cd = _wrap_parts(
+            td["points"], td.get("cells", None), pd, cd, info, "tensordict"
         )
-        point_offset = sum(info.point_sizes[: info.rank])
-        out: dict[str, Any] = {}
-        for key, value in td.items():
-            if key == "global_data":
-                out[key] = value
-            elif key == "points":
-                out[key] = (
-                    value
-                    if points_axis is None
-                    else _shard(value, _sizes(points_axis, info), info)
-                )
-            elif key == "cells":
-                out[key] = (
-                    _shard(value + point_offset, info.cell_sizes, info)
-                    if cells_sharded
-                    else value
-                )
-            elif key == "point_data" and isinstance(value, TensorDict):
-                out[key] = (
-                    value
-                    if points_axis is None
-                    else _wrap_tree(value, points_axis, info)
-                )
-            elif key == "cell_data" and isinstance(value, TensorDict):
-                out[key] = _wrap_tree(value, "cells", info) if cells_sharded else value
-            elif isinstance(value, TensorDict):
-                out[key] = _wrap_tensordict(value, info)
-            else:
-                out[key] = _wrap_tree(TensorDict({key: value}), None, info)[key]
-        return TensorDict(out, batch_size=[], device=td.device)
-    out = {}
+        wrapped = {"points": points, "cells": cells, "point_data": pd, "cell_data": cd}
+        out = {k: v for k, v in wrapped.items() if v is not None}
     for key, value in td.items():
+        if key in out:
+            continue
         if key == "global_data":
             out[key] = value
         elif isinstance(value, TensorDict):
@@ -398,14 +306,9 @@ def _wrap_tensordict(td: TensorDict, info: LocalShardInfo) -> TensorDict:
 def wrap_local_sample(sample: Any, info: LocalShardInfo) -> Any:
     r"""Wrap a transformed local sample into ``Shard(0)`` ShardTensors.
 
-    Communication-free: every rank knows every rank's cell and point counts
-    (:class:`LocalShardInfo`). Classification is structural where the
-    structure says it: a (sub-)mesh with cells must be this rank's shard (its
-    ``cells`` / ``cell_data`` go on the cell axis, ``points`` /
-    ``point_data`` on the point axis); a point cloud and a free-standing
-    leaf go on the axis whose local length they have (cell centroids on the
-    cell axis, vertices on the point axis), and stay plain (replicated) when
-    they match neither. ``global_data`` stays plain. Mesh caches are dropped.
+    Communication-free. A mesh with cells must be this rank's shard; point
+    clouds and free-standing leaves go on the axis matching their local
+    length, else stay plain. ``global_data`` stays plain.
 
     Parameters
     ----------

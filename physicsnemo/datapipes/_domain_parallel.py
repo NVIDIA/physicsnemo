@@ -35,13 +35,7 @@ Configuration
         # Optional overrides, keyed by axis name: "shard" | "replicate".
         # Anything not named falls back to the auto gate.
         "placements": {"interior.points": "shard", "boundaries.stl": "replicate"},
-        # Optional: how a sharded mesh with cells is laid out (MeshReader).
-        # "local" (MeshReader's default): each rank reads its contiguous
-        # share of the cells with exactly the vertices they reference,
-        # renumbered locally, and the transforms run on that plain local
-        # mesh; see physicsnemo.datapipes._local_shard. "global": points and
-        # cells are sharded independently, cells keep global vertex ids, and
-        # transforms run on the assembled ShardTensor mesh.
+        # Optional: layout of a sharded mesh with cells, "local" | "global".
         "mesh_layout": "local",
     }
 
@@ -84,7 +78,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Iterable, Literal, Mapping
+from typing import Any, Callable, Iterable, Literal, Mapping, get_args
 
 import torch
 from tensordict import TensorDict
@@ -111,7 +105,6 @@ DEFAULT_AUTO_SHARD_SIZE = 1024
 
 # Layouts of a sharded mesh with cells (see the module docstring).
 MeshLayoutName = Literal["local", "global"]
-_VALID_MESH_LAYOUTS: tuple[MeshLayoutName, ...] = ("local", "global")
 
 # Placement names as they appear in configuration. The ``domain_parallel``
 # dict is parsed from YAML (Hydra), so overrides are strings rather than
@@ -212,7 +205,7 @@ class DomainParallelConfig:
         if bad:
             raise ValueError(f'placements values must be "shard"|"replicate": {bad}')
         mesh_layout = config.get("mesh_layout")
-        if mesh_layout is not None and mesh_layout not in _VALID_MESH_LAYOUTS:
+        if mesh_layout is not None and mesh_layout not in get_args(MeshLayoutName):
             raise ValueError(
                 f'mesh_layout must be "local" or "global", got {mesh_layout!r}'
             )
