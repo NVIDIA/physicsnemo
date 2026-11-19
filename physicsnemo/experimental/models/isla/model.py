@@ -2796,7 +2796,7 @@ class QueryChunks:
             if self._scales is not None:
                 self._scales = {k: self._leaf(v) for k, v in self._scales.items()}
             ### The read's sources too: their pair invariants take a gradient when the geometry requires one, and
-            ### their log measures take the cells' measures' (which depend on the vertices unless given).
+            ### their log measures take one when the cells' measures do (from the vertices, or given).
             sources = ("src_r", "src_n", "src_vecs", "g_unit")
             self._walk.geometry = [
                 {k: self._leaf(v) if k in sources and v is not None else v for k, v in g.items()}
