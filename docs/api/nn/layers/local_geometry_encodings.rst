@@ -28,4 +28,4 @@ max-pooled.
 
 .. autoclass:: physicsnemo.experimental.nn.RadiusPooledFeatures
    :show-inheritance:
-   :members: neighbours
+   :members: neighbours, pool
