@@ -2796,12 +2796,14 @@ class QueryChunks:
             self._surface = (self._leaf(self._surface[0]), self._surface[1])
             if self._scales is not None:
                 self._scales = {k: self._leaf(v) for k, v in self._scales.items()}
-            ### The read's sources too: their pair invariants take a gradient when the geometry requires one.
+            ### The read's sources too: their pair invariants take a gradient when the geometry requires one, and
+            ### their log measures take one when the cells' measures do (from the vertices, or given).
             sources = ("src_r", "src_n", "src_vecs", "g_unit")
             self._walk.geometry = [
                 {k: self._leaf(v) if k in sources and v is not None else v for k, v in g.items()}
                 for g in self._walk.geometry
             ]
+            self._walk.src_logm = [self._leaf(t) for t in self._walk.src_logm]
         ### The blocks' log weights take the shift (the forest took the raw ones); each
         ### chunk's read takes the cells' and the conditions' shifts as leaves.
         self._log_shift = self._condition_shift = None
