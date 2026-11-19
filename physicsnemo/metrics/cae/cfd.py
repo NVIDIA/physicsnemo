@@ -277,14 +277,20 @@ if PV_AVAILABLE:
         wave_numbers = np.arange(0, nx + 1) * 2 * np.pi
         tke_spectrum = np.zeros(wave_numbers.shape)
 
-        # Filter out under-sampled regions
+        # Bin each mode by the magnitude of its signed integer wavenumber. FFT
+        # bins past the Nyquist index hold negative wavenumbers (0, 1, ..., -2, -1),
+        # so they fold onto the shell of their positive counterpart.
         # https://scicomp.stackexchange.com/questions/21360/computing-turbulent-energy-spectrum-from-isotropic-turbulence-flow-field-in-a-bo
-        for rkx in range(nx):
-            for rky in range(ny):
-                for rkz in range(nz):
-                    rk = int(np.round(np.sqrt(rkx * rkx + rky * rky + rkz * rkz)))
-                    if rk < len(tke_spectrum):
-                        tke_spectrum[rk] += E[rkx, rky, rkz]
+        ikx_g, iky_g, ikz_g = np.meshgrid(
+            np.fft.fftfreq(nx, 1.0 / nx),
+            np.fft.fftfreq(ny, 1.0 / ny),
+            np.fft.fftfreq(nz, 1.0 / nz),
+            indexing="ij",
+        )
+        rk = np.round(np.sqrt(ikx_g**2 + iky_g**2 + ikz_g**2)).astype(int)
+        # Filter out under-sampled regions
+        in_range = rk < len(tke_spectrum)
+        np.add.at(tke_spectrum, rk[in_range], E[in_range])
 
         E = E.flatten()
         mk = mk.flatten()
