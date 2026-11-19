@@ -246,7 +246,7 @@ def test_query_chunks_with_the_draw_active_equal_the_forward_pass(theta, monkeyp
         assert torch.allclose(p.grad, ref[name], rtol=1e-9, atol=1e-12 * scale), name
 
 
-@pytest.mark.parametrize("measures", ["effective", "geometric"])
+@pytest.mark.parametrize("measures", ["effective", "geometric", "given_with_grad"])
 def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data(
     measures,
 ):
@@ -255,7 +255,9 @@ def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data
     one forward pass, to 1e-12 of the largest (float64, another summation order): every
     tensor the chunks share is a leaf, so no chunk's backward frees another's graph.
     With ``geometric`` measures (no ``_effective_measure``) the cells' measures are
-    their areas, so the read's sources' log measures depend on the points too."""
+    their areas, so the read's sources' log measures depend on the points too. With
+    ``given_with_grad`` the given ``_effective_measure`` requires a gradient as well,
+    and gets the one of one forward pass."""
     m = _model()
     mesh, drv, q = _case()
     cell_data = mesh.cell_data
@@ -265,9 +267,16 @@ def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data
     def grads(chunked):
         pts = mesh.points.detach().clone().requires_grad_()
         g = drv.detach().clone().requires_grad_()
+        leaves = [pts, g]
+        data = cell_data
+        if measures == "given_with_grad":
+            eff = cell_data[EFFECTIVE_MEASURE_KEY].detach().clone().requires_grad_()
+            data = cell_data.exclude(EFFECTIVE_MEASURE_KEY)
+            data[EFFECTIVE_MEASURE_KEY] = eff
+            leaves.append(eff)
         kw = {
             "boundary_meshes": {
-                "wall": Mesh(points=pts, cells=mesh.cells, cell_data=cell_data)
+                "wall": Mesh(points=pts, cells=mesh.cells, cell_data=data)
             },
             "prediction_points": points_mesh(q),
             "global_data": {"g": g},
@@ -281,9 +290,9 @@ def test_query_chunks_carry_the_gradients_of_the_boundary_points_and_global_data
         else:
             out = outputs(m(**kw))
             sum(v.square().sum() for v in out.values()).backward()
-        return pts.grad, g.grad
+        return [t.grad for t in leaves]
 
-    for got, ref in zip(grads(chunked=True), grads(chunked=False)):
+    for got, ref in zip(grads(chunked=True), grads(chunked=False), strict=True):
         assert got is not None and float(ref.abs().max()) > 0
         assert torch.allclose(got, ref, rtol=0, atol=1e-12 * float(ref.abs().max()))
 
