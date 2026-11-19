@@ -295,8 +295,7 @@ class GeoTransolverSDF(Module):
     -----
     The neighbour searches and the signed distances run per sample of the batch, without gradient, in float32. The
     model is meant for one sample per GPU (meshes of different sizes are not padded into a batch) and has not been
-    tested with domain parallelism (:class:`~physicsnemo.domain_parallel.ShardTensor`), under which
-    :class:`ScaledSliceGALE` would count the tokens of the local shard.
+    tested with domain parallelism (:class:`~physicsnemo.domain_parallel.ShardTensor`).
 
     Examples
     --------
