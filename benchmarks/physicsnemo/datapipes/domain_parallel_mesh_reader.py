@@ -219,12 +219,13 @@ def main() -> None:
             f"read_mode={args.read_mode}"
         )
         print(
-            f"{'layout':8s} {'main ms (median/max)':>22s} {'reader ms (median/max)':>24s}"
+            "| layout | main ms median | main ms max | reader ms median | reader ms max |"
         )
+        print("|---|---|---|---|---|")
         for layout, r in results.items():
             print(
-                f"{layout:8s} {r['main'][0]:10.2f} / {r['main'][1]:8.2f} "
-                f"{r['reader'][0]:12.2f} / {r['reader'][1]:8.2f}"
+                f"| {layout} | {r['main'][0]:.2f} | {r['main'][1]:.2f} "
+                f"| {r['reader'][0]:.2f} | {r['reader'][1]:.2f} |"
             )
     dist.barrier()
     if tmp is not None:
