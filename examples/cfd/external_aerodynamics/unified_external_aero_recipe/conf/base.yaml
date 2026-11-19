@@ -51,6 +51,12 @@ training:
     weight_decay: 1.0e-4
     betas: [0.9, 0.999]
     eps: 1.0e-8
+    # Replay Muon's step as one CUDA graph: faster when the step is host-bound
+    # (small models or meshes), at extra GPU memory (0.52 GiB for GeoTransolver
+    # on DrivAerML). It replaces the compiled Muon step when compile is true.
+    # Keep it off with scheduler_update_mode "step": the graph is captured
+    # again for each new learning rate, which is slower than the eager step.
+    muon_cuda_graph: false
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:
