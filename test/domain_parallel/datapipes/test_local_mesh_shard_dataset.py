@@ -324,7 +324,10 @@ def test_local_layout_center_is_one_all_reduce(
         for i in range(_N_SAMPLES):
             events = _collective_events(dataset, [i])
             assert len(events) >= 1, events
-            assert all(re.search(r"all_?reduce", e, re.I) for e in events), events
+            # record_param_comms is the profiler's bookkeeping of that call.
+            assert all(
+                re.search(r"all_?reduce|record_param_comms", e, re.I) for e in events
+            ), events
             with torch.profiler.profile() as prof:
                 dataset._consume(dataset._load_host(i))
             n = sum(
