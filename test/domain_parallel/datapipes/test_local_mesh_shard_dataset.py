@@ -42,7 +42,9 @@ from physicsnemo.datapipes.readers.mesh import MeshReader
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
     ComputeSurfaceNormals,
+    MeshToTensorDict,
     RandomTranslateMesh,
+    RestructureTensorDict,
     SubsampleMesh,
 )
 from physicsnemo.distributed import DistributedManager
@@ -310,6 +312,16 @@ def test_local_layout_rejects_unsupported_chains(root_and_fmt, distributed_mesh)
             ValueError,
             "RandomTranslateMesh ran before it",
         ),
+        (
+            [
+                MeshToTensorDict(),
+                RestructureTensorDict(
+                    {"input": {"vertices": "points", "connectivity": "cells"}}
+                ),
+            ],
+            NotImplementedError,
+            "cannot move 'cells'",
+        ),
     ]:
         dataset = _dataset(
             root_and_fmt, dm.device, chain=chain, device_mesh=distributed_mesh
@@ -319,3 +331,18 @@ def test_local_layout_rejects_unsupported_chains(root_and_fmt, distributed_mesh)
                 dataset[0]
         finally:
             dataset.close()
+
+
+def test_local_layout_restructure_without_cells(root_and_fmt, distributed_mesh):
+    dm = DistributedManager()
+    chain = [
+        MeshToTensorDict(),
+        RestructureTensorDict({"input": {"vertices": "points"}}),
+    ]
+    dataset = _dataset(
+        root_and_fmt, dm.device, chain=chain, device_mesh=distributed_mesh
+    )
+    try:
+        assert "input" in dataset[0][0].keys()
+    finally:
+        dataset.close()
