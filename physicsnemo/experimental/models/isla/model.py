@@ -860,8 +860,9 @@ class ISLA(Module):
         dimensions, 0.77 in two), the default included, the coherence test
         rejects no cluster. At :math:`\theta > 0` the read is piecewise smooth:
         the output jumps where a cluster's admission changes, in the point and in
-        the boundary's vertices, and a cluster's position and normal take no
-        gradient. At 0 the read is smooth, and the model's derivatives in the
+        the boundary's vertices, and a cluster's position, normal and measure
+        take no gradient, and its means of the cells' values hold the cells'
+        weights fixed. At 0 the read is smooth, and the model's derivatives in the
         prediction points and in the boundary's vertices are complete. When the
         interior task keeps fewer boundary tokens than cells, the kept set
         changes in jumps as the vertices move, and the vertex derivative holds

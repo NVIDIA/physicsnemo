@@ -480,10 +480,12 @@ def test_boundary_forest_partition_is_the_same_under_a_winding_flip():
 
 def test_node_means_are_the_measure_weighted_means_of_every_node():
     """The scatter-and-sum-up node means equal the explicit weighted mean of each node's
-    cells, and carry a gradient to the cells' rows."""
+    cells, and carry a gradient to the cells' rows but none to their weights, which they
+    hold fixed as the nodes' measures are (and as the fused kernel does)."""
     pts, nrm, w, _ = cloud(300, d=3, seed=9)
     f = BoundaryForest.build(pts, w, nrm, None, theta=0.5, leaf_size=8, eps=1e-12)
     x = torch.randn(300, 4, 5, dtype=D, requires_grad=True)
+    w = w.clone().requires_grad_(True)
     means = tree_read.node_means(x, f, w)
     assert means.shape == (f.n_nodes, 4, 5)
     for i in range(f.n_nodes):
@@ -497,6 +499,7 @@ def test_node_means_are_the_measure_weighted_means_of_every_node():
         cells = _node_cells(f, i)
         ref[cells] += w[cells] / w[cells].sum()
     assert torch.allclose(x.grad, ref[:, None, None].expand_as(x), atol=1e-5)
+    assert w.grad is None
 
 
 @pytest.mark.parametrize("theta", [0.0, 0.5, 1.0])
@@ -2078,7 +2081,8 @@ def test_fused_node_means_match_the_reference(dtype):
     """The fused node means against ``node_means`` on a forest of a sphere: the
     backward bitwise (the same float32 additions, one per node), the forward to
     float32 roundoff before the cast (the reference sums each leaf's cells by atomics,
-    in no fixed order) and within the 2x-error rule of the float64 means."""
+    in no fixed order) and within the 2x-error rule of the float64 means. Neither
+    gives the cells' weights a gradient."""
     from physicsnemo.experimental.models.isla._fused_read import fused_node_means
 
     mesh, _, _ = _sphere_case(n=3000, nq=10)
@@ -2094,8 +2098,10 @@ def test_fused_node_means_match_the_reference(dtype):
     res = []
     for fn in (tree_read.node_means, fused_node_means):
         x = x0.clone().requires_grad_(True)
-        y = fn(x, forest, omega)
+        weights = omega.clone().requires_grad_(True)
+        y = fn(x, forest, weights)
         y.backward(gout)
+        assert weights.grad is None
         res.append((y.detach().float(), x.grad))
     tol = 1e-6 if dtype == torch.float32 else 8e-3
     assert torch.allclose(
