@@ -20,11 +20,23 @@ This module provides the Adjacency tensorclass for representing ragged arrays
 using offset-indices encoding, commonly used in graph and mesh processing.
 """
 
+from collections.abc import Sequence
+
 import torch
-from jaxtyping import Int
+from jaxtyping import Bool, Int
 from tensordict import TensorClass
 
 from physicsnemo.utils._tracing import is_tracing
+
+SourceSelection = (
+    slice
+    | Sequence[int]
+    | Sequence[bool]
+    | Int[torch.Tensor, " n_selected"]
+    | Bool[torch.Tensor, " n_sources"]
+)
+"""Sources of an ``Adjacency`` to select: a slice, or integer indices (repeats
+allowed) or a boolean mask as a tensor, list, or tuple."""
 
 # Packed (source, target) keys ``source * n_targets + target`` are used while
 # ``n_sources * n_targets`` stays below this bound, safely inside int64.
@@ -69,6 +81,15 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         ... )
         >>> adj.to_list()
         [[10, 11], [], [12, 13]]
+
+    Indexing with integer indices, a boolean mask, or a slice selects sources
+    and returns their neighbor lists as a new ``Adjacency``:
+
+    >>> adj[torch.tensor([2, 0])].to_list()
+    [[12, 13], [10, 11]]
+
+    On an adjacency with batch dimensions, such as a stack of adjacencies,
+    indexing selects along the batch instead, as for other tensorclasses.
     """
 
     # n_sources_plus_one == n_sources + 1; the trailing offset is len(indices).
@@ -77,9 +98,10 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
 
     def __post_init__(self) -> None:
         # Runs on construction and load, but not when tensordict rebuilds an
-        # existing adjacency (clone, to, indexing): the offsets read below
-        # synchronize a CUDA device.
-        if not is_tracing():
+        # existing adjacency (clone, to, batch indexing): the offsets read below
+        # synchronize a CUDA device. The checks are for a single adjacency, so a
+        # stack, whose adjacencies were checked when built, skips them on load.
+        if not is_tracing() and not self.batch_dims:
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
             if len(self.offsets) < 1:
@@ -179,6 +201,58 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
         [3, 0, 2]
         """
         return self.offsets[1:] - self.offsets[:-1]
+
+    def __getitem__(self, sources: SourceSelection) -> "Adjacency":
+        """Select sources and return their neighbor lists.
+
+        Batch indexing works as on other tensorclasses: on an adjacency with
+        batch dimensions, such as a stack of adjacencies, indexing selects
+        along the batch, and an index that holds ``None`` or ``...`` acts on
+        the batch shape. So indexing a TensorDict that holds adjacencies, as in
+        ``td[0]`` or ``td[None]``, indexes them with its other entries.
+
+        Parameters
+        ----------
+        sources : SourceSelection
+            The sources to keep, in order: a one-dimensional selection, as of
+            a tensor of shape ``(n_sources,)``. That is a slice, or integer
+            indices (repeats allowed) or a boolean mask as a tensor, list, or
+            tuple.
+
+        Returns
+        -------
+        Adjacency
+            Adjacency whose ``i``-th neighbor list is that of the ``i``-th
+            selected source. The neighbor indices keep their values.
+
+        Examples
+        --------
+        >>> adj = Adjacency(
+        ...     offsets=torch.tensor([0, 3, 5, 6, 9]),
+        ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        ... )
+        >>> adj[torch.tensor([3, 0, 3])].to_list()
+        [[6, 7, 8], [0, 1, 2], [6, 7, 8]]
+        >>> adj[1:3].to_list()
+        [[3, 4], [5]]
+        >>> torch.stack([adj, adj])[1].to_list()
+        [[0, 1, 2], [3, 4], [5], [6, 7, 8]]
+        """
+        parts = sources if isinstance(sources, tuple) else (sources,)
+        if self.batch_dims or any(p is None or p is Ellipsis for p in parts):
+            return super().__getitem__(sources)
+
+        from physicsnemo.mesh.spatial._ragged import _ragged_arange
+
+        ids = _selected_ids(sources, self.n_sources, self.offsets.device)
+        starts = self.offsets[:-1][ids]
+        counts = self.offsets[1:][ids] - starts
+        positions, _ = _ragged_arange(starts, counts)
+        return Adjacency(
+            offsets=torch.cat([counts.new_zeros(1), counts.cumsum(0)]),
+            indices=self.indices[positions],
+            device=self.device,
+        )
 
     def expand_to_pairs(
         self,
@@ -289,6 +363,38 @@ class Adjacency(TensorClass, skip_post_init_on_rebuild=True):
             offsets=new_offsets,
             indices=self.indices[keep_mask],
         )
+
+
+def _selected_ids(
+    sources: SourceSelection, n_sources: int, device: torch.device
+) -> Int[torch.Tensor, " n_selected"]:
+    """Return the ids, on ``device``, of the sources that ``sources`` selects, in order.
+
+    A list or tuple is one selection, as a tensor is, where torch would read a
+    tuple as one index per dimension. An empty one selects no sources. Negative
+    ids stay as given, and ids out of range raise where they are used.
+    """
+    if isinstance(sources, slice):
+        selected = range(*sources.indices(n_sources))  # empty if start >= stop
+        if selected.step < 0:  # as for a tensor
+            raise ValueError("step must be greater than zero")
+        return (
+            torch.arange(len(selected), device=device) * selected.step + selected.start
+        )
+    if not isinstance(sources, torch.Tensor):
+        sources = torch.as_tensor(sources)
+        if sources.numel() == 0:  # torch reads an empty list or tuple as floats
+            sources = sources.long()
+    sources = sources.to(device)
+    if sources.ndim != 1:
+        raise IndexError("source indices or masks must be one-dimensional")
+    if sources.dtype not in (torch.bool, torch.uint8):
+        return sources
+    if sources.numel() != n_sources:
+        raise IndexError(
+            f"source mask must have length {n_sources}, got {sources.numel()}"
+        )
+    return sources.nonzero().squeeze(-1)
 
 
 def build_adjacency_from_pairs(

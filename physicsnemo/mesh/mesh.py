@@ -50,7 +50,11 @@ from physicsnemo.mesh.geometry._cell_normals import _compute_cell_normals_from_p
 
 ### Imported at run time, not only for type checking: `Mesh.load` must find
 ### this class to rebuild the adjacencies cached in a saved mesh.
-from physicsnemo.mesh.neighbors._adjacency import Adjacency
+from physicsnemo.mesh.neighbors._adjacency import (
+    Adjacency,
+    SourceSelection,
+    _selected_ids,
+)
 from physicsnemo.mesh.remeshing import remesh
 from physicsnemo.mesh.transformations.deform import (
     displace,
@@ -2771,8 +2775,21 @@ class Mesh(
             self._cache[key] = cached
         return cached
 
-    def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
+    def _cached_adjacency(
+        self,
+        cache_key: str,
+        compute_fn,
+        indices: SourceSelection | None = None,
+        from_points: bool = True,
+        to_cells: bool = False,
+        **kwargs,
+    ):
         r"""Look up or compute-and-cache a topological adjacency.
+
+        With ``indices``, return only the neighbor lists of those sources. If
+        the adjacency is cached, the cached one is indexed. If not, the lists
+        come from only the cells that share a point with a source, and nothing
+        is cached.
 
         All four ``get_*_adjacency`` methods delegate here. The ``Adjacency``
         object (itself a tensorclass) is stored directly under
@@ -2792,22 +2809,49 @@ class Mesh(
             ``"cell_to_cells_codim_1"``.
         compute_fn : callable
             ``(mesh, **kwargs) -> Adjacency`` invoked on cache miss.
+        indices : SourceSelection, optional
+            Sources to return the neighbor lists of, as in
+            ``adjacency[indices]``.
+        from_points : bool
+            Whether the sources are points, rather than cells.
+        to_cells : bool
+            Whether the neighbors are cells, rather than points.
         **kwargs
             Forwarded to ``compute_fn``.
 
         Returns
         -------
         Adjacency
-            Cached or freshly computed adjacency.
+            Cached or freshly computed adjacency, or its lists of ``indices``.
         """
         cached = self._cache.get(("topology", cache_key), None)
-        if cached is not None:
-            return cached
-        result = compute_fn(self, **kwargs)
-        self._cache["topology", cache_key] = result
-        return result
+        if indices is None or cached is not None:
+            if cached is None:
+                cached = compute_fn(self, **kwargs)
+                self._cache["topology", cache_key] = cached
+            return cached if indices is None else cached[indices]
 
-    def get_point_to_cells_adjacency(self):
+        ### Every neighbor of a source shares a point with it, so the cells that
+        ### touch the points of the sources hold all their neighbor lists. Cell 0
+        ### joins them, so that the local mesh has cells whenever this mesh does
+        ### and its adjacency takes the same code path, with the same dtypes.
+        device = self.points.device
+        n_sources = self.n_points if from_points else self.n_cells
+        ids = _selected_ids(indices, n_sources, device)
+        near = torch.zeros(self.n_points, dtype=torch.bool, device=device)
+        near[ids if from_points else self.cells[ids].flatten()] = True
+        touching = near[self.cells].any(dim=-1)
+        touching[:1] = True
+        kept = touching.nonzero().squeeze(-1)
+        if not from_points:  # the ids of the sources among the kept cells
+            ids = torch.searchsorted(kept, torch.where(ids < 0, ids + n_sources, ids))
+        local = Mesh(points=self.points, cells=self.cells[kept])  # no data to copy
+        adjacency = compute_fn(local, **kwargs)[ids]
+        if to_cells:  # back to this mesh's cell ids, in place: the result is new
+            adjacency.indices = kept[adjacency.indices]
+        return adjacency
+
+    def get_point_to_cells_adjacency(self, *, indices: SourceSelection | None = None):
         """Compute the star of each vertex (all cells containing each point).
 
         For each point in the mesh, finds all cells that contain that point. This
@@ -2817,11 +2861,22 @@ class Mesh(
         Adjacency depends only on topology (cells), not geometry (points), so
         the cache is preserved through geometric transforms.
 
+        Parameters
+        ----------
+        indices : SourceSelection, optional
+            Points to return the cell lists of: integer indices (repeats
+            allowed), a boolean mask, or a slice. The result equals
+            ``get_point_to_cells_adjacency()[indices]``. Unless that is cached,
+            it comes from only the cells around these points, and nothing is
+            cached. For many draws from one mesh, index the cached adjacency.
+
         Returns
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
-            contain point ``i``. Isolated points (not in any cells) have empty lists.
+            contain point ``i``. With ``indices``, list ``i`` belongs to the
+            ``i``-th selected point. The cell indices are those of this mesh
+            either way. Isolated points (not in any cells) have empty lists.
 
         Examples
         --------
@@ -2833,9 +2888,11 @@ class Mesh(
         """
         from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
 
-        return self._cached_adjacency("point_to_cells", get_point_to_cells_adjacency)
+        return self._cached_adjacency(
+            "point_to_cells", get_point_to_cells_adjacency, indices, to_cells=True
+        )
 
-    def get_point_to_points_adjacency(self):
+    def get_point_to_points_adjacency(self, *, indices: SourceSelection | None = None):
         """Compute point-to-point adjacency (graph edges of the mesh).
 
         For each point, finds all other points that share a cell with it. In simplicial
@@ -2845,11 +2902,22 @@ class Mesh(
         Adjacency depends only on topology (cells), not geometry (points), so
         the cache is preserved through geometric transforms.
 
+        Parameters
+        ----------
+        indices : SourceSelection, optional
+            Points to return the neighbor lists of: integer indices (repeats
+            allowed), a boolean mask, or a slice. The result equals
+            ``get_point_to_points_adjacency()[indices]``. Unless that is cached,
+            it comes from only the cells around these points, and nothing is
+            cached. For many draws from one mesh, index the cached adjacency.
+
         Returns
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
-            share a cell (edge) with point ``i``. Isolated points have empty lists.
+            share a cell (edge) with point ``i``. With ``indices``, list ``i``
+            belongs to the ``i``-th selected point. The point indices are those
+            of this mesh either way. Isolated points have empty lists.
 
         Examples
         --------
@@ -2858,12 +2926,22 @@ class Mesh(
         >>> adj = mesh.get_point_to_points_adjacency()
         >>> # Get neighbors of point 0
         >>> neighbors_of_point_0 = adj.to_list()[0]
+        >>> # The lists of points 1, 0, and 1, built from only the cells around them
+        >>> two_triangles_2d.load().get_point_to_points_adjacency(indices=[1, 0, 1]).to_list()
+        [[0, 2, 3], [1, 2], [0, 2, 3]]
         """
         from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
 
-        return self._cached_adjacency("point_to_points", get_point_to_points_adjacency)
+        return self._cached_adjacency(
+            "point_to_points", get_point_to_points_adjacency, indices
+        )
 
-    def get_cell_to_cells_adjacency(self, adjacency_codimension: int = 1):
+    def get_cell_to_cells_adjacency(
+        self,
+        adjacency_codimension: int = 1,
+        *,
+        indices: SourceSelection | None = None,
+    ):
         """Compute cell-to-cells adjacency based on shared facets.
 
         Two cells are considered adjacent if they share a k-codimension facet.
@@ -2883,12 +2961,21 @@ class Mesh(
             - 2: Cells must share a codimension-2 facet (e.g., tetrahedra sharing
               an edge)
             - k: Cells must share a codimension-k facet
+        indices : SourceSelection, optional
+            Cells to return the neighbor lists of: integer indices (repeats
+            allowed), a boolean mask, or a slice. The result equals
+            ``get_cell_to_cells_adjacency(adjacency_codimension)[indices]``.
+            Unless that is cached, it comes from only the cells that share a
+            point with these cells, and nothing is cached. For many draws from
+            one mesh, index the cached adjacency.
 
         Returns
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
-            share a k-codimension facet with cell ``i``.
+            share a k-codimension facet with cell ``i``. With ``indices``, list
+            ``i`` belongs to the ``i``-th selected cell. The cell indices are
+            those of this mesh either way.
 
         Examples
         --------
@@ -2903,10 +2990,13 @@ class Mesh(
         return self._cached_adjacency(
             f"cell_to_cells_codim_{adjacency_codimension}",
             get_cell_to_cells_adjacency,
+            indices,
+            from_points=False,
+            to_cells=True,
             adjacency_codimension=adjacency_codimension,
         )
 
-    def get_cell_to_points_adjacency(self):
+    def get_cell_to_points_adjacency(self, *, indices: SourceSelection | None = None):
         """Get the vertices (points) that comprise each cell.
 
         This is a simple wrapper around the cells array that returns it in the
@@ -2914,12 +3004,22 @@ class Mesh(
 
         The result is cached in ``_cache["topology", ...]`` for efficiency.
 
+        Parameters
+        ----------
+        indices : SourceSelection, optional
+            Cells to return the vertex lists of: integer indices (repeats
+            allowed), a boolean mask, or a slice. The result equals
+            ``get_cell_to_points_adjacency()[indices]``. This adjacency is the
+            cells array itself, so it is always built in full and cached.
+
         Returns
         -------
         Adjacency
             Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
-            are vertices of cell ``i``. For simplicial meshes, all cells have the same
-            number of vertices (``n_manifold_dims + 1``).
+            are vertices of cell ``i``. With ``indices``, list ``i`` belongs to
+            the ``i``-th selected cell. The point indices are those of this mesh
+            either way. For simplicial meshes, all cells have the same number of
+            vertices (``n_manifold_dims + 1``).
 
         Examples
         --------
@@ -2931,7 +3031,10 @@ class Mesh(
         """
         from physicsnemo.mesh.neighbors import get_cell_to_points_adjacency
 
-        return self._cached_adjacency("cell_to_points", get_cell_to_points_adjacency)
+        adjacency = self._cached_adjacency(
+            "cell_to_points", get_cell_to_points_adjacency
+        )
+        return adjacency if indices is None else adjacency[indices]
 
     def pad(
         self,
