@@ -1494,6 +1494,9 @@ def _load_checkpoint_distributed(
             None,
         )
         optim_sd = checkpoint_dict.get("optimizer_state_dict", {}) if is_rank0 else {}
+        # Rank 0 read the file onto ``device``. FSDP1's optimizer load keeps rank
+        # 0's step counts where they are, so move them back to the CPU here.
+        _move_step_counts_to_cpu(optim_sd)
         if opt_model is not None and _is_distributed_model(opt_model):
             dtensor_plc = _get_dtensor_param_placements(opt_model)
             if isinstance(opt_model, FSDPModule) and _needs_dcp_broadcast_bypass(

@@ -2098,6 +2098,62 @@ def test_fsdp2_auxiliary_optimizer_model_checkpoint(
         assert loaded["step"].device.type == "cpu"
 
 
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("wrapper", ["fsdp1", "fsdp2"])
+def test_distributed_checkpoint_keeps_step_counts_on_cpu(shared_tmp_dir, wrapper):
+    """A resumed default AdamW keeps its step counts on the CPU on every rank."""
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+
+    device = dm.device
+    mesh = init_device_mesh("cuda", (dm.world_size,), mesh_dim_names=("world",))
+
+    def build():
+        torch.manual_seed(0)
+        model = FullyConnected(
+            in_features=8, out_features=8, num_layers=2, layer_size=16
+        ).to(device)
+        if wrapper == "fsdp1":
+            model = FSDP(
+                model,
+                device_mesh=mesh["world"],
+                sharding_strategy=ShardingStrategy.FULL_SHARD,
+                use_orig_params=True,
+            )
+        else:
+            fully_shard(model, mesh=mesh["world"])
+        return model, torch.optim.AdamW(model.parameters(), lr=1e-2)
+
+    model, optimizer = build()
+    x = torch.randn(2, 8, device=device)
+    for _ in range(2):
+        model(x).sum().backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    save_checkpoint(
+        shared_tmp_dir,
+        models=model,
+        optimizer=optimizer,
+        optimizer_model=model,
+        epoch=1,
+    )
+    dist.barrier()
+
+    model2, optimizer2 = build()
+    load_checkpoint(
+        shared_tmp_dir,
+        models=model2,
+        optimizer=optimizer2,
+        optimizer_model=model2,
+        device=device,
+    )
+    assert optimizer2.state
+    for state in optimizer2.state.values():
+        assert state["step"].device.type == "cpu"
+
+
 # ---------------------------------------------------------------------------
 # FSDP2 — plain nn.Module (not physicsnemo.Module)
 # ---------------------------------------------------------------------------
