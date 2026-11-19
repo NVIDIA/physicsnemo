@@ -16,7 +16,7 @@
 
 import inspect
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Literal, get_type_hints
 
 import pytest
@@ -385,6 +385,7 @@ def test_warp_stream_scope_forwards_sync_options(monkeypatch, sync_enter, sync_e
 
     monkeypatch.setattr(function_spec.wp, "Stream", DummyGuard)
     monkeypatch.setattr(function_spec.wp, "ScopedStream", scoped_stream)
+    monkeypatch.setattr(function_spec, "_WARP_GUARD_STREAMS", {})
 
     stream = DummyStream()
     with FunctionSpec.warp_stream_scope(
@@ -398,6 +399,34 @@ def test_warp_stream_scope_forwards_sync_options(monkeypatch, sync_enter, sync_e
         ("body",),
         ("wait", stream),
     ]
+
+
+def test_warp_stream_scope_reuses_one_guard_per_device(monkeypatch):
+    created, waits = [], []
+
+    class DummyStream:
+        def __init__(self, device):
+            self.device = device
+
+    class DummyGuard:
+        def __init__(self, device):
+            self.device = device
+            created.append(device)
+
+        def wait_stream(self, stream):
+            waits.append((self.device, stream.device))
+
+    monkeypatch.setattr(function_spec.wp, "Stream", DummyGuard)
+    monkeypatch.setattr(function_spec.wp, "ScopedStream", lambda *a, **k: nullcontext())
+    monkeypatch.setattr(function_spec, "_WARP_GUARD_STREAMS", {})
+
+    devices = ["cuda:0", "cuda:0", "cuda:1", "cuda:0", "cuda:1"]
+    for device in devices:
+        with FunctionSpec.warp_stream_scope(DummyStream(device)):
+            pass
+
+    assert created == ["cuda:0", "cuda:1"]  # one guard per device
+    assert waits == [(d, d) for d in devices]  # each exit waits on its device's guard
 
 
 def test_dispatch_compatible_with_torch_compile():

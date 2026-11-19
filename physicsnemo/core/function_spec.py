@@ -21,6 +21,7 @@ import importlib
 import importlib.util
 import inspect
 import re
+import threading
 import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Literal, Sequence, Tuple
@@ -30,6 +31,26 @@ import warp as wp
 from packaging.requirements import Requirement
 
 from physicsnemo.core.version_check import check_version_spec
+
+# One Warp-owned guard stream per device for ``FunctionSpec.warp_stream_scope``,
+# created on first use and reused: dropping a stream on every call stalls the
+# host under Warp's default memory-pool release threshold. Warp frees on the
+# legacy NULL stream, which waits on the guard's queued wait whatever the
+# guard's lifetime, so a reused guard orders cleanup the same way.
+_WARP_GUARD_STREAMS: Dict[str, Any] = {}
+_WARP_GUARD_LOCK = threading.Lock()
+
+
+def _warp_guard_stream(device) -> wp.Stream:
+    """Return the guard stream for ``device``, creating it once."""
+    key = str(device)
+    guard = _WARP_GUARD_STREAMS.get(key)
+    if guard is None:
+        with _WARP_GUARD_LOCK:
+            guard = _WARP_GUARD_STREAMS.get(key)
+            if guard is None:
+                guard = _WARP_GUARD_STREAMS[key] = wp.Stream(device)
+    return guard
 
 
 @dataclass(frozen=True)
@@ -760,9 +781,12 @@ class FunctionSpec:
         the launch finishes, which crashes.
 
         This context manager runs the enclosed Warp work inside
-        ``wp.ScopedStream(wp_launch_stream)``. On exit, a temporary Warp-owned
-        (blocking) stream waits on the borrowed stream so Warp's cleanup is
-        ordered after the compute instead of firing early.
+        ``wp.ScopedStream(wp_launch_stream)``. On exit, a Warp-owned (blocking)
+        guard stream waits on the borrowed stream so Warp's cleanup is ordered
+        after the compute instead of firing early. The guard is one stream per
+        device, created on first use and reused: a new stream on every call
+        stalls the host on its frees under Warp's default memory-pool release
+        threshold.
 
         Parameters
         ----------
@@ -791,9 +815,9 @@ class FunctionSpec:
             return
 
         # Blocking, Warp-owned guard stream on the same device as the borrowed
-        # stream. Created before the scope so it is ready to install the guard
-        # once the launch has been enqueued.
-        guard = wp.Stream(wp_launch_stream.device)
+        # stream, reused across calls. Fetched before the scope so it is ready
+        # to install the guard once the launch has been enqueued.
+        guard = _warp_guard_stream(wp_launch_stream.device)
         try:
             with wp.ScopedStream(
                 wp_launch_stream,
