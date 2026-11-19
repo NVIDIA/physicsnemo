@@ -1561,6 +1561,7 @@ def _load_checkpoint_distributed(
                 io.BytesIO(osd_list[0]), map_location=device, weights_only=False
             )
             if optim_sd:
+                _move_step_counts_to_cpu(optim_sd)
                 optimizer.load_state_dict(optim_sd)
                 if is_rank0:
                     checkpoint_logging.success("Loaded optimizer state dictionary")

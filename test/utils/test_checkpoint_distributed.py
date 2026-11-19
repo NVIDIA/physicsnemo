@@ -2094,6 +2094,8 @@ def test_fsdp2_auxiliary_optimizer_model_checkpoint(
             assert loaded[key].device in (torch.device("cpu"), device)
         assert loaded["exp_avg"].device == device
         assert loaded["exp_avg_sq"].device == device
+        # As in a fresh AdamW, the step count stays on the CPU.
+        assert loaded["step"].device.type == "cpu"
 
 
 # ---------------------------------------------------------------------------
