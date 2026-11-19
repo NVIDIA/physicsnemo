@@ -2039,7 +2039,7 @@ def test_fsdp2_multiple_models_checkpoint(shared_tmp_dir):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@pytest.mark.parametrize("load_on_gpu", [False, True])
+@pytest.mark.parametrize("load_on_gpu", [False, True], ids=("cpu", "gpu"))
 def test_fsdp2_auxiliary_optimizer_model_checkpoint(
     shared_tmp_dir, monkeypatch, load_on_gpu
 ):

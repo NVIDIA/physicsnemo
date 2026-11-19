@@ -1533,7 +1533,8 @@ def _load_checkpoint_distributed(
             )
             if optim_sd:
                 optimizer.load_state_dict(optim_sd)
-                checkpoint_logging.success("Loaded optimizer state dictionary")
+                if is_rank0:
+                    checkpoint_logging.success("Loaded optimizer state dictionary")
 
     # Broadcast remaining training state (scheduler, scaler, epoch, metadata)
     rest: dict[str, Any] = {}
