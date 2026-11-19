@@ -31,6 +31,7 @@ Run with ``torchrun --nproc-per-node {2,4} -m pytest --multigpu-static``.
 
 import re
 import threading
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -352,5 +353,81 @@ def test_local_layout_restructure_without_cells(root_and_fmt, distributed_mesh):
     )
     try:
         assert "input" in dataset[0][0].keys()
+    finally:
+        dataset.close()
+
+
+def test_prepare_background_consume_dedicated_group(root_and_fmt, distributed_mesh):
+    r"""After prepare_background_consume the centering all_reduce runs on a
+    group other than the device mesh's, with unchanged results."""
+    dm = DistributedManager()
+    sharded = _dataset(
+        root_and_fmt, dm.device, chain=_chain(True, False), device_mesh=distributed_mesh
+    )
+    reference = _dataset(root_and_fmt, dm.device, chain=_chain(True, False))
+    groups = []
+    orig = dist.all_reduce
+
+    def spy(tensor, *args, **kwargs):
+        groups.append(kwargs.get("group"))
+        return orig(tensor, *args, **kwargs)
+
+    try:
+        sharded.prepare_background_consume()
+        sharded.prepare_background_consume()  # idempotent
+        mesh_group = distributed_mesh.get_group()
+        assert sharded._stats_group is not None
+        assert sharded._stats_group != mesh_group
+        assert dist.get_process_group_ranks(
+            sharded._stats_group
+        ) == dist.get_process_group_ranks(mesh_group)
+        with patch.object(dist, "all_reduce", spy):
+            for i in range(_N_SAMPLES):
+                sample, _ = sharded._consume(sharded._load_host(i))
+                expected, _ = reference[i]
+                _assert_matches(
+                    sample,
+                    expected,
+                    distributed_mesh.size(0),
+                    exact=False,
+                    centered=True,
+                )
+        assert len(groups) == _N_SAMPLES
+        assert all(g is sharded._stats_group for g in groups)
+    finally:
+        sharded.close()
+        reference.close()
+
+
+def test_prepare_background_consume_global_layout_raises(
+    root_and_fmt, distributed_mesh
+):
+    dm = DistributedManager()
+    dataset = _dataset(
+        root_and_fmt,
+        dm.device,
+        chain=_chain(True),
+        device_mesh=distributed_mesh,
+        layout="global",
+    )
+    try:
+        with pytest.raises(ValueError, match="global"):
+            dataset.prepare_background_consume()
+    finally:
+        dataset.close()
+
+
+def test_prepare_background_consume_no_stats(root_and_fmt, distributed_mesh):
+    r"""Without centering no group is needed and still no collectives."""
+    dm = DistributedManager()
+    dataset = _dataset(
+        root_and_fmt,
+        dm.device,
+        chain=_chain(True, center=False),
+        device_mesh=distributed_mesh,
+    )
+    try:
+        dataset.prepare_background_consume()
+        assert _collective_events(dataset, range(_N_SAMPLES)) == []
     finally:
         dataset.close()
