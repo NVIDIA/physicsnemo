@@ -467,7 +467,7 @@ def remesh(
 
     from physicsnemo.mesh.mesh import Mesh
 
-    source = mesh
+    candidates = [(mesh, linear_resolution)]
     if (
         isinstance(n_clusters, int)
         and 3 <= n_clusters <= mesh.n_points
@@ -476,8 +476,8 @@ def remesh(
         and 0 <= int(mesh.cells.min())
         and int(mesh.cells.max()) < mesh.n_points
     ):
-        # Invalid inputs skip the refinement, so that remeshing reports them
-        # Midpoint averages use at least float32, as the final interpolation
+        # Invalid inputs skip the refinement, so that remeshing reports them.
+        # Midpoint averages use at least float32, as the final interpolation.
         fields = [mesh.point_data.select(*transfer_keys), linear_resolution]
         fields = [
             field.apply(_widen) if isinstance(field, TensorDict) else _widen(field)
@@ -487,22 +487,29 @@ def remesh(
         points, cells, fields = _split_long_edges(
             mesh.points.detach(), mesh.cells.to(torch.int64), fields, n_clusters
         )
-        source = Mesh(points=points, cells=cells, point_data=fields[0])
-        if linear_resolution is not None:
-            linear_resolution = fields[1]
-    (
-        output_points,
-        output_cells,
-        source_faces,
-        barycentric_coordinates,
-    ) = _remeshing_with_mapping(
-        source.points,
-        source.cells,
-        n_clusters,
-        max_iterations=max_iterations,
-        vertex_density=linear_resolution,
-        vertex_density_exponent=_LINEAR_RESOLUTION_DENSITY_EXPONENT,
-    )
+        refined = Mesh(points=points, cells=cells, point_data=fields[0])
+        candidates.insert(0, (refined, fields[1] if len(fields) > 1 else None))
+    for source, resolution in candidates:
+        try:
+            (
+                output_points,
+                output_cells,
+                source_faces,
+                barycentric_coordinates,
+            ) = _remeshing_with_mapping(
+                source.points,
+                source.cells,
+                n_clusters,
+                max_iterations=max_iterations,
+                vertex_density=resolution,
+                vertex_density_exponent=_LINEAR_RESOLUTION_DENSITY_EXPONENT,
+            )
+            break
+        except RuntimeError:
+            # A strip thinner than the cluster spacing can collapse once
+            # refined, so remesh the input as given
+            if source is mesh:
+                raise
     output_point_data = (
         _interpolate_point_data(
             source,
