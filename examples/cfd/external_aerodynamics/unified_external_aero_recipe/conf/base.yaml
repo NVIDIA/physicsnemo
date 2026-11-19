@@ -54,7 +54,9 @@ training:
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:
-  prefetch_factor: 4
+  # Samples read ahead. Under domain parallelism each read takes longer, and 4
+  # can fall behind the training step at domain_size 8.
+  prefetch_factor: 8
   num_streams: 4
   use_streams: true
   num_workers: 4
