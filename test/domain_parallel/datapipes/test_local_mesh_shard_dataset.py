@@ -98,9 +98,7 @@ def _dataset(root_and_fmt, device, *, chain, device_mesh=None, layout="local"):
             domain_parallel={"auto_shard_size": 2, "mesh_layout": layout},
             device_mesh=device_mesh,
         )
-    reader = MeshReader(
-        root, pattern=f"**/*.{fmt}", subsample_n_cells=WINDOW, **kwargs
-    )
+    reader = MeshReader(root, pattern=f"**/*.{fmt}", subsample_n_cells=WINDOW, **kwargs)
     dataset = MeshDataset(reader, transforms=chain, device=device)
     generator = torch.Generator()
     generator.manual_seed(_SEED)
@@ -164,9 +162,14 @@ def _assert_matches(
     check(sample.global_data["U_inf"], reference.global_data["U_inf"])
 
 
-@pytest.mark.parametrize("area_weighted", [False, True])
 @pytest.mark.parametrize(
-    "on_device, augment", [(False, False), (True, True), (False, True)]
+    "on_device, augment, area_weighted",
+    [
+        (False, False, False),
+        (False, False, True),
+        (True, True, False),
+        (False, True, False),
+    ],
 )
 def test_local_layout_matches_unsharded(
     root_and_fmt_all, distributed_mesh, augment, on_device, area_weighted

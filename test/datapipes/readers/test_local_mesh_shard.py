@@ -39,10 +39,10 @@ from physicsnemo.datapipes._local_shard import (
     POINT_MEAN,
     POINT_SUM,
     LocalMeshShard,
-    LocalShardInfo,
 )
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.readers.mesh import (
+    MeshReader,
     _subsample_mesh_cells,
     read_local_cell_shard,
 )
@@ -56,6 +56,8 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import io_zarr
 from test.datapipes._local_shard_utils import (
     WINDOW as _WINDOW,
+)
+from test.datapipes._local_shard_utils import (
     grid_mesh,
     recipe_chain,
     write_sample,
@@ -116,7 +118,12 @@ def _window_and_reference(full: Mesh, windowed: bool):
 def _shares(open_source, world, window, stats=frozenset()):
     return [
         read_local_cell_shard(
-            open_source(), rank=r, world_size=world, cell_window=window, stats=stats
+            open_source(),
+            device_mesh=None,  # never touched before the wrap
+            rank=r,
+            world_size=world,
+            cell_window=window,
+            stats=stats,
         )
         for r in range(world)
     ]
@@ -136,17 +143,8 @@ def _reduced_stats(shares) -> TensorDict:
     return TensorDict(out, batch_size=[])
 
 
-def _as_payload(share, rank, stats=None) -> LocalMeshShard:
-    info = LocalShardInfo(
-        device_mesh=None,  # never touched before the wrap
-        rank=rank,
-        cell_sizes=share.cell_sizes,
-        point_sizes=share.point_sizes,
-        n_points=share.n_points,
-    )
-    return LocalMeshShard(
-        mesh=share.mesh, info=info, stats=share.stats if stats is None else stats
-    )
+def _with_stats(share, stats) -> LocalMeshShard:
+    return LocalMeshShard(mesh=share.mesh, info=share.info, stats=stats)
 
 
 @pytest.mark.parametrize("windowed", [False, True])
@@ -159,18 +157,18 @@ def test_shares_reproduce_unsharded_read(source, world, windowed):
 
     n_cells = reference.n_cells
     assert all(
-        s.cell_sizes == tuple(compute_split_shapes(n_cells, world)) for s in shares
+        s.info.cell_sizes == tuple(compute_split_shapes(n_cells, world)) for s in shares
     )
-    point_sizes = shares[0].point_sizes
+    point_sizes = shares[0].info.point_sizes
     for rank, share in enumerate(shares):
         mesh = share.mesh
-        assert share.point_sizes == point_sizes
-        assert mesh.n_cells == share.cell_sizes[rank]
+        assert share.info.point_sizes == point_sizes
+        assert mesh.n_cells == share.info.cell_sizes[rank]
         assert mesh.n_points == point_sizes[rank]
         # Cells index exactly this rank's points.
         assert int(mesh.cells.max()) == mesh.n_points - 1
         assert torch.unique(mesh.cells).numel() == mesh.n_points
-        assert share.n_points == reference.n_points
+        assert share.info.n_points == reference.n_points
     if world > 1:  # seam vertices are held by both neighbours
         assert sum(point_sizes) > reference.n_points
 
@@ -221,7 +219,8 @@ def test_statistics_only_on_request(pmsh_source):
     (share,) = _shares(open_source, 1, window)
     assert len(share.stats.keys()) == 0
     with pytest.raises(ValueError, match="unknown shard statistics"):
-        _shares(open_source, 1, window, {"median"})
+        # Validation lives in the reader's request; it needs no instance state.
+        MeshReader.request_shard_stats(object(), {"median"})
 
 
 def test_cached_point_sizes_read_only_own_cells(pmsh_source):
@@ -230,12 +229,16 @@ def test_cached_point_sizes_read_only_own_cells(pmsh_source):
     first = _shares(open_source, 3, None)
     again = [
         read_local_cell_shard(
-            open_source(), rank=r, world_size=3, point_sizes=first[r].point_sizes
+            open_source(),
+            device_mesh=None,
+            rank=r,
+            world_size=3,
+            point_sizes=first[r].info.point_sizes,
         )
         for r in range(3)
     ]
     for a, b in zip(first, again):
-        assert a.point_sizes == b.point_sizes
+        assert a.info.point_sizes == b.info.point_sizes
         assert torch.equal(a.mesh.points, b.mesh.points)
         assert torch.equal(a.mesh.cells, b.mesh.cells)
 
@@ -244,7 +247,11 @@ def test_too_few_cells_for_the_ranks_raises(pmsh_source):
     open_source, _ = pmsh_source
     with pytest.raises(ValueError, match="cannot split 3 cells over 4 ranks"):
         read_local_cell_shard(
-            open_source(), rank=0, world_size=4, cell_window=torch.arange(3)
+            open_source(),
+            device_mesh=None,
+            rank=0,
+            world_size=4,
+            cell_window=torch.arange(3),
         )
 
 
@@ -253,8 +260,6 @@ def _apply_local(chain, payload):
     for t in chain:
         data = t.apply_local_shard(data, payload)
     return data
-
-
 
 
 @pytest.mark.parametrize("area_weighted", [False, True])
@@ -278,9 +283,7 @@ def test_local_transform_chain_matches_unsharded(
         stats |= t.required_shard_stats()
     shares = _shares(open_source, world, window, stats)
     reduced = _reduced_stats(shares)
-    outputs = [
-        _apply_local(chain, _as_payload(s, r, reduced)) for r, s in enumerate(shares)
-    ]
+    outputs = [_apply_local(chain, _with_stats(s, reduced)) for s in shares]
     for t in chain:
         reference = t(reference)
 
@@ -314,7 +317,7 @@ def test_local_transform_chain_matches_unsharded(
 def test_unsupported_transforms_raise(pmsh_source):
     open_source, full = pmsh_source
     window, _ = _window_and_reference(full, True)
-    payload = _as_payload(_shares(open_source, 2, window)[0], 0)
+    payload = _shares(open_source, 2, window)[0]
     with pytest.raises(NotImplementedError, match="subsample"):
         SubsampleMesh(n_cells=_WINDOW - 1).apply_local_shard(payload.mesh, payload)
     with pytest.raises(NotImplementedError, match="subsample"):
