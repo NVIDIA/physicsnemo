@@ -1,0 +1,4 @@
+huggingface_hub>=0.30
+pandas>=2.0
+pyvista>=0.43.0
+scipy>=1.11

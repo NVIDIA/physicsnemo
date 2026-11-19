@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Recipe 1: train on DeepJEB (train.py). Relative paths are relative to this example. The default model is the
+# GeoTransolver with local geometry encodings (model=geotransolver_sdf); model=geotransolver trains the stock
+# GeoTransolver for comparison.
+defaults:
+  - model: geotransolver_sdf
+  - _self_
+
+data:
+  root: ???                        # converted DeepJEB (convert_deepjeb.py)
+  split: splits/deepjeb.json
+  scales: stats/deepjeb_scales.json
+  coordinate_scale_mm: 100.0
+  token_voxel_mm: 2.0
+  num_workers: 4
+  max_designs: null                # e.g. 8 for a smoke test
+
+training:
+  epochs: 100                      # about 80 h on 4 H100 GPUs (80 GB) for geotransolver_sdf
+  lr: 2.0e-3                       # for 4 GPUs (one sample per GPU); scale with sqrt(GPUs)
+  weight_decay: 0.0
+  warmup_epochs: 2
+  final_lr_ratio: 0.1              # cosine decay to this fraction of lr
+  loss_weights:                    # mean squared error of the normalized fields
+    displacement: 0.3333333333333333
+    von_mises: 1.0
+  grad_clip: 1.0
+  precision: bfloat16              # autocast of the forward pass; float32 to disable
+  seed: 20261003
+  val_every: 5                     # epochs
+  log_every: 100                   # steps
+
+output_dir: outputs/deepjeb        # checkpoints/, the final model and train_log.jsonl
+
+hydra:
+  run:
+    dir: ${output_dir}/hydra
+  output_subdir: null
+  job:
+    chdir: false
