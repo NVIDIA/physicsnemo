@@ -447,19 +447,18 @@ class FLARE(_FLAREMixerBase):
 
     def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
         r"""Apply FLARE attention to ``x`` of shape :math:`(B, N, C)`."""
-        if not torch.compiler.is_compiling():
-            if x.ndim != 3:
-                raise ValueError(
-                    f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
-                )
-            # Token-sharded inputs are supported through the SDPA kernels'
-            # ShardTensor dispatch; Transformer Engine attention is not
-            # ShardTensor aware and would attend over the local shard only.
-            if self.use_te and hasattr(x, "redistribute"):
-                raise NotImplementedError(
-                    "FLARE(use_te=True) does not support token-sharded inputs; "
-                    "use use_te=False for domain parallelism."
-                )
+        if x.ndim != 3:
+            raise ValueError(
+                f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
+            )
+        # Token-sharded inputs are supported through the SDPA kernels'
+        # ShardTensor dispatch; Transformer Engine attention is not
+        # ShardTensor aware and would attend over the local shard only.
+        if self.use_te and hasattr(x, "redistribute"):
+            raise NotImplementedError(
+                "FLARE(use_te=True) does not support token-sharded inputs; "
+                "use use_te=False for domain parallelism."
+            )
         k = self.k_norm(self._tokens(x, self.k_proj))
         v = self._tokens(x, self.v_proj)
         q = self._latents(self.q_norm(self.latent_q).to(dtype=k.dtype), x.shape[0])
@@ -616,19 +615,18 @@ class FLAREPlusPlus(_FLAREMixerBase):
 
     def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
         r"""Apply FLARE++ attention to ``x`` of shape :math:`(B, N, C)`."""
-        if not torch.compiler.is_compiling():
-            if x.ndim != 3:
-                raise ValueError(
-                    f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
-                )
-            # Token-sharded inputs are supported through the SDPA kernels'
-            # ShardTensor dispatch; Transformer Engine attention is not
-            # ShardTensor aware and would attend over the local shard only.
-            if self.use_te and hasattr(x, "redistribute"):
-                raise NotImplementedError(
-                    "FLAREPlusPlus(use_te=True) does not support token-sharded "
-                    "inputs; use use_te=False for domain parallelism."
-                )
+        if x.ndim != 3:
+            raise ValueError(
+                f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
+            )
+        # Token-sharded inputs are supported through the SDPA kernels'
+        # ShardTensor dispatch; Transformer Engine attention is not
+        # ShardTensor aware and would attend over the local shard only.
+        if self.use_te and hasattr(x, "redistribute"):
+            raise NotImplementedError(
+                "FLAREPlusPlus(use_te=True) does not support token-sharded "
+                "inputs; use use_te=False for domain parallelism."
+            )
         batch = x.shape[0]
 
         k0 = self.k0_norm(self._tokens(x, self.k0_proj))

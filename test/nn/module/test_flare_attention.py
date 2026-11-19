@@ -273,6 +273,34 @@ def test_flare_use_te_rejects_token_sharded_inputs(cls):
         mixer(x)
 
 
+@pytest.mark.parametrize("cls", [FLARE, FLAREPlusPlus])
+def test_compiled_use_te_rejects_token_sharded_inputs(cls):
+    """The token-sharded + use_te check also runs under torch.compile."""
+    import torch._dynamo
+
+    torch._dynamo.reset()
+    mixer = cls(dim=32, heads=4)
+    x = torch.randn(1, 8, 32).as_subclass(_TokenSharded)
+    mixer.use_te = True
+    compiled = torch.compile(mixer, backend="eager")
+    with pytest.raises(Exception, match="use_te=True") as ei:
+        compiled(x)
+    assert "NotImplementedError" in repr(type(ei.value).__mro__) or isinstance(
+        ei.value, NotImplementedError
+    )
+
+
+@pytest.mark.parametrize("cls", [FLARE, FLAREPlusPlus])
+def test_compiled_rejects_wrong_ndim(cls):
+    """The ndim check also runs under torch.compile."""
+    import torch._dynamo
+
+    torch._dynamo.reset()
+    compiled = torch.compile(cls(dim=32, heads=4), backend="eager")
+    with pytest.raises(Exception, match="3D input"):
+        compiled(torch.randn(8, 32))
+
+
 @requires_module("transformer_engine>=2.14.0")
 @pytest.mark.parametrize("name", list(_MIXERS))
 @pytest.mark.parametrize("use_rmsnorm", [True, False])
