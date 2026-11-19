@@ -2037,6 +2037,65 @@ def test_fsdp2_multiple_models_checkpoint(shared_tmp_dir):
     )
 
 
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("load_on_gpu", [False, True], ids=("cpu", "gpu"))
+def test_fsdp2_auxiliary_optimizer_model_checkpoint(
+    shared_tmp_dir, monkeypatch, load_on_gpu
+):
+    """Every rank restores the optimizer of a non-distributed optimizer model."""
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+
+    device = dm.device
+    mesh = init_device_mesh("cuda", (dm.world_size,), mesh_dim_names=("world",))
+
+    def build():
+        torch.manual_seed(0)
+        main = FullyConnected(
+            in_features=8, out_features=8, num_layers=2, layer_size=16
+        ).to(device)
+        fully_shard(main, mesh=mesh["world"])
+        aux = nn.Linear(4, 4).to(device)
+        return main, aux, torch.optim.AdamW(aux.parameters(), lr=1e-2)
+
+    main, aux, optimizer = build()
+    x = torch.randn(2, 4, device=device)
+    for _ in range(3):
+        aux(x).sum().backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    save_checkpoint(
+        shared_tmp_dir,
+        models=[main, aux],
+        optimizer=optimizer,
+        optimizer_model=aux,
+        epoch=1,
+    )
+    dist.barrier()
+
+    main2, aux2, optimizer2 = build()
+    _forbid_nonzero_rank_file_access(monkeypatch)
+    load_checkpoint(
+        shared_tmp_dir,
+        models=[main2, aux2],
+        optimizer=optimizer2,
+        optimizer_model=aux2,
+        device=device if load_on_gpu else "cpu",
+    )
+
+    for p, p2 in zip(aux.parameters(), aux2.parameters()):
+        saved, loaded = optimizer.state[p], optimizer2.state[p2]
+        assert loaded.keys() == saved.keys()
+        for key, value in saved.items():
+            torch.testing.assert_close(loaded[key], value, check_device=False)
+            # Nothing lands on another rank's GPU.
+            assert loaded[key].device in (torch.device("cpu"), device)
+        assert loaded["exp_avg"].device == device
+        assert loaded["exp_avg_sq"].device == device
+
+
 # ---------------------------------------------------------------------------
 # FSDP2 — plain nn.Module (not physicsnemo.Module)
 # ---------------------------------------------------------------------------

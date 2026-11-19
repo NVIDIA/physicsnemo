@@ -582,6 +582,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
   repeated triangles or stray triangles.
+- Distributed `load_checkpoint` restores the optimizer state on every rank when
+  `optimizer_model` is not distributed, such as a small model trained beside an
+  FSDP model. Before, only rank 0 restored it, and the other ranks silently kept
+  a fresh optimizer.
 - `fill_holes` winds each fill like the surrounding surface, fills holes that
   pass through a shared vertex, leaves zero-area slits to
   `stitch_t_junctions`, and fills flat holes without folded triangles.
