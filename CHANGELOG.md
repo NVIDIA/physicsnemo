@@ -578,6 +578,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- At `tree_read_theta > 0`, ISLA's reference boundary read holds each cluster's
+  cell weights fixed in its means, as the fused CUDA kernel does, so both give
+  the same derivatives in the boundary's vertices. They used to disagree there.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
