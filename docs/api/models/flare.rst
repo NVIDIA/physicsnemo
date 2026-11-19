@@ -48,9 +48,10 @@ across the block stack. Checkpointing is disabled by default.
         checkpointing_ratio=0.5,
     )
 
-Checkpointing is active only during gradient-enabled training and uses
-PyTorch's non-reentrant checkpoint implementation, which can be combined with
-``torch.compile``.
+Checkpointing is active only during gradient-enabled training. The native
+backend uses PyTorch's non-reentrant checkpoint implementation, while
+``use_te=True`` uses Transformer Engine's checkpoint wrapper. The native
+PyTorch checkpoint backend can also be combined with ``torch.compile``.
 
 .. autoclass:: physicsnemo.models.flare.FLARE
     :show-inheritance:

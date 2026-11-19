@@ -346,25 +346,25 @@ class FLARE(_FLAREMixerBase):
     ----------
     dim : int
         Number of input and output channels :math:`C`.
-    heads : int, optional
-        Number of attention heads :math:`H`. Default is 8.
-    dim_head : int | None, optional
+    heads : int, optional, default=8
+        Number of attention heads :math:`H`.
+    dim_head : int | None, optional, default=None
         Channels per head :math:`D`. Must satisfy ``heads * dim_head == dim``.
-        ``None`` uses ``dim // heads``. Default is ``None``.
-    dropout : float, optional
-        Dropout after the output projection. Default is 0.0.
-    n_global_queries : int, optional
-        Number of latent queries :math:`M` per head. Default is 64.
-    qk_norm : bool, optional
-        Normalize latent queries and keys per head (affine). Default is ``True``:
-        on DrivAerML, FLARE with QK-norm beat the previous FLARE in all 4 tested
-        settings, and FLARE without it was worse in 3 of 4.
-    use_rmsnorm : bool, optional
+        ``None`` uses ``dim // heads``.
+    dropout : float, optional, default=0.0
+        Dropout after the output projection.
+    n_global_queries : int, optional, default=64
+        Number of latent queries :math:`M` per head.
+    qk_norm : bool, optional, default=True
+        Normalize latent queries and keys per head (affine). Enabled by
+        default: on DrivAerML, FLARE with QK-norm beat the previous FLARE in
+        all 4 tested settings, and FLARE without it was worse in 3 of 4.
+    use_rmsnorm : bool, optional, default=True
         Use RMSNorm (``eps=1e-6``) for the per-head norms; ``False`` uses
-        LayerNorm. Default is ``True``.
-    use_te : bool, optional
+        LayerNorm.
+    use_te : bool, optional, default=False
         Use Transformer Engine linear layers, norms and ``DotProductAttention``
-        (CUDA only). Default is ``False``.
+        (CUDA only).
 
     Forward
     -------
@@ -442,7 +442,17 @@ class FLARE(_FLAREMixerBase):
             self.attn_fn = self._make_attn_fn()
 
     def no_weight_decay(self) -> set[str]:
-        r"""Names of this module's parameters to train without weight decay."""
+        r"""Names of this module's parameters to train without weight decay.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        set[str]
+            Parameter names relative to this module (the latent queries).
+        """
         return {"latent_q"}
 
     def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
@@ -493,29 +503,29 @@ class FLAREPlusPlus(_FLAREMixerBase):
     ----------
     dim : int
         Number of input and output channels :math:`C`.
-    heads : int, optional
-        Number of attention heads :math:`H`. Default is 8.
-    dim_head : int | None, optional
+    heads : int, optional, default=8
+        Number of attention heads :math:`H`.
+    dim_head : int | None, optional, default=None
         Channels per head :math:`D`. Must satisfy ``heads * dim_head == dim``.
-        ``None`` uses ``dim // heads``. Default is ``None``.
-    dropout : float, optional
-        Dropout after the output projection. Default is 0.0.
-    n_global_queries : int, optional
-        Number of routing queries :math:`M` per head. Default is 64.
-    k_norm : bool, optional
-        Normalize routing keys :math:`K` per head (affine). Default is ``True``.
-    share_k0_v0 : bool, optional
-        Use the query-synthesis keys as its values. Default is ``True``.
-    q_fixed_norm : bool, optional
-        Normalize the fixed queries (no affine). Default is ``True``.
-    gate_logit_init : float, optional
-        Initial gate logit for every head. Default is 0.25.
-    use_rmsnorm : bool, optional
+        ``None`` uses ``dim // heads``.
+    dropout : float, optional, default=0.0
+        Dropout after the output projection.
+    n_global_queries : int, optional, default=64
+        Number of routing queries :math:`M` per head.
+    k_norm : bool, optional, default=True
+        Normalize routing keys :math:`K` per head (affine).
+    share_k0_v0 : bool, optional, default=True
+        Use the query-synthesis keys as its values.
+    q_fixed_norm : bool, optional, default=True
+        Normalize the fixed queries (no affine).
+    gate_logit_init : float, optional, default=0.25
+        Initial gate logit for every head.
+    use_rmsnorm : bool, optional, default=True
         Use RMSNorm (``eps=1e-6``) for the per-head norms; ``False`` uses
-        LayerNorm. Default is ``True``.
-    use_te : bool, optional
+        LayerNorm.
+    use_te : bool, optional, default=False
         Use Transformer Engine linear layers, norms and ``DotProductAttention``
-        (CUDA only). Default is ``False``.
+        (CUDA only).
 
     Forward
     -------
@@ -610,7 +620,18 @@ class FLAREPlusPlus(_FLAREMixerBase):
             self.attn_fn = self._make_attn_fn()
 
     def no_weight_decay(self) -> set[str]:
-        r"""Names of this module's parameters to train without weight decay."""
+        r"""Names of this module's parameters to train without weight decay.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        set[str]
+            Parameter names relative to this module (the latent queries and
+            gate logits).
+        """
         return {"latent_q0", "latent_q_fixed", "gate_logit"}
 
     def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:

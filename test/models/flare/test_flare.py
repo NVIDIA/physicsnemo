@@ -60,9 +60,11 @@ _MODELS = {
 
 
 def _inputs(device, batch=2, n=24):
+    # Draw on CPU and move, so a given seed yields the same values on every
+    # device (the golden-output tests compare all devices to one reference).
     return (
-        torch.randn(batch, n, 2, device=device),
-        torch.randn(batch, n, 3, device=device),
+        torch.randn(batch, n, 2).to(device),
+        torch.randn(batch, n, 3).to(device),
     )
 
 

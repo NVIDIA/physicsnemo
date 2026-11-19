@@ -230,7 +230,18 @@ class _FLAREBackbone(Module):
         self.initialize_weights()
 
     def _build_mixer(self, **kwargs) -> nn.Module:
-        r"""Return one block's token mixer (implemented by subclasses)."""
+        r"""Return one block's token mixer (implemented by subclasses).
+
+        Parameters
+        ----------
+        **kwargs
+            Mixer options shared by every block (``dim``, ``heads``, ...).
+
+        Returns
+        -------
+        nn.Module
+            Token mixer mapping :math:`(B, N, C)` to :math:`(B, N, C)`.
+        """
         raise NotImplementedError
 
     def initialize_weights(self) -> None:
@@ -239,10 +250,31 @@ class _FLAREBackbone(Module):
         Linear layers flagged ``_skip_weight_init`` (the mixers' identity-plus-
         noise projections) and the mixers' latent parameters keep their own
         initialization.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
         """
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        r"""Initialize one module's parameters in place (used by ``self.apply``).
+
+        Parameters
+        ----------
+        m : nn.Module
+            Module to initialize. Linear weights get truncated-normal
+            (std 0.02) values and zero biases; norm weights get ones and zero
+            biases. Linear layers flagged ``_skip_weight_init`` are skipped.
+
+        Returns
+        -------
+        None
+        """
         linear_layers: tuple[type, ...] = (nn.Linear,)
         norm_layers: tuple[type, ...] = (nn.LayerNorm, nn.RMSNorm)
         if self.use_te:
@@ -279,6 +311,16 @@ class _FLAREBackbone(Module):
 
         Collected from every submodule that defines ``no_weight_decay()``
         (the FLARE / FLARE++ mixers' latent queries and gate logits).
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        set[str]
+            Fully qualified parameter names, e.g.
+            ``"blocks.0.mixer.latent_q"``.
         """
         names = set()
         for prefix, module in self.named_modules():
@@ -344,41 +386,39 @@ _COMMON_PARAMS_DOC = r"""
         Number of functional input channels :math:`C_{fx}`.
     out_dim : int
         Number of output channels :math:`C_{out}`.
-    embedding_dim : int | None, optional
+    embedding_dim : int | None, optional, default=None
         Number of embedding channels :math:`C_{emb}` (e.g. coordinates),
         concatenated in front of ``fx``. ``None`` means no embedding input.
-        Default is ``None``.
-    n_layers : int, optional
-        Number of blocks. Default is 4.
-    n_hidden : int, optional
-        Hidden width :math:`C`. Default is 256.
-    dropout : float, optional
-        Dropout after each mixer's output projection. Default is 0.0.
-    n_head : int, optional
+    n_layers : int, optional, default=4
+        Number of blocks.
+    n_hidden : int, optional, default=256
+        Hidden width :math:`C`.
+    dropout : float, optional, default=0.0
+        Dropout after each mixer's output projection.
+    n_head : int, optional, default=8
         Number of attention heads; ``n_hidden`` must be divisible by it.
-        Default is 8.
-    act : str, optional
+    act : str, optional, default="gelu_tanh"
         Activation of the input projection and block MLPs (any
-        :func:`~physicsnemo.nn.get_activation` name). Default is
-        ``"gelu_tanh"`` (tanh-approximate GELU).
-    mlp_ratio : int, optional
-        Block MLP hidden width is ``mlp_ratio * n_hidden``. Default is 4.
-    slice_num : int, optional
-        Number of latent (routing) queries per head. Default is 32.
-    use_rmsnorm : bool, optional
+        :func:`~physicsnemo.nn.get_activation` name). The default is
+        tanh-approximate GELU.
+    mlp_ratio : int, optional, default=4
+        Block MLP hidden width is ``mlp_ratio * n_hidden``.
+    slice_num : int, optional, default=32
+        Number of latent (routing) queries per head.
+    use_rmsnorm : bool, optional, default=True
         Use RMSNorm (``eps=1e-6``) for every norm (block, output and the
-        mixers' per-head norms); ``False`` uses LayerNorm. Default is ``True``.
-    use_te : bool, optional
-        Use Transformer Engine layers (linear, norms, fused norm + MLP,
-        fused norm + linear head, ``DotProductAttention``; CUDA only). With
+        mixers' per-head norms); ``False`` uses LayerNorm.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers (linear, norms, fused norm + MLP, fused
+        norm + linear head, ``DotProductAttention``; CUDA only). With
         ``use_te=True``, ``act`` must be one of ``"gelu_tanh"``, ``"gelu"``
         (both tanh-approximate GELU in Transformer Engine), ``"relu"`` or
-        ``"silu"``. Default is ``False``.
-    activation_checkpointing : bool, optional
-        Checkpoint blocks during training. Default is ``False``.
-    checkpointing_ratio : float, optional
+        ``"silu"``.
+    activation_checkpointing : bool, optional, default=False
+        Checkpoint blocks during training.
+    checkpointing_ratio : float, optional, default=1.0
         Fraction of blocks to checkpoint, spread evenly across the stack, when
-        ``activation_checkpointing=True``. Default is 1.0."""
+        ``activation_checkpointing=True``."""
 
 _COMMON_IO_DOC = r"""
     Forward
@@ -411,9 +451,9 @@ class FLARE(_FLAREBackbone):
 """
         + _COMMON_PARAMS_DOC
         + r"""
-    qk_norm : bool, optional
-        Normalize latent queries and keys per head in each mixer. Default is
-        ``True`` (see :class:`~physicsnemo.nn.FLARE`).
+    qk_norm : bool, optional, default=True
+        Normalize latent queries and keys per head in each mixer (see
+        :class:`~physicsnemo.nn.FLARE`).
 """
         + _COMMON_IO_DOC
         + r"""
@@ -480,14 +520,14 @@ class FLAREPlusPlus(_FLAREBackbone):
 """
         + _COMMON_PARAMS_DOC
         + r"""
-    k_norm : bool, optional
-        Normalize routing keys per head. Default is ``True``.
-    share_k0_v0 : bool, optional
-        Share keys and values of the query-synthesis pass. Default is ``True``.
-    q_fixed_norm : bool, optional
-        Normalize the fixed anchor queries. Default is ``True``.
-    gate_logit_init : float, optional
-        Initial per-head gate logit of the dynamic queries. Default is 0.25.
+    k_norm : bool, optional, default=True
+        Normalize routing keys per head.
+    share_k0_v0 : bool, optional, default=True
+        Share keys and values of the query-synthesis pass.
+    q_fixed_norm : bool, optional, default=True
+        Normalize the fixed anchor queries.
+    gate_logit_init : float, optional, default=0.25
+        Initial per-head gate logit of the dynamic queries.
 """
         + _COMMON_IO_DOC
         + r"""
