@@ -141,9 +141,7 @@ One run of each recipe with this example (`train.py`, `evaluate.py`,
 4 H100 GPUs. Errors are mean per-sample relative L2 errors over every node,
 evaluated in float32 (`evaluate.py`); the stress R² is the median over the samples.
 Results can differ slightly with the hardware, the number of GPUs, the seed and the
-library version: an earlier run of the same model and recipe with the authors'
-training code gave a DeepJEB test stress error of 0.066 and, after LoRA, a SimJEB
-test stress error of 0.255, and LoRA reruns with two other seeds stayed within 0.002.
+library version.
 
 | Model | DeepJEB test, displacement / stress | SimJEB test, displacement / stress | SimJEB test stress R² |
 | --- | --- | --- | --- |
