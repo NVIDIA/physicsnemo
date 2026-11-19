@@ -169,10 +169,15 @@ class GraphCastLossFunction(nn.Module):
             return torch.tensor([1.0], dtype=torch.float)
 
     def get_channel_dict(self, dataset_metadata_path, channels_list):
-        """Gets lists of surface and atmospheric channels"""
+        """Gets lists of surface and atmospheric channels.
+
+        Also stores the channel names in ``channels_list`` order as
+        ``self.channel_names``, which sets the order of the variable weights.
+        """
         with open(dataset_metadata_path, "r") as f:
             data_json = json.load(f)
             channel_list = [data_json["coords"]["channel"][c] for c in channels_list]
+            self.channel_names = channel_list
 
             # separate atmosphere and surface variables
             channel_dict = {"surface": [], "atmosphere": []}
@@ -218,11 +223,9 @@ class GraphCastLossFunction(nn.Module):
 
     def assign_variable_weights(self):
         """assigns per-variable per-pressure level weights"""
-        surface_weights_dict = self.assign_surface_weights()
-        atmosphere_weights_dict = self.assign_atmosphere_weights()
-        surface_weights = list(surface_weights_dict.values())
-        atmosphere_weights = list(atmosphere_weights_dict.values())
-        variable_weights = torch.cat(
-            (torch.FloatTensor(surface_weights), torch.FloatTensor(atmosphere_weights))
+        weights = {**self.assign_surface_weights(), **self.assign_atmosphere_weights()}
+        # Follow the channel order of the loss inputs, which need not list all
+        # surface variables first or group pressure levels by variable.
+        return torch.FloatTensor(
+            [weights[name] for name in self.channel_names]
         )  # [num_channel]
-        return variable_weights

@@ -626,6 +626,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.metrics.cae.cfd.compute_tke_spectrum` no longer raises
   `UnboundLocalError` when `length` is passed; the domain length now sets the
   grid spacing used for the wavenumbers.
+- `physicsnemo.metrics.climate.graphcast_loss.GraphCastLossFunction` gives
+  each channel its own variable weight. The weights used to be listed with all
+  surface variables first and pressure levels grouped by variable, so any other
+  channel order (such as the FourCastNet ERA5 layouts) applied them to the
+  wrong channels.
 - The GLOBE DrivAerML example trains under `torch.compile` again on PyTorch 2.13
   and 2.14. It and the AirfRANS example now set
   `torch._dynamo.config.specialize_float`, which avoids a Dynamo crash in GLOBE's
