@@ -578,9 +578,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `load_checkpoint` keeps a resumed optimizer's step counts on the CPU unless
-  the optimizer is fused or capturable, as a fresh AdamW does. On the GPU, the
-  step counts forced host syncs in every later eager optimizer step, which
+- `load_checkpoint` keeps a resumed optimizer's step counts on the CPU, where a
+  fresh AdamW keeps them, unless the optimizer is fused or capturable. Step
+  counts on the GPU forced host syncs in every later eager optimizer step and
   slowed resumed training.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
