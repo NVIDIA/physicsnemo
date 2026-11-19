@@ -61,6 +61,8 @@ dataloader:
   use_streams: true
   num_workers: 4
   pin_memory: true
+  # Run host->device copy/transforms/collate for the next batch on a background thread.
+  consume_ahead: false
 
 # -- Domain parallelism -------------------------------------------------------
 # Shard each sample over `domain_size` GPUs; the rest of the block is the

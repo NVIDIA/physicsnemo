@@ -1267,6 +1267,7 @@ def build_dataloaders(
         num_streams=num_streams,
         use_streams=use_streams,
         seed=sampler_seed,
+        consume_ahead=cfg.dataloader.get("consume_ahead", False),
     )
     train_loader = DataLoader(
         train_dataset,
