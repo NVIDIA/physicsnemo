@@ -405,7 +405,7 @@ examples/generative/ @CharlelieLrt @pzharrington
 # ==============================================================================
 
 examples/geophysics/ @CharlelieLrt
-examples/geophysics/diffusion_fwi/
+examples/geophysics/diffusion_fwi/ @CharlelieLrt
 
 # ==============================================================================
 # EXAMPLES - Healthcare
