@@ -224,9 +224,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Mesh.remesh` splits long source edges before clustering, so meshes with
   large faces and slivers come out even, and closes holes and folds in its
-  result where it can. The even spacing welds features thinner than the cluster
-  spacing, so they lose volume unless more clusters or a `resolution_field`
-  keep them.
+  result where it can, which can add vertices beyond `n_clusters`. Features
+  thinner than the cluster spacing are welded and lose volume, less so with
+  more clusters or a higher `resolution_field` there.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit

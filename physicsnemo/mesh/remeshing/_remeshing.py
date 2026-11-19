@@ -47,7 +47,8 @@ _SPLIT_EDGE_FRACTION = 0.5
 _MIN_POINTS_PER_CLUSTER = 4
 _MAX_FACES_PER_CLUSTER = 256
 _MAX_REFINED_FACES = 2**22
-# Warp's errors when no face survives the clustering
+# Warp's errors when no face survives the clustering (keep in sync with
+# nn/functional/geometry/remeshing/_warp_impl/launch_forward.py and op.py)
 _COLLAPSE_ERRORS = (
     "collapsed every input face",
     "only zero-area faces",
@@ -494,11 +495,12 @@ def remesh(
     side of an equilateral triangle when the surface is cut into
     ``2 * n_clusters`` faces. Splitting stops before a round would exceed 256
     source faces per cluster, or ``2**22`` faces (about 1 GiB) when the input
-    has fewer. Many slivers fanned from one point can reach that
+    has fewer. An input with more faces is not refined. Many slivers fanned
+    from one point can reach that
     budget first and leave small faces. The split spaces clusters evenly by
     area, so features thinner than the cluster spacing, which the source's
-    vertices used to outline, are welded shut and lose volume. More clusters
-    or a higher ``resolution_field`` on such features keeps them.
+    vertices used to outline, are welded shut and lose volume. More clusters,
+    or a higher ``resolution_field`` on such features, reduce the loss.
     Output vertices are compacted by connectivity but are not welded by
     position. Backend-specific tuning remains available through
     :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
