@@ -188,7 +188,6 @@ def main() -> None:
 
     if args.read_mode == "memmap":
         import physicsnemo.datapipes._local_shard as local_shard
-
         import physicsnemo.datapipes.readers.mesh as mesh_module
 
         def _plain_read_rows(t, sel=None):
