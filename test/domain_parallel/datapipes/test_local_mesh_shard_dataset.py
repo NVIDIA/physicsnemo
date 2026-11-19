@@ -357,12 +357,19 @@ def test_local_layout_restructure_without_cells(root_and_fmt, distributed_mesh):
         dataset.close()
 
 
-def test_prepare_background_consume_dedicated_group(root_and_fmt, distributed_mesh):
+@pytest.mark.parametrize("layout", ["local", None])  # None: the reader's default
+def test_prepare_background_consume_dedicated_group(
+    root_and_fmt, distributed_mesh, layout
+):
     r"""After prepare_background_consume the centering all_reduce runs on a
     group other than the device mesh's, with unchanged results."""
     dm = DistributedManager()
     sharded = _dataset(
-        root_and_fmt, dm.device, chain=_chain(True, False), device_mesh=distributed_mesh
+        root_and_fmt,
+        dm.device,
+        chain=_chain(True, False),
+        device_mesh=distributed_mesh,
+        layout=layout,
     )
     reference = _dataset(root_and_fmt, dm.device, chain=_chain(True, False))
     groups = []
