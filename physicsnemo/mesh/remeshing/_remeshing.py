@@ -41,10 +41,19 @@ _LINEAR_RESOLUTION_DENSITY_EXPONENT = 4.0
 # Clustering integrates only at source vertices, so a large source triangle
 # holds no cluster inside it. Source edges are split down to this fraction of
 # the output's target edge, then until each cluster has this many source
-# points, within this many source faces per cluster.
+# points, within this many source faces per cluster and, at about 250 bytes
+# per face, about 1 GiB in all.
 _SPLIT_EDGE_FRACTION = 0.5
 _MIN_POINTS_PER_CLUSTER = 4
 _MAX_FACES_PER_CLUSTER = 256
+_MAX_REFINED_FACES = 2**22
+# Warp's errors when no face survives the clustering
+_COLLAPSE_ERRORS = (
+    "collapsed every input face",
+    "only zero-area faces",
+    "removed every remeshed face",
+    "no output triangles",
+)
 
 
 def _canonical_point_data_key(key: PointDataKey) -> PointDataKey:
@@ -244,7 +253,9 @@ def _split_long_edges(
     # roughly 2 * n_clusters faces
     target_edge = float((doubled_area / (3**0.5 * n_clusters)).sqrt())
     target = _SPLIT_EDGE_FRACTION * target_edge
-    max_faces = max(cells.shape[0], _MAX_FACES_PER_CLUSTER * n_clusters)
+    max_faces = min(
+        _MAX_FACES_PER_CLUSTER * n_clusters, max(cells.shape[0], _MAX_REFINED_FACES)
+    )
     rotation = torch.arange(3, device=cells.device)
     while True:
         starts, ends = cells, cells.roll(-1, dims=1)
@@ -402,10 +413,10 @@ def remesh(
     with a bounding volume hierarchy, and reconstructs compact triangle
     connectivity. If the source is watertight, holes in the result are filled,
     and faces that no winding can make consistent, such as those of a fold,
-    are cut out and filled again. Each connected component is then wound
-    consistently and like the source, so a closed, outward-wound source gives
-    a closed, outward-wound result. A direct positive tensor or an attached
-    point-data field can specify relative local linear resolution.
+    are cut out and filled again, which closes holes and folds where it can.
+    Each connected component is then wound consistently and like the source. A
+    direct positive tensor or an attached point-data field can specify
+    relative local linear resolution.
 
     Parameters
     ----------
@@ -479,8 +490,15 @@ def remesh(
     cluster spacing can be assigned to a common cluster and welded together.
     Projection can map distinct cluster centroids to the same surface position.
     Edge splitting continues until edges are at most half the target output
-    edge and the source has four points per cluster, within 256 source faces
-    per cluster.
+    edge and the source has four points per cluster. The target edge is the
+    side of an equilateral triangle when the surface is cut into
+    ``2 * n_clusters`` faces. Splitting stops before a round would exceed 256
+    source faces per cluster, or ``2**22`` faces (about 1 GiB) when the input
+    has fewer. Many slivers fanned from one point can reach that
+    budget first and leave small faces. The split spaces clusters evenly by
+    area, so features thinner than the cluster spacing, which the source's
+    vertices used to outline, are welded shut and lose volume. More clusters
+    or a higher ``resolution_field`` on such features keeps them.
     Output vertices are compacted by connectivity but are not welded by
     position. Backend-specific tuning remains available through
     :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
@@ -547,10 +565,10 @@ def remesh(
                 vertex_density_exponent=_LINEAR_RESOLUTION_DENSITY_EXPONENT,
             )
             break
-        except RuntimeError:
+        except RuntimeError as error:
             # A strip thinner than the cluster spacing can collapse once
-            # refined, so remesh the input as given
-            if source is mesh:
+            # refined, so cluster the input as given
+            if source is mesh or not any(e in str(error) for e in _COLLAPSE_ERRORS):
                 raise
     output_point_data = (
         _interpolate_point_data(

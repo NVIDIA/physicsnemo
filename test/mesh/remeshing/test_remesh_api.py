@@ -25,6 +25,7 @@ import torch
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.mesh.remeshing import remesh
+from physicsnemo.mesh.remeshing._remeshing import _close_and_orient
 
 
 def _fillet_box(n_fillet: int = 64, radius: float = 0.05) -> Mesh:
@@ -113,6 +114,32 @@ def test_remesh_changes_a_mesh_at_its_own_point_count(device):
     )
     upper_fraction = (output.points[:, 2] > 0.5).float().mean()
     assert float(upper_fraction) > 0.6
+
+
+def test_remesh_repair_fills_holes_and_cuts_out_bad_faces():
+    # A remesh of a closed sphere with one vertex's faces missing and a face
+    # doubled the other way round, whose edges then have three faces each
+    source = sphere_icosahedral.load(subdivisions=1)
+    coefficients = source.points.new_tensor([0.3, -0.7, 1.1])
+    cells = source.cells
+    keep = ~(cells == 0).any(dim=1)
+    broken = torch.cat([cells[keep], cells[keep][:1, [0, 2, 1]]])
+    output = Mesh(points=source.points, cells=broken)
+    output.point_data["affine"] = source.points @ coefficients
+    source_faces = torch.zeros(source.n_points, dtype=torch.int64)
+    source_faces[cells.flatten()] = torch.arange(source.n_cells).repeat_interleave(3)
+
+    repaired = _close_and_orient(output, source, source_faces)
+
+    # The cut's fill adds a centroid, and the missing vertex is dropped
+    is_new = torch.cdist(repaired.points, source.points).min(dim=1).values > 1e-6
+    assert int(is_new.sum()) >= 1
+    assert not (repaired.points == source.points[0]).all(dim=1).any()
+    _assert_even_closed_and_outward(repaired, max_area_ratio=100.0)
+    # A filled-in centroid takes its boundary's mean, which is affine here
+    torch.testing.assert_close(
+        repaired.point_data["affine"], repaired.points @ coefficients
+    )
 
 
 def test_remesh_keeps_a_strip_thinner_than_the_cluster_spacing():
