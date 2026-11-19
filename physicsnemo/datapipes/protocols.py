@@ -403,6 +403,17 @@ class DatasetBase(ABC):
         payload = handle.future.result()  # re-raises producer errors via _consume
         return self._consume(payload, handle.stream, defer_sync=defer_sync)
 
+    def prepare_background_consume(self) -> None:
+        """Prepare for :meth:`consume` running on a background thread.
+
+        Called by ``DataLoader(consume_ahead=True)`` on the main thread,
+        once per iterator, before the background consume thread starts.
+        All ranks iterate together, so collective setup is allowed here.
+        Subclasses override this to set up state the consume step needs
+        off the main thread, or raise if their configuration does not
+        support it. The default is a no-op.
+        """
+
     # ------------------------------------------------------------------
     # Concrete interface
     # ------------------------------------------------------------------

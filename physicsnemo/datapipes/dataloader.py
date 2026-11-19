@@ -26,6 +26,8 @@ When collate_metadata=True, returns (TensorDict, list[dict]) tuples.
 from __future__ import annotations
 
 import itertools
+import queue
+import threading
 import warnings
 from typing import Any, Callable, Iterator, Optional, Sequence
 
@@ -135,6 +137,7 @@ class DataLoader:
         num_streams: int = 4,
         use_streams: bool = True,
         seed: int | None = None,
+        consume_ahead: bool = False,
     ) -> None:
         """
         Initialize the DataLoader.
@@ -172,6 +175,17 @@ class DataLoader:
             reader, and every stochastic transform, making the full
             pipeline reproducible.  Use :meth:`set_epoch` to vary the
             random sequence across epochs while staying deterministic.
+        consume_ahead : bool, default=False
+            If True (map-style datasets with prefetching enabled), a
+            background thread runs the consume step (host-to-device copy
+            and transforms) and collation for batch N+1 while the training
+            loop works on batch N, keeping at most one collated batch
+            ready. The main thread still gates the compute stream on each
+            batch right before yielding it. The dataset's
+            ``prepare_background_consume()`` hook (when present) is called
+            on the main thread once per iterator, before the thread
+            starts. Ignored for iterable datasets and when
+            ``prefetch_factor=0``.
 
         Raises
         ------
@@ -192,6 +206,7 @@ class DataLoader:
         self.num_streams = num_streams
         self.use_streams = use_streams and torch.cuda.is_available()
         self._seed = seed
+        self.consume_ahead = consume_ahead
         # Iterable (generator) datasets are driven main-thread-only: no
         # sampler, no worker-pool prefetch (see _iter_iterable).
         self._iterable = isinstance(dataset, IterableDatasetBase)
@@ -476,6 +491,12 @@ class DataLoader:
                     compute_stream.wait_event(event)
 
         try:
+            if self.consume_ahead:
+                yield from self._iter_consume_ahead(
+                    pump, drain_one_batch, gate_compute_stream, compute_stream
+                )
+                return
+
             # Prime: consume the first batch's items, enqueueing their
             # preprocessing stream work (event recorded, compute-stream wait
             # deferred to gate_compute_stream below).
@@ -528,6 +549,105 @@ class DataLoader:
             # drop any prefetched-but-unconsumed handles.
             pump.stop()
             self.dataset.cancel_prefetch()
+
+    def _iter_consume_ahead(
+        self,
+        pump: IOPump,
+        drain_one_batch: Callable[[], tuple[list[Any], bool]],
+        gate_compute_stream: Callable[[list], None],
+        compute_stream: Optional[torch.cuda.Stream],
+    ) -> Iterator[Any]:
+        """Run consume + collate one batch ahead on a background thread.
+
+        The thread drains the pump batch by batch (``consume`` with
+        ``defer_sync=True``), collates, and hands ``(batch, events)`` to the
+        main thread through a queue of size 1. The main thread calls
+        ``gate_compute_stream(events)`` right before each yield, exactly as
+        the default path does.
+
+        With streams, the thread collates on its own stream, which first
+        waits on the batch's preprocessing events; a single event recorded
+        after collation is what the compute stream waits on. Without
+        streams, the thread runs on the main thread's current CUDA stream
+        (if CUDA is in use) and ``events`` is empty.
+
+        Errors raised on the thread are re-raised here. Closing the
+        generator (early ``break``, exhaustion, or an error) stops the pump
+        and joins the thread.
+        """
+        prepare = getattr(self.dataset, "prepare_background_consume", None)
+        if prepare is not None:
+            prepare()
+
+        # Threads inherit neither the current device nor the current stream.
+        if compute_stream is not None:
+            work_stream = torch.cuda.Stream(device=compute_stream.device)
+        elif torch.cuda.is_available() and torch.cuda.is_initialized():
+            work_stream = torch.cuda.current_stream()
+        else:
+            work_stream = None
+
+        ready: queue.Queue = queue.Queue(maxsize=1)
+        stop = threading.Event()
+        end = object()
+
+        def put(item: Any) -> bool:
+            # Bounded put that gives up once the consumer has gone away.
+            while not stop.is_set():
+                try:
+                    ready.put(item, timeout=0.05)
+                    return True
+                except queue.Full:
+                    pass
+            return False
+
+        def produce() -> None:
+            try:
+                if work_stream is not None:
+                    torch.cuda.set_device(work_stream.device)
+                with preprocessing_stream(work_stream):
+                    has_batch = True
+                    while has_batch and not stop.is_set():
+                        samples, has_batch = drain_one_batch()
+                        events = self.dataset._pop_events()
+                        if not samples:
+                            continue
+                        if compute_stream is not None:
+                            for event in events:
+                                work_stream.wait_event(event)
+                        batch = self.collate_fn(samples)
+                        events = []
+                        if compute_stream is not None:
+                            record_consumer_stream(batch, compute_stream)
+                            event = torch.cuda.Event()
+                            event.record(work_stream)
+                            events = [event]
+                        if not put((batch, events)):
+                            return
+            except BaseException as exc:  # noqa: BLE001
+                put(exc)
+                return
+            put(end)
+
+        thread = threading.Thread(
+            target=produce, name="datapipe_consume_ahead", daemon=True
+        )
+        thread.start()
+        try:
+            while True:
+                item = ready.get()
+                if item is end:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                batch, events = item
+                gate_compute_stream(events)
+                yield batch
+        finally:
+            stop.set()
+            # Stopping the pump ends a drain the thread may be parked in.
+            pump.stop()
+            thread.join()
 
     def _iter_iterable(
         self,
@@ -667,6 +787,7 @@ class DataLoader:
             f"  drop_last={self.drop_last},\n"
             f"  prefetch_factor={self.prefetch_factor},\n"
             f"  num_streams={self.num_streams},\n"
-            f"  use_streams={self.use_streams}\n"
+            f"  use_streams={self.use_streams},\n"
+            f"  consume_ahead={self.consume_ahead}\n"
             f")"
         )

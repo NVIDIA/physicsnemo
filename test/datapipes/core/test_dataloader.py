@@ -20,6 +20,8 @@ This module consolidates all DataLoader tests, using real CUDA streams
 for GPU-related tests instead of mocks.
 """
 
+import threading
+
 import pytest
 import torch
 from tensordict import TensorDict
@@ -765,6 +767,204 @@ class TestDataLoaderRepr:
         assert "drop_last=True" in repr_str
         assert "prefetch_factor=4" in repr_str
         assert "num_streams=6" in repr_str
+
+
+# ============================================================================
+# Consume-ahead (background consume + collate)
+# ============================================================================
+
+_DEVICES = [
+    pytest.param("cpu", False, id="cpu"),
+    pytest.param(
+        "cuda:0",
+        False,
+        id="cuda-nostreams",
+        marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA"),
+    ),
+    pytest.param(
+        "cuda:0",
+        True,
+        id="cuda-streams",
+        marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA"),
+    ),
+]
+
+
+class _Scale(dp.Transform):
+    """Device transform; raises on the sample whose label is ``fail_label``."""
+
+    def __init__(self, fail_label=None):
+        super().__init__()
+        self.fail_label = fail_label
+
+    def __call__(self, data):
+        if self.fail_label is not None and int(data["label"][0]) == self.fail_label:
+            raise RuntimeError("transform failed")
+        data["positions"] = data["positions"] * 2.0 + 1.0
+        return data
+
+
+class _HookDataset(dp.Dataset):
+    """Records calls to prepare_background_consume (thread, consume thread alive)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hook_calls = []
+
+    def prepare_background_consume(self):
+        self.hook_calls.append(
+            (threading.current_thread(), _live_threads("datapipe_consume_ahead"))
+        )
+
+
+def _live_threads(name):
+    return [t for t in threading.enumerate() if t.name == name and t.is_alive()]
+
+
+def _loader(numpy_data_dir, device, use_streams, *, consume_ahead, **kwargs):
+    reader = dp.NumpyReader(numpy_data_dir, pin_memory=device != "cpu")
+    dataset = _HookDataset(
+        reader,
+        device=None if device == "cpu" else device,
+        transforms=_Scale(kwargs.pop("fail_label", None)),
+    )
+    return dp.DataLoader(
+        dataset,
+        use_streams=use_streams,
+        consume_ahead=consume_ahead,
+        **kwargs,
+    )
+
+
+class TestDataLoaderConsumeAhead:
+    """consume_ahead=True must match the default path batch for batch."""
+
+    @pytest.mark.parametrize("device,use_streams", _DEVICES)
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"batch_size": 3},
+            {"batch_size": 3, "drop_last": True},
+            {"batch_size": 4, "shuffle": True, "seed": 7, "collate_metadata": True},
+            {"batch_size": 20},
+        ],
+    )
+    def test_identical_batches(self, numpy_data_dir, device, use_streams, kwargs):
+        expected = list(
+            _loader(numpy_data_dir, device, use_streams, consume_ahead=False, **kwargs)
+        )
+        got = list(
+            _loader(numpy_data_dir, device, use_streams, consume_ahead=True, **kwargs)
+        )
+        assert len(got) == len(expected) > 0
+        for a, b in zip(got, expected):
+            if kwargs.get("collate_metadata"):
+                (a, meta_a), (b, meta_b) = a, b
+                assert meta_a == meta_b
+            assert a.device == b.device
+            assert set(a.keys()) == set(b.keys())
+            for key in b.keys():
+                torch.testing.assert_close(a[key], b[key], rtol=0, atol=0)
+        assert not _live_threads("datapipe_consume_ahead")
+
+    @pytest.mark.parametrize("device,use_streams", _DEVICES)
+    def test_transform_error_surfaces_from_next(
+        self, numpy_data_dir, device, use_streams
+    ):
+        loader = _loader(
+            numpy_data_dir,
+            device,
+            use_streams,
+            consume_ahead=True,
+            batch_size=2,
+            fail_label=5,
+        )
+        it = iter(loader)
+        assert len([next(it), next(it)]) == 2  # samples 0..3
+        with pytest.raises(RuntimeError, match="transform failed"):
+            for _ in range(3):
+                next(it)
+        assert not _live_threads("datapipe_consume_ahead")
+
+    def test_collate_error_surfaces_from_next(self, numpy_data_dir):
+        def bad_collate(samples):
+            raise ValueError("collate failed")
+
+        loader = _loader(
+            numpy_data_dir,
+            "cpu",
+            False,
+            consume_ahead=True,
+            batch_size=2,
+            collate_fn=bad_collate,
+        )
+        with pytest.raises(ValueError, match="collate failed"):
+            next(iter(loader))
+        assert not _live_threads("datapipe_consume_ahead")
+
+    @pytest.mark.parametrize("device,use_streams", _DEVICES)
+    def test_early_break_leaves_no_thread(self, numpy_data_dir, device, use_streams):
+        loader = _loader(
+            numpy_data_dir, device, use_streams, consume_ahead=True, batch_size=1
+        )
+        for _ in loader:
+            break
+        assert not _live_threads("datapipe_consume_ahead")
+        assert not _live_threads("datapipe_pump")
+
+        it = iter(loader)
+        next(it)
+        assert len(_live_threads("datapipe_consume_ahead")) == 1
+        it.close()
+        assert not _live_threads("datapipe_consume_ahead")
+        assert not _live_threads("datapipe_pump")
+
+        # The loader is reusable after an early stop.
+        assert len(list(loader)) == 10
+
+    def test_hook_called_once_per_iterator_on_main_thread(self, numpy_data_dir):
+        loader = _loader(numpy_data_dir, "cpu", False, consume_ahead=True, batch_size=3)
+        calls = loader.dataset.hook_calls
+        assert len(list(loader)) == 4
+        assert len(calls) == 1
+        thread, live = calls[0]
+        assert thread is threading.main_thread()
+        assert live == []  # called before the consume thread started
+        list(loader)
+        assert len(calls) == 2
+
+    def test_hook_not_called_by_default(self, numpy_data_dir):
+        loader = _loader(
+            numpy_data_dir, "cpu", False, consume_ahead=False, batch_size=3
+        )
+        list(loader)
+        assert loader.dataset.hook_calls == []
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_streams_on_side_compute_stream(self, numpy_data_dir):
+        """Consume-ahead feeds a non-default compute stream correctly."""
+        kwargs = {"batch_size": 2, "num_streams": 2, "prefetch_factor": 2}
+        expected = [
+            b["positions"].sum().item()
+            for b in _loader(
+                numpy_data_dir, "cuda:0", True, consume_ahead=False, **kwargs
+            )
+        ]
+        loader = _loader(numpy_data_dir, "cuda:0", True, consume_ahead=True, **kwargs)
+        assert loader.use_streams
+        compute = torch.cuda.Stream()
+        sums = []
+        with torch.cuda.stream(compute):
+            for batch in loader:
+                # Some compute-stream work between batches.
+                y = (batch["positions"] @ batch["positions"].transpose(-1, -2)).sum()
+                sums.append((batch["positions"].sum(), y))
+        compute.synchronize()
+        assert [s.item() for s, _ in sums] == pytest.approx(expected)
+
+    def test_repr_includes_consume_ahead(self, numpy_data_dir):
+        loader = _loader(numpy_data_dir, "cpu", False, consume_ahead=True)
+        assert "consume_ahead=True" in repr(loader)
 
 
 # ============================================================================
