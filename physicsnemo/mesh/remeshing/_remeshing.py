@@ -224,9 +224,9 @@ def _widen(values: torch.Tensor) -> torch.Tensor:
 def _split_long_edges(
     points: torch.Tensor,
     cells: torch.Tensor,
-    fields: list,
+    fields: list[torch.Tensor | TensorDict],
     n_clusters: int,
-) -> tuple[torch.Tensor, torch.Tensor, list]:
+) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor | TensorDict]]:
     """Split long edges at their midpoints, the longest first.
 
     Each round splits the edges longer than half the longest, and the faces
@@ -237,10 +237,13 @@ def _split_long_edges(
     """
     vertices = points[cells].to(torch.float64)
     edge_vectors = vertices[:, 1:] - vertices[:, :1]
-    area = torch.linalg.cross(edge_vectors[:, 0], edge_vectors[:, 1]).norm(dim=1).sum()
+    doubled_area = (
+        torch.linalg.cross(edge_vectors[:, 0], edge_vectors[:, 1]).norm(dim=1).sum()
+    )
     # Edge of an equilateral triangle when the area is cut into the output's
     # roughly 2 * n_clusters faces
-    target = _SPLIT_EDGE_FRACTION * float((2 * area / (3**0.5 * n_clusters)).sqrt())
+    target_edge = float((doubled_area / (3**0.5 * n_clusters)).sqrt())
+    target = _SPLIT_EDGE_FRACTION * target_edge
     max_faces = max(cells.shape[0], _MAX_FACES_PER_CLUSTER * n_clusters)
     rotation = torch.arange(3, device=cells.device)
     while True:
@@ -301,9 +304,9 @@ def _close_and_orient(output: Mesh, source: Mesh, source_faces: torch.Tensor) ->
     n_points, n_cells = output.n_points, output.n_cells
     if is_watertight(source):
         output = fill_holes(output, max_hole_edges=n_points)[0]
-        is_new = output.cells >= n_points
         if output.n_points > n_points and len(output.point_data.keys()) > 0:
             # Each fan face holds one centroid and two boundary points
+            is_new = output.cells >= n_points
             fans = is_new.any(dim=1)
             centroid = output.cells[fans].max(dim=1).values
             boundary = output.cells[fans][~is_new[fans]].reshape(-1, 2)
