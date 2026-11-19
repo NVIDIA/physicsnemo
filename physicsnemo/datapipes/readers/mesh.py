@@ -996,21 +996,33 @@ def read_local_cell_shard(
         own_cells = _source_rows(src, cells_src, slice(start, stop), n_src_cells)
 
     referenced = None
+    remap = None
     if need_all:
+        # One sort; everything else is window-sized masks over ``uniq``.
+        uniq, inverse = torch.unique(all_cells.reshape(-1), return_inverse=True)
+        verts_per_cell = all_cells.shape[1] if all_cells.ndim > 1 else 1
         sizes = []
         offset = 0
-        for size in cell_sizes:
-            chunk = all_cells[offset : offset + size].reshape(-1)
-            sizes.append(torch.unique(chunk).numel())
+        mask_own = None
+        for r, size in enumerate(cell_sizes):
+            ent = inverse[offset * verts_per_cell : (offset + size) * verts_per_cell]
+            mask = torch.zeros(len(uniq), dtype=torch.bool)
+            mask[ent] = True
+            sizes.append(int(mask.sum()))
+            if r == rank:
+                mask_own, own_ent = mask, ent
             offset += size
         point_sizes = tuple(sizes)
         if cell_window is not None:
             # The unsharded read compacts onto the window's vertices.
-            referenced = torch.unique(all_cells.reshape(-1))
+            referenced = uniq
+        local_ids = uniq[mask_own]
+        remap = torch.cumsum(mask_own, 0) - 1
+        local_cells = remap[own_ent].to(own_cells.dtype).reshape(own_cells.shape)
+    else:
+        local_ids, local_cells = torch.unique(own_cells, return_inverse=True)
+        local_cells = local_cells.to(own_cells.dtype).reshape(own_cells.shape)
     n_points = n_src_points if referenced is None else len(referenced)
-
-    local_ids, local_cells = torch.unique(own_cells, return_inverse=True)
-    local_cells = local_cells.to(own_cells.dtype).reshape(own_cells.shape)
 
     points = _source_rows(src, points_src, local_ids, n_src_points)
 
@@ -1019,16 +1031,15 @@ def read_local_cell_shard(
         # Partial sum over the vertices this rank owns: a vertex belongs to
         # the lowest rank whose cells reference it, so seam vertices count
         # once over all ranks. Every rank derives ownership from all_cells.
-        uniq, inverse = torch.unique(all_cells.reshape(-1), return_inverse=True)
-        verts_per_cell = all_cells.shape[1] if all_cells.ndim > 1 else 1
         chunk_of_entry = torch.repeat_interleave(
             torch.arange(world_size),
             torch.tensor(cell_sizes) * verts_per_cell,
         )
         owner = torch.full((len(uniq),), world_size, dtype=torch.long)
         owner.scatter_reduce_(0, inverse.reshape(-1), chunk_of_entry, reduce="amin")
-        owned = uniq[owner == rank]
-        rows = torch.searchsorted(local_ids, owned)
+        owned_idx = torch.nonzero(owner == rank).squeeze(-1)
+        owned = uniq[owned_idx]
+        rows = remap[owned_idx]
         point_sum = points[rows].to(torch.float64).sum(dim=0)
         count = len(owned)
         if referenced is None and len(uniq) < n_src_points and rank == 0:
