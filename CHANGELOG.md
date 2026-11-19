@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `physicsnemo.optim.Muon` and `physicsnemo.optim.CombinedOptimizer` support
+  `torch.amp.GradScaler`'s sync-free step protocol
+  (`_step_supports_amp_scaling`): gradients are unscaled on device and a step
+  with inf/NaN gradients is discarded with `torch.where`, so mixed-precision
+  (fp16) training no longer calls `found_inf.item()` every step.
+  `CombinedOptimizer` opts in only when all its sub-optimizers do.
 - Unified external aero recipe: adds AB-UPT surface, volume, and joint
   configurations calling the library model directly, configurable independent
   point-set sampling in `DomainMeshReader`, and grouped tensor outputs for
