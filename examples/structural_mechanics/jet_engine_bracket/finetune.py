@@ -180,6 +180,9 @@ def main(cfg: DictConfig) -> None:
             )
         if rank0:
             adapter = {k: v for k, v in model.state_dict().items() if "lora_" in k}
+            # Written under another name and renamed, so that an interrupted
+            # write does not leave a truncated ``state.pt`` behind.
+            partial = state_file.with_name(state_file.name + ".tmp")
             torch.save(
                 {
                     "epoch": epoch + 1,
@@ -187,8 +190,9 @@ def main(cfg: DictConfig) -> None:
                     "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(),
                 },
-                state_file,
+                partial,
             )
+            partial.replace(state_file)
             log.write(json.dumps(record) + "\n")
             log.flush()
             print(json.dumps(record), flush=True)
