@@ -222,6 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Mesh.remesh` splits long source edges before clustering and then closes and
+  orients its result, so meshes with large faces and slivers come out even, and
+  a closed outward input gives a closed outward output.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit

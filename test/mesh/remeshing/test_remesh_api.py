@@ -17,6 +17,7 @@
 """Device-independent tests for the public Mesh remeshing API."""
 
 import inspect
+import math
 
 import pytest
 import torch
@@ -24,6 +25,96 @@ import torch
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.mesh.remeshing import remesh
+
+
+def _fillet_box(n_fillet: int = 64, radius: float = 0.05) -> Mesh:
+    """A closed unit box like a CAD export: flat sides of one quad, finely
+    sampled vertical fillets, and caps fanned from their centers."""
+    outline = []
+    for k, (x, y) in enumerate([(1, 1), (-1, 1), (-1, -1), (1, -1)]):
+        angle = torch.linspace(0, math.pi / 2, n_fillet) + k * math.pi / 2
+        center = torch.tensor([x, y]) * (0.5 - radius)
+        outline.append(center + radius * torch.stack([angle.cos(), angle.sin()], 1))
+    outline = torch.cat(outline)
+    n = outline.shape[0]
+    bottom = torch.nn.functional.pad(outline, (0, 1))
+    top = torch.nn.functional.pad(outline, (0, 1), value=1.0)
+    centers = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    i = torch.arange(n)
+    j = (i + 1) % n
+    cells = torch.cat(
+        [
+            torch.stack([i, j, j + n], 1),
+            torch.stack([i, j + n, i + n], 1),
+            torch.stack([torch.full_like(i, 2 * n), j, i], 1),
+            torch.stack([torch.full_like(i, 2 * n + 1), i + n, j + n], 1),
+        ]
+    )
+    return Mesh(points=torch.cat([bottom, top, centers]), cells=cells)
+
+
+def _assert_even_closed_and_outward(output: Mesh, max_area_ratio: float) -> None:
+    areas = output.cell_areas.double()
+    p1, p99 = torch.quantile(areas, areas.new_tensor([0.01, 0.99]))
+    assert float(p99 / p1) < max_area_ratio
+    # Closed and consistently wound: every directed edge appears exactly once,
+    # and its reverse also appears
+    cells = output.cells
+    directed = torch.cat([cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]])
+    unique_directed = torch.unique(directed, dim=0)
+    assert unique_directed.shape[0] == directed.shape[0]
+    reversed_ids = unique_directed.flip(1) @ unique_directed.new_tensor(
+        [cells.max() + 1, 1]
+    )
+    ids = unique_directed @ unique_directed.new_tensor([cells.max() + 1, 1])
+    assert torch.isin(reversed_ids, ids).all()
+    vertices = output.points.double()[cells]
+    signed_volume = (
+        vertices[:, 0] * torch.linalg.cross(vertices[:, 1], vertices[:, 2])
+    ).sum() / 6
+    assert float(signed_volume) > 0.9
+
+
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)]
+)
+def test_remesh_evens_out_large_faces_and_slivers(device):
+    source = _fillet_box().to(device)
+    areas = source.cell_areas
+    assert float(areas.max() / areas.min()) > 1000
+
+    output = remesh(source, 250)
+
+    assert 200 <= output.n_points <= 260
+    _assert_even_closed_and_outward(output, max_area_ratio=10.0)
+
+
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)]
+)
+def test_remesh_changes_a_mesh_at_its_own_point_count(device):
+    source = _fillet_box().to(device)
+    source.point_data["affine"] = source.points @ source.points.new_tensor(
+        [0.3, -0.7, 1.1]
+    )
+    source.point_data["resolution"] = 1.0 + (source.points[:, 2] > 0.5).float()
+
+    output = remesh(
+        source,
+        source.n_points,
+        transfer_point_data="affine",
+        resolution_field="resolution",
+    )
+
+    _assert_even_closed_and_outward(output, max_area_ratio=30.0)
+    torch.testing.assert_close(
+        output.point_data["affine"],
+        output.points @ output.points.new_tensor([0.3, -0.7, 1.1]),
+        rtol=1e-4,
+        atol=1e-4,
+    )
+    upper_fraction = (output.points[:, 2] > 0.5).float().mean()
+    assert float(upper_fraction) > 0.6
 
 
 def test_remesh_public_signatures():
