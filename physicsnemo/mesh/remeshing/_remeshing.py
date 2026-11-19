@@ -539,7 +539,9 @@ def remesh(
         and int(mesh.cells.max()) < mesh.n_points
     ):
         # Invalid inputs skip the refinement, so that remeshing reports them.
-        # Midpoint averages use at least float32, as the final interpolation.
+        # Midpoints, edge lengths and averages use at least float32, as the
+        # final interpolation, so a float16 source far from the origin cannot
+        # overflow; the refined points return to the source's dtype.
         fields = [mesh.point_data.select(*transfer_keys), linear_resolution]
         fields = [
             field.apply(_widen) if isinstance(field, TensorDict) else _widen(field)
@@ -547,8 +549,9 @@ def remesh(
             if field is not None
         ]
         points, cells, fields = _split_long_edges(
-            mesh.points.detach(), mesh.cells.to(torch.int64), fields, n_clusters
+            _widen(mesh.points.detach()), mesh.cells.to(torch.int64), fields, n_clusters
         )
+        points = points.to(mesh.points.dtype)
         refined = Mesh(points=points, cells=cells, point_data=fields[0])
         candidates.insert(0, (refined, fields[1] if len(fields) > 1 else None))
     for source, resolution in candidates:

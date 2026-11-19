@@ -211,6 +211,26 @@ def test_remesh_preserves_reduced_precision(dtype):
     assert output.validate(check_manifoldness=True)["valid"]
 
 
+def test_remesh_refines_float16_far_from_the_origin():
+    # float16 midpoints of x = 40000 overflow (80000 > 65504) unless averaged wider
+    points = torch.tensor(
+        [
+            [40000.0, 0.0, 0.0],
+            [40000.0, 128.0, 0.0],
+            [40000.0, 128.0, 128.0],
+            [40000.0, 0.0, 128.0],
+        ],
+        dtype=torch.float16,
+    )
+    source = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+
+    output = remesh(source, 4)
+
+    assert output.points.dtype == torch.float16
+    assert torch.isfinite(output.points).all()
+    assert output.n_cells > 0
+
+
 def test_cpu_remesh_rejects_unsafe_geometry():
     nonfinite = sphere_icosahedral.load(subdivisions=1)
     nonfinite.points[0, 0] = torch.nan
