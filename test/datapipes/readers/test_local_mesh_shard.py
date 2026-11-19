@@ -24,7 +24,6 @@ ShardTensor wrap and the multi-rank pipeline are covered in
 ``test/domain_parallel/datapipes/test_local_mesh_shard_dataset.py``.
 """
 
-import numpy as np
 import pytest
 import torch
 from tensordict import TensorDict
@@ -370,38 +369,23 @@ def test_dataset_runs_chain_on_local_share(source, monkeypatch):
         moved[0]
 
 
-def test_read_rows_sequential_and_fallbacks(tmp_path, monkeypatch):
-    r"""``read_rows`` equals indexing for every selection kind, using
-    ``np.fromfile`` on memmap files and plain indexing otherwise."""
+def test_read_rows_matches_indexing(tmp_path):
+    r"""``read_rows`` equals indexing for every selection kind and returns a
+    plain tensor owning its memory."""
     values = torch.randn(5000, 3)
     TensorDict({"v": values}, batch_size=[]).memmap(tmp_path / "td")
     lazy = TensorDict.load_memmap(tmp_path / "td")["v"]
-    assert getattr(lazy, "filename", None) is not None
-
-    calls = []
-    real = np.fromfile
-    monkeypatch.setattr(
-        np, "fromfile", lambda *a, **k: calls.append(k["count"]) or real(*a, **k)
-    )
-    window = _cyclic_block_indices(5000, 700, start=4600)  # wraps: 2 runs
-    dense = torch.unique(torch.randint(0, 5000, (2000,)))  # sorted, dense
-    sparse = torch.tensor([0, 1000, 2000, 3000, 4000, 4999])  # sorted, sparse
-    unsorted = torch.tensor([4000, 2, 4999, 7, 1, 3000])  # sparse, unsorted
+    dense = torch.unique(torch.randint(0, 5000, (2000,)))
     cases = [
-        (None, values, 1),
-        (slice(10, 900), values[10:900], 1),
-        (window, values[window], 2),
-        (dense, values[dense], 1),
-        (sparse, values[sparse], 0),
-        (unsorted, values[unsorted], 0),
+        (None, values),
+        (slice(10, 900), values[10:900]),
+        (dense, values[dense]),
+        (torch.tensor([0, 1000, 4999]), values[[0, 1000, 4999]]),
+        (torch.empty(0, dtype=torch.long), values[:0]),
     ]
-    for selection, expected, n_reads in cases:
-        calls.clear()
+    for selection, expected in cases:
         out = read_rows(lazy, selection)
         assert torch.equal(out, expected)
         assert type(out) is torch.Tensor
-        assert len(calls) == n_reads, selection
-    # Not file-backed: plain indexing.
-    calls.clear()
-    assert torch.equal(read_rows(values, dense), values[dense])
-    assert calls == []
+        assert getattr(out, "filename", None) is None
+        assert out.untyped_storage().data_ptr() != lazy.untyped_storage().data_ptr()

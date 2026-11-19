@@ -61,11 +61,9 @@ below the sample size) cannot run locally and raise; use
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-import numpy as np
 import torch
 from tensordict import TensorDict
 from torch.distributed.tensor.placement_types import Shard
@@ -89,54 +87,8 @@ Axis = Literal["cells", "points"]
 
 
 # ---------------------------------------------------------------------------
-# Sequential row reads from memory-mapped files
+# Row reads
 # ---------------------------------------------------------------------------
-
-# A sorted selection is read as one sequential span when it touches at least
-# one row in this many. Page-faulting scattered rows of a memory map costs a
-# round trip per page on a networked filesystem; reading the span reads every
-# page once.
-_DENSE_SPAN_FACTOR = 32
-# A selection made of at most this many contiguous runs is read run by run.
-_MAX_RUNS = 4
-
-
-def _index_runs(indices: torch.Tensor) -> list[tuple[int, int]]:
-    """Ascending contiguous ``[start, stop)`` runs of a 1-D integer index."""
-    if indices.numel() == 0:
-        return []
-    breaks = torch.nonzero(indices[1:] != indices[:-1] + 1).flatten()
-    starts = [0] + [int(b) + 1 for b in breaks]
-    ends = [int(b) + 1 for b in breaks] + [len(indices)]
-    return [(int(indices[s]), int(indices[e - 1]) + 1) for s, e in zip(starts, ends)]
-
-
-def _backing_file(t: torch.Tensor) -> tuple[str, np.dtype] | None:
-    """``(filename, numpy dtype)`` if *t* is a whole, raw, C-contiguous memmap file."""
-    filename = getattr(t, "filename", None)
-    if filename is None or t.ndim == 0 or not t.is_contiguous():
-        return None
-    if t.storage_offset() != 0:
-        return None
-    try:
-        dtype = torch.empty(0, dtype=t.dtype).numpy().dtype
-        if os.path.getsize(filename) != t.numel() * t.element_size():
-            return None
-    except (TypeError, OSError):
-        return None
-    return filename, dtype
-
-
-def _read_span(t: torch.Tensor, file: tuple[str, np.dtype], start: int, stop: int):
-    filename, dtype = file
-    row = t[0].numel() if t.shape[0] > 0 else 0
-    array = np.fromfile(
-        filename,
-        dtype=dtype,
-        count=(stop - start) * row,
-        offset=start * row * t.element_size(),
-    )
-    return torch.from_numpy(array).view(stop - start, *t.shape[1:])
 
 
 def read_rows(
@@ -144,47 +96,19 @@ def read_rows(
 ) -> torch.Tensor:
     r"""``t[selection]`` (all rows for ``None``) materialized in host memory.
 
-    A tensor backed by a whole memory-mapped file (``MemoryMappedTensor``,
-    as ``Mesh.load`` returns) is read with sequential ``np.fromfile`` calls:
-    one per contiguous run of the selection, or one over the selection's span
-    when it is sorted and touches at least one row in ``_DENSE_SPAN_FACTOR``.
-    That replaces page faults on the memory map, which on a networked
-    filesystem cost a round trip per page, with large sequential reads. Any
-    other tensor or selection falls back to indexing.
-
     Parameters
     ----------
     t : torch.Tensor
         Source tensor, typically a lazily loaded memmap leaf.
     selection : slice or Tensor or None
-        Unit-step slice, 1-D integer index, or ``None`` for every row.
+        Slice, 1-D integer index, or ``None`` for every row.
 
     Returns
     -------
     torch.Tensor
         A plain tensor owning its memory.
     """
-    file = _backing_file(t)
-    n = t.shape[0] if t.ndim > 0 else 0
-    if selection is None:
-        if file is None:
-            return torch.as_tensor(t).clone()
-        return _read_span(t, file, 0, n)
-    if isinstance(selection, slice):
-        start, stop, step = selection.indices(n)
-        if file is None or step != 1:
-            return torch.as_tensor(t[selection]).clone()
-        return _read_span(t, file, start, max(start, stop))
-    if file is None or selection.numel() == 0:
-        return torch.as_tensor(t[selection]).clone()
-    runs = _index_runs(selection)
-    if len(runs) <= _MAX_RUNS:
-        parts = [_read_span(t, file, a, b) for a, b in runs]
-        return parts[0] if len(parts) == 1 else torch.cat(parts)
-    lo, hi = int(selection.min()), int(selection.max()) + 1
-    if hi - lo <= _DENSE_SPAN_FACTOR * selection.numel():
-        return _read_span(t, file, lo, hi)[selection - lo]
-    return torch.as_tensor(t[selection]).clone()
+    return torch.as_tensor(t if selection is None else t[selection]).clone()
 
 
 # ---------------------------------------------------------------------------
