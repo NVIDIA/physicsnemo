@@ -158,7 +158,10 @@ def main(cfg: DictConfig) -> None:
         logger.info("Data downloaded.")
         logger.info("Extracting data...")
         with tarfile.open(output_path, "r") as tar_ref:
-            tar_ref.extractall(to_absolute_path("./datasets/"))
+            extract_kwargs = dict(path=to_absolute_path("./datasets/"))
+            if "filter" in tar_ref.extractall.__code__.co_varnames:
+                extract_kwargs["filter"] = "data"
+            tar_ref.extractall(**extract_kwargs)
         logger.info("Data extracted")
 
     if Path(raw_test_data_path).is_file():
@@ -172,7 +175,10 @@ def main(cfg: DictConfig) -> None:
         logger.info("Data downloaded.")
         logger.info("Extracting data...")
         with tarfile.open(output_path, "r") as tar_ref:
-            tar_ref.extractall(to_absolute_path("./datasets/"))
+            extract_kwargs = dict(path=to_absolute_path("./datasets/"))
+            if "filter" in tar_ref.extractall.__code__.co_varnames:
+                extract_kwargs["filter"] = "data"
+            tar_ref.extractall(**extract_kwargs)
         logger.info("Data extracted")
 
     # Data pre-processing
