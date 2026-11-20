@@ -69,7 +69,12 @@ def _flare_attention_te(
     ``attn_fn`` must be configured with ``qkv_format="bshd"`` and
     ``attention_type="cross"`` (query and key sequence lengths differ). It
     returns the heads flattened, so the output is reshaped back to ``bshd``.
+
+    The inputs are made contiguous first: TE's fused (bf16/fp16) backends
+    assume dense ``bshd`` memory and silently read the wrong elements from
+    strided views such as the batch-expanded, head-transposed latent queries.
     """
+    q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     return rearrange(attn_fn(q, k, v), "b s (h d) -> b s h d", h=heads)
 
 
