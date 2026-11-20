@@ -338,3 +338,17 @@ class TestReduceAndAverage:
         )
         assert averages["b_mae"] == pytest.approx(2.0)
         assert averages["a_mae"] == pytest.approx(1.0)
+
+
+def test_reduce_start_matches_reduce_and_average():
+    """The async reducer yields the same floats as the blocking wrapper."""
+    from train import _reduce_start
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    loss = torch.tensor(3.0, device=dev)
+    losses = TensorDict({"loss/a": torch.tensor(1.0, device=dev)}, batch_size=[])
+    metrics = TensorDict({"m": torch.tensor(2.0, device=dev)}, batch_size=[])
+    pending = _reduce_start(loss, losses, metrics, 1, device=dev)
+    expected = _reduce_and_average(loss, losses, metrics, 1, device=dev)
+    assert pending.result() == expected == (3.0, {"loss/a": 1.0}, {"m": 2.0})
+    assert pending.ready()
