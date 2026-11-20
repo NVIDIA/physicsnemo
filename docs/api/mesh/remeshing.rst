@@ -20,7 +20,18 @@ selected point data to the new vertices.
 .. important::
 
    ``n_clusters`` is the global target number of output vertices, not
-   triangles. Cleanup can produce slightly fewer vertices.
+   triangles. Cleanup can drop clusters, and hole filling adds one vertex per
+   hole filled with a fan, so the count can land above or below the target.
+
+.. note::
+
+   By default, ``remesh`` first splits long source edges, so that clusters can
+   land inside large faces. For a closed input, it then fills holes and
+   repairs folds in the result. If that result changes the input's area, or a
+   closed input's volume, by more than 5%, or leaves a closed input open or
+   inconsistently wound, ``remesh`` clusters the input's own vertices instead,
+   as ``refine=False`` always does. Either way, each connected component of
+   the result is then wound consistently and like the source.
 
 .. note::
 
@@ -100,7 +111,10 @@ you do not select. Selected fields must contain real floating-point tensors:
 Warp records the closest source triangle and barycentric coordinates while it
 projects each final output vertex. PyTorch then interpolates the selected
 fields directly from the original mesh. This avoids a second spatial query and
-prevents cumulative interpolation drift.
+prevents cumulative interpolation drift. Edge splitting places midpoints on the
+original edges, so the result still equals interpolation on the original
+faces. A vertex added by hole filling sits at its hole's centroid, which may
+lie off the surface, and takes the mean of the hole's boundary values.
 
 Transfer does not improve the source field or recover details that are absent
 from the input mesh. A reduced mesh has fewer degrees of freedom and generally
