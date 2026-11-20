@@ -215,3 +215,83 @@ def test_globe_accepts_boundary_meshes_as_tensordict() -> None:
     torch.testing.assert_close(
         from_tensordict.point_data["pressure"], from_dict.point_data["pressure"]
     )
+
+
+def _make_chunked_inference_case(theta: float) -> tuple[GLOBE, dict]:
+    """A tiny float64 GLOBE model and 100 prediction points near a lumpy sphere."""
+    torch.manual_seed(0)
+    model = (
+        GLOBE(
+            n_spatial_dims=3,
+            output_schema={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
+            boundary_source_schemas={"no_slip": {}},
+            reference_length_names=["test_length"],
+            reference_area=1.0,
+            hidden_layer_sizes=[8],
+            theta=theta,
+        )
+        .to(torch.float64)
+        .eval()
+    )
+    mesh = lumpy_sphere.load(subdivisions=1).to(torch.float64)
+    generator = torch.Generator().manual_seed(0)
+    kwargs = {
+        "prediction_points": torch.randn(
+            100, 3, generator=generator, dtype=torch.float64
+        ),
+        "boundary_meshes": {"no_slip": mesh},
+        "reference_lengths": {"test_length": torch.tensor(1.0, dtype=torch.float64)},
+    }
+    return model, kwargs
+
+
+def test_globe_prediction_chunks_exact_at_theta_zero() -> None:
+    """At ``theta=0`` chunking the prediction points changes results only by
+    rounding, and the results come back in input order."""
+    model, kwargs = _make_chunked_inference_case(theta=0.0)
+    with torch.no_grad():
+        unchunked = model(**kwargs, prediction_chunk_size=None)
+        chunked = model(**kwargs, prediction_chunk_size=16)
+    torch.testing.assert_close(chunked.points, kwargs["prediction_points"])
+    for key in ("pressure", "velocity"):
+        torch.testing.assert_close(
+            chunked.point_data[key], unchunked.point_data[key], atol=1e-12, rtol=1e-12
+        )
+
+
+def test_globe_prediction_chunks_deterministic() -> None:
+    """At ``theta > 0`` chunked calls give the same results every time."""
+    model, kwargs = _make_chunked_inference_case(theta=1.5)
+    with torch.no_grad():
+        first = model(**kwargs, prediction_chunk_size=16)
+        second = model(**kwargs, prediction_chunk_size=16)
+    for key in ("pressure", "velocity"):
+        assert torch.equal(first.point_data[key], second.point_data[key])
+
+
+def test_globe_prediction_chunks_are_spread_out(monkeypatch) -> None:
+    """Points given in spatial order are not chunked into spatial patches."""
+    model, kwargs = _make_chunked_inference_case(theta=1.5)
+    points = kwargs["prediction_points"]
+    x_sorted = points[:, 0].sort().values
+    kwargs["prediction_points"] = points[points[:, 0].argsort()]
+
+    chunks: list[torch.Tensor] = []
+    build_prediction_plans = model._build_prediction_plans
+
+    def _spy(*args, **kwargs):
+        chunks.append(
+            kwargs["prediction_points"] if "prediction_points" in kwargs else args[1]
+        )
+        return build_prediction_plans(*args, **kwargs)
+
+    monkeypatch.setattr(model, "_build_prediction_plans", _spy)
+    with torch.no_grad():
+        model(**kwargs, prediction_chunk_size=20)
+
+    ### Measure each chunk's x-extent by rank, which outlying points of the
+    ### Gaussian cloud cannot dominate. Contiguous chunks span 19 ranks.
+    assert len(chunks) == 5
+    for chunk_points in chunks:
+        ranks = torch.searchsorted(x_sorted, chunk_points[:, 0].contiguous())
+        assert ranks.max() - ranks.min() > 0.5 * len(x_sorted)
