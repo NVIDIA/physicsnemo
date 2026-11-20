@@ -578,6 +578,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `load_checkpoint` keeps a resumed optimizer's step counts on the CPU, where a
+  fresh AdamW keeps them, unless the optimizer is fused or capturable. Step
+  counts on the GPU forced host syncs in every later eager optimizer step and
+  slowed resumed training.
 - At `tree_read_theta > 0`, ISLA's reference boundary read holds each cluster's
   cell weights fixed in its means, as the fused CUDA kernel does, so both give
   the same derivatives in the boundary's vertices. They used to disagree there.
