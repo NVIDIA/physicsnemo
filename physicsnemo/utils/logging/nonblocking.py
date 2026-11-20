@@ -57,8 +57,8 @@ class NonBlockingLogger:
     optionally reduces it across ranks, and starts one non-blocking copy of it
     to pinned host memory, which PyTorch's caching host allocator reuses from
     step to step. Each call's ``log_fn`` runs once its copy has landed, during
-    a later :meth:`log` call or at :meth:`flush`, so records arrive in order,
-    usually about one step late.
+    that or a later :meth:`log` call or at :meth:`flush`, so records arrive in
+    order, usually about one step late.
 
     Parameters
     ----------
@@ -87,7 +87,7 @@ class NonBlockingLogger:
     >>> from physicsnemo.utils.logging import NonBlockingLogger
     >>> with NonBlockingLogger(lambda values, step: print(step, values)) as logger:
     ...     for step in range(3):
-    ...         loss = torch.tensor(2.0**-step)  # a GPU tensor in a training loop
+    ...         loss = torch.tensor(2.0**-step)  # on the GPU in a real loop
     ...         logger.log({"loss": loss}, step)
     0 {'loss': 1.0}
     1 {'loss': 0.5}
@@ -126,28 +126,35 @@ class NonBlockingLogger:
         Parameters
         ----------
         values : Mapping[str, Any]
-            One-element tensors on one device, in a mapping that may nest
-            (a ``dict`` or a :class:`~tensordict.TensorDict`). Their values at
-            this call are the ones logged. They are packed in a dtype of at
-            least ``float32``.
+            Plain one-element tensors on one device, in a mapping that may
+            nest (a ``dict`` or a :class:`~tensordict.TensorDict`). Their
+            values at this call are the ones logged. They are packed in a
+            dtype of at least ``float32``, or ``float64`` if any is an integer
+            or a bool, so integers up to 2**53 stay exact. Call
+            ``full_tensor()`` on a ``DTensor`` or ``ShardTensor`` first.
         *args, **kwargs
             Passed on to ``log_fn`` as they are, such as the step number.
         """
         keys, scalars = [], []
-        for key, scalar in _leaves(values):
-            if scalar.numel() != 1:
+        for key, value in _leaves(values):
+            scalar = value.detach() if isinstance(value, torch.Tensor) else value
+            if type(scalar) is not torch.Tensor or scalar.numel() != 1:
                 raise ValueError(
-                    f"NonBlockingLogger logs scalars, but {'/'.join(key)!r} "
-                    f"has shape {tuple(scalar.shape)}."
+                    "NonBlockingLogger logs plain one-element tensors, but "
+                    f"{'/'.join(key)!r} is a {type(value).__name__} of shape "
+                    f"{tuple(getattr(value, 'shape', ()))}."
                 )
             keys.append(key)
-            scalars.append(scalar.detach().reshape(()))
+            scalars.append(scalar.reshape(()))
         ### Pack in key order, so every rank lays out the buffer identically.
         order = sorted(range(len(keys)), key=keys.__getitem__)
         host, landed = torch.empty(0), None
         if scalars:
+            all_float = all(s.is_floating_point() for s in scalars)
             dtype = functools.reduce(
-                torch.promote_types, (s.dtype for s in scalars), torch.float32
+                torch.promote_types,
+                (s.dtype for s in scalars),
+                torch.float32 if all_float else torch.float64,
             )
             buffer = torch.stack([scalars[i].to(dtype) for i in order])
             if (
@@ -168,7 +175,7 @@ class NonBlockingLogger:
         )
         self.flush(wait=False)
 
-    def flush(self, wait: bool = True) -> None:
+    def flush(self, *, wait: bool = True) -> None:
         """Run ``log_fn`` for the queued calls, in order.
 
         Parameters

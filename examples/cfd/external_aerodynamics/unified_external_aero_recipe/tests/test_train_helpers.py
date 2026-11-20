@@ -370,7 +370,7 @@ class _HeldLogger(NonBlockingLogger):
     """A :class:`NonBlockingLogger` whose copies land only when it is flushed
     with a wait, as if the GPU ran behind for the whole epoch."""
 
-    def flush(self, wait=True):
+    def flush(self, *, wait=True):
         if wait:
             super().flush(wait=True)
 

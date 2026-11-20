@@ -17,6 +17,7 @@
 """Tests for :class:`physicsnemo.utils.logging.NonBlockingLogger`."""
 
 import os
+import re
 import socket
 from datetime import timedelta
 
@@ -90,29 +91,28 @@ def test_logs_nested_values_in_order_as_python_numbers(device):
     assert all(type(values["loss"]) is float for values, _, _ in calls)
 
 
-def test_packs_in_at_least_float32(device):
-    """Next to a 16-bit value, integers and bools are packed in float32, not
-    in the 16-bit dtype (257 is not a bfloat16); a float64 value keeps the
-    whole buffer in float64."""
+def test_integers_and_float64_values_stay_exact(device):
+    """Next to float32 and 16-bit values, integers (here above 2**24, past
+    float32's exact range), bools and float64 values are logged exactly."""
     calls, log_fn = _recorder()
     fine = 1 + 2.0**-40  # not representable in float32
     with NonBlockingLogger(log_fn) as logger:
         logger.log(
             {
-                "bf16": torch.tensor(1.0078125, dtype=torch.bfloat16, device=device),
-                "int": torch.tensor(257, device=device),
+                "f32": torch.tensor(0.5, device=device),
+                "count": torch.tensor(2**24 + 1, device=device),
                 "bool": torch.tensor(True, device=device),
             }
         )
         logger.log(
             {
-                "f32": torch.tensor(0.5, device=device),
+                "bf16": torch.tensor(1.0078125, dtype=torch.bfloat16, device=device),
                 "f64": torch.tensor(fine, dtype=torch.float64, device=device),
             }
         )
     assert [values for values, _, _ in calls] == [
-        {"bf16": 1.0078125, "int": 257.0, "bool": 1.0},
-        {"f32": 0.5, "f64": fine},
+        {"f32": 0.5, "count": 2.0**24 + 1, "bool": 1.0},
+        {"bf16": 1.0078125, "f64": fine},
     ]
 
 
@@ -134,10 +134,24 @@ def test_empty_values_still_call_log_fn():
     assert calls == [({}, (3,), {})]
 
 
-@pytest.mark.parametrize("shape", [(3,), (2, 2)])
-def test_rejects_values_with_several_elements(shape):
-    with pytest.raises(ValueError, match="'metrics/u' has shape"):
-        NonBlockingLogger(print).log({"metrics": {"u": torch.zeros(shape)}})
+class _Subclass(torch.Tensor):
+    """Stands in for tensor subclasses such as ``DTensor``."""
+
+
+@pytest.mark.parametrize(
+    "value, kind",
+    [
+        (torch.zeros(3), "Tensor of shape (3,)"),
+        (torch.zeros(2, 2), "Tensor of shape (2, 2)"),
+        (torch.zeros(()).as_subclass(_Subclass), "_Subclass of shape ()"),
+        (0.5, "float of shape ()"),
+    ],
+)
+def test_rejects_values_other_than_plain_scalar_tensors(value, kind):
+    """:meth:`log` raises at once, naming the value, rather than when the
+    record is logged."""
+    with pytest.raises(ValueError, match=rf"'metrics/u' is a {re.escape(kind)}"):
+        NonBlockingLogger(print).log({"metrics": {"u": value}})
 
 
 @requires_cuda
@@ -199,11 +213,14 @@ def _reduce_rank(rank, port):
         calls, log_fn = _recorder()
         with NonBlockingLogger(log_fn, reduce_op=dist.ReduceOp.AVG) as logger:
             logger.log(values)
+            ### Averaged in float32: the mean, 1 + 2**-8, is not a bfloat16.
+            logger.log({"bf16": torch.tensor(1 + rank / 128, dtype=torch.bfloat16)})
         own_calls, own_log_fn = _recorder()
         with NonBlockingLogger(own_log_fn) as logger:
             logger.log(values)
         assert calls[0][0] == {"loss": 1.5, "metrics": {"l2": 15.0}}
         assert list(calls[0][0]) == list(values)  # each rank's own key order
+        assert calls[1][0] == {"bf16": 1 + 2**-8}
         assert own_calls[0][0] == {
             "loss": 1.0 + rank,
             "metrics": {"l2": 10.0 + 10 * rank},
@@ -220,8 +237,9 @@ def _reduce_rank(rank, port):
 )
 def test_reduce_op_logs_all_rank_means():
     """With ``reduce_op=AVG`` on two CPU ranks, each rank logs the all-rank
-    means, even when the ranks give the keys in different orders; without it,
-    each rank logs its own values."""
+    means, even when the ranks give the keys in different orders, and 16-bit
+    values are averaged in float32; without it, each rank logs its own
+    values."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
