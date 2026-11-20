@@ -217,7 +217,9 @@ def test_globe_accepts_boundary_meshes_as_tensordict() -> None:
     )
 
 
-def _make_chunked_inference_case(theta: float) -> tuple[GLOBE, dict]:
+def _make_chunked_inference_case(
+    theta: float, device: str = "cpu"
+) -> tuple[GLOBE, dict]:
     """A tiny float64 GLOBE model and 100 prediction points near a lumpy sphere."""
     torch.manual_seed(0)
     model = (
@@ -230,17 +232,19 @@ def _make_chunked_inference_case(theta: float) -> tuple[GLOBE, dict]:
             hidden_layer_sizes=[8],
             theta=theta,
         )
-        .to(torch.float64)
+        .to(device=device, dtype=torch.float64)
         .eval()
     )
-    mesh = lumpy_sphere.load(subdivisions=1).to(torch.float64)
+    mesh = lumpy_sphere.load(subdivisions=1).to(device=device, dtype=torch.float64)
     generator = torch.Generator().manual_seed(0)
     kwargs = {
         "prediction_points": torch.randn(
             100, 3, generator=generator, dtype=torch.float64
-        ),
+        ).to(device),
         "boundary_meshes": {"no_slip": mesh},
-        "reference_lengths": {"test_length": torch.tensor(1.0, dtype=torch.float64)},
+        "reference_lengths": {
+            "test_length": torch.tensor(1.0, dtype=torch.float64, device=device)
+        },
     }
     return model, kwargs
 
@@ -256,6 +260,21 @@ def test_globe_prediction_chunks_exact_at_theta_zero() -> None:
     for key in ("pressure", "velocity"):
         torch.testing.assert_close(
             chunked.point_data[key], unchunked.point_data[key], atol=1e-12, rtol=1e-12
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_globe_prediction_chunks_under_default_device(device: str) -> None:
+    """Chunked calls work while a default device is set with ``torch.device``."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    model, kwargs = _make_chunked_inference_case(theta=0.0, device=device)
+    with torch.no_grad(), torch.device(device):
+        unchunked = model(**kwargs, prediction_chunk_size=None)
+        chunked = model(**kwargs, prediction_chunk_size=16)
+    for key in ("pressure", "velocity"):
+        torch.testing.assert_close(
+            chunked.point_data[key], unchunked.point_data[key], atol=1e-10, rtol=1e-10
         )
 
 

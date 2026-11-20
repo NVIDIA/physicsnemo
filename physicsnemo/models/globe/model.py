@@ -20,7 +20,7 @@ from typing import Any, Literal, Sequence
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from tensordict import PackLayout, TensorDict
 from torch.profiler import record_function
 
@@ -1166,12 +1166,12 @@ class GLOBE(Module):
         elif prediction_chunk_size is None:
             prediction_chunk_size = n_points
 
-        permutation: torch.Tensor | None = None
+        permutation: Int[torch.Tensor, "n_points"] | None = None
         if n_points > prediction_chunk_size:
             # Built on the CPU with its own generator: the same on every
             # device, and the global RNG is left alone.
             permutation = torch.randperm(
-                n_points, generator=torch.Generator().manual_seed(0)
+                n_points, generator=torch.Generator().manual_seed(0), device="cpu"
             ).to(device)
 
         chunk_results: list[torch.Tensor] = []
