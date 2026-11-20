@@ -154,6 +154,17 @@ during development and debugging, offering clear visibility into training progre
     :members:
     :show-inheritance:
 
+Non-Blocking Logger
+-------------------
+
+A logger for per-step losses and metrics computed on the GPU, which keeps the training loop running instead of
+waiting for each value. It does not write logs itself: it passes the values to a function you give it, such as one
+that writes to TensorBoard or to another logger on this page, once they have reached the host.
+
+.. automodule:: physicsnemo.utils.logging.nonblocking
+    :members:
+    :show-inheritance:
+
 MLflow Logger
 -------------
 

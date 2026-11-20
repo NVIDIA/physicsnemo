@@ -33,6 +33,7 @@ Usage::
     python src/train.py benchmark_io=true +training.benchmark_max_steps=20
 """
 
+import math
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -76,7 +77,11 @@ from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import (
+    NonBlockingLogger,
+    PythonLogger,
+    RankZeroLoggingWrapper,
+)
 from physicsnemo.utils.profiling import Profiler, profile
 
 ### When `cfg.profile` is set, every train / val epoch breaks out of its
@@ -140,27 +145,23 @@ def _reduce_and_average(
     (train ``drop_last=True``, val pads) that equals the true global mean and
     keeps the integer count out of the float reduction buffer. It is
     granularity-neutral, mirrors the inference-side ``infer._allreduce_sums``,
-    and is called at two boundaries:
-
-    - Per step, with ``n_samples == 1``, so the logged iteration curves are
-      global all-rank means rather than rank-0's shard.
-    - Per epoch, with ``n_samples == n_local`` and the running epoch sums, for
-      the dataset-wide summary.
+    and is called once per epoch, with ``n_samples == n_local`` and the running
+    epoch sums, for the dataset-wide summary (each step's values are averaged
+    as they are logged, in :func:`_run_epoch`).
 
     Args:
         loss_sum: Rank-local sum of scalar losses over the ``n_samples`` being
-            collapsed, as a 0-D on-device tensor -- one step's detached
-            ``loss`` per step, or the running epoch-loss tensor -- not a mean.
+            collapsed, as a 0-D on-device tensor (the running epoch loss),
+            not a mean.
         losses_td: Rank-local per-field loss sum: a 0-D (``batch_size=[]``)
             ``TensorDict`` whose leaves are summed scalar losses, one per loss
-            term. ``None`` is the "zero samples" sentinel (see Notes); it does
-            not arise on the per-step path, where a batch is always present.
+            term. ``None`` is the "zero samples" sentinel (see Returns).
         metrics_td: The matching per-field metric-sum accumulator, with the
             same ``None`` sentinel. Seeded in lock-step with ``losses_td``, so
             the two are ``None`` together or populated together.
         n_samples: Number of samples this rank contributed to ``loss_sum`` and
-            the accumulators (``1`` per step, ``n_local`` per epoch; equal to
-            the step count because the recipe runs ``batch_size == 1``).
+            the accumulators (``n_local``, equal to the step count because
+            the recipe runs ``batch_size == 1``).
         device: The rank's collective/compute device (``dist_manager.device``),
             where the ``all_reduce`` runs.
         metric_counts: Optional per-leaf count of the samples behind
@@ -176,9 +177,8 @@ def _reduce_and_average(
         collective.
 
     Notes:
-        The per-step collective is deadlock-free only because every rank runs
-        the same step count (train ``drop_last=True``, val pads) and packs the
-        same leaves in the same order (all ranks share one ``target_config``).
+        Every rank packs the same leaves in the same order (all ranks share
+        one ``target_config``), so the collective matches up across ranks.
         Single-process skips the reduction, leaving single-GPU logs unchanged.
     """
     ### Inputs are plain tensors even under domain parallelism: ``forward_pass``
@@ -219,6 +219,24 @@ def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
         metrics.apply(lambda v: torch.where(v.isnan(), 0.0, v)),
         metrics.apply(lambda v: (~v.isnan()).float()),
     )
+
+
+def _step_means(
+    values: dict[str, Any],
+) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Split one step's logged all-rank means into its loss, losses and metrics.
+
+    With ``metric_counts`` (masked targets), each metric is divided by its
+    count, as in :func:`_reduce_and_average`, and is NaN where no rank had a
+    finite target.
+    """
+    metrics = values["metrics"]
+    if "metric_counts" in values:
+        counts = values["metric_counts"]
+        metrics = {
+            k: v / counts[k] if counts[k] else math.nan for k, v in metrics.items()
+        }
+    return values["loss"], values["losses"], metrics
 
 
 ### ---------------------------------------------------------------------------
@@ -355,11 +373,13 @@ def _run_epoch(
     Train and val share the same per-batch loop (``forward_pass`` +
     metric accumulation + per-step console log + per-epoch summary).
     Train mode additionally runs the backward / optimizer / scheduler
-    step and emits per-step TensorBoard + JSONL entries (``phase: "step"``);
-    val mode wraps the loop in ``torch.no_grad()``, skips TensorBoard
-    per-step logging, and emits a lighter-weight JSONL record per step
-    (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
-    and ``step_time_s``.
+    step and emits per-step TensorBoard + JSONL entries (``phase:
+    "train_step"``); val mode wraps the loop in ``torch.no_grad()``, skips
+    TensorBoard per-step logging, and emits a lighter-weight JSONL record per
+    step (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
+    and ``step_time_s``. Each step's records are logged once its values reach
+    the host (:class:`~physicsnemo.utils.logging.NonBlockingLogger`), so
+    logging never makes a step wait for the GPU.
 
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
@@ -385,7 +405,7 @@ def _run_epoch(
     is_rank0 = dist_manager.rank == 0
 
     ### All three accumulators live on-device, so epoch sums build up with no
-    ### per-step host sync (the only per-step D2H is inside _reduce_and_average).
+    ### per-step host sync (per-step values are read back without waiting, below).
     ### total_loss is float64 for accumulation precision, downcast to float32 at
     ### the epoch reduce. None = not yet seeded; n_local is this rank's local
     ### sample count.
@@ -397,8 +417,72 @@ def _run_epoch(
     n_local = 0
     num_steps = len(dataloader)
     output_layout = resolve_output_layout(cfg)
+
+    def log_step(
+        values: dict[str, Any], i: int, step_dt: float, mem_gb: float, lr: float | None
+    ) -> None:
+        """Log one step once its values, global all-rank means, reach the host."""
+        step_loss, step_losses, step_metrics = _step_means(values)
+        ### Train mode includes Mem in the per-step line; val drops it
+        ### because the no_grad path is the lowest-noise place to look.
+        mem_str = f" Mem: {mem_gb:.2f}GB" if is_train else ""
+        logger.info(
+            f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
+            f"Loss: {step_loss:.6f} "
+            f"Step: {step_dt:.3f}s"
+            f"{mem_str}"
+        )
+
+        ### Per-step TensorBoard is train-only (val_writer is epoch-only);
+        ### per-step JSONL is written in both modes so downstream tooling gets
+        ### val step-times directly. The logged values are global all-rank
+        ### means (rank 0 is only the writer).
+        if is_rank0:
+            if is_train:
+                global_step = epoch * num_steps + i
+                if writer is not None:
+                    ### Tags: iteration/loss/... and iteration/metrics/...
+                    _log_to_tensorboard(writer, step_losses, "iteration", global_step)
+                    _log_to_tensorboard(
+                        writer, step_metrics, "iteration/metrics", global_step
+                    )
+                    for tag, value in (
+                        ("lr", lr),
+                        ("performance/mem_gb", mem_gb),
+                        ("performance/step_time_s", step_dt),
+                    ):
+                        writer.add_scalar(f"iteration/{tag}", value, global_step)
+                if log_jsonl is not None:
+                    log_jsonl(
+                        {
+                            "phase": "train_step",
+                            "global_step": global_step,
+                            "loss": step_loss,
+                            "mem_gb": mem_gb,
+                            "step_time_s": step_dt,
+                            **step_losses,
+                            **step_metrics,
+                        }
+                    )
+            elif log_jsonl is not None:
+                ### Val records name their epoch and omit mem_gb (lowest-noise path).
+                log_jsonl(
+                    {
+                        "phase": "val_step",
+                        "epoch": epoch,
+                        "val_step": i,
+                        "loss": step_loss,
+                        "step_time_s": step_dt,
+                        **step_losses,
+                        **step_metrics,
+                    }
+                )
+
     epoch_t0 = time.perf_counter()
-    with grad_ctx:
+    ### Each step logs once its values reach the host, usually a step later;
+    ### the block's end waits for the rest.
+    step_logger = NonBlockingLogger(log_step, reduce_op=dist.ReduceOp.AVG)
+    with grad_ctx, step_logger:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
             batch = recursive_to_device(batch, dist_manager.device)
@@ -448,8 +532,8 @@ def _run_epoch(
             n_local += 1
 
             ### Detached scalar loss: accumulate the epoch sum on-device (no
-            ### host sync) and feed the per-step reducer below. Materialized
-            ### so the plain accumulator never sees a ShardTensor.
+            ### host sync) and keep it for this step's log below.
+            ### Materialized so the plain accumulator never sees a ShardTensor.
             loss_det = materialize(loss.detach())
             total_loss += loss_det
 
@@ -460,98 +544,14 @@ def _run_epoch(
                 else 0
             )
 
-            ### Reduce this step's loss + metrics across ranks so the iteration
-            ### logs are global all-rank means, not rank-0's shard. This is a
-            ### collective: EVERY rank must call it, so it sits outside the
-            ### rank-0 logging gate below. ``n_samples=1`` is this step's local
-            ### sample count (one batch == one sample), matching the
-            ### ``n_local += 1`` accumulation above. Equal per-rank step counts
-            ### keep the per-step collective deadlock-free (see
-            ### ``_reduce_and_average``).
-            step_loss, step_losses, step_metrics = _reduce_and_average(
-                loss_det,
-                losses,
-                metrics,
-                1,
-                device=dist_manager.device,
-                metric_counts=counts,
-            )
-
-            ### Train mode includes Mem in the per-step line; val drops it
-            ### because the no_grad path is the lowest-noise place to look.
-            mem_str = f" Mem: {mem_gb:.2f}GB" if is_train else ""
-            logger.info(
-                f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
-                f"Loss: {step_loss:.6f} "
-                f"Step: {step_dt:.3f}s"
-                f"{mem_str}"
-            )
-
-            ### Per-step TensorBoard is train-only (val_writer is epoch-only);
-            ### per-step JSONL is written in both modes so downstream tooling gets
-            ### val step-times directly. The logged values are global all-rank
-            ### means (rank 0 is only the writer).
-            if is_rank0:
-                if is_train:
-                    global_step = epoch * num_steps + i
-                    if writer is not None:
-                        ### Loss keys already start with `loss/`, so the iteration
-                        ### prefix yields tags like `iteration/loss/pressure`;
-                        ### metric tags get an explicit `iteration/metrics/...`
-                        ### namespace so we never have to split by string prefix.
-                        _log_to_tensorboard(
-                            writer, step_losses, "iteration", global_step
-                        )
-                        _log_to_tensorboard(
-                            writer, step_metrics, "iteration/metrics", global_step
-                        )
-                        writer.add_scalar(
-                            "iteration/lr",
-                            scheduler.get_last_lr()[0],
-                            global_step=global_step,
-                        )
-                        writer.add_scalar(
-                            "iteration/performance/mem_gb",
-                            mem_gb,
-                            global_step=global_step,
-                        )
-                        writer.add_scalar(
-                            "iteration/performance/step_time_s",
-                            step_dt,
-                            global_step=global_step,
-                        )
-                    if log_jsonl is not None:
-                        log_jsonl(
-                            {
-                                "phase": "train_step",
-                                "global_step": global_step,
-                                "loss": step_loss,
-                                "mem_gb": mem_gb,
-                                "step_time_s": step_dt,
-                                **step_losses,
-                                **step_metrics,
-                            }
-                        )
-                elif log_jsonl is not None:
-                    ### Val per-step record. ``epoch`` is explicit (unlike
-                    ### the train ``step`` records, which the parser infers
-                    ### from surrounding ``train`` markers) so val_step
-                    ### records can be associated with an epoch without
-                    ### relying on surrounding context. ``mem_gb`` is
-                    ### intentionally omitted -- the no_grad path is the
-                    ### lowest-noise place to measure step time and we
-                    ### don't want allocator state hopping in TB.
-                    log_jsonl(
-                        {
-                            "phase": "val_step",
-                            "epoch": epoch,
-                            "val_step": i,
-                            "loss": step_loss,
-                            "step_time_s": step_dt,
-                            **step_losses,
-                            **step_metrics,
-                        }
-                    )
+            ### Averaging across ranks is a collective, so every rank logs,
+            ### outside the rank-0 logging gate; equal per-rank step counts
+            ### keep it deadlock-free.
+            lr = scheduler.get_last_lr()[0] if is_train else None
+            values = {"loss": loss_det, "losses": losses, "metrics": metrics}
+            if counts is not None:
+                values["metric_counts"] = counts
+            step_logger.log(values, i, step_dt, mem_gb, lr)
 
             if cfg.profile and i >= _PROFILE_MAX_STEPS:
                 break
