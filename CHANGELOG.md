@@ -578,6 +578,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Mesh.scale` with a scalar factor transfers effective cell measures
+  analytically (`|factor| ** n_manifold_dims`) instead of validating degenerate
+  cells, removing a host-device sync per call on GPU meshes.
 - `load_checkpoint` keeps a resumed optimizer's step counts on the CPU, where a
   fresh AdamW keeps them, unless the optimizer is fused or capturable. Step
   counts on the GPU forced host syncs in every later eager optimizer step and
