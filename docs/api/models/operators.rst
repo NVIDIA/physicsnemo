@@ -54,3 +54,24 @@ encode/decode methods operate in the scaled model frame.
     :members: encode_geometry, encode, decode_queries, decode_vorticity
 
 .. autoclass:: physicsnemo.experimental.models.ab_upt.ABUPTContext
+
+ArGEnT (Experimental)
+---------------------
+
+ArGEnT (Arbitrary Geometry-encoded Transformer) predicts fields at query points
+from a geometry point cloud. Queries cross-attend to the geometry with linear
+attention and continuous-coordinate RoPE. ``ArGEnTDeepONet`` adds a DeepONet
+branch over non-geometric parameters such as the Reynolds number. For more
+information, refer to the `ArGEnT paper <https://arxiv.org/abs/2602.11626>`__.
+
+.. autoclass:: physicsnemo.experimental.models.argent.ArGEnT
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.experimental.models.argent.ArGEnTDeepONet
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.experimental.models.argent.ArGEnTGeometry
