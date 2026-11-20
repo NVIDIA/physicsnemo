@@ -14,12 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""FLARE and FLARE++ models.
+r"""FLARE, FLAREv2 and FLARE++ models.
 
-Standalone pre-norm transformers with FLARE and FLARE++
-attention mixers.
+:class:`FLAREv2` and :class:`FLAREPlusPlus` are standalone pre-norm
+transformers with FLAREv2 and FLARE++ attention mixers. :class:`FLARE` is the
+original Transolver-based FLARE model; it is deprecated and will be removed in
+the 27.3 release.
 """
 
-from .flare import FLARE, FLAREPlusPlus
+from .flare import FLARE
+from .flarev2 import FLAREPlusPlus, FLAREv2
 
-__all__ = ["FLARE", "FLAREPlusPlus"]
+__all__ = ["FLARE", "FLAREv2", "FLAREPlusPlus"]
