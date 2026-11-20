@@ -222,6 +222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Mesh.remesh` splits long source edges before clustering, so meshes with
+  large faces and slivers come out even, and closes holes and folds in its
+  result where it can. If that changes the input's area or volume by more than
+  5%, or opens a closed input, as on thin plates, it clusters the input's own
+  vertices as before, as `refine=False` always does, and either way winds the
+  result consistently like the source.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit
