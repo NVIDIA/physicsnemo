@@ -123,6 +123,7 @@ def _compose_train_cfg(
         ("geotransolver_volume_highlift", "highlift_volume", True),
         ("transolver_volume", "drivaer_ml_volume", True),
         ("flare_volume", "drivaer_ml_volume", True),
+        ("flare_plus_plus_volume", "drivaer_ml_volume", True),
         ("domino_volume", "drivaer_ml_volume", True),
     ],
 )
@@ -312,6 +313,12 @@ _MODEL_SHRINK_OVERRIDES: dict[str, dict] = {
         "slice_num": 16,
         "n_head": 2,
     },
+    "FLAREPlusPlusv2": {
+        "n_layers": 2,
+        "n_hidden": 32,
+        "slice_num": 16,
+        "n_head": 2,
+    },
 }
 
 
@@ -414,6 +421,20 @@ _TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
     ),
     _RecipeSpec("flare_surface", "flare_surface", "drivaer_ml_surface", "surface", []),
     _RecipeSpec("flare_volume", "flare_volume", "drivaer_ml_volume", "volume", []),
+    _RecipeSpec(
+        "flare_plus_plus_surface",
+        "flare_plus_plus_surface",
+        "drivaer_ml_surface",
+        "surface",
+        [],
+    ),
+    _RecipeSpec(
+        "flare_plus_plus_volume",
+        "flare_plus_plus_volume",
+        "drivaer_ml_volume",
+        "volume",
+        [],
+    ),
     _RecipeSpec(
         "highlift_surface", "geotransolver_surface", "highlift_surface", "surface", []
     ),

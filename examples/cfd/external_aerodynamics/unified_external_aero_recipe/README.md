@@ -306,7 +306,7 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume,volume_joint}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `flare_plus_plus_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume,volume_joint}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
 | `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface`, `drivaer_ml_{surface,volume,joint}_point_sets` |
 
 Pick one of each on the CLI:
@@ -544,6 +544,7 @@ unified_external_aero_recipe/
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
       flare_{surface,volume}.yaml
+      flare_plus_plus_{surface,volume}.yaml
       ab_upt_{surface,volume,joint}.yaml
       smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
@@ -712,10 +713,16 @@ python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
     'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]' \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
-# FLARE
+# FLARE (FLAREv2)
 python src/train.py model=flare_surface dataset=drivaer_ml_surface \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 python src/train.py model=flare_volume dataset=drivaer_ml_volume \
+    training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
+
+# FLARE++ (FLAREPlusPlusv2)
+python src/train.py model=flare_plus_plus_surface dataset=drivaer_ml_surface \
+    training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
+python src/train.py model=flare_plus_plus_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
 # SMART (experimental, separate surface and volume models)

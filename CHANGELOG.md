@@ -118,6 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DotProductAttention` on Transformer Engine; with `use_te=False`,
   token-sharded (`ShardTensor`) inputs are supported. Layers and models expose
   `no_weight_decay()` for their latent parameters.
+  The external aerodynamics recipe's `flare_{surface,volume}` configs now use
+  `FLAREv2`, and new `flare_plus_plus_{surface,volume}` configs use
+  `FLAREPlusPlusv2`.
 - Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
