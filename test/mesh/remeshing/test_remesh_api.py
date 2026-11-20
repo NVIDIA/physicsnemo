@@ -23,9 +23,13 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+from physicsnemo.mesh.primitives.surfaces import (
+    cube_surface,
+    cylinder_open,
+    sphere_icosahedral,
+)
 from physicsnemo.mesh.remeshing import remesh
-from physicsnemo.mesh.remeshing._remeshing import _close_and_orient
+from physicsnemo.mesh.remeshing._remeshing import _close, _vertex_normals
 
 
 def _fillet_box(n_fillet: int = 64, radius: float = 0.05) -> Mesh:
@@ -54,24 +58,22 @@ def _fillet_box(n_fillet: int = 64, radius: float = 0.05) -> Mesh:
     return Mesh(points=torch.cat([bottom, top, centers]), cells=cells)
 
 
+def _area_and_volume(mesh: Mesh) -> tuple[float, float]:
+    a, b, c = mesh.points.double()[mesh.cells].unbind(dim=1)
+    area = torch.linalg.cross(b - a, c - a, dim=1).norm(dim=1).sum() / 2
+    return float(area), float((a * torch.linalg.cross(b, c)).sum() / 6)
+
+
 def _assert_even_closed_and_outward(output: Mesh, max_area_ratio: float) -> None:
     areas = output.cell_areas.double()
     p1, p99 = torch.quantile(areas, areas.new_tensor([0.01, 0.99]))
     assert float(p99 / p1) < max_area_ratio
-    # Closed and consistently wound: every directed edge appears exactly once,
-    # and its reverse also appears
-    cells = output.cells
-    directed = torch.cat([cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]])
-    unique_directed = torch.unique(directed, dim=0)
-    assert unique_directed.shape[0] == directed.shape[0]
-    starts, ends = unique_directed.T
-    n_points = output.n_points
-    assert torch.isin(ends * n_points + starts, starts * n_points + ends).all()
-    vertices = output.points.double()[cells]
-    signed_volume = (
-        vertices[:, 0] * torch.linalg.cross(vertices[:, 1], vertices[:, 2])
-    ).sum() / 6
-    assert float(signed_volume) > 0.9
+    # Closed and consistently wound: each directed edge once, and its reverse
+    directed = output.cells[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+    keys = directed[:, 0] * output.n_points + directed[:, 1]
+    assert keys.unique().numel() == keys.numel()
+    assert torch.isin(directed[:, 1] * output.n_points + directed[:, 0], keys).all()
+    assert _area_and_volume(output)[1] > 0.9
 
 
 @pytest.mark.parametrize(
@@ -116,25 +118,37 @@ def test_remesh_changes_a_mesh_at_its_own_point_count(device):
     assert float(upper_fraction) > 0.6
 
 
-def test_remesh_repair_fills_holes_and_cuts_out_bad_faces():
-    # A remesh of a closed sphere with one vertex's faces missing and a face
-    # doubled the other way round, whose edges then have three faces each
+def test_remesh_repair_fills_holes_and_cuts_out_folds():
+    # A remesh of a closed sphere with a hole where one vertex's faces are
+    # missing, and a Moebius band in place of another vertex's faces, which
+    # no winding can make consistent
     source = sphere_icosahedral.load(subdivisions=1)
     coefficients = source.points.new_tensor([0.3, -0.7, 1.1])
     cells = source.cells
-    keep = ~(cells == 0).any(dim=1)
-    broken = torch.cat([cells[keep], cells[keep][:1, [0, 2, 1]]])
-    output = Mesh(points=source.points, cells=broken)
+    fan = (cells == 0).any(dim=1)
+    rolled = [
+        face.roll(-int((face == 0).nonzero()[0, 0])).tolist() for face in cells[fan]
+    ]
+    following = {a: b for _, a, b in rolled}
+    ring = [rolled[0][1]]
+    while len(ring) < len(following):
+        ring.append(following[ring[-1]])
+    ring = torch.tensor(ring)
+    band = torch.tensor([[0, 1, 3], [0, 2, 3], [0, 2, 4], [1, 2, 4], [1, 3, 4]])
+    hole = (cells == 19).any(dim=1)
+    assert not torch.isin(cells[hole], ring).any()
+    output = Mesh(
+        points=source.points, cells=torch.cat([cells[~fan & ~hole], ring[band]])
+    )
     output.point_data["affine"] = source.points @ coefficients
     source_faces = torch.zeros(source.n_points, dtype=torch.int64)
     source_faces[cells.flatten()] = torch.arange(source.n_cells).repeat_interleave(3)
 
-    repaired = _close_and_orient(output, source, source_faces)
+    repaired = _close(output, _vertex_normals(source, source_faces))
 
-    # The cut's fill adds a centroid, and the missing vertex is dropped
+    # The six-edge hole is filled around a new centroid
     is_new = torch.cdist(repaired.points, source.points).min(dim=1).values > 1e-6
-    assert int(is_new.sum()) >= 1
-    assert not (repaired.points == source.points[0]).all(dim=1).any()
+    assert int(is_new.sum()) == 1
     _assert_even_closed_and_outward(repaired, max_area_ratio=100.0)
     # A filled-in centroid takes its boundary's mean, which is affine here
     torch.testing.assert_close(
@@ -142,8 +156,51 @@ def test_remesh_repair_fills_holes_and_cuts_out_bad_faces():
     )
 
 
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)]
+)
+@pytest.mark.parametrize(
+    ("case", "n_clusters"),
+    [("plate", 100), ("plate", 250), ("plate", 514), ("cube", 8), ("cylinder", 250)],
+)
+def test_remesh_keeps_the_shape_of_thin_coarse_and_open_inputs(
+    case, n_clusters, device
+):
+    # Remeshed refined, a 2 % thick plate keeps under 5 % of its volume, the
+    # cube 45 % and the open cylinder 90 % of its area
+    if case == "plate":
+        source = _fillet_box()
+        source = source.with_points(
+            source.points * source.points.new_tensor([1, 1, 0.02])
+        )
+    else:
+        source = cube_surface.load() if case == "cube" else cylinder_open.load()
+    area, volume = _area_and_volume(source)
+
+    output = remesh(source.to(device), n_clusters)
+
+    output_area, output_volume = _area_and_volume(output)
+    assert abs(output_area / area - 1) < 0.05
+    if case != "cylinder":
+        assert abs(output_volume / volume - 1) < 0.05
+
+
+def test_remesh_without_refinement_clusters_only_the_input_vertices():
+    source = _fillet_box()
+
+    output = remesh(source, source.n_points, refine=False)
+
+    # As on main, this many clusters returns the input, slivers and all
+    assert output.n_points == source.n_points
+    for mesh in (source, output):
+        areas = mesh.cell_areas.double()
+        p1, p99 = torch.quantile(areas, areas.new_tensor([0.01, 0.99]))
+        assert float(p99 / p1) > 500
+
+
 def test_remesh_keeps_a_strip_thinner_than_the_cluster_spacing():
-    # Refined, the strip has no face spanning three of the four clusters
+    # Refined, the strip has no face spanning three of the four clusters. On
+    # main, which never refines, this already held.
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0e-7, 0.0], [0.0, 1.0e-7, 0.0]],
         dtype=torch.float64,
@@ -164,6 +221,7 @@ def test_remesh_public_signatures():
         "max_iterations",
         "transfer_point_data",
         "resolution_field",
+        "refine",
     )
     assert Mesh.remesh is remesh
     mesh_remesh_signature = inspect.signature(Mesh.remesh)
@@ -171,6 +229,7 @@ def test_remesh_public_signatures():
     assert remesh_signature.parameters["max_iterations"].default == 4
     assert remesh_signature.parameters["transfer_point_data"].default is False
     assert remesh_signature.parameters["resolution_field"].default is None
+    assert remesh_signature.parameters["refine"].default is True
 
 
 def test_remesh_runs_on_cpu():
@@ -228,7 +287,7 @@ def test_remesh_refines_float16_far_from_the_origin():
 
     assert output.points.dtype == torch.float16
     assert torch.isfinite(output.points).all()
-    assert output.n_cells > 0
+    assert abs(_area_and_volume(output)[0] / 128**2 - 1) < 0.05
 
 
 def test_cpu_remesh_rejects_unsafe_geometry():
