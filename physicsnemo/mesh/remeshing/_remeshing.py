@@ -331,8 +331,11 @@ def _fill_holes(mesh: Mesh) -> Mesh:
     from physicsnemo.mesh.repair import fill_holes
 
     n_points, dtype = mesh.n_points, mesh.points.dtype
-    # fill_holes' area test overflows in float16
-    mesh = fill_holes(mesh.with_points(_widen(mesh.points)), max_hole_edges=n_points)[0]
+    # fill_holes' area test overflows in float16. A loop it takes for a slit
+    # of zero area is filled too, in a second pass without that test.
+    mesh, stats = fill_holes(mesh.with_points(_widen(mesh.points)), n_points)
+    if stats["n_holes_zero_area"] > 0:
+        mesh = fill_holes(mesh, mesh.n_points, tolerance=0.0)[0]
     mesh = mesh.with_points(mesh.points.to(dtype))
     if mesh.n_points > n_points and len(mesh.point_data.keys()) > 0:
         # Each fan face holds one centroid and two boundary points
