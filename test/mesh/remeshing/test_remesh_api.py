@@ -166,8 +166,8 @@ def test_remesh_repair_fills_holes_and_cuts_out_folds():
 def test_remesh_keeps_the_shape_of_thin_coarse_and_open_inputs(
     case, n_clusters, device
 ):
-    # Remeshed refined, a 2 % thick plate keeps under 5 % of its volume, the
-    # cube 45 % and the open cylinder 90 % of its area
+    # Remeshed refined, a 2 % thick plate kept 3 to 30 % of its volume, the
+    # cube about half and the open cylinder 85 to 91 % of its area
     if case == "plate":
         source = _fillet_box()
         source = source.with_points(
