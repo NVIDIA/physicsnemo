@@ -186,6 +186,12 @@ class Muon(_TorchMuon):
     >>> _ = opt.step()
     """
 
+    # Opt in to torch.amp.GradScaler's sync-free protocol: GradScaler.step sets
+    # ``self.grad_scale`` (None if ``unscale_`` already ran) and ``self.found_inf``
+    # before calling step() and deletes them afterwards, instead of unscaling the
+    # gradients itself and calling ``found_inf.item()`` to decide whether to step.
+    _step_supports_amp_scaling = True
+
     @staticmethod
     def _group_params_by_shape(params: list[Tensor]) -> dict[tuple, list[int]]:
         """Bucket parameter indices by ``(shape, dtype, device)``.
@@ -224,7 +230,20 @@ class Muon(_TorchMuon):
         -------
         float or None
             The loss returned by *closure*, or ``None`` if no closure was given.
+
+        Notes
+        -----
+        When driven by :class:`torch.amp.GradScaler`, the scaler sets the
+        attributes ``grad_scale`` and ``found_inf`` before calling this method.
+        A non-None ``grad_scale`` unscales the gradients in place on device. A
+        non-None ``found_inf`` makes the update conditional without a host sync:
+        the step is computed and then, where ``found_inf > 0``, the parameters and
+        momentum buffers are restored from a snapshot taken before the step.
+        Without these attributes the step is unchanged.
         """
+        grad_scale: Tensor | None = getattr(self, "grad_scale", None)
+        found_inf: Tensor | None = getattr(self, "found_inf", None)
+
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -257,6 +276,16 @@ class Muon(_TorchMuon):
                 if g.ndim != 2:
                     raise ValueError("Param gradient must be a 2D matrix")
 
+            if grad_scale is not None:
+                # Unscale on device (GradScaler passes the scale, not its inverse).
+                inv_scale = grad_scale.double().reciprocal().float()
+                torch._foreach_mul_(grads, inv_scale.to(grads[0].device))
+
+            if found_inf is not None:
+                # Snapshot so the update can be undone without a host sync.
+                old_params = torch._foreach_mul(params_with_grad, 1.0)
+                old_bufs = torch._foreach_mul(momentum_bufs, 1.0)
+
             # Momentum (fused across all shapes): buf = momentum*buf + (1-momentum)*grad
             torch._foreach_lerp_(momentum_bufs, grads, 1 - momentum)
             if nesterov:
@@ -286,6 +315,15 @@ class Muon(_TorchMuon):
                     ortho[j].to(group_params[j].dtype) for j in range(len(idxs))
                 ]
                 torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
+
+            if found_inf is not None:
+                # Keep the old values where found_inf > 0. torch.where (not a
+                # lerp) so inf/NaN in the discarded update cannot leak through.
+                skip = found_inf.to(params_with_grad[0].device) > 0
+                for new, old in zip(
+                    params_with_grad + momentum_bufs, old_params + old_bufs
+                ):
+                    new.copy_(torch.where(skip, old, new))
 
         return loss
 
