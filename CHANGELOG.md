@@ -219,6 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh.validation` adds `find_self_intersections`, which finds the
   pairs of crossing triangles in a 3D surface. `validate` runs it when
   `check_self_intersection=True` and skips meshes it does not apply to.
+- Adds `physicsnemo.utils.logging.NonBlockingLogger`, which logs scalars from
+  the GPU without making the host wait for the GPU, so a training loop can log
+  every step without stalling the next one. It packs each call's scalars into
+  one buffer, can average them across ranks, and copies them to the host in
+  one transfer.
 
 ### Changed
 
