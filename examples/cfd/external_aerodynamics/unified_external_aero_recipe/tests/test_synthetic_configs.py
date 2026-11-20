@@ -306,7 +306,7 @@ _MODEL_SHRINK_OVERRIDES: dict[str, dict] = {
         "slice_num": 16,
         "n_head": 2,
     },
-    "FLARE": {
+    "FLAREv2": {
         "n_layers": 2,
         "n_hidden": 32,
         "slice_num": 16,

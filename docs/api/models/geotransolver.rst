@@ -11,8 +11,8 @@ GALE layers use either
 setting) or
 :class:`~physicsnemo.nn.module.flare_attention.FLARE` (with ``attention_type="GALE_FA"``)
 as the self-attention backend. Setting ``attention_type="GALE_FPP"`` selects
-input-conditioned :class:`~physicsnemo.nn.module.flare_attention.FLAREPlusPlus`
-attention while retaining GeoTransolver's context path.
+input-conditioned FLARE++ attention while retaining GeoTransolver's context
+path.
 
 For more information on GeoTransolver, refer to the `GeoTransolver paper
 <https://arxiv.org/abs/2512.20399>`__.

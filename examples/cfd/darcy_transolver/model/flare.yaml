@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# FLARE: pre-norm transformer with FLARE (Fast Low-rank Attention Routing
+# FLAREv2: pre-norm transformer with FLAREv2 (Fast Low-rank Attention Routing
 # Engine) attention mixers. Inputs are flattened point clouds (B, N, C).
 
-_target_: physicsnemo.models.flare.FLARE
+_target_: physicsnemo.models.flare.FLAREv2
 _convert_: all
 
 functional_dim: 1
