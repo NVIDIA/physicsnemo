@@ -204,7 +204,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unified external aero recipe trains with optional domain parallelism
   (`domain_parallelism.domain_size`), reading samples sharded and running the
   model on ShardTensors over a domain x data-parallel device mesh.
-- Adds the experimental `ArGEnT` and `ArGEnTDeepONet` models.
+- Adds the experimental `ArGEnT` and `ArGEnTDeepONet` models. Contributed by
+  "Kevin" Seung Whan Chung, Wenqian Chen, Andreas Robertson, Kyle Godbey,
+  Zhi-Feng Wei, Michael Penwarden, Pratanu Roy, Panos Stinis and Yucheng Fu.
 
 - `physicsnemo.mesh.repair` adds `stitch_t_junctions`, which closes the
   zero-width gaps where a vertex lies on another triangle's edge, and
