@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Log scalars that live on the GPU without making the host wait for them."""
+"""Non-blocking logging of scalars that live on the GPU."""
 
 import functools
 from collections import deque
@@ -56,24 +56,25 @@ class NonBlockingLogger:
     meantime. :meth:`log` instead packs a step's scalars into one buffer,
     optionally reduces it across ranks, and starts one non-blocking copy of it
     to pinned host memory, which PyTorch's caching host allocator reuses from
-    step to step. Each call's ``log_fn`` runs once its copy has landed, during
-    that or a later :meth:`log` call or at :meth:`flush`, so records arrive in
-    order, usually about one step late.
+    step to step. ``log_fn`` runs for each call once its copy has landed,
+    during that or a later :meth:`log` call or at :meth:`flush`, so records
+    arrive in order, usually about one step late.
 
     Parameters
     ----------
     log_fn : Callable[..., None]
         Called as ``log_fn(values, *args, **kwargs)`` for each :meth:`log`
-        call, where ``values`` is a nested ``dict`` of Python numbers with the
+        call, where ``values`` is a nested ``dict`` of Python floats with the
         logged scalars' keys.
     reduce_op : torch.distributed.ReduceOp | None, optional
         If given, the scalars are all-reduced over ``group`` with this op, in
-        the same buffer and before the copy: ``ReduceOp.AVG`` logs all-rank
-        means. Every rank must then call :meth:`log` with the same keys. By
-        default ``None``, which logs each rank's own values. A single process
-        never reduces.
+        the same buffer and before the copy. For example, ``ReduceOp.AVG``
+        logs the mean over ranks. Every rank must then make the same
+        :meth:`log` calls, with the same keys and dtypes. By default ``None``,
+        which logs each rank's own values. A single process never reduces.
     group : torch.distributed.ProcessGroup | None, optional
-        The process group for ``reduce_op``, by default the default group.
+        The process group for ``reduce_op``. By default ``None``, the default
+        process group.
 
     Notes
     -----
@@ -85,9 +86,11 @@ class NonBlockingLogger:
     -------
     >>> import torch
     >>> from physicsnemo.utils.logging import NonBlockingLogger
-    >>> with NonBlockingLogger(lambda values, step: print(step, values)) as logger:
+    >>> def show(values, step):
+    ...     print(step, values)
+    >>> with NonBlockingLogger(show) as logger:
     ...     for step in range(3):
-    ...         loss = torch.tensor(2.0**-step)  # on the GPU in a real loop
+    ...         loss = torch.tensor(2.0**-step)  # a GPU tensor in training
     ...         logger.log({"loss": loss}, step)
     0 {'loss': 1.0}
     1 {'loss': 0.5}
@@ -118,7 +121,7 @@ class NonBlockingLogger:
         self.flush(wait=exc_type is None)
 
     def log(self, values: Mapping[str, Any], /, *args: Any, **kwargs: Any) -> None:
-        """Start copying ``values`` to the host, and queue ``log_fn``'s call.
+        """Start copying ``values`` to the host and queue ``log_fn``'s call.
 
         It then calls ``flush(wait=False)``, which runs ``log_fn`` for each
         queued call whose copy has landed.
@@ -130,10 +133,13 @@ class NonBlockingLogger:
             nest (a ``dict`` or a :class:`~tensordict.TensorDict`). Their
             values at this call are the ones logged. They are packed in a
             dtype of at least ``float32``, or ``float64`` if any is an integer
-            or a bool, so integers up to 2**53 stay exact. Call
-            ``full_tensor()`` on a ``DTensor`` or ``ShardTensor`` first.
-        *args, **kwargs
-            Passed on to ``log_fn`` as they are, such as the step number.
+            or a bool, so integers up to ``2**53`` come back exact (as floats).
+            Call ``full_tensor()`` on a ``DTensor`` or ``ShardTensor`` first.
+        *args : Any
+            Positional arguments passed on to ``log_fn`` as they are, such as
+            the step number.
+        **kwargs : Any
+            Keyword arguments passed on to ``log_fn`` as they are.
         """
         keys, scalars = [], []
         for key, value in _leaves(values):
