@@ -39,8 +39,9 @@ te = OptionalImport("transformer_engine.pytorch")
 
 _FLARE_DEPRECATION_MESSAGE = (
     "physicsnemo.nn.FLARE is deprecated and will be removed in the 27.3 release; "
-    "use physicsnemo.nn.FLAREv2 or physicsnemo.nn.FLAREPlusPlusv2 for new "
-    "training. Existing FLARE checkpoints still load."
+    "use physicsnemo.experimental.nn.FLAREv2 or "
+    "physicsnemo.experimental.nn.FLAREPlusPlusv2 for new training. Existing FLARE "
+    "checkpoints still load."
 )
 
 
@@ -138,8 +139,8 @@ class FLARE(nn.Module):
 
     .. warning::
         Deprecated: ``FLARE`` will be removed in the 27.3 release. Use
-        :class:`~physicsnemo.nn.FLAREv2` or
-        :class:`~physicsnemo.nn.FLAREPlusPlusv2` for new training.
+        :class:`~physicsnemo.experimental.nn.FLAREv2` or
+        :class:`~physicsnemo.experimental.nn.FLAREPlusPlusv2` for new training.
 
     Parameters
     ----------

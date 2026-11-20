@@ -713,13 +713,13 @@ python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
     'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]' \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
-# FLARE (FLAREv2)
+# FLARE (FLAREv2, experimental)
 python src/train.py model=flare_surface dataset=drivaer_ml_surface \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 python src/train.py model=flare_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
-# FLARE++ (FLAREPlusPlusv2)
+# FLARE++ (FLAREPlusPlusv2, experimental)
 python src/train.py model=flare_plus_plus_surface dataset=drivaer_ml_surface \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 python src/train.py model=flare_plus_plus_volume dataset=drivaer_ml_volume \

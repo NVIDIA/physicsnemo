@@ -17,7 +17,7 @@
 # FLAREv2: pre-norm transformer with FLAREv2 (Fast Low-rank Attention Routing
 # Engine) attention mixers. Inputs are flattened point clouds (B, N, C).
 
-_target_: physicsnemo.models.flare.FLAREv2
+_target_: physicsnemo.experimental.models.flarev2.FLAREv2
 _convert_: all
 
 functional_dim: 1

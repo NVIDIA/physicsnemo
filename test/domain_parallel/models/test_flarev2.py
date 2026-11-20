@@ -40,7 +40,7 @@ import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.models.flare import FLAREPlusPlusv2, FLAREv2
+from physicsnemo.experimental.models.flarev2 import FLAREPlusPlusv2, FLAREv2
 from test.domain_parallel.models.harness import (
     DomainParallelModelCase,
     run_domain_parallel_model_check,

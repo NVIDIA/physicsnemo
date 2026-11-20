@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from physicsnemo.nn import FLAREPlusPlusv2, FLAREv2
+from physicsnemo.experimental.nn import FLAREPlusPlusv2, FLAREv2
 from test.conftest import requires_module
 
 _MIXERS = {
@@ -239,7 +239,7 @@ def test_torch_compile(device, name):
 @pytest.mark.parametrize("name", list(_MIXERS))
 def test_use_te_requires_transformer_engine(name, monkeypatch):
     """use_te=True fails clearly when Transformer Engine is missing."""
-    import physicsnemo.nn.module.flare_attention_v2 as fa
+    import physicsnemo.experimental.nn.flare_attention_v2 as fa
 
     cls, kwargs = _MIXERS[name]
 

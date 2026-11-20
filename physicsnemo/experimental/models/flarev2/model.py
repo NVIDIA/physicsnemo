@@ -17,7 +17,8 @@
 r"""FLAREv2 and FLAREPlusPlusv2 (FLARE++) models.
 
 Standalone pre-norm transformer backbones whose token mixers are
-:class:`~physicsnemo.nn.FLAREv2` or :class:`~physicsnemo.nn.FLAREPlusPlusv2`
+:class:`~physicsnemo.experimental.nn.FLAREv2` or
+:class:`~physicsnemo.experimental.nn.FLAREPlusPlusv2`
 attention:
 
 .. code-block:: text
@@ -45,13 +46,17 @@ from jaxtyping import Float
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.experimental.nn.flare_attention_v2 import (
+    FLAREPlusPlusv2 as FLAREPlusPlusv2Attention,
+)
+from physicsnemo.experimental.nn.flare_attention_v2 import (
+    FLAREv2 as FLAREv2Attention,
+)
 from physicsnemo.models.utils.activation_checkpointing import (
     resolve_checkpointing_ratio,
     run_checkpoint,
     should_checkpoint_interleaved_block,
 )
-from physicsnemo.nn import FLAREPlusPlusv2 as FLAREPlusPlusv2Attention
-from physicsnemo.nn import FLAREv2 as FLAREv2Attention
 from physicsnemo.nn import Mlp
 
 te = OptionalImport("transformer_engine.pytorch")
@@ -382,7 +387,7 @@ class _FLAREBackbone(Module):
 class FLAREv2(_FLAREBackbone):
     r"""FLAREv2 model: pre-norm transformer with FLAREv2 attention mixers.
 
-    Each block applies :class:`~physicsnemo.nn.FLAREv2` attention and an MLP,
+    Each block applies :class:`~physicsnemo.experimental.nn.FLAREv2` attention and an MLP,
     both as pre-norm residual branches. The input projection is a two-layer
     MLP (width :math:`2C`) and the output head is a norm plus a linear layer.
     See the `FLARE paper <https://arxiv.org/abs/2508.12594>`_.
@@ -428,7 +433,7 @@ class FLAREv2(_FLAREBackbone):
         ``activation_checkpointing=True``.
     qk_norm : bool, optional, default=True
         Normalize latent queries and keys per head in each mixer (see
-        :class:`~physicsnemo.nn.FLAREv2`).
+        :class:`~physicsnemo.experimental.nn.FLAREv2`).
 
     Forward
     -------
@@ -451,7 +456,7 @@ class FLAREv2(_FLAREBackbone):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.models.flare import FLAREv2
+    >>> from physicsnemo.experimental.models.flarev2 import FLAREv2
     >>> model = FLAREv2(functional_dim=3, embedding_dim=3, out_dim=4, n_hidden=64)
     >>> fx, emb = torch.randn(2, 100, 3), torch.randn(2, 100, 3)
     >>> model(fx, embedding=emb).shape
@@ -502,7 +507,7 @@ class FLAREPlusPlusv2(_FLAREBackbone):
     r"""FLAREPlusPlusv2 model: pre-norm transformer with FLARE++ attention mixers.
 
     Same backbone as :class:`FLAREv2`, with
-    :class:`~physicsnemo.nn.FLAREPlusPlusv2` mixers, whose routing queries are
+    :class:`~physicsnemo.experimental.nn.FLAREPlusPlusv2` mixers, whose routing queries are
     synthesized from each block's input. See the `FLARE++ paper
     <https://arxiv.org/abs/2608.11519>`_.
 
@@ -575,7 +580,7 @@ class FLAREPlusPlusv2(_FLAREBackbone):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.models.flare import FLAREPlusPlusv2
+    >>> from physicsnemo.experimental.models.flarev2 import FLAREPlusPlusv2
     >>> model = FLAREPlusPlusv2(functional_dim=3, out_dim=4, n_hidden=64)
     >>> model(torch.randn(2, 100, 3)).shape
     torch.Size([2, 100, 4])

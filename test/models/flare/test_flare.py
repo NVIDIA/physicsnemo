@@ -141,6 +141,7 @@ def test_deprecation_warning(cls, prefix):
     assert len(deprecations) == 1, [str(w.message) for w in deprecations]
     message = str(deprecations[0].message)
     assert message.startswith(prefix)
+    assert "physicsnemo.experimental.models.flarev2" in message
     assert "27.3" in message
     assert deprecations[0].filename == __file__
 

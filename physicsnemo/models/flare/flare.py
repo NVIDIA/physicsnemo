@@ -40,13 +40,14 @@ te = OptionalImport("transformer_engine.pytorch")
 
 _FLARE_DEPRECATION_MESSAGE = (
     "physicsnemo.models.flare.FLARE is deprecated and will be removed in the "
-    "27.3 release; use FLAREv2 or FLAREPlusPlusv2 for new training. Existing "
-    "FLARE checkpoints still load."
+    "27.3 release; use physicsnemo.experimental.models.flarev2.FLAREv2 or "
+    "physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2 for new training. "
+    "Existing FLARE checkpoints still load."
 )
 _FLARE_PLUS_PLUS_DEPRECATION_MESSAGE = (
     "physicsnemo.models.flare.FLAREPlusPlus is deprecated and will be removed in "
-    "the 27.3 release; use FLAREPlusPlusv2 for new training. Existing checkpoints "
-    "still load."
+    "the 27.3 release; use physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2 "
+    "for new training. Existing checkpoints still load."
 )
 # Inner FLARE deprecation warnings (the FLARE model and the nn.FLARE layer),
 # suppressed while a model that already warned builds its parts.
@@ -148,9 +149,9 @@ class FLARE(CoreTransolver):
 
     .. warning::
         Deprecated: ``FLARE`` will be removed in the 27.3 release. Use
-        :class:`~physicsnemo.models.flare.FLAREv2` or
-        :class:`~physicsnemo.models.flare.FLAREPlusPlusv2` for new training.
-        Existing FLARE checkpoints still load.
+        :class:`~physicsnemo.experimental.models.flarev2.FLAREv2` or
+        :class:`~physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2` for
+        new training. Existing FLARE checkpoints still load.
 
     Parameters
     ----------
@@ -285,8 +286,9 @@ class FLAREPlusPlus(FLARE):
 
     .. warning::
         Deprecated: this ``FLAREPlusPlus`` model will be removed in the 27.3
-        release. Use :class:`~physicsnemo.models.flare.FLAREPlusPlusv2` for new
-        training. Existing checkpoints still load.
+        release. Use
+        :class:`~physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2` for
+        new training. Existing checkpoints still load.
 
     Parameters
     ----------

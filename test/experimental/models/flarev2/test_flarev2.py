@@ -23,9 +23,9 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
-from physicsnemo.models.flare import FLAREPlusPlusv2, FLAREv2
-from physicsnemo.nn import FLAREPlusPlusv2 as FLAREPlusPlusv2Attention
-from physicsnemo.nn import FLAREv2 as FLAREv2Attention
+from physicsnemo.experimental.models.flarev2 import FLAREPlusPlusv2, FLAREv2
+from physicsnemo.experimental.nn import FLAREPlusPlusv2 as FLAREPlusPlusv2Attention
+from physicsnemo.experimental.nn import FLAREv2 as FLAREv2Attention
 from test.common import (
     check_ort_version,
     validate_amp,
@@ -221,9 +221,12 @@ def test_autocast(device, name, dtype):
 @pytest.mark.parametrize(
     "name, file_name",
     [
-        ("flarev2", "models/flare/data/flarev2_output.pth"),
-        ("flarev2_qk_norm", "models/flare/data/flarev2_qk_norm_output.pth"),
-        ("flareppv2", "models/flare/data/flare_plus_plus_v2_output.pth"),
+        ("flarev2", "experimental/models/flarev2/data/flarev2_output.pth"),
+        (
+            "flarev2_qk_norm",
+            "experimental/models/flarev2/data/flarev2_qk_norm_output.pth",
+        ),
+        ("flareppv2", "experimental/models/flarev2/data/flare_plus_plus_v2_output.pth"),
     ],
 )
 def test_forward_accuracy(device, name, file_name):
@@ -327,8 +330,8 @@ def _torch_to_te_state_dict(state_dict: dict) -> dict:
 @pytest.mark.parametrize("name", list(_MODELS))
 def test_use_te_requires_transformer_engine(name, monkeypatch):
     """use_te=True fails clearly when Transformer Engine is missing."""
-    import physicsnemo.models.flare.flarev2 as flare_module
-    import physicsnemo.nn.module.flare_attention_v2 as fa
+    import physicsnemo.experimental.models.flarev2.model as flare_module
+    import physicsnemo.experimental.nn.flare_attention_v2 as fa
 
     class _Missing:
         available = False
@@ -420,7 +423,7 @@ def test_use_te_fused_module_init(device, use_rmsnorm):
 
 def test_use_te_rejects_unsupported_activation():
     """Transformer Engine's fused MLP only supports a few activations."""
-    import physicsnemo.models.flare.flarev2 as flare_module
+    import physicsnemo.experimental.models.flarev2.model as flare_module
 
     with pytest.raises(ValueError, match="not supported with use_te=True"):
         flare_module._te_activation("tanh")

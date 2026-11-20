@@ -101,8 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
-- Adds `FLAREv2` and `FLAREPlusPlusv2` (models in `physicsnemo.models.flare`,
-  layers in `physicsnemo.nn`), the successors of FLARE and FLARE++: standalone
+- Adds experimental `FLAREv2` and `FLAREPlusPlusv2` (models in
+  `physicsnemo.experimental.models.flarev2`, layers in
+  `physicsnemo.experimental.nn`), the successors of FLARE and FLARE++: standalone
   pre-norm transformers (not Transolver subclasses) with RMSNorm by default
   (`use_rmsnorm`) and tanh-approximate GELU (new `"gelu_tanh"` activation).
   The layers use attention scale `dim_head**-0.5`, latent queries initialized
@@ -547,7 +548,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `physicsnemo.models.flare.FLARE` and
   `physicsnemo.models.flare.FLAREPlusPlus` models and the `physicsnemo.nn.FLARE`
   layer are deprecated and will be removed in the 27.3 release; constructing
-  them emits a `FutureWarning`. Use `FLAREv2` or `FLAREPlusPlusv2` for new
+  them emits a `FutureWarning`. Use the experimental
+  `physicsnemo.experimental.models.flarev2.FLAREv2` / `FLAREPlusPlusv2` models
+  (layers: `physicsnemo.experimental.nn.FLAREv2` / `FLAREPlusPlusv2`) for new
   training. Existing checkpoints still load.
 
 ### Removed

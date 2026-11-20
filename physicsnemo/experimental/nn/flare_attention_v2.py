@@ -35,8 +35,7 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import OptionalImport
-
-from .physics_attention import _project_input
+from physicsnemo.nn.module.physics_attention import _project_input
 
 te = OptionalImport("transformer_engine.pytorch")
 

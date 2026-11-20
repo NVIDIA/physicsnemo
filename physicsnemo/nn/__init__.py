@@ -95,7 +95,6 @@ from .module.embedding_layers import (
     SinusoidalTimestepEmbedding,
 )
 from .module.flare_attention import FLARE, FLAREPlusPlus
-from .module.flare_attention_v2 import FLAREPlusPlusv2, FLAREv2
 from .module.fourier_layers import (
     FourierFilter,
     FourierLayer,

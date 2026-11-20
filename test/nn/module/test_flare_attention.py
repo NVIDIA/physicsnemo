@@ -61,6 +61,7 @@ def test_flare_deprecation_warning():
     deprecations = [w for w in record if "is deprecated" in str(w.message)]
     assert len(deprecations) == 1
     assert "27.3" in str(deprecations[0].message)
+    assert "physicsnemo.experimental.nn.FLAREv2" in str(deprecations[0].message)
     assert deprecations[0].filename == __file__
 
 

@@ -26,6 +26,7 @@ import warnings
 from physicsnemo.core.warnings import LegacyFeatureWarning
 
 from .diffusion_unet_3d_blocks import Conv3D, GroupNorm3D, UNetAttention3D, UNetBlock3D
+from .flare_attention_v2 import FLAREPlusPlusv2, FLAREv2
 from .rope import (
     build_axial_rope_cos_sin_2d_continuous,
     build_rope_cos_sin_1d_continuous,
@@ -46,6 +47,8 @@ from .point_utils import (
 
 __all__ = [
     "FLARE",
+    "FLAREv2",
+    "FLAREPlusPlusv2",
     "UNetBlock3D",
     "Conv3D",
     "GroupNorm3D",
