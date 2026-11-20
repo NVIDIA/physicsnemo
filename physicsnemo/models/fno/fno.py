@@ -46,7 +46,7 @@ class MetaData(ModelMetaData):
     # Optimization
     jit: bool = False
     cuda_graphs: bool = True
-    amp: bool = False
+    amp: bool = True
     # Inference
     onnx_cpu: bool = False
     onnx_gpu: bool = False
