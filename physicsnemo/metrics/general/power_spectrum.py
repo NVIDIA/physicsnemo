@@ -86,13 +86,14 @@ def power_spectrum(x: torch.Tensor) -> Tuple[torch.Tensor]:
     pwr = torch.fft.fftn(x, dim=(-2, -1), norm="ortho").abs() ** 2
     pwr = torch.fft.fftshift(pwr, dim=(-2, -1)).to(torch.float32)
 
-    # Azimuthal average
+    # Azimuthal average. After fftshift the zero frequency sits at index n // 2
+    # along an axis of length n, for even and odd n alike.
     xx, yy = torch.meshgrid(
-        torch.arange(h, device=pwr.device),
-        torch.arange(w, device=pwr.device),
+        torch.arange(h, device=pwr.device, dtype=torch.float32),
+        torch.arange(w, device=pwr.device, dtype=torch.float32),
         indexing="ij",
     )
-    k = torch.hypot(xx - h // 2, yy - w / 2).to(torch.float32)
+    k = torch.hypot(xx - h // 2, yy - w // 2)
 
     sort = torch.argsort(k.flatten())
     k_sort = k.flatten()[sort]
