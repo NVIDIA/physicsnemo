@@ -271,23 +271,30 @@ def test_remesh_preserves_reduced_precision(dtype):
 
 
 def test_remesh_refines_float16_far_from_the_origin():
-    # float16 midpoints of x = 40000 overflow (80000 > 65504) unless averaged wider
-    points = torch.tensor(
-        [
-            [40000.0, 0.0, 0.0],
-            [40000.0, 128.0, 0.0],
-            [40000.0, 128.0, 128.0],
-            [40000.0, 0.0, 128.0],
-        ],
-        dtype=torch.float16,
-    )
-    source = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+    # float16 midpoints at x = 40000 overflow (80000 > 65504) unless averaged
+    # wider. The box spans 16384, and its fillets are coarse enough for
+    # float16's spacing of 32 there.
+    box = _fillet_box(radius=0.25)
+    offset = torch.tensor([40000.0, 0.0, 0.0])
+    source = box.with_points((box.points * 16384 + offset).half())
 
-    output = remesh(source, 4)
+    output = remesh(source, source.n_points)
 
     assert output.points.dtype == torch.float16
     assert torch.isfinite(output.points).all()
-    assert abs(_area_and_volume(output)[0] / 128**2 - 1) < 0.05
+    for measure, expected in zip(_area_and_volume(output), _area_and_volume(source)):
+        assert abs(measure / expected - 1) < 0.05
+
+    # The refined result is kept: it is far more even than the input's own
+    # vertices give
+    def area_ratio(mesh: Mesh) -> float:
+        a, b, c = mesh.points.double()[mesh.cells].unbind(dim=1)
+        areas = torch.linalg.cross(b - a, c - a, dim=1).norm(dim=1)
+        p1, p99 = torch.quantile(areas, areas.new_tensor([0.01, 0.99]))
+        return float(p99 / p1)
+
+    unrefined = remesh(source, source.n_points, refine=False)
+    assert area_ratio(output) < 0.2 * area_ratio(unrefined)
 
 
 def test_cpu_remesh_rejects_unsafe_geometry():

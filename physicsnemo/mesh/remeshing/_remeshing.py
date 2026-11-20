@@ -38,9 +38,7 @@ ResolutionField: TypeAlias = PointDataKey | torch.Tensor | None
 # squared-distance CVT objective on a 2D surface, its integration density is
 # the fourth power of that multiplier.
 _LINEAR_RESOLUTION_DENSITY_EXPONENT = 4.0
-# Source edges are split down to this fraction of the output's target edge,
-# then until each cluster has this many source points, within this many faces
-# per cluster and, at about 250 bytes per face, about 1 GiB in all.
+# Refinement limits, as described in the Notes of remesh
 _SPLIT_EDGE_FRACTION = 0.5
 _MIN_POINTS_PER_CLUSTER = 4
 _MAX_FACES_PER_CLUSTER = 256
@@ -246,11 +244,7 @@ def _split_long_edges(
     TensorDicts, averaged at the midpoints. Refinement stops when the next
     round would exceed the face budget.
     """
-    vertices = points[cells].to(torch.float64)
-    edge_vectors = vertices[:, 1:] - vertices[:, :1]
-    doubled_area = (
-        torch.linalg.cross(edge_vectors[:, 0], edge_vectors[:, 1]).norm(dim=1).sum()
-    )
+    doubled_area = _face_normals(points, cells).norm(dim=1).sum()
     # Edge of an equilateral triangle when the area is cut into the output's
     # roughly 2 * n_clusters faces
     target_edge = float((doubled_area / (3**0.5 * n_clusters)).sqrt())
@@ -305,18 +299,19 @@ def _split_long_edges(
     return points, cells, fields
 
 
+def _face_normals(points: torch.Tensor, cells: torch.Tensor) -> torch.Tensor:
+    """Each face's normal in float64, twice the face's area long."""
+    a, b, c = points.double()[cells].unbind(dim=1)
+    return torch.linalg.cross(b - a, c - a, dim=1)
+
+
 def _vertex_normals(source: Mesh, source_faces: torch.Tensor) -> torch.Tensor:
     """Normal of the source face under each output vertex, zero where none."""
-    vertices = source.points.double()[source.cells[source_faces.clamp_min(0)]]
-    normals = torch.linalg.cross(
-        vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0], dim=1
-    )
+    normals = _face_normals(source.points, source.cells[source_faces.clamp_min(0)])
     return normals * (source_faces >= 0)[:, None]
 
 
-def _edge_stats(
-    mesh: Mesh,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _edge_stats(mesh: Mesh) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Each face edge's edge index (face-major), and each edge's face count
     and winding sum, which is zero where its faces run it oppositely."""
     starts, ends = mesh.cells.reshape(-1), mesh.cells.roll(-1, dims=1).reshape(-1)
@@ -331,28 +326,25 @@ def _fill_holes(mesh: Mesh) -> Mesh:
     from physicsnemo.mesh.repair import fill_holes
 
     n_points, dtype = mesh.n_points, mesh.points.dtype
-    # fill_holes' area test overflows in float16. A loop it takes for a slit
-    # of zero area is filled too, in a second pass without that test.
-    mesh, stats = fill_holes(mesh.with_points(_widen(mesh.points)), n_points)
-    if stats["n_holes_zero_area"] > 0:
-        mesh = fill_holes(mesh, mesh.n_points, tolerance=0.0)[0]
+    # fill_holes' area test overflows in float16
+    mesh = fill_holes(mesh.with_points(_widen(mesh.points)), n_points)[0]
     mesh = mesh.with_points(mesh.points.to(dtype))
-    if mesh.n_points > n_points and len(mesh.point_data.keys()) > 0:
-        # Each fan face holds one centroid and two boundary points
-        is_new = mesh.cells >= n_points
-        fans = is_new.any(dim=1)
-        centroid = mesh.cells[fans].max(dim=1).values
-        boundary = mesh.cells[fans][~is_new[fans]].reshape(-1, 2)
-        counts = 2 * torch.bincount(centroid, minlength=mesh.n_points)
+    if mesh.n_points == n_points or len(mesh.point_data.keys()) == 0:
+        return mesh
+    # Each fan face holds one centroid and two boundary points
+    is_new = mesh.cells >= n_points
+    fans = is_new.any(dim=1)
+    centroid = mesh.cells[fans].max(dim=1).values
+    boundary = mesh.cells[fans][~is_new[fans]].reshape(-1, 2)
+    counts = 2 * torch.bincount(centroid, minlength=mesh.n_points)
 
-        def boundary_mean(values: torch.Tensor) -> torch.Tensor:
-            wide = _widen(values)
-            sums = torch.zeros_like(wide).index_add(0, centroid, wide[boundary].sum(1))
-            means = sums / counts.reshape((-1,) + (1,) * (values.ndim - 1))
-            return torch.cat([values[:n_points], means[n_points:].to(values.dtype)])
+    def boundary_mean(values: torch.Tensor) -> torch.Tensor:
+        wide = _widen(values)
+        sums = torch.zeros_like(wide).index_add(0, centroid, wide[boundary].sum(1))
+        means = sums / counts.reshape((-1,) + (1,) * (values.ndim - 1))
+        return torch.cat([values[:n_points], means[n_points:].to(values.dtype)])
 
-        mesh = mesh.with_data(point_data=mesh.point_data.apply(boundary_mean))
-    return mesh
+    return mesh.with_data(point_data=mesh.point_data.apply(boundary_mean))
 
 
 def _orient_like(mesh: Mesh, vertex_normals: torch.Tensor) -> Mesh:
@@ -372,10 +364,7 @@ def _orient_like(mesh: Mesh, vertex_normals: torch.Tensor) -> Mesh:
     vertex_normals = torch.nn.functional.pad(
         vertex_normals, (0, 0, 0, mesh.n_points - vertex_normals.shape[0])
     )
-    vertices = mesh.points.double()[mesh.cells]
-    normals = torch.linalg.cross(
-        vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0], dim=1
-    )
+    normals = _face_normals(mesh.points, mesh.cells)
     agreement = (normals * vertex_normals[mesh.cells].sum(dim=1)).sum(dim=1)
     votes = torch.zeros_like(agreement).index_add(0, component, agreement)
     flip = votes[component] < 0
@@ -415,8 +404,9 @@ def _keeps_shape(output: Mesh, mesh: Mesh, closed: bool) -> bool:
     center = mesh.points.double().mean(dim=0)
     measures = []
     for m in (output, mesh):
-        a, b, c = (m.points.double()[m.cells] - center).unbind(dim=1)
-        area = torch.linalg.cross(b - a, c - a, dim=1).norm(dim=1).sum() / 2
+        points = m.points.double() - center
+        a, b, c = points[m.cells].unbind(dim=1)
+        area = _face_normals(points, m.cells).norm(dim=1).sum() / 2
         measures.append(torch.stack([area, (a * torch.linalg.cross(b, c)).sum() / 6]))
     error = (measures[0] / measures[1] - 1).abs()
     keeps = error[0] <= _SHAPE_TOLERANCE
@@ -447,8 +437,9 @@ def remesh(
     cut out and filled again. If the result then changes the input's area, or
     a closed input's volume, by more than 5 %, or leaves a closed input open
     or inconsistently wound, the input's own vertices are clustered instead,
-    without refinement or repair. Each connected component is wound
-    consistently and like the source. A direct positive tensor or an attached
+    as before, without refinement or repair. Either way, each connected
+    component of the result is then wound consistently and like the source,
+    which can re-wind faces of the unrefined result too. A direct positive tensor or an attached
     point-data field can specify relative local linear resolution.
 
     Parameters
@@ -481,7 +472,8 @@ def remesh(
         is ``None`` for uniform remeshing.
     refine : bool, optional
         Split long source edges, and repair and check the result, as above.
-        ``False`` clusters only the input's vertices. Default is ``True``.
+        ``False`` clusters only the input's vertices, then winds the result
+        like the source. Default is ``True``.
 
     Returns
     -------
@@ -537,7 +529,8 @@ def remesh(
     cluster spacing, which the source's vertices used to outline, can be
     welded shut. The result check then falls back to the input's vertices,
     which keeps such inputs, like thin plates, as they were. The check works
-    on the whole mesh, so a small feature can still lose volume within it.
+    on the whole mesh, so a small feature can still lose volume within it, and
+    a result near the 5 % limit can take either path, on CUDA from run to run.
     Output vertices are compacted by connectivity but are not welded by
     position. Backend-specific tuning remains available through
     :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
@@ -578,12 +571,9 @@ def remesh(
     ):
         # Invalid inputs skip the refinement, so that remeshing reports them.
         # Refinement runs in at least float32, so float16 cannot overflow.
-        fields = [mesh.point_data.select(*transfer_keys), linear_resolution]
-        fields = [
-            field.apply(_widen) if isinstance(field, TensorDict) else _widen(field)
-            for field in fields
-            if field is not None
-        ]
+        fields = [mesh.point_data.select(*transfer_keys).apply(_widen)]
+        if linear_resolution is not None:
+            fields.append(_widen(linear_resolution))
         points, cells, fields = _split_long_edges(
             _widen(mesh.points.detach()), mesh.cells.to(torch.int64), fields, n_clusters
         )
