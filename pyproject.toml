@@ -439,6 +439,7 @@ FIGConvUNet = "physicsnemo.models.figconvnet:FIGConvUNet"
 # FLARE
 FLARE = "physicsnemo.models.flare:FLARE"
 FLAREv2 = "physicsnemo.models.flare:FLAREv2"
+FLAREPlusPlusv2 = "physicsnemo.models.flare:FLAREPlusPlusv2"
 
 # FNO
 FNO = "physicsnemo.models.fno:FNO"

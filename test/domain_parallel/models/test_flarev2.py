@@ -40,7 +40,7 @@ import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.models.flare import FLAREPlusPlus, FLAREv2
+from physicsnemo.models.flare import FLAREPlusPlusv2, FLAREv2
 from test.domain_parallel.models.harness import (
     DomainParallelModelCase,
     run_domain_parallel_model_check,
@@ -110,19 +110,19 @@ _CASES = [
         "flarev2-irregular-qk-norm-layernorm", qk_norm=True, use_rmsnorm=False
     ),
     _irregular_case("flarev2-irregular-no-qk-norm", qk_norm=False),
-    _irregular_case("flarepp-irregular", FLAREPlusPlus),
+    _irregular_case("flareppv2-irregular", FLAREPlusPlusv2),
     _irregular_case(
-        "flarepp-irregular-unshared-layernorm",
-        FLAREPlusPlus,
+        "flareppv2-irregular-unshared-layernorm",
+        FLAREPlusPlusv2,
         share_k0_v0=False,
         use_rmsnorm=False,
     ),
     _irregular_case(
-        "flarepp-irregular-unshared-rmsnorm", FLAREPlusPlus, share_k0_v0=False
+        "flareppv2-irregular-unshared-rmsnorm", FLAREPlusPlusv2, share_k0_v0=False
     ),
     _irregular_case(
-        "flarepp-irregular-shared-layernorm",
-        FLAREPlusPlus,
+        "flareppv2-irregular-shared-layernorm",
+        FLAREPlusPlusv2,
         use_rmsnorm=False,
         k_norm=False,
         q_fixed_norm=False,
@@ -130,8 +130,8 @@ _CASES = [
     # Batch > 1 and a token count that does not split evenly across ranks.
     _irregular_case("flarev2-irregular-uneven", batch=2, n_points=1001),
     _irregular_case(
-        "flarepp-irregular-uneven-unshared-layernorm",
-        FLAREPlusPlus,
+        "flareppv2-irregular-uneven-unshared-layernorm",
+        FLAREPlusPlusv2,
         batch=3,
         n_points=777,
         share_k0_v0=False,

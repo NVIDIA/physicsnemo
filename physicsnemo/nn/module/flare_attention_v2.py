@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FLAREv2 (Fast Low-rank Attention Routing Engine) and FLARE++ attention layers.
+"""FLAREv2 and FLAREPlusPlusv2 (FLARE++) attention layers.
 
-:class:`FLAREv2` and :class:`FLAREPlusPlus` are token mixers with cost linear
+:class:`FLAREv2` and :class:`FLAREPlusPlusv2` are token mixers with cost linear
 in the number of tokens. Their attention passes run on the shared kernels
 below: ``F.scaled_dot_product_attention`` on ``(B, H, S, D)`` tensors, which
 also dispatches to :class:`~physicsnemo.domain_parallel.ShardTensor` for
@@ -191,7 +191,7 @@ def _init_latents(latents: nn.Parameter) -> None:
 
 
 class _FLAREMixerBase(nn.Module):
-    r"""Backend plumbing shared by :class:`FLAREv2` and :class:`FLAREPlusPlus`.
+    r"""Backend plumbing shared by :class:`FLAREv2` and :class:`FLAREPlusPlusv2`.
 
     Activations are kept in ``(B, H, S, D)`` layout for the SDPA kernels and
     in ``(B, S, H, D)`` layout (``bshd``) for the Transformer Engine kernels.
@@ -401,8 +401,8 @@ class FLAREv2(_FLAREMixerBase):
         return self.out_dropout(self.out_proj(y))
 
 
-class FLAREPlusPlus(_FLAREMixerBase):
-    r"""FLARE++ attention with input-conditioned routing queries.
+class FLAREPlusPlusv2(_FLAREMixerBase):
+    r"""FLAREPlusPlusv2: FLARE++ attention with input-conditioned routing queries.
 
     FLARE++ builds its routing queries from the input, then routes like
     :class:`FLAREv2`:
@@ -476,7 +476,7 @@ class FLAREPlusPlus(_FLAREMixerBase):
     Examples
     --------
     >>> import torch
-    >>> attention = FLAREPlusPlus(dim=256, heads=8)
+    >>> attention = FLAREPlusPlusv2(dim=256, heads=8)
     >>> attention(torch.randn(2, 100, 256)).shape
     torch.Size([2, 100, 256])
     """
@@ -496,7 +496,7 @@ class FLAREPlusPlus(_FLAREMixerBase):
         use_te: bool = False,
     ) -> None:
         super().__init__()
-        _check_te(use_te, "FLAREPlusPlus")
+        _check_te(use_te, "FLAREPlusPlusv2")
         dim_head = _check_dims(dim, heads, dim_head)
         if n_global_queries <= 0:
             raise ValueError(
@@ -569,7 +569,7 @@ class FLAREPlusPlus(_FLAREMixerBase):
         # ShardTensor aware and would attend over the local shard only.
         if self.use_te and hasattr(x, "redistribute"):
             raise NotImplementedError(
-                "FLAREPlusPlus(use_te=True) does not support token-sharded "
+                "FLAREPlusPlusv2(use_te=True) does not support token-sharded "
                 "inputs; use use_te=False for domain parallelism."
             )
         batch = x.shape[0]

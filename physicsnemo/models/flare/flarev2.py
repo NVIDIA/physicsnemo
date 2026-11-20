@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""FLAREv2 and FLARE++ models.
+r"""FLAREv2 and FLAREPlusPlusv2 (FLARE++) models.
 
 Standalone pre-norm transformer backbones whose token mixers are
-:class:`~physicsnemo.nn.FLAREv2` or :class:`~physicsnemo.nn.FLAREPlusPlus`
+:class:`~physicsnemo.nn.FLAREv2` or :class:`~physicsnemo.nn.FLAREPlusPlusv2`
 attention:
 
 .. code-block:: text
@@ -50,7 +50,7 @@ from physicsnemo.models.utils.activation_checkpointing import (
     run_checkpoint,
     should_checkpoint_interleaved_block,
 )
-from physicsnemo.nn import FLAREPlusPlus as FLAREPlusPlusAttention
+from physicsnemo.nn import FLAREPlusPlusv2 as FLAREPlusPlusv2Attention
 from physicsnemo.nn import FLAREv2 as FLAREv2Attention
 from physicsnemo.nn import Mlp
 
@@ -498,11 +498,11 @@ class FLAREv2(_FLAREBackbone):
         return FLAREv2Attention(**kwargs, qk_norm=self._qk_norm)
 
 
-class FLAREPlusPlus(_FLAREBackbone):
-    r"""FLARE++ model: pre-norm transformer with FLARE++ attention mixers.
+class FLAREPlusPlusv2(_FLAREBackbone):
+    r"""FLAREPlusPlusv2 model: pre-norm transformer with FLARE++ attention mixers.
 
     Same backbone as :class:`FLAREv2`, with
-    :class:`~physicsnemo.nn.FLAREPlusPlus` mixers, whose routing queries are
+    :class:`~physicsnemo.nn.FLAREPlusPlusv2` mixers, whose routing queries are
     synthesized from each block's input. See the `FLARE++ paper
     <https://arxiv.org/abs/2608.11519>`_.
 
@@ -575,8 +575,8 @@ class FLAREPlusPlus(_FLAREBackbone):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.models.flare import FLAREPlusPlus
-    >>> model = FLAREPlusPlus(functional_dim=3, out_dim=4, n_hidden=64)
+    >>> from physicsnemo.models.flare import FLAREPlusPlusv2
+    >>> model = FLAREPlusPlusv2(functional_dim=3, out_dim=4, n_hidden=64)
     >>> model(torch.randn(2, 100, 3)).shape
     torch.Size([2, 100, 4])
     """
@@ -626,4 +626,4 @@ class FLAREPlusPlus(_FLAREBackbone):
         )
 
     def _build_mixer(self, **kwargs) -> nn.Module:
-        return FLAREPlusPlusAttention(**kwargs, **self._mixer_kwargs)
+        return FLAREPlusPlusv2Attention(**kwargs, **self._mixer_kwargs)

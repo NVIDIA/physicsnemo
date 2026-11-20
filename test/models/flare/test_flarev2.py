@@ -23,8 +23,8 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
-from physicsnemo.models.flare import FLAREPlusPlus, FLAREv2
-from physicsnemo.nn import FLAREPlusPlus as FLAREPlusPlusAttention
+from physicsnemo.models.flare import FLAREPlusPlusv2, FLAREv2
+from physicsnemo.nn import FLAREPlusPlusv2 as FLAREPlusPlusv2Attention
 from physicsnemo.nn import FLAREv2 as FLAREv2Attention
 from test.common import (
     check_ort_version,
@@ -53,7 +53,7 @@ _SMALL = dict(
 _MODELS = {
     "flarev2": (FLAREv2, {"qk_norm": False}),
     "flarev2_qk_norm": (FLAREv2, {"qk_norm": True}),
-    "flarepp": (FLAREPlusPlus, {}),
+    "flareppv2": (FLAREPlusPlusv2, {}),
 }
 
 
@@ -118,13 +118,13 @@ def test_norm_type(name, use_rmsnorm):
     assert len(norms) >= 2 * _SMALL["n_layers"] + 1
 
 
-def test_flare_plus_plus_constructor():
+def test_flare_plus_plus_v2_constructor():
     """FLARE++ passes its mixer options to every block."""
-    model = FLAREPlusPlus(
+    model = FLAREPlusPlusv2(
         **_SMALL, k_norm=False, share_k0_v0=False, gate_logit_init=1.0
     )
     for block in model.blocks:
-        assert isinstance(block.mixer, FLAREPlusPlusAttention)
+        assert isinstance(block.mixer, FLAREPlusPlusv2Attention)
         assert isinstance(block.mixer.k_norm, nn.Identity)
         assert block.mixer.v0_proj is not None
         torch.testing.assert_close(block.mixer.gate_logit, torch.ones(4))
@@ -223,7 +223,7 @@ def test_autocast(device, name, dtype):
     [
         ("flarev2", "models/flare/data/flarev2_output.pth"),
         ("flarev2_qk_norm", "models/flare/data/flarev2_qk_norm_output.pth"),
-        ("flarepp", "models/flare/data/flare_plus_plus_output.pth"),
+        ("flareppv2", "models/flare/data/flare_plus_plus_v2_output.pth"),
     ],
 )
 def test_forward_accuracy(device, name, file_name):

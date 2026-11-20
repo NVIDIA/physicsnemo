@@ -21,15 +21,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from physicsnemo.nn import FLAREPlusPlus, FLAREv2
+from physicsnemo.nn import FLAREPlusPlusv2, FLAREv2
 from test.conftest import requires_module
 
 _MIXERS = {
     "flarev2": (FLAREv2, {"qk_norm": False}),
     "flarev2_qk_norm": (FLAREv2, {"qk_norm": True}),
-    "flarepp": (FLAREPlusPlus, {}),
-    "flarepp_unshared": (
-        FLAREPlusPlus,
+    "flareppv2": (FLAREPlusPlusv2, {}),
+    "flareppv2_unshared": (
+        FLAREPlusPlusv2,
         {"share_k0_v0": False, "k_norm": False, "q_fixed_norm": False},
     ),
 }
@@ -87,15 +87,15 @@ def test_flarev2_qk_norm_modules():
         assert norm.weight is not None
 
 
-def test_flarepp_norm_modules():
+def test_flareppv2_norm_modules():
     """FLARE++ norm layout: q0/k affine, k0/v0/q_fixed without affine."""
-    mixer = FLAREPlusPlus(dim=32, heads=4)
+    mixer = FLAREPlusPlusv2(dim=32, heads=4)
     assert mixer.q0_norm.weight is not None
     assert mixer.k_norm.weight is not None
     for norm in (mixer.k0_norm, mixer.v0_norm, mixer.q_fixed_norm):
         assert isinstance(norm, nn.RMSNorm) and norm.weight is None
     assert mixer.v0_proj is None
-    off = FLAREPlusPlus(dim=32, heads=4, k_norm=False, q_fixed_norm=False)
+    off = FLAREPlusPlusv2(dim=32, heads=4, k_norm=False, q_fixed_norm=False)
     assert isinstance(off.k_norm, nn.Identity)
     assert isinstance(off.q_fixed_norm, nn.Identity)
 
@@ -122,7 +122,7 @@ def test_latent_init_and_shapes():
     flare = FLAREv2(dim=128, heads=8, n_global_queries=64)
     assert flare.latent_q.shape == (8, 64, 16)
     assert 0.018 < flare.latent_q.std() < 0.022
-    mixer = FLAREPlusPlus(dim=128, heads=8, n_global_queries=64, gate_logit_init=0.5)
+    mixer = FLAREPlusPlusv2(dim=128, heads=8, n_global_queries=64, gate_logit_init=0.5)
     assert mixer.latent_q0.shape == mixer.latent_q_fixed.shape == (8, 64, 16)
     torch.testing.assert_close(mixer.gate_logit, torch.full((8,), 0.5))
 
@@ -131,7 +131,7 @@ def test_no_weight_decay():
     """Each mixer declares its latent parameters as no-weight-decay."""
     flare = FLAREv2(dim=32, heads=4)
     assert flare.no_weight_decay() == {"latent_q"}
-    mixer = FLAREPlusPlus(dim=32, heads=4)
+    mixer = FLAREPlusPlusv2(dim=32, heads=4)
     assert mixer.no_weight_decay() == {"latent_q0", "latent_q_fixed", "gate_logit"}
     for module in (flare, mixer):
         params = dict(module.named_parameters(recurse=False))
@@ -156,10 +156,10 @@ def test_flarev2_matches_reference():
     torch.testing.assert_close(flare(x), expected)
 
 
-def test_flarepp_gate_mixes_dynamic_queries():
+def test_flareppv2_gate_mixes_dynamic_queries():
     """A very negative gate logit reduces FLARE++ to fixed-query FLAREv2 routing."""
     torch.manual_seed(0)
-    mixer = FLAREPlusPlus(dim=32, heads=4, n_global_queries=5).eval()
+    mixer = FLAREPlusPlusv2(dim=32, heads=4, n_global_queries=5).eval()
     x = torch.randn(2, 11, 32)
     with torch.no_grad():
         mixer.gate_logit.fill_(-1e4)
@@ -213,15 +213,15 @@ def test_low_precision_module(device, name):
         ({"dim": 32, "heads": 4, "n_global_queries": 0}, "n_global_queries"),
     ],
 )
-@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlus])
+@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlusv2])
 def test_invalid_arguments(cls, kwargs, match):
     with pytest.raises(ValueError, match=match):
         cls(**kwargs)
 
 
-def test_flarepp_invalid_gate():
+def test_flareppv2_invalid_gate():
     with pytest.raises(ValueError, match="gate_logit_init"):
-        FLAREPlusPlus(dim=32, heads=4, gate_logit_init=float("nan"))
+        FLAREPlusPlusv2(dim=32, heads=4, gate_logit_init=float("nan"))
 
 
 @pytest.mark.parametrize("name", list(_MIXERS))
@@ -258,7 +258,7 @@ class _TokenSharded(torch.Tensor):
         raise AssertionError
 
 
-@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlus])
+@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlusv2])
 def test_use_te_rejects_token_sharded_inputs(cls):
     """TE attention is not ShardTensor aware, so sharded inputs must raise."""
     mixer = cls(dim=32, heads=4)
@@ -268,7 +268,7 @@ def test_use_te_rejects_token_sharded_inputs(cls):
         mixer(x)
 
 
-@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlus])
+@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlusv2])
 def test_compiled_use_te_rejects_token_sharded_inputs(cls):
     """The token-sharded + use_te check also runs under torch.compile."""
     import torch._dynamo
@@ -285,7 +285,7 @@ def test_compiled_use_te_rejects_token_sharded_inputs(cls):
     )
 
 
-@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlus])
+@pytest.mark.parametrize("cls", [FLAREv2, FLAREPlusPlusv2])
 def test_compiled_rejects_wrong_ndim(cls):
     """The ndim check also runs under torch.compile."""
     import torch._dynamo

@@ -24,6 +24,7 @@ and replaces all attention blocks with FLARE blocks.
 from __future__ import annotations
 
 import warnings
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -33,14 +34,23 @@ from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver import Transolver as CoreTransolver
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 from physicsnemo.nn import FLARE as FLAREAttention
+from physicsnemo.nn import FLAREPlusPlus as FLAREPlusPlusAttention
 
 te = OptionalImport("transformer_engine.pytorch")
 
 _FLARE_DEPRECATION_MESSAGE = (
     "physicsnemo.models.flare.FLARE is deprecated and will be removed in the "
-    "27.3 release; use FLAREv2 or FLAREPlusPlus for new training. Existing "
+    "27.3 release; use FLAREv2 or FLAREPlusPlusv2 for new training. Existing "
     "FLARE checkpoints still load."
 )
+_FLARE_PLUS_PLUS_DEPRECATION_MESSAGE = (
+    "physicsnemo.models.flare.FLAREPlusPlus is deprecated and will be removed in "
+    "the 27.3 release; use FLAREPlusPlusv2 for new training. Existing checkpoints "
+    "still load."
+)
+# Inner FLARE deprecation warnings (the FLARE model and the nn.FLARE layer),
+# suppressed while a model that already warned builds its parts.
+_INNER_FLARE_DEPRECATION = r"physicsnemo\.(models\.flare|nn)\.FLARE is deprecated"
 
 
 class _FLAREBlock(nn.Module):
@@ -60,20 +70,39 @@ class _FLAREBlock(nn.Module):
         out_dim: int = 1,
         n_global_queries: int = 32,
         use_te: bool = False,
+        attention_type: Literal["FLARE", "FLARE++"] = "FLARE",
+        attn_scale: float | None = None,
     ) -> None:
         super().__init__()
         self.last_layer = last_layer
         dim_head = hidden_dim // num_heads
 
         self.ln_1 = te.LayerNorm(hidden_dim) if use_te else nn.LayerNorm(hidden_dim)
-        self.Attn = FLAREAttention(
-            dim=hidden_dim,
-            heads=num_heads,
-            dim_head=dim_head,
-            dropout=dropout,
-            n_global_queries=n_global_queries,
-            use_te=use_te,
-        )
+        match attention_type:
+            case "FLARE":
+                self.Attn = FLAREAttention(
+                    dim=hidden_dim,
+                    heads=num_heads,
+                    dim_head=dim_head,
+                    dropout=dropout,
+                    n_global_queries=n_global_queries,
+                    use_te=use_te,
+                )
+            case "FLARE++":
+                self.Attn = FLAREPlusPlusAttention(
+                    dim=hidden_dim,
+                    heads=num_heads,
+                    dim_head=dim_head,
+                    dropout=dropout,
+                    n_global_queries=n_global_queries,
+                    use_te=use_te,
+                    attn_scale=attn_scale,
+                )
+            case _:
+                raise ValueError(
+                    f"Invalid attention type: {attention_type!r}. "
+                    "Expected 'FLARE' or 'FLARE++'."
+                )
         if use_te:
             self.ln_mlp1 = te.LayerNormMLP(
                 hidden_size=hidden_dim,
@@ -120,7 +149,7 @@ class FLARE(CoreTransolver):
     .. warning::
         Deprecated: ``FLARE`` will be removed in the 27.3 release. Use
         :class:`~physicsnemo.models.flare.FLAREv2` or
-        :class:`~physicsnemo.models.flare.FLAREPlusPlus` for new training.
+        :class:`~physicsnemo.models.flare.FLAREPlusPlusv2` for new training.
         Existing FLARE checkpoints still load.
 
     Parameters
@@ -175,6 +204,9 @@ class FLARE(CoreTransolver):
     :class:`~physicsnemo.nn.module.flare_attention.FLARE` : FLARE attention layer.
     """
 
+    _attention_type: Literal["FLARE", "FLARE++"] = "FLARE"
+    _attention_scale: float | None = None
+
     def __init__(
         self,
         functional_dim: int,
@@ -221,9 +253,7 @@ class FLARE(CoreTransolver):
         # warned about the deprecation; do not repeat it for every layer.
         with warnings.catch_warnings():
             warnings.filterwarnings(
-                "ignore",
-                message=r"physicsnemo\.nn\.FLARE is deprecated",
-                category=FutureWarning,
+                "ignore", message=_INNER_FLARE_DEPRECATION, category=FutureWarning
             )
             self.blocks = nn.ModuleList(
                 [
@@ -237,8 +267,125 @@ class FLARE(CoreTransolver):
                         out_dim=out_dim,
                         n_global_queries=slice_num,
                         use_te=use_te,
+                        attention_type=self._attention_type,
+                        attn_scale=self._attention_scale,
                     )
                     for i in range(n_layers)
                 ]
             )
         self.initialize_weights()
+
+
+class FLAREPlusPlus(FLARE):
+    r"""Transolver backbone with FLARE++ dynamic-routing attention.
+
+    This is the standalone FLARE++ architecture. It keeps FLARE's residual
+    backbone and replaces each fixed-query FLARE mixer with a FLARE++ mixer
+    whose routing queries are synthesized from the current block input.
+
+    .. warning::
+        Deprecated: this ``FLAREPlusPlus`` model will be removed in the 27.3
+        release. Use :class:`~physicsnemo.models.flare.FLAREPlusPlusv2` for new
+        training. Existing checkpoints still load.
+
+    Parameters
+    ----------
+    functional_dim : int
+        Number of input-value channels, excluding embeddings.
+    out_dim : int
+        Number of output channels.
+    embedding_dim : int | None, optional
+        Number of embedding channels. Required when ``unified_pos=False``.
+    n_layers : int, optional
+        Number of transformer blocks. Default is 4.
+    n_hidden : int, optional
+        Hidden width. Default is 256.
+    dropout : float, optional
+        Dropout rate. Default is 0.0.
+    n_head : int, optional
+        Number of attention heads. Default is 8.
+    act : str, optional
+        Activation function name. Default is ``"gelu"``.
+    mlp_ratio : int, optional
+        MLP expansion ratio. Default is 4.
+    slice_num : int, optional
+        Number of dynamic routing queries. Default is 32.
+    unified_pos : bool, optional
+        Whether to use unified positional embeddings. Default is ``False``.
+    ref : int, optional
+        Reference-grid size for unified positions. Default is 8.
+    structured_shape : tuple[int, ...] | None, optional
+        Structured input shape, or ``None`` for unstructured inputs.
+    time_input : bool, optional
+        Whether to include time embeddings. Default is ``False``.
+    use_te : bool, optional
+        Transformer Engine is not currently supported. Default is ``False``.
+    activation_checkpointing : bool, optional
+        Whether to checkpoint transformer blocks during training. Default is
+        ``False``.
+    checkpointing_ratio : float, optional
+        Fraction of blocks to checkpoint. Default is 1.0.
+    attn_scale : float | None, optional
+        Scale applied to attention scores. ``None`` uses the standard
+        ``1 / sqrt(head dimension)`` scale. Default is ``None``.
+
+    See Also
+    --------
+    :class:`FLARE` : Standalone fixed-query FLARE model.
+    :class:`~physicsnemo.nn.module.flare_attention.FLAREPlusPlus` : FLARE++
+        attention layer.
+    """
+
+    _attention_type: Literal["FLARE", "FLARE++"] = "FLARE++"
+
+    def __init__(
+        self,
+        functional_dim: int,
+        out_dim: int,
+        embedding_dim: int | None = None,
+        n_layers: int = 4,
+        n_hidden: int = 256,
+        dropout: float = 0.0,
+        n_head: int = 8,
+        act: str = "gelu",
+        mlp_ratio: int = 4,
+        slice_num: int = 32,
+        unified_pos: bool = False,
+        ref: int = 8,
+        structured_shape: None | tuple[int, ...] = None,
+        time_input: bool = False,
+        use_te: bool = False,
+        activation_checkpointing: bool = False,
+        checkpointing_ratio: float = 1.0,
+        attn_scale: float | None = None,
+    ) -> None:
+        warnings.warn(_FLARE_PLUS_PLUS_DEPRECATION_MESSAGE, FutureWarning, stacklevel=2)
+        if use_te:
+            raise ValueError(
+                "FLAREPlusPlus does not support Transformer Engine; set use_te=False."
+            )
+        self._attention_scale = attn_scale
+        # FLAREPlusPlus already warned; silence the FLARE base-class warning.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=_INNER_FLARE_DEPRECATION, category=FutureWarning
+            )
+            super().__init__(
+                functional_dim=functional_dim,
+                out_dim=out_dim,
+                embedding_dim=embedding_dim,
+                n_layers=n_layers,
+                n_hidden=n_hidden,
+                dropout=dropout,
+                n_head=n_head,
+                act=act,
+                mlp_ratio=mlp_ratio,
+                slice_num=slice_num,
+                unified_pos=unified_pos,
+                ref=ref,
+                structured_shape=structured_shape,
+                time_input=time_input,
+                use_te=use_te,
+                activation_checkpointing=activation_checkpointing,
+                checkpointing_ratio=checkpointing_ratio,
+            )

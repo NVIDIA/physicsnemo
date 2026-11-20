@@ -18,7 +18,7 @@ default) normalizes queries and keys per head (RMSNorm by default, LayerNorm
 with ``use_rmsnorm=False``). ``no_weight_decay()`` names the latent parameters
 to train without weight decay.
 
-FLAREv2 and FLARE++ run their attention passes through shared kernels:
+FLAREv2 and FLAREPlusPlusv2 run their attention passes through shared kernels:
 ``torch.nn.functional.scaled_dot_product_attention`` (which also handles
 token-sharded :class:`~physicsnemo.domain_parallel.ShardTensor` inputs), or,
 with ``use_te=True``, Transformer Engine ``Linear``, norm and
@@ -29,19 +29,20 @@ with ``use_te=True``, Transformer Engine ``Linear``, norm and
    :members:
    :exclude-members: forward
 
-FLARE++
--------
+FLAREPlusPlusv2
+---------------
 
-FLARE++ adds routing queries synthesized from the current input. One attention
-pass from normalized learned seeds creates dynamic queries; a per-head sigmoid
-gate adds them to learned fixed queries; the usual FLARE gather/scatter pair
-then routes information, preserving linear complexity in the number of input
-tokens for a fixed query count.
+:class:`~physicsnemo.nn.FLAREPlusPlusv2` (FLARE++) adds routing queries
+synthesized from the current input. One attention pass from normalized learned
+seeds creates dynamic queries; a per-head sigmoid gate adds them to learned
+fixed queries; the usual FLARE gather/scatter pair then routes information,
+preserving linear complexity in the number of input tokens for a fixed query
+count.
 
 For details, see the `FLARE++ paper
 <https://arxiv.org/abs/2608.11519>`__.
 
-.. autoclass:: physicsnemo.nn.module.flare_attention_v2.FLAREPlusPlus
+.. autoclass:: physicsnemo.nn.module.flare_attention_v2.FLAREPlusPlusv2
    :show-inheritance:
    :members:
    :exclude-members: forward
@@ -52,9 +53,22 @@ FLARE (deprecated)
 :class:`~physicsnemo.nn.FLARE` is the original FLARE layer. It is deprecated
 and will be removed in the 27.3 release; constructing it emits a
 ``FutureWarning``. Use :class:`~physicsnemo.nn.FLAREv2` or
-:class:`~physicsnemo.nn.FLAREPlusPlus` for new training.
+:class:`~physicsnemo.nn.FLAREPlusPlusv2` for new training.
 
 .. autoclass:: physicsnemo.nn.module.flare_attention.FLARE
+   :show-inheritance:
+   :members:
+   :exclude-members: forward
+
+FLARE++
+-------
+
+:class:`~physicsnemo.nn.FLAREPlusPlus` is the original FLARE++ layer: learned
+seeds synthesize routing queries from the current input with one attention
+pass, and the usual FLARE gather/scatter pair routes information. It is the
+attention used by GeoTransolver's ``"GALE_FPP"`` backend.
+
+.. autoclass:: physicsnemo.nn.module.flare_attention.FLAREPlusPlus
    :show-inheritance:
    :members:
    :exclude-members: forward

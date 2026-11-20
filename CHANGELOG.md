@@ -101,21 +101,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
-- Adds `physicsnemo.models.flare.FLAREv2` and `physicsnemo.nn.FLAREv2`, the
-  successor of FLARE: a standalone pre-norm transformer (no longer a
-  Transolver subclass) with RMSNorm by default (`use_rmsnorm`) and
-  tanh-approximate GELU (new `"gelu_tanh"` activation). The FLAREv2 layer uses
-  attention scale `dim_head**-0.5`, latent queries initialized from
-  N(0, 0.02), `dim x dim` key/value projections initialized to identity plus
-  small noise and per-head query/key normalization (`qk_norm`, on by default;
-  on DrivAerML, FLAREv2 with QK-norm beat FLARE in all 4 tested settings and
-  without it was worse in 3 of 4). Inputs must be `(B, N, C)`; structured
+- Adds `FLAREv2` and `FLAREPlusPlusv2` (models in `physicsnemo.models.flare`,
+  layers in `physicsnemo.nn`), the successors of FLARE and FLARE++: standalone
+  pre-norm transformers (not Transolver subclasses) with RMSNorm by default
+  (`use_rmsnorm`) and tanh-approximate GELU (new `"gelu_tanh"` activation).
+  The layers use attention scale `dim_head**-0.5`, latent queries initialized
+  from N(0, 0.02), `dim x dim` key/value projections initialized to identity
+  plus small noise and per-head normalization. `FLAREv2` adds query/key
+  normalization (`qk_norm`, on by default; on DrivAerML, FLAREv2 with QK-norm
+  beat FLARE in all 4 tested settings and without it was worse in 3 of 4).
+  `FLAREPlusPlusv2` adds normalized query synthesis, gated fixed plus dynamic
+  queries and shared synthesis keys/values (`k_norm`, `share_k0_v0`,
+  `q_fixed_norm`, `gate_logit_init`). Inputs must be `(B, N, C)`; structured
   grids and unified positions are not supported. `use_te=True` runs the linear
   layers, norms (fused `LayerNormMLP` / `LayerNormLinear`) and
   `DotProductAttention` on Transformer Engine; with `use_te=False`,
   token-sharded (`ShardTensor`) inputs are supported. Layers and models expose
-  `no_weight_decay()` for their latent parameters. Input validation (ndim,
-  token-sharded + Transformer Engine) also runs under `torch.compile`.
+  `no_weight_decay()` for their latent parameters.
 - Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
@@ -237,16 +239,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `physicsnemo.models.flare.FLAREPlusPlus` and `physicsnemo.nn.FLAREPlusPlus`
-  (experimental) move to the FLAREv2 architecture: the model shares the
-  FLAREv2 backbone, and the layer adds normalized query synthesis, gated fixed
-  plus dynamic queries and shared synthesis keys/values (`k_norm`,
-  `share_k0_v0`, `q_fixed_norm`, `gate_logit_init`, `use_rmsnorm`). The
-  `unified_pos`, `ref`, `structured_shape`, `time_input` and `attn_scale`
-  arguments are removed, Transformer Engine (`use_te=True`) and token-sharded
-  `ShardTensor` inputs are now supported, and checkpoints of the previous
-  FLARE++ model and layer no longer load. GeoTransolver's `"GALE_FPP"`
-  backend keeps the previous FLARE++ attention.
 - `repair_mesh` also removes duplicate cells and stitches T-junctions of
   triangle meshes by default, and `split_nonmanifold_edges=True` also drops fins.
   Its default tolerances are now relative to the mesh's size, and an explicit
@@ -549,10 +541,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warns.
 - The `physicsnemo.experimental.models.globe` import path is deprecated.
   Import GLOBE from `physicsnemo.models.globe` instead.
-- `physicsnemo.models.flare.FLARE` and `physicsnemo.nn.FLARE` are deprecated
-  and will be removed in the 27.3 release; constructing them emits a
-  `FutureWarning`. Use `FLAREv2` or `FLAREPlusPlus` for new training. Existing
-  FLARE checkpoints still load.
+- The `physicsnemo.models.flare.FLARE` and
+  `physicsnemo.models.flare.FLAREPlusPlus` models and the `physicsnemo.nn.FLARE`
+  layer are deprecated and will be removed in the 27.3 release; constructing
+  them emits a `FutureWarning`. Use `FLAREv2` or `FLAREPlusPlusv2` for new
+  training. Existing checkpoints still load.
 
 ### Removed
 
