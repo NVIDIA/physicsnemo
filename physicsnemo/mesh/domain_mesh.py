@@ -1425,9 +1425,10 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         raise_on_error : bool, optional
             Raise ``ValueError`` on first error vs return report.
         check_self_intersection : bool, optional
-            Request self-intersection checks for every component. This option
-            is keyword-only and not yet implemented; passing ``True`` raises
-            ``NotImplementedError``.
+            Check each mesh for pairs of its own triangles that intersect (see
+            :meth:`Mesh.validate`). Meshes that are not triangle meshes in 3D,
+            such as a tetrahedral interior, are skipped. Intersections between
+            two different meshes are not checked. Keyword-only.
 
         Returns
         -------
@@ -1440,12 +1441,6 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             - ``"boundaries"``: ``dict[str, Mapping[str, ...]]`` of per-boundary
               reports.
             - ``"valid"``: ``bool``, ``True`` only if all meshes pass validation.
-
-        Raises
-        ------
-        NotImplementedError
-            If ``check_self_intersection=True`` because component-level
-            self-intersection checking is not yet implemented.
         """
         kwargs: dict[str, Any] = dict(
             check_degenerate_cells=check_degenerate_cells,

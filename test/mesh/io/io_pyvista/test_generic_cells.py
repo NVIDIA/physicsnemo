@@ -902,6 +902,263 @@ def test_parent_provenance_rejects_unknown_parent(monkeypatch):
         from_pyvista(grid)
 
 
+def _edge_counts(cells: torch.Tensor) -> np.ndarray:
+    """Number of triangles at each distinct edge."""
+    edges = np.sort(cells.numpy()[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+    return np.unique(edges, axis=0, return_counts=True)[1]
+
+
+def _fan(polygon: list[int], center: int) -> list[list[int]]:
+    """The fan ``(v_i, v_{i+1}, center)`` of a polygon."""
+    return [[a, b, center] for a, b in zip(polygon, polygon[1:] + polygon[:1])]
+
+
+### A 1 x 1 face with 3 hanging nodes on one edge, snapped with a 1e-4 zigzag
+### and ~1e-3 out of plane: VTK's ear cutting stops after 2 of 5 triangles.
+_HANGING_NODE_FACE = np.array(
+    [
+        [0.0, 0.0, 0.0003],
+        [0.25, -0.0001, -0.0013],
+        [0.5, 0.0001, 0.0009],
+        [0.75, 0.0001, 0.0004],
+        [1.0, 0.0, -0.0005],
+        [1.0, 1.0, 0.0006],
+        [0.0, 1.0, 0.0004],
+    ]
+)
+
+
+def test_polygon_split_on_local_vertex_numbers_is_fanned(monkeypatch):
+    """Simplices on a polygon's local vertex numbers are replaced by a fan."""
+    ### Seven disjoint unit pentagons in the z = 0 plane.
+    pentagon = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.5, 0.5, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    points = np.concatenate([pentagon + [2.0 * i, 0.0, 0.0] for i in range(7)])
+    cells = np.concatenate([[5, *range(5 * i, 5 * i + 5)] for i in range(7)])
+    grid = pv.UnstructuredGrid(
+        cells, np.full(7, pv.CellType.POLYGON, dtype=np.uint8), points
+    )
+    original_triangulate = pv.UnstructuredGrid.triangulate
+
+    def fail_like_vtk(mesh, *args, **kwargs):
+        triangulated = original_triangulate(mesh, *args, **kwargs)
+        parents = np.asarray(triangulated.cell_data["__physicsnemo_parent_cell_id"])
+        cells = triangulated.cells_dict[pv.CellType.TRIANGLE]
+        ### As VTK does when a polygon's ear cutting fails: positions within the
+        ### polygon instead of point IDs.
+        cells[:] = [0, 1, 2]
+        corrupted = pv.UnstructuredGrid(
+            {pv.CellType.TRIANGLE: cells}, np.asarray(triangulated.points)
+        )
+        corrupted.cell_data["__physicsnemo_parent_cell_id"] = parents
+        return corrupted
+
+    monkeypatch.setattr(pv.UnstructuredGrid, "triangulate", fail_like_vtk)
+
+    mesh = from_pyvista(grid)
+
+    expected = [_fan(list(range(5 * i, 5 * i + 5)), 35 + i) for i in range(7)]
+    assert mesh.cells.tolist() == sum(expected, [])
+    torch.testing.assert_close(
+        mesh.points[35:], torch.from_numpy(points.reshape(7, 5, 3).mean(axis=1))
+    )
+
+
+@pytest.mark.parametrize("unused_points_first", [True, False])
+def test_polygon_vtk_cannot_split_is_fanned(unused_points_first):
+    """A polygon that VTK's ear cutting fails on is split into a full fan.
+
+    VTK's vtkDataSetTriangleFilter writes such a polygon's local vertex numbers
+    as point IDs: here the six unused points, or the polygon's own points 0 to
+    5, which give two triangles that cover only part of it.
+    """
+    angles = np.linspace(0.0, 2.0 * np.pi, 6, endpoint=False)
+    star = np.stack(
+        [np.cos(angles), np.sin(angles), 3.0 * np.cos(3.0 * angles)], axis=1
+    )[[0, 3, 1, 4, 2, 5]]
+    if unused_points_first:
+        unused = 100.0 + np.arange(18, dtype=float).reshape(6, 3)
+        points, first = np.vstack([unused, star]), 6
+    else:
+        points, first = star, 0
+    grid = pv.UnstructuredGrid(
+        np.array([6, *range(first, first + 6)]),
+        np.array([pv.CellType.POLYGON], dtype=np.uint8),
+        points,
+    )
+
+    mesh = from_pyvista(grid)
+
+    assert mesh.cells.tolist() == _fan(list(range(first, first + 6)), len(points))
+    torch.testing.assert_close(
+        mesh.points[-1], torch.from_numpy(star.mean(axis=0)), atol=1e-12, rtol=0
+    )
+
+
+def test_partial_vtk_polygon_split_is_fanned_with_data():
+    """A face that VTK splits only partly is fanned; point and cell data follow."""
+    strip_points = np.array([[2.0, 0, 0], [3.0, 0, 0], [2.0, 1, 0], [3.0, 1, 0]])
+    points = np.concatenate([_HANGING_NODE_FACE, strip_points])
+    polydata = pv.PolyData(
+        points, faces=[7, 0, 1, 2, 3, 4, 5, 6], strips=[4, 7, 8, 9, 10]
+    )
+    polydata.point_data["pressure"] = np.arange(11, dtype=np.float32)
+    polydata.point_data["velocity"] = np.arange(33, dtype=np.float64).reshape(11, 3)
+    polydata.point_data["label"] = np.arange(10, 21, dtype=np.int32)
+    polydata.cell_data["patch"] = np.array([5, 6], dtype=np.int16)
+    strip_triangles = (
+        pv.PolyData(points, strips=[4, 7, 8, 9, 10]).triangulate().regular_faces
+    )
+
+    mesh = from_pyvista(polydata)
+
+    assert mesh.cells.tolist() == _fan(list(range(7)), 11) + strip_triangles.tolist()
+    torch.testing.assert_close(
+        mesh.points[11], torch.from_numpy(_HANGING_NODE_FACE.mean(axis=0))
+    )
+    assert mesh.point_data["pressure"][11].item() == 3.0
+    assert mesh.point_data["pressure"].dtype == torch.float32
+    assert mesh.point_data["velocity"][11].tolist() == [9.0, 10.0, 11.0]
+    assert mesh.point_data["label"].tolist() == [*range(10, 21), 10]
+    assert mesh.cell_data["patch"].tolist() == [5] * 7 + [6] * 2
+
+
+@pytest.mark.parametrize("unstructured", [False, True])
+def test_repeated_polygon_vertex_keeps_correct_vtk_split(unstructured):
+    """A polygon that repeats a vertex keeps VTK's split when it is correct."""
+    points = np.array([[0.0, 0, 0], [1.0, 0, 0], [1.0, 1, 0], [0.0, 1, 0]])
+    polydata = pv.PolyData(points, faces=[5, 0, 1, 1, 2, 3])
+    source = polydata.cast_to_unstructured_grid() if unstructured else polydata
+
+    mesh = from_pyvista(source)
+
+    assert mesh.n_points == 4
+    assert mesh.cells.tolist() == [[0, 1, 3], [2, 3, 1]]
+
+
+@pytest.mark.parametrize("unstructured", [False, True])
+def test_collapsed_quad_becomes_its_triangle(unstructured):
+    """A quad with only 3 distinct vertices becomes that triangle, with no new point."""
+    triangle = np.array([[2.0, 0, 0], [3.0, 0, 0], [3.0, 1, 0]])
+    points = np.concatenate([_HANGING_NODE_FACE, triangle])
+    polydata = pv.PolyData(points, faces=[4, 7, 8, 8, 9, 7, 0, 1, 2, 3, 4, 5, 6])
+    polydata.cell_data["patch"] = np.array([7, 8], dtype=np.int16)
+    source = polydata.cast_to_unstructured_grid() if unstructured else polydata
+
+    mesh = from_pyvista(source)
+
+    ### Only the fanned hanging-node face gets a center point.
+    assert mesh.n_points == 11
+    assert mesh.cells.tolist() == [[7, 8, 9], *_fan(list(range(7)), 10)]
+    assert mesh.cell_data["patch"].tolist() == [7] + [8] * 7
+
+
+def test_failed_split_of_polygon_with_repeated_vertex_has_no_zero_area_fan():
+    """A wrongly split polygon that repeats a vertex is fanned over its distinct vertices."""
+    polydata = pv.PolyData(_HANGING_NODE_FACE, faces=[8, 0, 1, 2, 2, 3, 4, 5, 6])
+
+    mesh = from_pyvista(polydata)
+
+    assert mesh.cells.tolist() == _fan(list(range(7)), 7)
+    assert bool((mesh.cell_areas > 0).all())
+    torch.testing.assert_close(
+        mesh.points[7], torch.from_numpy(_HANGING_NODE_FACE.mean(axis=0))
+    )
+
+
+def test_large_polygon_split_uses_every_vertex():
+    """A polygon with thousands of vertices keeps VTK's full split."""
+    circle = pv.Circle(resolution=4000)
+
+    mesh = from_pyvista(circle)
+
+    assert mesh.n_points == 4000
+    assert mesh.n_cells == 3998
+    assert torch.equal(torch.unique(mesh.cells), torch.arange(4000))
+
+
+def test_closed_polygon_surface_with_failed_split_stays_closed():
+    """A closed prism whose caps VTK splits only partly comes out closed and manifold."""
+    points = np.concatenate([_HANGING_NODE_FACE, _HANGING_NODE_FACE - [0, 0, 1]])
+    caps = [[7, *range(7)], [7, *range(13, 6, -1)]]
+    sides = [[4, i, i + 7, (i + 1) % 7 + 7, (i + 1) % 7] for i in range(7)]
+    polydata = pv.PolyData(points, faces=np.concatenate(caps + sides))
+
+    mesh = from_pyvista(polydata)
+
+    assert (_edge_counts(mesh.cells) == 2).all()
+
+
+def test_colliding_vtk_diagonals_are_fanned():
+    """Two real faces whose VTK diagonals coincide are fanned, so no edge is non-manifold."""
+    ### A quad and a pentagon of an OpenFOAM boundary that share two
+    ### consecutive edges; VTK splits both along the diagonal (0, 3).
+    points = np.array(
+        [
+            [0.80509055, 1.3701948, 1.224843],
+            [0.8024448, 1.3575118, 1.211203],
+            [0.79767466, 1.3812817, 1.2344762],
+            [0.82015, 1.3832408, 1.2359446],
+            [0.8126095, 1.3582656, 1.2087677],
+            [0.81547546, 1.3717744, 1.2234923],
+        ],
+        dtype=np.float32,
+    )
+    polydata = pv.PolyData(points, faces=[4, 0, 2, 3, 5, 5, 0, 1, 4, 3, 2])
+
+    mesh = from_pyvista(polydata)
+
+    assert mesh.cells.tolist() == _fan([0, 2, 3, 5], 6) + _fan([0, 1, 4, 3, 2], 7)
+    assert _edge_counts(mesh.cells).max() == 2
+
+
+def test_repeated_vtk_child_is_fanned(monkeypatch):
+    """A polygon whose VTK children repeat a triangle is fanned."""
+    polydata = pv.PolyData(_HANGING_NODE_FACE[[0, 4, 5, 6]], faces=[4, 0, 1, 2, 3])
+    original_triangulate = pv.PolyData.triangulate
+
+    def repeat_first_child(mesh, *args, **kwargs):
+        triangulated = original_triangulate(mesh, *args, **kwargs)
+        triangles = triangulated.regular_faces
+        repeated = pv.PolyData.from_regular_faces(
+            triangulated.points, triangles[[0, 0]]
+        )
+        repeated.cell_data["__physicsnemo_parent_cell_id"] = np.zeros(2, dtype=int)
+        return repeated
+
+    monkeypatch.setattr(pv.PolyData, "triangulate", repeat_first_child)
+
+    mesh = from_pyvista(polydata)
+
+    assert mesh.cells.tolist() == _fan([0, 1, 2, 3], 4)
+
+
+@pytest.mark.parametrize("unstructured", [False, True])
+def test_correct_vtk_polygon_splits_are_kept(unstructured):
+    """Polygons that VTK splits correctly keep VTK's triangles and add no points."""
+    surface = pv.Cube().merge(pv.Polygon(center=(3.0, 0.0, 0.0), n_sides=7))
+    surface = surface.merge(pv.Plane(center=(0.0, 3.0, 0.0)))
+    source = surface.cast_to_unstructured_grid() if unstructured else surface
+    triangulated = source.triangulate()
+    expected = (
+        triangulated.cells_dict[pv.CellType.TRIANGLE]
+        if unstructured
+        else triangulated.regular_faces
+    )
+
+    mesh = from_pyvista(source, manifold_dim=2)
+
+    assert mesh.n_points == surface.n_points
+    assert mesh.cells.tolist() == expected.tolist()
+
+
 def test_malformed_inputs_raise_in_one_subprocess():
     """Malformed attributes and topology are checked in one isolated process."""
     script = textwrap.dedent(

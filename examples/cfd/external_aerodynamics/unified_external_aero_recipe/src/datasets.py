@@ -101,14 +101,21 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
 def apply_model_config(dataset_cfg: DictConfig, recipe_cfg: DictConfig) -> DictConfig:
     """A dataset config as the recipe config's model reads it.
 
-    Applies the model config's ``dataset_reader_overrides``, then appends its
-    ``dataset_append_transforms`` and, last, its ``extra_task.transforms`` to
-    ``pipeline.transforms`` (so steps one model needs leave the dataset files
-    and the other models' samples as they are). ``extra_task.targets`` and
-    ``extra_task.target_sources`` join the dataset's; ``train.py`` reads
-    ``extra_task.field_weights``. Without these keys the config is unchanged.
+    Applies the model config's ``dataset_reader_overrides`` and
+    ``dataset_overrides`` (merged into the dataset config with
+    ``OmegaConf.merge``, which merges nested keys and replaces lists, for
+    example a surface convention its appended transforms change), then
+    appends its ``dataset_append_transforms`` and, last, its
+    ``extra_task.transforms`` to ``pipeline.transforms`` (so steps one model
+    needs leave the dataset files and the other models' samples as they are).
+    ``extra_task.targets`` and ``extra_task.target_sources`` join the
+    dataset's; ``train.py`` reads ``extra_task.field_weights``. Without these
+    keys the config is unchanged.
     """
     dataset_cfg = _apply_dataset_reader_overrides(dataset_cfg, recipe_cfg)
+    overrides = OmegaConf.select(recipe_cfg, "dataset_overrides", default=None)
+    if overrides:
+        dataset_cfg = OmegaConf.merge(dataset_cfg, overrides)
     task = OmegaConf.select(recipe_cfg, "extra_task", default=None) or {}
     appends = OmegaConf.select(recipe_cfg, "dataset_append_transforms", default=None)
     shared = (

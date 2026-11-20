@@ -131,6 +131,17 @@ points around the same body:
 >>> out.point_data["pressure"].shape, out.point_data["velocity"].shape
 (torch.Size([100]), torch.Size([100, 3]))
 
+The `unified external aerodynamics recipe
+<https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe#isla>`_
+trains and evaluates ISLA on DrivAerML with three configurations:
+
+- ``isla_surface``: a surface task on the vehicle.
+- ``isla_volume``: an interior task.
+- ``isla_volume_joint``: an interior task that also predicts the wall
+  pressure and wall shear stress at points just off the vehicle.
+
+Its README documents how the dataset maps to the model's inputs.
+
 .. autoclass:: physicsnemo.experimental.models.isla.ISLA
     :show-inheritance:
     :members:

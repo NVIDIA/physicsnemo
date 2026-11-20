@@ -566,7 +566,8 @@ class BVH(TensorClass):
 
     def _traverse(
         self,
-        query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
+        query_min: Float[torch.Tensor, "n_queries n_spatial_dims"],
+        query_max: Float[torch.Tensor, "n_queries n_spatial_dims"],
         max_candidates_per_point: int | None,
         aabb_tolerance: float,
     ) -> tuple[
@@ -575,11 +576,12 @@ class BVH(TensorClass):
     ]:
         r"""Core BVH traversal returning raw ``(query_idx, cell_idx)`` pairs.
 
-        All AABB tests and tree operations are fully vectorized across
-        queries. The outer loop runs once per tree level
+        Each query is the box ``[query_min, query_max]``; a point query passes
+        the same tensor for both. All AABB tests and tree operations are fully
+        vectorized across queries. The outer loop runs once per tree level
         (:math:`O(\log N)` iterations).
         """
-        n_queries = query_points.shape[0]
+        n_queries = query_min.shape[0]
         dev = self.device
 
         if self.n_nodes == 0 or n_queries == 0:
@@ -599,18 +601,25 @@ class BVH(TensorClass):
 
         ### Iterative traversal: one iteration per tree level
         while len(current_query_indices) > 0:
-            ### Vectorized AABB containment test for all active pairs, one
+            ### Vectorized AABB overlap test for all active pairs, one
             # spatial dimension at a time so temporaries are (n_active,) only
             inside = None
-            for d in range(query_points.shape[1]):
-                p = query_points[:, d][current_query_indices]
+            for d in range(query_min.shape[1]):
+                lo = query_min[:, d][current_query_indices]
+                hi = (
+                    lo
+                    if query_max is query_min
+                    else query_max[:, d][current_query_indices]
+                )
                 ok = (
-                    p >= self.node_aabb_min[:, d][current_node_indices] - aabb_tolerance
+                    hi
+                    >= self.node_aabb_min[:, d][current_node_indices] - aabb_tolerance
                 ) & (
-                    p <= self.node_aabb_max[:, d][current_node_indices] + aabb_tolerance
+                    lo
+                    <= self.node_aabb_max[:, d][current_node_indices] + aabb_tolerance
                 )
                 inside = ok if inside is None else inside & ok
-            del p, ok
+            del lo, hi, ok
 
             ### Filter to intersecting pairs only; free the old frontier now so
             # it is never alive together with the next one
@@ -723,8 +732,10 @@ class BVH(TensorClass):
             parts_q: list[torch.Tensor] = []
             parts_c: list[torch.Tensor] = []
             for start in range(0, n_queries, _QUERY_CHUNK_SIZE):
+                chunk = query_points[start : start + _QUERY_CHUNK_SIZE]
                 chunk_q, chunk_c = self._traverse(
-                    query_points[start : start + _QUERY_CHUNK_SIZE],
+                    chunk,
+                    chunk,
                     max_candidates_per_point,
                     aabb_tolerance,
                 )
@@ -734,6 +745,7 @@ class BVH(TensorClass):
             del parts_q, parts_c
         else:
             all_q, all_c = self._traverse(
+                query_points,
                 query_points,
                 max_candidates_per_point,
                 aabb_tolerance,
@@ -745,3 +757,56 @@ class BVH(TensorClass):
             n_targets=len(self.sorted_cell_order),
         )
         return adjacency.truncate_per_source(max_candidates_per_point)
+
+    def find_overlapping_cells(
+        self,
+        query_aabb_min: Float[torch.Tensor, "n_queries n_spatial_dims"],
+        query_aabb_max: Float[torch.Tensor, "n_queries n_spatial_dims"],
+    ) -> Adjacency:
+        r"""Find the cells whose bounding boxes overlap each query box.
+
+        Boxes that only touch count as overlapping. With ``leaf_size=1`` the
+        result is exactly the overlapping cells; with larger leaves it also
+        holds the other cells of each overlapping leaf. There is no limit per
+        query, so memory grows with the number of pairs; to bound it, query
+        slices of the boxes.
+
+        Parameters
+        ----------
+        query_aabb_min : torch.Tensor
+            Minimum corners of the query boxes, shape
+            ``(n_queries, n_spatial_dims)``.
+        query_aabb_max : torch.Tensor
+            Maximum corners of the query boxes, same shape.
+
+        Returns
+        -------
+        Adjacency
+            Overlapping cells of query ``i``, in increasing order, at
+            ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> mesh = Mesh(
+        ...     points=torch.tensor(
+        ...         [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [2.0, 2.0], [4.0, 0.0]]
+        ...     ),
+        ...     cells=torch.tensor([[0, 1, 2], [1, 4, 3]]),
+        ... )
+        >>> bvh = BVH.from_mesh(mesh)
+        >>> lo = torch.tensor([[1.5, 0.5], [5.0, 0.0]])
+        >>> hi = torch.tensor([[2.5, 1.0], [6.0, 1.0]])
+        >>> bvh.find_overlapping_cells(lo, hi).to_list()
+        [[0, 1], []]
+        """
+        self._validate_query_points(query_aabb_min)
+        self._validate_query_points(query_aabb_max)
+        all_q, all_c = self._traverse(query_aabb_min, query_aabb_max, None, 0.0)
+        return build_adjacency_from_pairs(
+            source_indices=all_q,
+            target_indices=all_c,
+            n_sources=query_aabb_min.shape[0],
+            n_targets=len(self.sorted_cell_order),
+        )

@@ -565,9 +565,33 @@ class TestValidate:
         report = dm.validate()
         assert not report["valid"]
 
-    def test_self_intersection_option_propagates(self, tet_domain):
-        with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
-            tet_domain.validate(check_self_intersection=True)
+    def test_self_intersection_checks_triangle_boundaries(self):
+        """The tet interior is skipped; crossings in triangle boundaries are found."""
+        crossing = Mesh(
+            points=torch.tensor(
+                [
+                    [0.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.5, 0.5, -1.0],
+                    [0.5, 0.5, 1.0],
+                    [1.5, 1.5, 1.0],
+                ]
+            ),
+            cells=torch.tensor([[0, 1, 2], [3, 4, 5]]),
+        )
+        dm = DomainMesh(
+            interior=two_tetrahedra.load(),
+            boundaries={"wall": crossing, "inlet": crossing.clone()},
+        )
+        report = dm.validate(check_self_intersection=True)
+        assert report["interior"]["n_self_intersecting_pairs"] == -1
+        assert report["interior"]["valid"]
+        for name in ("wall", "inlet"):
+            boundary = report["boundaries"][name]
+            assert boundary["n_self_intersecting_pairs"] == 1
+            assert boundary["self_intersecting_pairs"].tolist() == [[0, 1]]
+        assert not report["valid"]
 
     def test_positional_tolerance_is_preserved(self, tet_domain):
         """The sixth historical argument remains the geometric tolerance."""

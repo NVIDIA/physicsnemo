@@ -17,6 +17,7 @@ Here, you're able to train (and run inference with) the following models:
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - [SMART](https://arxiv.org/abs/2601.18707) (experimental, separate surface/volume models)
 - [GLOBE](https://arxiv.org/abs/2511.15856)
+- ISLA (Invariant Slice Attention, experimental; see [ISLA](#isla))
 - [AB-UPT](https://arxiv.org/abs/2502.09692v4) (experimental; surface, volume, or joint)
 
 We currently support the following datasets:
@@ -258,6 +259,7 @@ The `forward_kwargs:` spec syntax is intentionally minimal:
 | `{a: ..., b: ...}` | Each value resolved, returned as a dict. Used for dict-valued kwargs (e.g. GLOBE's `boundary_meshes: {vehicle: boundaries.vehicle}` and `reference_lengths: {L_ref: 1.0, delta_turb: 0.015}`). |
 | `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Used by Transolver / FLARE-style models that need a per-sample feature (e.g. freestream velocity) broadcast across the per-element axis of another kwarg. |
 | `{concat_point_sets: [<mesh path>, ...]}` | One point-cloud `Mesh` of the listed point sets, merged in order: their points, and the `point_data` fields every set holds. Used by single-decoder models that predict several sets at once (see [Training on several prediction sets](#training-on-several-prediction-sets)). |
+| `{literal: <value>}` | `<value>` as it is, unresolved, when `literal` is the only key (in `{literal: x, note: y}`, `x` reads as a path). Used for constant arguments of the model config (e.g. ISLA's `prediction_boundaries: {literal: [vehicle]}`, a list of names rather than paths). |
 
 For tensor-input models, scalars and 1-D vectors in `forward_kwargs`
 are padded up to ndim>=2 before the batch dim is added (so `U_inf`
@@ -304,7 +306,7 @@ Available models and datasets:
 
 | Group | Files |
 |---|---|
-| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
+| `model/` (`conf/model/*.yaml`) | `geotransolver_{surface,volume,volume_highlift}`, `transolver_{surface,volume}`, `flare_{surface,volume}`, `smart_{surface,volume}`, `globe_{surface,volume}`, `isla_{surface,volume,volume_joint}`, `domino_{surface,volume}`, `ab_upt_{surface,volume,joint}` |
 | `dataset/` (`datasets/*.yaml`) | `drivaer_ml_{surface,volume}`, `highlift_{surface,volume}`, `shift_suv_{estate,fastback}_surface`, `drivaer_ml_{surface,volume,joint}_point_sets` |
 
 Pick one of each on the CLI:
@@ -535,6 +537,9 @@ unified_external_aero_recipe/
                                #  optimizer base, training fundamentals)
     train.yaml                 # the training entry point
     infer.yaml                 # the inference entry point (companion)
+    scheduler/                 # learning-rate schedules (Hydra group)
+      step_lr.yaml             # the default
+      warmup_cosine.yaml
     model/                     # model templates (Hydra group)
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
@@ -542,6 +547,7 @@ unified_external_aero_recipe/
       ab_upt_{surface,volume,joint}.yaml
       smart_{surface,volume}.yaml
       globe_{surface,volume}.yaml
+      isla_{surface,volume,volume_joint}.yaml
       domino_{surface,volume}.yaml
   datasets/                    # one file per dataset (loaded at runtime
                                #  by load_dataset_config, NOT by Hydra)
@@ -566,15 +572,17 @@ unified_external_aero_recipe/
 | Metrics list | `train.yaml` (`metrics`) |
 | Multi-dataset orchestration | `train.yaml` (`extra_datasets`) + Python in `datasets.build_dataloaders` |
 | Model + forward_kwargs | `conf/model/<name>.yaml` |
-| Training schedule (lr, scheduler, num_epochs, compile) | `train.yaml` |
+| Training schedule (lr, num_epochs, compile) | `train.yaml`, overridden by a model template that sets it |
+| Learning-rate scheduler | `conf/scheduler/<name>.yaml`, picked in `train.yaml`'s defaults or a model template's |
 
 ### `conf/train.yaml`
 
 ```yaml
 defaults:
   - base
-  - model: geotransolver_volume
+  - scheduler@training.scheduler: step_lr   # conf/scheduler/step_lr.yaml
   - _self_
+  - model: geotransolver_volume
 
 # Dataset selection (a string naming a file in datasets/, no `.yaml`)
 dataset: drivaer_ml_volume
@@ -599,11 +607,21 @@ training:
   num_epochs: 500
   optimizer:
     lr: 3.0e-3
-  scheduler:
-    _target_: torch.optim.lr_scheduler.StepLR
-    step_size: 100
-    gamma: 0.1
 ```
+
+The schedule is the `scheduler` config group in `conf/scheduler/`.
+`step_lr` (the default) is StepLR with `step_size: 100` and `gamma: 0.1`.
+`warmup_cosine` is a warmup to the peak learning rate over the first 5 of 500
+epochs, then a cosine decay to 1e-6 (at the ISLA learning rate of 3.75e-4).
+Its default `pct_start: 0.01` assumes about 500 epochs:
+`training.num_epochs=100` raises, and fewer epochs get no warmup. For another
+length, set `training.scheduler.pct_start=<5/num_epochs>`. Under
+`scheduler_update_mode: step`, also set `training.scheduler.total_steps` to
+the number of optimizer updates.
+Pick one on the CLI (`scheduler@training.scheduler=warmup_cosine`) or in a
+model template's defaults list
+(`- override /scheduler@training.scheduler: warmup_cosine`). Its keys
+still take CLI overrides, such as `training.scheduler.gamma=0.5`.
 
 ### How the pieces compose
 
@@ -629,14 +647,18 @@ Notes on the composition:
   its contents merge at the global root rather than under the group
   name. This lets one model file declare `model:` AND
   `input_type` / `output_type` / `forward_kwargs:` together.
-- `_self_` is the LAST entry in `train.yaml`'s `defaults:` so any inline
-  `model:` / `training:` / `dataloader:` overrides win over the model
-  template values.
+- `_self_` comes before `model` in `train.yaml`'s `defaults:`, so a model
+  template's values win over `train.yaml`'s (for example ISLA's learning
+  rate of 3.75e-4). CLI overrides win over both.
 - Forward kwargs live alongside the model in the same template because
   they are a property of the model class's forward signature, not an
   independent dimension.
 - Model templates may declare `dataset_reader_overrides`; `build_dataloaders`
-  merges those keys into each selected dataset's reader config. Volume datasets
+  merges those keys into each selected dataset's reader config. Their
+  `dataset_overrides` merge into the dataset config with `OmegaConf.merge`
+  (nested keys merge and lists are replaced), for training and inference
+  (for example a force convention that an appended transform changes).
+  Volume datasets
   preserve in-file boundaries by default; point-based volume templates opt into
   dropping them, while GLOBE keeps the lossless default it requires.
 - The model template's `out_dim: ${out_dim}` interpolation resolves
@@ -644,9 +666,10 @@ Notes on the composition:
   computes from the chosen dataset's `targets:` block (sum of channel
   counts via `field_dim()`). GLOBE templates declare per-target
   `output_schema` instead and don't touch `out_dim`.
-- `conf/infer.yaml` follows the same shape:
-  `defaults: - base, - model: ???, - _self_` with checkpoint /
-  output-path knobs in place of the training schedule. `base.yaml` is
+- `conf/infer.yaml` follows the same shape, with checkpoint / output-path
+  knobs in place of the training schedule. Its `defaults:` are `base`,
+  `scheduler@training.scheduler: step_lr` (for the model templates that
+  override it), `model: ???` and `_self_`. `base.yaml` is
   intentionally training-agnostic so both entry points can share it.
 
 ### Recipe Gallery
@@ -721,6 +744,11 @@ python src/train.py model=geotransolver_surface dataset=highlift_surface \
 python src/train.py model=geotransolver_volume_highlift dataset=highlift_volume \
     compile=false training.num_epochs=200 sampling_resolution=100000
 
+# ISLA (mesh-native, experimental; see the ISLA section below)
+python src/train.py model=isla_surface dataset=drivaer_ml_surface
+python src/train.py model=isla_volume dataset=drivaer_ml_volume
+python src/train.py model=isla_volume_joint dataset=drivaer_ml_volume
+
 # DoMINO (DRAFT, doesn't run end-to-end)
 python src/train.py model=domino_surface dataset=drivaer_ml_surface \
     compile=false training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
@@ -775,6 +803,55 @@ python src/infer.py model=ab_upt_joint dataset=drivaer_ml_joint_point_sets \
     dataset_reader_overrides.point_sets.surface_queries.count=null \
     dataset_reader_overrides.point_sets.interior.count=null rescale_geometry=true
 ```
+
+### ISLA
+
+ISLA is mesh-native, on GLOBE's contract (`input_type: mesh`). It reads
+the whole boundary of the flow domain: the vehicle and the tunnel's `inlet`,
+`outlet`, `slip` and `no_slip` boundaries that each DrivAerML case file
+stores. The configs adapt the dataset's samples from the model config, so
+the dataset files and the other models' samples stay as they are.
+
+- `isla_surface` predicts pressure and wall shear stress at the vehicle's
+  cells. Its `dataset_reader_overrides: {domain_boundaries: [...]}` makes
+  the reader load the tunnel boundaries beside the subsampled vehicle, whole
+  up to `sampling_resolution` cells each (DrivAerML's have a few thousand).
+  The dataset's transforms move them with the vehicle, and its terminal
+  `SurfaceMeshToDomainMesh` keeps them.
+- `isla_volume` predicts velocity, pressure and `nut` at the interior points.
+  It reads every boundary whole (`subsample_n_cells: null`) and draws its
+  own boundary tokens. It computes its own signed distances, so it ignores
+  the dataset's `sdf` inputs.
+  Its defaults (50,000 interior points and 100,000 boundary tokens) fit
+  one 80 GB GPU: 62 GiB at 0.5 s per step on a GB300. The research setting,
+  `sampling_resolution=200000 model.n_boundary_tokens=200000`, needs about
+  215 GiB, which fits one GB300 (288 GB).
+- `isla_volume_joint` trains the interior task jointly with the vehicle's
+  wall pressure and wall shear stress, as a second prediction set (see
+  [Training on several prediction sets](#training-on-several-prediction-sets)):
+
+  ```bash
+  python src/train.py model=isla_volume_joint dataset=drivaer_ml_volume
+  ```
+
+  Its `BoundaryCellsToPoints` draws as many of the vehicle's cells per
+  case as there are interior points, and puts a point just off each one,
+  on the fluid side, with the cell's stored fields as targets. One model
+  predicts at the interior and the wall points in one call. Its defaults
+  fit one 80 GB GPU: under an 80 GB cap they trained at 74 GiB peak
+  reserved and 0.65 s per step on a GB300. The research setting,
+  `sampling_resolution=200000 model.n_boundary_tokens=200000`, needs about
+  234 GiB. Inference reports no integrated forces for this config, since
+  the force code integrates only at the vehicle's cell centroids.
+
+ISLA needs every boundary's normals to point into the fluid. The curated
+files wind the vehicle with its normals into the body, so all three configs
+append `FlipBoundaryOrientation` for the vehicle. They then declare
+`dataset_overrides: {surface_normals_point: outward}`, so the force
+coefficients keep their sign. All three use the `warmup_cosine` schedule,
+a learning rate of 3.75e-4, and `compile: false` with the model's own
+per-block compile (`model.compile_blocks: true`). Its fast paths on CUDA
+need Triton.
 
 ### Dataset config anatomy
 
@@ -843,9 +920,11 @@ pipeline:
     # in interior.point_data; boundaries = {"vehicle": <surface Mesh with
     # non-target cell features kept>}. cell_data_targets are auto-injected
     # by the dataset builder from the `targets:` block below.
-    - _target_: ${dp:MeshToDomainMesh}
+    # SurfaceMeshToDomainMesh is MeshToDomainMesh on this Mesh, and also keeps
+    # the tunnel boundaries when a model config reads them
+    # (`dataset_reader_overrides: {domain_boundaries: [...]}`).
+    - _target_: ${dp:SurfaceMeshToDomainMesh}
       interior_points: cell_centroids
-      boundary_name: vehicle
 
 # Single source of truth for prediction field names + types.
 # `out_dim` is auto-derived from this block by build_dataloaders().
@@ -928,6 +1007,10 @@ dataset indices and handles distributed sampling across ranks.
    datasets only; volume datasets already produce a `DomainMesh`
    natively via `DomainMeshReader`). The dataset builder will
    auto-inject `cell_data_targets` from the YAML's `targets:` block.
+   A surface dataset that a model config may read with `domain_boundaries`
+   must end with `SurfaceMeshToDomainMesh` instead: `MeshToDomainMesh`
+   returns a `DomainMesh` unchanged, so the sample would keep the surface
+   as its interior.
 8. For surface data with pressure and wall shear stress, declare the
    conventions that the integrated force coefficients need:
    - `surface_normals_point: inward` when the surface is wound so that

@@ -82,7 +82,8 @@ same far-field list for every point, up to ties of that frame (equal variances, 
 symmetric axis), so the read is the same approximation in every pose. At
 :math:`\theta > 0` the read is piecewise smooth: the output jumps where a cluster's
 admission changes, as the point or the boundary's vertices move, and a virtual cell's
-position and normal take no gradient. At :math:`\theta = 0` the read is smooth, and the
+position, normal and measure take no gradient, and its means of the cells' values hold
+the cells' weights fixed. At :math:`\theta = 0` the read is smooth, and the
 read's own derivatives in the prediction points and in the boundary's cells are complete:
 the pair invariants take a gradient whenever the geometry requires one
 (:func:`_chunked_basis_from_plan`). The whole model's derivative in the boundary's
@@ -746,15 +747,18 @@ class TreeReadPairs:
 
 def node_means(x: torch.Tensor, forest: BoundaryForest, omega: torch.Tensor) -> torch.Tensor:
     """The measure-weighted mean ``(M, ...)`` of the cells' rows ``x`` ``(N, ...)`` over
-    every node of the forest, differentiable in ``x``. One scatter over the forest
-    order gives the leaves' sums; each internal node is then the sum of its two
-    children, depth by depth up to the roots (a tree of pairwise sums, no
-    cancellation). The sums run in float64 for float64 rows and in float32 for
-    float32, bfloat16 and float16 rows."""
+    every node of the forest, differentiable in ``x``. The weights ``omega`` take no
+    gradient: a node's mean holds its cells' weights fixed, as its measure (the
+    forest's) is, and as
+    :func:`~physicsnemo.experimental.models.isla._fused_read.fused_node_means` does.
+    One scatter over the forest order gives the leaves' sums; each internal node is
+    then the sum of its two children, depth by depth up to the roots (a tree of
+    pairwise sums, no cancellation). The sums run in float64 for float64 rows and in
+    float32 for float32, bfloat16 and float16 rows."""
     work = torch.float64 if x.dtype == torch.float64 else torch.float32
     cells = forest.cells
     flat = x.reshape(x.shape[0], -1).to(work)[cells]
-    weighted = flat * omega[cells, None].to(work)
+    weighted = flat * omega.detach()[cells, None].to(work)
     n_leaves = forest.leaf_ids.shape[0]
     leaf_sums = weighted.new_zeros(n_leaves, weighted.shape[1]).index_add(
         0, forest.position_leaf, weighted
