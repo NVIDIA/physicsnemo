@@ -636,22 +636,6 @@ class Transolver(Module):
             nn.init.constant_(m.bias, 0)  # type: ignore[arg-type]
             nn.init.constant_(m.weight, 1.0)  # type: ignore[arg-type]
 
-        if self.use_te and isinstance(m, (te.LayerNormMLP, te.LayerNormLinear)):
-            # Fused TE modules hold their parameters directly (no Linear
-            # children), so the checks above miss them: apply the same
-            # trunc_normal / zero-bias / unit-norm init as the PyTorch path.
-            if isinstance(m, te.LayerNormMLP):
-                weights, biases = ("fc1_weight", "fc2_weight"), ("fc1_bias", "fc2_bias")
-            else:
-                weights, biases = ("weight",), ("bias",)
-            for name in weights:
-                nn.init.trunc_normal_(getattr(m, name), std=0.02)
-            for name in (*biases, "layer_norm_bias"):
-                param = getattr(m, name, None)
-                if isinstance(param, nn.Parameter) and param.numel():
-                    nn.init.zeros_(param)
-            nn.init.ones_(m.layer_norm_weight)
-
     def get_grid(self, ref: int, batchsize: int = 1) -> torch.Tensor:
         r"""
         Generate unified positional encoding grid for structured 2D data.

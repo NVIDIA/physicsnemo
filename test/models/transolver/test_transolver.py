@@ -540,48 +540,6 @@ def test_transolver_te(pytestconfig):
     )
 
 
-@requires_module("transformer_engine>=2.14.0")
-def test_transolver_te_fused_module_init():
-    """Fused TE MLPs and head get trunc_normal(0.02) weights, zero biases, unit norms."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is not available")
-
-    torch.manual_seed(0)
-    n_layers = 3
-    model = Transolver(
-        structured_shape=None,
-        n_layers=n_layers,
-        n_hidden=128,
-        dropout=0,
-        n_head=4,
-        time_input=False,
-        act="gelu",
-        mlp_ratio=4,
-        functional_dim=2,
-        embedding_dim=3,
-        out_dim=64,
-        slice_num=16,
-        ref=1,
-        unified_pos=False,
-        use_te=True,
-    ).to("cuda")
-    params = dict(model.named_parameters())
-    weights = [n for n in params if n.endswith(("fc1_weight", "fc2_weight"))]
-    assert len(weights) == 2 * n_layers
-    head_weight = f"blocks.{n_layers - 1}.ln_mlp2.weight"
-    assert head_weight in params
-    for name in [*weights, head_weight]:
-        # TE's own default is normal(0, 0.023).
-        assert abs(params[name].std().item() - 0.02) < 1e-3, name
-    for name, param in params.items():
-        if name.endswith(("fc1_bias", "fc2_bias", "layer_norm_bias")) or name == (
-            f"blocks.{n_layers - 1}.ln_mlp2.bias"
-        ):
-            assert torch.all(param == 0), name
-        if name.endswith("layer_norm_weight"):
-            assert torch.all(param == 1), name
-
-
 @requires_module("transformer_engine")
 def test_transolver_te_activation_checkpointing(monkeypatch):
     """Checkpointed TE blocks preserve outputs and gradients."""
