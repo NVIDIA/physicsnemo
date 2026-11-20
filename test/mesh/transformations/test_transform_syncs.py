@@ -26,7 +26,11 @@ import pytest
 import torch
 
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.calculus.measure import point_measures, set_point_measures
+from physicsnemo.mesh.calculus.measure import (
+    EFFECTIVE_MEASURE_KEY,
+    point_measures,
+    set_point_measures,
+)
 from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.mesh.transformations.geometric import (
@@ -397,3 +401,56 @@ def test_random_augmentations_are_sync_free():
         for t in transforms:
             t(mesh)
     torch.cuda.synchronize()
+
+
+def _measured_surface(device) -> Mesh:
+    mesh = _surface(device)
+    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = mesh.cell_areas * torch.linspace(
+        1.0, 2.0, mesh.n_cells, device=device
+    )
+    return mesh
+
+
+@pytest.mark.parametrize("factor", [2.5, -0.5, torch.tensor(3.0)])
+def test_uniform_scale_measure_matches_general_path(factor):
+    mesh = _measured_surface("cpu")
+    fast = mesh.scale(factor)
+    f = float(factor)
+    slow = mesh.transform(torch.eye(3) * f)  # general (validated) path
+    torch.testing.assert_close(fast.points, slow.points)
+    torch.testing.assert_close(
+        fast.cell_data[EFFECTIVE_MEASURE_KEY], slow.cell_data[EFFECTIVE_MEASURE_KEY]
+    )
+    torch.testing.assert_close(fast.cell_areas, slow.cell_areas)
+    torch.testing.assert_close(
+        fast.cell_data[EFFECTIVE_MEASURE_KEY],
+        mesh.cell_data[EFFECTIVE_MEASURE_KEY] * abs(f) ** 2,
+    )
+
+
+def test_nonuniform_scale_still_validates_degenerate_cells():
+    points = torch.tensor([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]])
+    cells = torch.tensor([[0, 1, 2], [1, 2, 2]])  # second cell has zero area
+    mesh = Mesh(points=points, cells=cells)
+    mesh.cell_data[EFFECTIVE_MEASURE_KEY] = torch.ones(2)
+    with pytest.raises(ValueError, match="zero-measure"):
+        mesh.scale(torch.tensor([1.0, 2.0, 1.0]))
+
+
+@requires_cuda
+def test_uniform_scale_with_effective_measure_does_not_sync():
+    mesh = _measured_surface("cuda")
+    tensor_factor = torch.tensor(2.0, device="cuda")
+    mesh.scale(2.0)  # warm up
+    mesh.scale(tensor_factor, assume_invertible=True)
+    torch.cuda.synchronize()
+    previous = torch.cuda.get_sync_debug_mode()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        out = mesh.scale(2.0)
+        out = mesh.scale(tensor_factor, assume_invertible=True)
+    finally:
+        torch.cuda.set_sync_debug_mode(previous)
+    torch.testing.assert_close(
+        out.cell_data[EFFECTIVE_MEASURE_KEY], mesh.cell_data[EFFECTIVE_MEASURE_KEY] * 4
+    )
