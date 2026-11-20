@@ -18,11 +18,9 @@
 # ---------------------------------------------------------------------------
 # FLARE template -- SURFACE recipes.
 # ---------------------------------------------------------------------------
-# FLARE inherits from Transolver and replaces physics attention blocks
-# with FLARE (Fast Low-rank Attention Routing Engine) blocks. The plus
-# variant is disabled internally; Transformer Engine remains configurable.
-# Forward signature matches Transolver's, hence the identical
-# forward_kwargs spec.
+# FLAREv2: pre-norm transformer with FLAREv2 (Fast Low-rank Attention Routing
+# Engine) attention mixers. Its forward(fx, embedding) signature matches
+# Transolver's, hence the identical forward_kwargs spec.
 input_type: tensors
 output_type: tensors
 
@@ -35,7 +33,7 @@ forward_kwargs:
     expand_like: embedding
 
 model:
-  _target_: physicsnemo.models.flare.FLARE
+  _target_: physicsnemo.experimental.models.flarev2.FLAREv2
   out_dim: ${out_dim}     # auto-set from the chosen dataset's `targets:` block
   functional_dim: 3       # fx = freestream velocity U_inf (3)
   embedding_dim: 6        # embedding = points (3) + normals (3)
@@ -46,8 +44,6 @@ model:
   act: "gelu"
   mlp_ratio: 4
   slice_num: 256          # n_global_queries for FLARE attention
-  unified_pos: false
-  structured_shape: null  # unstructured mesh
   use_te: false
   activation_checkpointing: false
   checkpointing_ratio: 1.0

@@ -195,6 +195,7 @@ ACT2FN = {
     "selu": nn.SELU,
     "silu": nn.SiLU,
     "gelu": nn.GELU,
+    "gelu_tanh": (nn.GELU, {"approximate": "tanh"}),
     "sin": Sin,
     "sigmoid": nn.Sigmoid,
     "logsigmoid": nn.LogSigmoid,
