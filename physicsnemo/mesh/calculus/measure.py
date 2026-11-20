@@ -205,6 +205,7 @@ def _transfer_cell_measures(
     result: "Mesh",
     parents: torch.Tensor | None = None,
     unchanged: torch.Tensor | None = None,
+    uniform_scale: float | torch.Tensor | None = None,
 ) -> None:
     """Transfer explicit cell measures through geometric changes/subdivision.
 
@@ -212,10 +213,24 @@ def _transfer_cell_measures(
     without ``parents``. ``unchanged`` is a boolean mask over result rows: a
     marked row only reorders its source row's vertices, so it keeps that row's
     measure bitwise and, outside tracing and autograd, its cached area.
+
+    ``uniform_scale`` (a scalar or 0-d factor applied to every coordinate)
+    scales each measure by exactly ``|factor| ** n_manifold_dims``. No cell
+    can become degenerate, so this needs neither areas nor validation (which
+    would synchronize with the host).
     """
     if EFFECTIVE_MEASURE_KEY not in source.cell_data:
         return
     measures = cell_measures(source)
+    if uniform_scale is not None:
+        dtype = torch.promote_types(measures.dtype, torch.float32)
+        n = source.n_manifold_dims
+        if isinstance(uniform_scale, torch.Tensor):
+            ratio = uniform_scale.abs().to(device=measures.device, dtype=dtype) ** n
+        else:
+            ratio = abs(float(uniform_scale)) ** n  # host number: no device copy
+        set_cell_measures(result, (measures.to(dtype) * ratio).to(measures.dtype))
+        return
     old_areas = source.cell_areas
     if parents is not None:
         measures, old_areas = measures[parents], old_areas[parents]

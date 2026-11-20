@@ -584,6 +584,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Mesh.scale` with a scalar factor transfers effective cell measures
+  analytically (`|factor| ** n_manifold_dims`) instead of validating degenerate
+  cells, removing a host-device sync per call on GPU meshes.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,

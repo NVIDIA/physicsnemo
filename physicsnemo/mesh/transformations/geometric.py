@@ -545,6 +545,7 @@ def transform(
     transform_global_data: bool | TensorDict = False,
     assume_invertible: bool | None = None,
     assume_similarity: bool | None = None,
+    _uniform_scale: float | torch.Tensor | None = None,
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
@@ -752,7 +753,7 @@ def transform(
         _transform_point_measures,
     )
 
-    _transfer_cell_measures(mesh, transformed_mesh)
+    _transfer_cell_measures(mesh, transformed_mesh, uniform_scale=_uniform_scale)
     _transform_point_measures(mesh, transformed_mesh, matrix, assume_similarity)
     return transformed_mesh
 
@@ -999,4 +1000,8 @@ def scale(
         if assume_invertible is None
         else assume_invertible,
         assume_similarity=is_similarity,
+        _uniform_scale=factor
+        if isinstance(factor, (int, float))
+        or (isinstance(factor, torch.Tensor) and factor.ndim == 0)
+        else None,
     )
