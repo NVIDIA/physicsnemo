@@ -578,6 +578,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external-aero recipe: the training loop no longer waits on the GPU
+  every step to read the loss. Per-step values are copied to pinned host memory
+  without blocking and logged once ready (possibly a step late); epoch averages
+  are unchanged.
+
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
