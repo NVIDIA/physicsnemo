@@ -435,11 +435,11 @@ def remesh(
     connectivity. For a watertight source, holes in the result are filled, and
     faces that no winding can make consistent, such as those of a fold, are
     cut out and filled again. If the result then changes the input's area, or
-    a closed input's volume, by more than 5 %, or leaves a closed input open
+    a closed input's volume, by more than 5%, or leaves a closed input open
     or inconsistently wound, the input's own vertices are clustered instead,
-    as before, without refinement or repair. Either way, each connected
-    component of the result is then wound consistently and like the source,
-    which can re-wind faces of the unrefined result too. A direct positive tensor or an attached
+    without refinement or repair. Either way, each connected component of the
+    result is then wound consistently and like the source, which can re-wind
+    faces of the unrefined result too. A direct positive tensor or an attached
     point-data field can specify relative local linear resolution.
 
     Parameters
@@ -530,7 +530,7 @@ def remesh(
     welded shut. The result check then falls back to the input's vertices,
     which keeps such inputs, like thin plates, as they were. The check works
     on the whole mesh, so a small feature can still lose volume within it, and
-    a result near the 5 % limit can take either path, on CUDA from run to run.
+    a result near the 5% limit can take either path, on CUDA from run to run.
     Output vertices are compacted by connectivity but are not welded by
     position. Backend-specific tuning remains available through
     :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may

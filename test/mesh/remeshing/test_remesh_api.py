@@ -271,9 +271,9 @@ def test_remesh_preserves_reduced_precision(dtype):
 
 
 def test_remesh_refines_float16_far_from_the_origin():
-    # float16 midpoints at x = 40000 overflow (80000 > 65504) unless averaged
-    # wider. The box spans 16384, and its fillets are coarse enough for
-    # float16's spacing of 32 there.
+    # x = 40000 is past half of float16's maximum, so a midpoint summed before
+    # halving would overflow. The box spans 16384, and its fillets are coarse
+    # enough for float16's spacing of 32 there.
     box = _fillet_box(radius=0.25)
     offset = torch.tensor([40000.0, 0.0, 0.0])
     source = box.with_points((box.points * 16384 + offset).half())
