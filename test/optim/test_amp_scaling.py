@@ -255,3 +255,66 @@ def test_grad_scaler_fp16_no_sync(combined):
             )
     run_step(False)
     assert any(not torch.equal(p, ref) for p, ref in zip(model.parameters(), before))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_grad_scaler_fp16_compiled_combined():
+    """Compiled CombinedOptimizer(Muon, fused AdamW) under GradScaler + fp16.
+
+    The forwarded ``grad_scale``/``found_inf`` attributes must neither break
+    the compiled sub-optimizer steps nor recompile them every step: after
+    warmup, ``scaler.step`` runs without a host sync, a step with an inf
+    gradient leaves every parameter unchanged and the other steps update.
+    """
+    device = "cuda"
+    torch._dynamo.reset()
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(16, 32), torch.nn.GELU(), torch.nn.Linear(32, 4)
+    ).to(device)
+    weights = [p for p in model.parameters() if p.ndim == 2]
+    others = [p for p in model.parameters() if p.ndim != 2]
+    opt = CombinedOptimizer(
+        [_muon(weights), torch.optim.AdamW(others, lr=1e-3, fused=True)],
+        torch_compile_kwargs={},
+    )
+    assert opt._step_supports_amp_scaling
+    scaler = torch.amp.GradScaler("cuda", init_scale=2.0**10)
+    x = torch.randn(8, 16, device=device)
+
+    def run_step(inject_inf, check_sync):
+        opt.zero_grad()
+        with torch.autocast("cuda", dtype=torch.float16):
+            loss = model(x).float().pow(2).mean()
+        scaler.scale(loss).backward()
+        if inject_inf:
+            weights[0].grad[0, 0] = float("inf")
+        torch.cuda.synchronize()
+        if check_sync:
+            torch.cuda.set_sync_debug_mode("error")
+        try:
+            scaler.step(opt)
+        finally:
+            torch.cuda.set_sync_debug_mode("default")
+        scaler.update()
+
+    # Warmup compiles the step functions (compilation itself may sync).
+    for _ in range(3):
+        run_step(False, check_sync=False)
+    frames = torch._dynamo.utils.counters["frames"]["ok"]
+    for _ in range(2):
+        run_step(False, check_sync=True)
+
+    before = [p.detach().clone() for p in model.parameters()]
+    scale = scaler.get_scale()
+    run_step(True, check_sync=True)
+    for p, ref in zip(model.parameters(), before):
+        torch.testing.assert_close(p.detach(), ref, rtol=0, atol=0)
+    assert scaler.get_scale() == scale * 0.5
+
+    for _ in range(2):
+        run_step(False, check_sync=True)
+    for p, ref in zip(model.parameters(), before):
+        assert not torch.equal(p.detach(), ref)
+    # No step after warmup, including the skipped one, compiled a new frame.
+    assert torch._dynamo.utils.counters["frames"]["ok"] == frames
