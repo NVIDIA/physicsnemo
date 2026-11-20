@@ -33,9 +33,10 @@ handling for:
   sums over the global sample count (used per epoch); its
   single-process path must equal plain ``total_loss / n`` + per-leaf
   ``sum / n`` averaging.
-- :func:`train._run_epoch`: each step's values are read back without a
-  host sync (:func:`train._start_step_readback`), and every step is logged
-  once, in order, with the values the blocking per-step readback gave.
+- :func:`train._run_epoch`: each step's values are logged without a host
+  sync (:class:`~physicsnemo.utils.logging.NonBlockingLogger`), and every
+  step is logged once, in order, with the values the blocking per-step
+  readback gave.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -77,6 +78,7 @@ from train import (  # noqa: E402  -- after the skip guard
 )
 
 from physicsnemo.mesh import Mesh  # noqa: E402  -- after the importorskip guard
+from physicsnemo.utils.logging import NonBlockingLogger  # noqa: E402
 
 ### ---------------------------------------------------------------------------
 ### forward_pass: the batch's target_measure reaches the loss and the metrics
@@ -364,44 +366,18 @@ _DEVICES = [
 ]
 
 
-class _InFlight:
-    """A readback event that lands only when ``landed()`` says so (by default
-    never before the epoch's end, so every record goes through the epoch-end
-    drain); counts its waits. It wraps the real event, so a record's host copy
-    has always landed by the time it is read."""
+class _HeldLogger(NonBlockingLogger):
+    """A :class:`NonBlockingLogger` whose copies land only when it is flushed
+    with a wait, as if the GPU ran behind for the whole epoch."""
 
-    def __init__(self, waits, landed, event):
-        self.waits = waits
-        self.landed = landed
-        self.event = event
-
-    def query(self):
-        if not self.landed():
-            return False
-        if self.event is not None:
-            self.event.synchronize()
-        return True
-
-    def synchronize(self):
-        self.waits.append(self)
-        if self.event is not None:
-            self.event.synchronize()
+    def flush(self, wait=True):
+        if wait:
+            super().flush(wait=True)
 
 
-def _hold_readbacks(monkeypatch, landed=lambda step: False):
-    """Patch :func:`train._start_step_readback` so a record lands before the
-    epoch's end only when ``landed(step)`` says so; returns the list of
-    drain waits, one per record."""
-    waits, steps = [], []
-    start = train._start_step_readback
-
-    def held(*args, **kwargs):
-        reduced, event = start(*args, **kwargs)
-        steps.append(step := len(steps))
-        return reduced, _InFlight(waits, lambda: landed(step), event)
-
-    monkeypatch.setattr(train, "_start_step_readback", held)
-    return waits
+def _hold_records(monkeypatch):
+    """Make :func:`train._run_epoch` log through :class:`_HeldLogger`."""
+    monkeypatch.setattr(train, "NonBlockingLogger", _HeldLogger)
 
 
 def _run_test_epoch(
@@ -519,58 +495,52 @@ def test_every_step_logged_once_in_order_with_blocking_values(
 @pytest.mark.parametrize("device", _DEVICES)
 @pytest.mark.parametrize("mode", ["train", "val"])
 def test_epoch_end_drains_records_still_in_flight(monkeypatch, device, mode):
-    """With no copy landed before the loop ends, nothing is logged during the
-    steps and the epoch's end waits for and logs every record, in order."""
-    waits = _hold_readbacks(monkeypatch)
+    """With no copy landed before the loop ends, the epoch's end waits for
+    and logs every record, in order, before the epoch summary."""
+    _hold_records(monkeypatch)
     loader = [{"k": float(k)} for k in range(7)]
     records, expected = _run_test_epoch(monkeypatch, loader, device, mode=mode)
     _check_steps(records, expected, mode, 7)
-    assert len(waits) == 7
 
 
 def test_profile_stop_drains_its_records(monkeypatch):
     """Under ``cfg.profile`` the loop stops after step ``_PROFILE_MAX_STEPS``
     and the epoch's end still logs every step it ran."""
-    _hold_readbacks(monkeypatch)
+    _hold_records(monkeypatch)
     loader = [{"k": float(k)} for k in range(train._PROFILE_MAX_STEPS + 5)]
     records, _ = _run_test_epoch(monkeypatch, loader, "cpu", mode="train", profile=True)
     steps = [r["global_step"] for r in records if r["phase"] == "train_step"]
     assert steps == list(range(train._PROFILE_MAX_STEPS + 1))
 
 
-def test_error_logs_only_the_landed_records(monkeypatch):
-    """When a step raises, the records whose copies have landed are logged,
-    in order up to the first one still in flight, with no wait; nothing
-    after them is logged, and the error propagates."""
-    raised = False
-    waits = _hold_readbacks(monkeypatch, landed=lambda step: raised and step != 3)
+def test_error_does_not_wait_for_records_in_flight(monkeypatch):
+    """When a step raises, the error propagates, and the epoch does not wait
+    for the records still in flight (here, all of them) to log them."""
+    _hold_records(monkeypatch)
     scalars = []
     writer = SimpleNamespace(
         add_scalar=lambda tag, value, global_step: scalars.append((tag, global_step))
     )
 
     class Loader:
-        """Five batches, then an error, at which steps 0-2 and 4 have landed."""
+        """Five batches, then an error."""
 
         def __len__(self):
             return 7
 
         def __iter__(self):
-            nonlocal raised
             yield from ({"k": float(k)} for k in range(5))
-            raised = True
             raise RuntimeError("step failed")
 
     with pytest.raises(RuntimeError, match="step failed"):
         _run_test_epoch(monkeypatch, Loader(), "cpu", mode="train", writer=writer)
-    assert [step for tag, step in scalars if tag == "iteration/lr"] == [0, 1, 2]
-    assert waits == []
+    assert scalars == []
 
 
 def test_lr_is_read_at_its_own_step(monkeypatch):
     """A record logged late carries the lr right after its own step's
     scheduler step, not the lr when it is logged."""
-    _hold_readbacks(monkeypatch)
+    _hold_records(monkeypatch)
     scalars = []
     writer = SimpleNamespace(
         add_scalar=lambda tag, value, global_step: scalars.append(
@@ -648,24 +618,8 @@ def test_train_steps_do_not_sync_with_the_device(monkeypatch):
     assert steps == list(range(12))
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_step_readback_lands_in_pinned_memory():
-    """The ``non_blocking`` copy targets pinned host memory; a pageable
-    target would make it synchronous."""
-    loss = torch.ones((), device="cuda")
-    reduced, event = train._start_step_readback(
-        loss,
-        TensorDict({"loss/test": loss * 2}),
-        TensorDict({"test_l2": loss * 3}),
-        device="cuda",
-    )
-    event.synchronize()
-    leaves = reduced.values(include_nested=True, leaves_only=True)
-    assert all(leaf.device.type == "cpu" and leaf.is_pinned() for leaf in leaves)
-
-
-def _readback_rank(rank, port):
-    """One rank of :func:`test_step_readback_is_the_all_rank_mean`."""
+def _step_log_rank(rank, port):
+    """One rank of :func:`test_step_log_is_the_all_rank_mean`."""
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port))
     dist.init_process_group(
         "gloo", rank=rank, world_size=2, timeout=timedelta(seconds=60)
@@ -678,15 +632,19 @@ def _readback_rank(rank, port):
         metrics, counts = _skip_nan(
             TensorDict({"test_l2": loss.sqrt(), "rank0_l2": loss if rank == 0 else nan})
         )
-        host_values, _ = train._start_step_readback(
-            loss, losses, metrics, device="cpu", metric_counts=counts
-        )
+        logged = []
+        values = {
+            "loss": loss,
+            "losses": losses,
+            "metrics": metrics,
+            "metric_counts": counts,
+        }
+        with NonBlockingLogger(logged.append, reduce_op=dist.ReduceOp.AVG) as logger:
+            logger.log(values)
         expected = _reduce_and_average(
             loss, losses, metrics, 1, device="cpu", metric_counts=counts
         )
-        assert host_values["loss"].item() == expected[0]
-        assert {k: v.item() for k, v in host_values["losses"].items()} == expected[1]
-        assert {k: v.item() for k, v in host_values["metrics"].items()} == expected[2]
+        assert train._step_means(logged[0]) == expected
         assert expected[2]["rank0_l2"] == pytest.approx(1.37)
     finally:
         dist.destroy_process_group()
@@ -698,12 +656,12 @@ def _readback_rank(rank, port):
     or "spawn" not in mp.get_all_start_methods(),
     reason="needs gloo and the spawn start method",
 )
-def test_step_readback_is_the_all_rank_mean():
-    """Across two CPU ranks with different values, each step's readback is
-    the all-rank mean, equal to the blocking per-step readback
+def test_step_log_is_the_all_rank_mean():
+    """Across two CPU ranks with different values, each step's logged values
+    are the all-rank means, equal to the blocking per-step readback
     (``_reduce_and_average`` with ``n_samples=1``). A metric whose target is
     finite on one rank only averages over that rank."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    mp.spawn(_readback_rank, args=(port,), nprocs=2)
+    mp.spawn(_step_log_rank, args=(port,), nprocs=2)
