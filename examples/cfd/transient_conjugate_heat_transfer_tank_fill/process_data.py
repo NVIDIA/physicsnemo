@@ -310,20 +310,14 @@ def compute_stats(npz_dir: Path, stats_dir: Path) -> None:
     for npz_path in sorted(npz_dir.glob("*.npz")):
         with np.load(npz_path) as data:
             # Compute statistics for surface fields
-            if "surface_fields" in data:
-                arr = data["surface_fields"]
-                if arr.size == 0:
-                    continue
+            if "surface_fields" in data and (arr := data["surface_fields"]).size:
                 smax = arr.max(axis=0)
                 smin = arr.min(axis=0)
                 surf_max = smax if surf_max is None else np.maximum(surf_max, smax)
                 surf_min = smin if surf_min is None else np.minimum(surf_min, smin)
 
             # Compute statistics for volume fields
-            if "volume_fields" in data:
-                arr = data["volume_fields"]
-                if arr.size == 0:
-                    continue
+            if "volume_fields" in data and (arr := data["volume_fields"]).size:
                 vmax = arr.max(axis=0)
                 vmin = arr.min(axis=0)
                 vol_max = vmax if vol_max is None else np.maximum(vol_max, vmax)

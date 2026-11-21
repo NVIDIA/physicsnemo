@@ -386,7 +386,8 @@ def _subsample_mesh(
 #
 # Layout: one batch axis per mesh, always even chunks.
 # - Point cloud (no cells): ``points`` / ``point_data`` chunk over the
-#   (windowed) point range; ``global_data`` replicates.
+#   (windowed) point range; ``global_data`` replicates. A mesh with zero cells
+#   is laid out the same way, and keeps its empty ``cells`` and ``cell_data``.
 # - Mesh with cells: ``cells`` / ``cell_data`` chunk over the (windowed) cell
 #   range and ``points`` / ``point_data`` chunk over the point range -- after
 #   the same global compaction onto referenced vertices the eager reader
@@ -480,7 +481,7 @@ def _read_mesh_selection(
             "point_data",
             leaf_reader=lambda a: _zarr_selection(a, point_selection, n_points),
         )
-        if drop_cells or n_cells == 0:
+        if drop_cells or "cells" not in src:
             cells, cell_data = None, empty
         else:
             cells = _zarr_selection(src["cells"], cell_selection, n_cells)
@@ -493,7 +494,7 @@ def _read_mesh_selection(
     else:
         points = _read(src.points[point_selection])
         point_data = _read_leaves(src.point_data, point_selection)
-        if drop_cells or src.n_cells == 0:
+        if drop_cells:
             cells, cell_data = None, empty
         else:
             cells = _read(src.cells[cell_selection])
@@ -691,7 +692,8 @@ def mesh_selection_to_proto(
     Three layouts, all even ``torch.chunk``-style splits so the assembly wrap
     needs no communication:
 
-    - point cloud: this rank's share of the (windowed) point range;
+    - point cloud, mesh with zero cells, or mesh whose cells were dropped:
+      this rank's share of the (windowed) point range;
     - mesh with cells, no window: this rank's share of the cell range and of
       the point range -- cells keep their global vertex ids;
     - mesh with cells and a cell window: the whole window of ``cells`` is
@@ -704,16 +706,18 @@ def mesh_selection_to_proto(
     vertex space; ``points[cells]`` on the assembled mesh is the routed gather.
     """
     device_mesh = plan.device_mesh
-    drop_cells = plan.n_cells_src == 0
-    if drop_cells:
+    if plan.n_cells_src == 0:
         n_points = (
             len(plan.point_window)
             if plan.point_window is not None
             else plan.n_points_src
         )
         p = _select(plan.point_window, _chunk(n_points, plan.shard_points, device_mesh))
-        local = _read_mesh_selection(src, p, slice(0, 0), drop_cells=True)
-        cells = torch.zeros(0, 1, dtype=torch.long)
+        # A source with cells had them dropped. One with zero cells keeps
+        # their shape and its (empty) cell data, as the eager reader does.
+        cells_dropped = _mesh_counts(src)[1] > 0
+        local = _read_mesh_selection(src, p, slice(0, 0), drop_cells=cells_dropped)
+        cells = local.cells
     elif plan.cell_window is None:
         n_points = plan.n_points_src
         c = _chunk(plan.n_cells_src, plan.shard_cells, device_mesh)

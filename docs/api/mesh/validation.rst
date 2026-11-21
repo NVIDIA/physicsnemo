@@ -145,6 +145,13 @@ cost more time:
      - off
      - Edges that break manifold topology, on meshes with a manifold
        dimension of 2
+   * - ``check_self_intersection``
+     - off
+     - Pairs of triangles that intersect anywhere other than at the vertices
+       or the edge they share, on triangle meshes in 3D, with
+       :func:`find_self_intersections`. Duplicate cells are not reported.
+       It is keyword-only and the most expensive check. Other meshes report
+       ``-1``.
 
 With ``raise_on_error=True``, :func:`validate` raises ``ValueError`` at the
 first problem instead of returning a report. For watertight and manifold
@@ -162,6 +169,7 @@ Summary
    :nosignatures:
 
    validate
+   find_self_intersections
    compute_quality_metrics
    compute_mesh_statistics
    validate_mesh
@@ -180,6 +188,8 @@ API Reference
 -------------
 
 .. autofunction:: validate
+
+.. autofunction:: find_self_intersections
 
 .. autofunction:: compute_quality_metrics
 

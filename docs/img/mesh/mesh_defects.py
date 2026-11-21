@@ -225,10 +225,10 @@ def _reversed():
     x, y = mesh.points.unbind(dim=-1)
     z = 0.4 * ((x - 0.5) ** 2 + (y - 0.5) ** 2)
     flipped = 13
-    # unit_square winds its cells clockwise. Reverse all of them, so that the
-    # normals point up, then reverse one cell back.
-    cells = mesh.cells[:, [0, 2, 1]]
-    cells[flipped] = mesh.cells[flipped]
+    # unit_square winds its cells counterclockwise, so the normals point up.
+    # Reverse one cell.
+    cells = mesh.cells.clone()
+    cells[flipped] = mesh.cells[flipped, [0, 2, 1]]
     broken = Mesh(points=torch.stack([x, y, z], dim=-1), cells=cells)
 
     # The normal of a reversed cell points down, against its neighbors.
