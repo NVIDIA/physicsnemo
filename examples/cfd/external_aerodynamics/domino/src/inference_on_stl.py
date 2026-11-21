@@ -60,8 +60,26 @@ from physicsnemo.models.domino.utils import sample_points_on_mesh
 from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
 
 # This is included for GPU memory tracking:
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+from pynvml import (
+    NVMLError_NotSupported,
+    nvmlInit,
+    nvmlDeviceGetHandleByIndex,
+    nvmlDeviceGetMemoryInfo,
+)
 import time
+
+
+def gpu_bytes_in_use(gpu_handle) -> int:
+    """Bytes of memory in use on the GPU behind ``gpu_handle``.
+
+    NVML cannot report memory on GPUs that share system memory with the CPU
+    (for example DGX Spark, GB10) and raises ``NVMLError_NotSupported``. Fall
+    back to CUDA's view of the current device there."""
+    try:
+        return nvmlDeviceGetMemoryInfo(gpu_handle).used
+    except NVMLError_NotSupported:
+        free, total = torch.cuda.mem_get_info()
+        return total - free
 
 
 # Initialize NVML
@@ -287,8 +305,8 @@ def inference_on_single_stl(
 
         logging_string = f"Device {device} processed {total_points_processed} points of {total_points}\n"
         if gpu_handle is not None:
-            gpu_info = nvmlDeviceGetMemoryInfo(gpu_handle)
-            gpu_memory_used = gpu_info.used / (1024**3)
+            gpu_bytes = gpu_bytes_in_use(gpu_handle)
+            gpu_memory_used = gpu_bytes / (1024**3)
             logging_string += f"  GPU memory used: {gpu_memory_used:.3f} Gb\n"
 
         logging_string += f"  Time taken since batch start: {current_loop_time - batch_start_time:.2f} seconds\n"
