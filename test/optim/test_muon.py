@@ -327,6 +327,20 @@ def _loader_cuda_work(stop, ready, iterations, errors):
 
 
 @_requires_cuda
+def test_cuda_graph_stream_outside_default_pool():
+    """Muon captures on a stream of the high-priority pool, so the default
+    pool, from which loaders draw their streams, never hands it out."""
+    params = _make_params(_GRAPH_SHAPES[:5], "cuda", seed=12)
+    opt = Muon(params, lr=0.02, cuda_graph=True)
+    for step in range(2):  # the second step captures the graph
+        _set_grads(params, seed=step)
+        opt.step()
+    assert opt._graph is not None
+    handles = {torch.cuda.Stream().cuda_stream for _ in range(64)}
+    assert opt._graph_stream.cuda_stream not in handles
+
+
+@_requires_cuda
 def test_cuda_graph_capture_with_loader_thread():
     """CUDA work in another thread, as a data loader does, neither invalidates
     the capture nor lands in it; every step recaptures (a new momentum) and

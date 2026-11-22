@@ -178,6 +178,10 @@ class Muon(_TorchMuon):
         change, when another hyperparameter (such as ``momentum``) changes, and
         after loading a state dict. A capture synchronizes the device and
         empties PyTorch's memory caches, so it costs more than an eager step.
+        It runs on a stream from torch's high-priority pool, which torch's data
+        loaders and DDP do not use. The replayed kernels keep that priority, so
+        when other streams run kernels at the same time, the GPU starts the
+        step's blocks first.
         Needs CUDA parameters. Holds copies of the gradients and of the
         orthogonalized updates, each the size of the parameters, and the
         graph's memory pool. Under ``torch.compile`` the step runs outside the
@@ -324,12 +328,15 @@ class Muon(_TorchMuon):
             # before every replay.
             grads = [p.grad for p in params]
             graph_grads = [g.clone() for g in grads]
-            # One capture stream for all captures: torch hands out its 32
-            # pooled streams in turn, so a new stream per capture would soon
-            # be one that another thread, such as a data loader's, is using.
+            # One capture stream for all captures, from torch's high-priority
+            # pool. torch hands out each pool's 32 streams in turn, and work
+            # that a default-priority user, such as a loader thread, put on
+            # it during a capture would be recorded instead of run. Captured
+            # kernels keep this priority, so the replayed step's blocks start
+            # first when other streams run kernels at the same time.
             device = params[0].device
             if self._graph_stream is None or self._graph_stream.device != device:
-                self._graph_stream = torch.cuda.Stream(device)
+                self._graph_stream = torch.cuda.Stream(device, priority=-1)
             stream = self._graph_stream
             graph = torch.cuda.CUDAGraph()
             updates: list = []
