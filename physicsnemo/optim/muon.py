@@ -480,9 +480,9 @@ class Muon(_TorchMuon):
 
                 group_params = [params_with_grad[i] for i in idxs]
                 # Cast back to the parameter dtype (NS runs in bf16), once per
-                # group: the group key includes the dtype. The cast is
-                # contiguous, so a tall group (transposed by NS) keeps
-                # _foreach_add_ on its fused path.
+                # group: the group key includes the dtype. For float32
+                # parameters the cast also makes the updates contiguous, so a
+                # tall group (transposed by NS) keeps _foreach_add_ fused.
                 ortho_list = ortho.to(
                     group_params[0].dtype, memory_format=torch.contiguous_format
                 ).unbind(0)

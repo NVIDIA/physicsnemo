@@ -112,7 +112,7 @@ def test_group_params_by_shape(device):
 def test_update_matches_transposed_layout(device, dtype, monkeypatch):
     """The fused update equals adding each parameter's update in the layout
     Newton-Schulz returns it in (transposed for a tall group) bit for bit, for
-    square, wide and tall groups."""
+    square, wide and tall groups; float32 updates reach the add contiguous."""
     shapes = [(16, 16), (16, 16), (8, 32), (8, 32), (32, 8), (32, 8)]
     fused = [
         torch.nn.Parameter(p.detach().to(dtype))
@@ -122,6 +122,11 @@ def test_update_matches_transposed_layout(device, dtype, monkeypatch):
     kwargs = dict(lr=0.02, weight_decay=0.1, adjust_lr_fn="match_rms_adamw")
     fused_opt, looped_opt = Muon(fused, **kwargs), Muon(looped, **kwargs)
     foreach_add = torch._foreach_add_
+    contiguous = []
+
+    def recording_add(tensors, others, alpha=1):
+        contiguous.extend(o.is_contiguous() for o in others)
+        foreach_add(tensors, others, alpha=alpha)
 
     def add_transposed(tensors, others, alpha=1):
         for t, o in zip(tensors, others):
@@ -133,12 +138,15 @@ def test_update_matches_transposed_layout(device, dtype, monkeypatch):
         grads = _make_grads(shapes, device, seed=200 + step)
         for p, q, g in zip(fused, looped, grads):
             p.grad, q.grad = g.to(dtype), g.to(dtype)
+        monkeypatch.setattr(torch, "_foreach_add_", recording_add)
         fused_opt.step()
         monkeypatch.setattr(torch, "_foreach_add_", add_transposed)
         looped_opt.step()
         monkeypatch.setattr(torch, "_foreach_add_", foreach_add)
         for p, q in zip(fused, looped):
             assert torch.equal(p, q)
+    # bf16 updates need no cast, so a tall group's stay transposed.
+    assert all(contiguous) == (dtype == torch.float32)
 
 
 def test_state_dict_roundtrip(device):
