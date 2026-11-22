@@ -53,9 +53,10 @@ training:
     eps: 1.0e-8
     # Replay Muon's momentum and Newton-Schulz kernels as one CUDA graph:
     # faster when the step is host-bound (small models or meshes), at extra
-    # GPU memory (about 0.2 GiB for the GeoTransolver volume model). It
-    # replaces the compiled Muon step when compile is true. A learning-rate
-    # schedule, stepped by epoch or by step, replays the same graph.
+    # GPU memory (the optimizer step reserves about 0.2 GiB more for the
+    # GeoTransolver volume model). It replaces the compiled Muon step when
+    # compile is true. A schedule that changes only the learning rate,
+    # stepped by epoch or by step, replays the same graph.
     muon_cuda_graph: false
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
