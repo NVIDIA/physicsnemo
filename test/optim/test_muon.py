@@ -332,10 +332,30 @@ def test_cuda_graph_capture_with_loader_thread():
         assert torch.equal(pe, pg)
 
 
+def _fail_once(monkeypatch, name, after):
+    """Make ``torch.cuda.CUDAGraph.<name>`` raise once, after running or
+    before it."""
+    original = getattr(torch.cuda.CUDAGraph, name)
+    calls = []
+
+    def failing(self, *args, **kwargs):
+        if calls:
+            return original(self, *args, **kwargs)
+        calls.append(None)
+        if after:
+            original(self, *args, **kwargs)
+        raise RuntimeError(f"{name} failed")
+
+    monkeypatch.setattr(torch.cuda.CUDAGraph, name, failing)
+
+
 @_requires_cuda
-def test_cuda_graph_capture_failure(monkeypatch):
-    """A host sync inside the step fails the capture with a RuntimeError and
-    leaves the user's gradients and current stream in place."""
+@pytest.mark.parametrize("where", ["capture_begin", "step", "capture_end"])
+def test_cuda_graph_capture_failure(monkeypatch, where):
+    """A capture that fails at its start (as capture_begin does under
+    torch.cuda.set_sync_debug_mode("error")), in the step (a host sync) or at
+    its end raises a RuntimeError, leaves no capture open, and leaves the
+    user's gradients and current stream in place; the next step captures."""
     import physicsnemo.optim.muon as muon_module
 
     params = _make_params(_GRAPH_SHAPES, "cuda", seed=6)
@@ -343,21 +363,32 @@ def test_cuda_graph_capture_failure(monkeypatch):
     _set_grads(params, seed=0)
     opt.step()
 
-    newton_schulz = muon_module._batched_newton_schulz
+    if where == "step":
+        newton_schulz = muon_module._batched_newton_schulz
 
-    def syncing_newton_schulz(updates, *args):
-        updates.sum().item()
-        return newton_schulz(updates, *args)
+        def syncing_newton_schulz(updates, *args):
+            updates.sum().item()
+            return newton_schulz(updates, *args)
 
-    monkeypatch.setattr(muon_module, "_batched_newton_schulz", syncing_newton_schulz)
+        monkeypatch.setattr(
+            muon_module, "_batched_newton_schulz", syncing_newton_schulz
+        )
+    else:
+        _fail_once(monkeypatch, where, after=where == "capture_begin")
     _set_grads(params, seed=1)
     grads = [p.grad for p in params]
     stream = torch.cuda.current_stream()
     with pytest.raises(RuntimeError, match="cuda_graph=False"):
         opt.step()
     assert torch.cuda.current_stream() == stream
+    with torch.cuda.stream(opt._graph_stream):
+        assert not torch.cuda.is_current_stream_capturing()
+    torch.cuda.synchronize()
     assert all(p.grad is g for p, g in zip(params, grads))
     assert opt._graph is None
+    monkeypatch.undo()
+    opt.step()
+    assert opt._graph is not None
 
 
 @_requires_cuda

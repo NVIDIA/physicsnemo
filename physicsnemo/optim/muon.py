@@ -36,6 +36,8 @@ remain interchangeable.
 
 from __future__ import annotations
 
+import contextlib
+import warnings
 from collections import defaultdict
 from typing import Callable
 
@@ -340,6 +342,15 @@ class Muon(_TorchMuon):
                 ):
                     self._step(deferred=updates)
             except Exception as e:
+                # A failure in capture_begin, or in capture_end before it ends
+                # the capture, leaves the stream capturing: end it here.
+                with torch.cuda.stream(stream):
+                    if torch.cuda.is_current_stream_capturing():
+                        with (
+                            contextlib.suppress(Exception),
+                            warnings.catch_warnings(action="ignore"),
+                        ):
+                            graph.capture_end()
                 raise RuntimeError(
                     "Muon(cuda_graph=True) could not capture its step as a CUDA "
                     "graph (a host sync inside the step cannot be captured); use "
