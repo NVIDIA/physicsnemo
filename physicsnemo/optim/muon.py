@@ -164,18 +164,20 @@ class Muon(_TorchMuon):
     cuda_graph : bool, optional
         Replay the momentum update and the Newton-Schulz orthogonalization as
         one CUDA graph instead of launching their kernels one by one from
-        Python. The weight decay and the update, which read the learning rate,
-        run after each replay as the eager step's own kernels (one per shape)
+        Python. The weight decay and the update, the only parts that read the
+        learning rate, run after each replay as the eager step's own calls
         with the group's current values. So the result equals the eager step's
         bit for bit, and a new ``lr``, ``weight_decay`` or ``adjust_lr_fn``
         (such as a scheduler's) replays the same graph. The first step runs
         eagerly and creates the momentum buffers, and the next step captures
         the graph. It is captured again when the parameters with gradients
         change, when another hyperparameter (such as ``momentum``) changes, and
-        after loading a state dict. Needs CUDA parameters. Holds a copy of the
-        gradients, the orthogonalized updates and the graph's memory pool.
-        Under ``torch.compile`` the step runs outside the compiled region, so
-        the graph replaces compiling it. Default False.
+        after loading a state dict. A capture synchronizes the device and
+        empties PyTorch's memory caches, so it costs more than an eager step.
+        Needs CUDA parameters. Holds copies of the gradients and of the
+        orthogonalized updates, each the size of the parameters, and the
+        graph's memory pool. Under ``torch.compile`` the step runs outside the
+        compiled region, so the graph replaces compiling it. Default False.
 
     Forward
     -------
