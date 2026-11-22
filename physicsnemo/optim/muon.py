@@ -191,6 +191,10 @@ class Muon(_TorchMuon):
     -------
     The optional closure loss returned by :meth:`step`, or ``None``.
 
+    Notes
+    -----
+    See :class:`torch.optim.Muon` for the full algorithm description.
+
     .. important::
         The fused path stacks equally-shaped matrices and orthogonalizes them
         with batched matmuls, which is only correct for **replicated 2-D
@@ -198,10 +202,6 @@ class Muon(_TorchMuon):
         equal to :class:`torch.optim.Muon` (DDP gradients are dense, replicated
         tensors, and :meth:`step` runs after ``backward()`` returns, by which
         point DDP's bucketed all-reduce has already been synchronized).
-
-    Notes
-    -----
-    See :class:`torch.optim.Muon` for the full algorithm description.
 
     Examples
     --------

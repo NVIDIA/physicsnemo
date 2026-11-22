@@ -21,3 +21,13 @@ for decoder layers.
     :show-inheritance:
     :special-members: __init__
 
+Muon
+----
+
+:class:`Muon` is :class:`torch.optim.Muon` with the Newton-Schulz orthogonalization
+batched across parameters of the same shape, and an optional CUDA-graph step
+(``cuda_graph=True``).
+
+.. autoclass:: physicsnemo.optim.Muon
+    :members:
+    :show-inheritance:
