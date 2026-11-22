@@ -28,10 +28,12 @@ the same as the per-parameter loop; only the number of kernel launches changes,
 from ``O(num_params * ns_steps)`` to ``O(num_shape_groups * ns_steps)``.
 
 This module provides :class:`Muon`, a subclass of :class:`torch.optim.Muon` that
-overrides only the per-step orthogonalization with a batched implementation. The
-constructor signature, hyperparameter semantics, validation, and ``momentum_buffer``
-optimizer-state key are all inherited from :class:`torch.optim.Muon`, so checkpoints
-remain interchangeable.
+replaces the per-step orthogonalization with a batched implementation and adds one
+constructor keyword, ``cuda_graph``, which replays the step as a CUDA graph. The
+other constructor arguments, hyperparameter semantics, validation, and
+``momentum_buffer`` optimizer-state key are all inherited from
+:class:`torch.optim.Muon`, and ``cuda_graph`` stays out of the ``state_dict``, so
+checkpoints remain interchangeable.
 """
 
 from __future__ import annotations
@@ -131,10 +133,12 @@ class Muon(_TorchMuon):
     Subclass of :class:`torch.optim.Muon` that batches the Newton-Schulz
     orthogonalization across parameters of the same shape using ``torch.bmm`` /
     ``torch.baddbmm``, and applies the momentum and weight-decay updates with the
-    ``torch._foreach_*`` fused kernels. Construction, validation, hyperparameter
-    defaults, and the ``momentum_buffer`` state key are inherited unchanged from
-    :class:`torch.optim.Muon`, so it is numerically equivalent (batched matmuls
-    compute each matrix independently) and checkpoint-compatible.
+    ``torch._foreach_*`` fused kernels. It adds one constructor keyword,
+    ``cuda_graph``, which replays the step as a CUDA graph. Everything else
+    about construction, validation, hyperparameter defaults, and the
+    ``momentum_buffer`` state key is inherited from :class:`torch.optim.Muon`,
+    so it is numerically equivalent (batched matmuls compute each matrix
+    independently) and checkpoint-compatible.
 
     Muon only optimizes 2-D parameters (linear / attention weight matrices). Use
     a standard optimizer such as AdamW for biases, norms, and embeddings -- for
