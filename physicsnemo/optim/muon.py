@@ -473,8 +473,12 @@ class Muon(_TorchMuon):
 
                 group_params = [params_with_grad[i] for i in idxs]
                 # Cast back to the parameter dtype (NS runs in bf16), once per
-                # group: the group key includes the dtype.
-                ortho_list = ortho.to(group_params[0].dtype).unbind(0)
+                # group: the group key includes the dtype. The cast is
+                # contiguous, so a tall group (transposed by NS) keeps
+                # _foreach_add_ on its fused path.
+                ortho_list = ortho.to(
+                    group_params[0].dtype, memory_format=torch.contiguous_format
+                ).unbind(0)
                 if deferred is not None:
                     shape_updates.append((shape, group_params, ortho_list))
                     continue
