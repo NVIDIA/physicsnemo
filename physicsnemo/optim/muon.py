@@ -50,6 +50,11 @@ _torch_muon_internal = OptionalImport("torch.optim._muon")
 
 __all__ = ["Muon"]
 
+# The param-group entries left out of Muon(cuda_graph=True)'s graph key: the
+# graph does not read them (the parameters enter the key through their data
+# pointers), so changing them needs no new capture.
+_NOT_IN_GRAPH_KEY = frozenset({"params", "lr", "weight_decay", "adjust_lr_fn"})
+
 
 def _batched_newton_schulz(
     updates: Tensor,
@@ -155,18 +160,20 @@ class Muon(_TorchMuon):
         One of ``"original"`` or ``"match_rms_adamw"``. Default None
         (treated as ``"original"``).
     cuda_graph : bool, optional
-        Replay the step as one CUDA graph instead of launching its kernels one
-        by one from Python. The graph runs the same kernels as the eager step,
-        so the result is the same bit for bit. The first step runs eagerly and
-        creates the momentum buffers, and the next step captures the graph.
-        It is captured again when the parameters with gradients change, when
-        any hyperparameter changes (such as a scheduler's learning rate), and
-        after loading a state dict. A capture costs more than an eager step,
-        so a schedule that changes the learning rate every step makes the step
-        slower. Needs CUDA parameters and float learning rates, and holds a
-        copy of the gradients and the graph's memory pool. Under
-        ``torch.compile`` the step runs outside the compiled region, so the
-        graph replaces compiling it. Default False.
+        Replay the momentum update and the Newton-Schulz orthogonalization as
+        one CUDA graph instead of launching their kernels one by one from
+        Python. The weight decay and the update, which read the learning rate,
+        run after each replay as the eager step's own kernels (one per shape)
+        with the group's current values. So the result equals the eager step's
+        bit for bit, and a new ``lr``, ``weight_decay`` or ``adjust_lr_fn``
+        (such as a scheduler's) replays the same graph. The first step runs
+        eagerly and creates the momentum buffers, and the next step captures
+        the graph. It is captured again when the parameters with gradients
+        change, when another hyperparameter (such as ``momentum``) changes, and
+        after loading a state dict. Needs CUDA parameters. Holds a copy of the
+        gradients, the orthogonalized updates and the graph's memory pool.
+        Under ``torch.compile`` the step runs outside the compiled region, so
+        the graph replaces compiling it. Default False.
 
     Forward
     -------
@@ -231,6 +238,7 @@ class Muon(_TorchMuon):
             raise ValueError("Muon(cuda_graph=True) needs every parameter on CUDA")
         self.cuda_graph = cuda_graph
         self._graph = self._graph_key = self._graph_grads = self._graph_stream = None
+        self._graph_updates = None
 
     def __getstate__(self) -> dict:
         return {**super().__getstate__(), "cuda_graph": self.cuda_graph}
@@ -242,6 +250,7 @@ class Muon(_TorchMuon):
         self.__dict__.setdefault("_graph_stream", None)
         # A graph cannot be copied, so a copy captures its own.
         self._graph = self._graph_key = self._graph_grads = None
+        self._graph_updates = None
 
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
@@ -269,11 +278,13 @@ class Muon(_TorchMuon):
     def _graph_step(self) -> None:
         """Replay the step as a CUDA graph, capturing it first if needed.
 
-        The eager step runs instead in two cases. One is while any parameter
-        with a gradient has no momentum buffer, so no buffer is created inside
-        a capture. The other is inside a capture the caller started, which then
-        records the eager step. Under ``torch.compile`` this method runs outside
-        the compiled region.
+        The graph leaves the parameters alone: the weight decay and the update,
+        which read the learning rate, run after each replay (see
+        :meth:`_apply_updates`). The eager step runs instead in two cases. One
+        is while any parameter with a gradient has no momentum buffer, so no
+        buffer is created inside a capture. The other is inside a capture the
+        caller started, which then records the eager step. Under
+        ``torch.compile`` this method runs outside the compiled region.
         """
         if torch.cuda.is_current_stream_capturing():
             return self._step()
@@ -287,19 +298,20 @@ class Muon(_TorchMuon):
         bufs = [self.state[p]["momentum_buffer"] for p in params]
         key = (
             [t.data_ptr() for t in params + bufs],
-            [{k: v for k, v in g.items() if k != "params"} for g in self.param_groups],
+            # The group dicts themselves too: _apply_updates reads them.
+            [
+                (id(g), {k: v for k, v in g.items() if k not in _NOT_IN_GRAPH_KEY})
+                for g in self.param_groups
+            ],
         )
         if key != self._graph_key:
             if len({p.device for p in params}) != 1 or not params[0].is_cuda:
                 raise ValueError(
                     "Muon(cuda_graph=True) needs every parameter on one CUDA device"
                 )
-            if any(isinstance(g["lr"], Tensor) for g in self.param_groups):
-                raise ValueError(
-                    "Muon(cuda_graph=True) needs float learning rates, not tensors"
-                )
-            # Free the old graph and gradient copies before capturing anew.
+            # Free the old graph, gradient copies and updates before capturing.
             self._graph = self._graph_key = self._graph_grads = None
+            self._graph_updates = None
             # The graph reads the gradients from copies of its own, refilled
             # before every replay.
             grads = [p.grad for p in params]
@@ -312,6 +324,7 @@ class Muon(_TorchMuon):
                 self._graph_stream = torch.cuda.Stream(device)
             stream = self._graph_stream
             graph = torch.cuda.CUDAGraph()
+            updates: list = []
             try:
                 for p, g in zip(params, graph_grads):
                     p.grad = g
@@ -325,7 +338,7 @@ class Muon(_TorchMuon):
                         graph, stream=stream, capture_error_mode="thread_local"
                     ),
                 ):
-                    self._step()
+                    self._step(deferred=updates)
             except Exception as e:
                 raise RuntimeError(
                     "Muon(cuda_graph=True) could not capture its step as a CUDA "
@@ -336,12 +349,37 @@ class Muon(_TorchMuon):
                 for p, g in zip(params, grads):
                     p.grad = g
             self._graph, self._graph_key, self._graph_grads = graph, key, graph_grads
+            self._graph_updates = updates
         # Capturing launches nothing, so the step also runs here after a capture.
         torch._foreach_copy_(self._graph_grads, [p.grad for p in params])
         self._graph.replay()
+        self._apply_updates()
         return None
 
-    def _step(self, closure: Callable[[], float] | None = None) -> float | None:
+    def _apply_updates(self) -> None:
+        """Apply the weight decay and the updates the graph orthogonalized.
+
+        These are the eager step's kernels with the group's current learning
+        rate and weight decay as host scalars, in the eager step's order on
+        each parameter, so the parameters equal the eager step's bit for bit
+        at any learning rate.
+        """
+        for group, params, shape_updates in self._graph_updates:
+            lr = group["lr"]
+            if isinstance(lr, Tensor):
+                lr = lr.item()
+            torch._foreach_mul_(params, 1 - lr * group["weight_decay"])
+            for shape, group_params, ortho_list in shape_updates:
+                adjusted_lr = _torch_muon_internal._adjust_lr(
+                    lr, group["adjust_lr_fn"], torch.Size(shape)
+                )
+                torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
+
+    def _step(
+        self,
+        closure: Callable[[], float] | None = None,
+        deferred: list | None = None,
+    ) -> float | None:
         """Perform a single optimization step.
 
         Parameters
@@ -349,6 +387,11 @@ class Muon(_TorchMuon):
         closure : Callable[[], float], optional
             Optional callable that reevaluates the model and returns the loss.
             Default None.
+        deferred : list, optional
+            If given (in a graph capture), the step leaves the parameters alone
+            and appends, per parameter group, ``(group, params_with_grad,
+            [(shape, group_params, ortho_list), ...])`` for
+            :meth:`_apply_updates`. Default None.
 
         Returns
         -------
@@ -362,7 +405,7 @@ class Muon(_TorchMuon):
 
         for group in self.param_groups:
             lr = group["lr"]
-            if isinstance(lr, Tensor):
+            if isinstance(lr, Tensor) and deferred is None:
                 lr = lr.item()
             weight_decay = group["weight_decay"]
             momentum = group["momentum"]
@@ -396,7 +439,11 @@ class Muon(_TorchMuon):
                 updates = list(momentum_bufs)
 
             # Decoupled weight decay (fused across all shapes).
-            torch._foreach_mul_(params_with_grad, 1 - lr * weight_decay)
+            shape_updates: list = []
+            if deferred is None:
+                torch._foreach_mul_(params_with_grad, 1 - lr * weight_decay)
+            else:
+                deferred.append((group, params_with_grad, shape_updates))
 
             # Group equally-shaped updates and orthogonalize each group with one
             # batched Newton-Schulz, then apply the (per-group, shape-dependent)
@@ -406,14 +453,17 @@ class Muon(_TorchMuon):
             for (shape, _dtype, _device), idxs in groups.items():
                 stacked = torch.stack([updates[i] for i in idxs], dim=0)
                 ortho = _batched_newton_schulz(stacked, ns_coefficients, ns_steps, eps)
-                adjusted_lr = _torch_muon_internal._adjust_lr(
-                    lr, adjust_lr_fn, torch.Size(shape)
-                )
 
                 group_params = [params_with_grad[i] for i in idxs]
                 # Cast back to the parameter dtype (NS runs in bf16), once per
                 # group: the group key includes the dtype.
                 ortho_list = ortho.to(group_params[0].dtype).unbind(0)
+                if deferred is not None:
+                    shape_updates.append((shape, group_params, ortho_list))
+                    continue
+                adjusted_lr = _torch_muon_internal._adjust_lr(
+                    lr, adjust_lr_fn, torch.Size(shape)
+                )
                 torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
 
         return loss
