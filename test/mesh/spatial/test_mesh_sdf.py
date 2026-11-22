@@ -29,7 +29,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.spatial.sdf import signed_distance_field
+from physicsnemo.mesh.spatial.sdf import sdf_normals, signed_distance_field
 
 
 # Build a simple tetrahedron surface mesh as four triangles (a deterministic
@@ -1020,3 +1020,59 @@ def test_sdf_backward_is_sync_free():
     finally:
         torch.cuda.set_sync_debug_mode(prev)
     torch.cuda.synchronize()
+
+
+def test_sdf_normals_far_points_are_the_closest_point_direction(device):
+    """Away from the surface the normal is the unit vector from hit to query."""
+    query = torch.tensor([[0.0, 0.0, 2.0], [3.0, 4.0, 0.0]], device=device)
+    hit = torch.zeros(2, 3, device=device)
+    face = torch.tensor([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device=device)
+    expected = torch.tensor([[0.0, 0.0, 1.0], [0.6, 0.8, 0.0]], device=device)
+    torch.testing.assert_close(sdf_normals(query, hit, face), expected)
+
+
+def test_sdf_normals_on_the_surface_are_the_face_normal(device):
+    """On the surface the direction is roundoff, so the face normal is used.
+
+    The side comes from the offset along the face normal: a query a few ulps
+    off keeps the face normal on either side, and a query resolved as inside
+    but still within the on-surface band gets the reversed normal.
+    """
+    eps = torch.finfo(torch.float32).eps
+    face = torch.tensor([[0.0, 0.0, 1.0]], device=device).expand(4, 3)
+    hit = torch.tensor([[10.0, 0.0, 0.0]], device=device).expand(4, 3)
+    # The band scales with the largest coordinate, here 10.
+    offsets = torch.tensor([0.0, 2.0, -2.0, -50.0], device=device) * eps * 10.0
+    query = hit.clone()
+    query[:, 2] = offsets
+    # A tangential offset of the same size must not tilt the normal.
+    query[:, 1] = 3.0 * eps * 10.0
+    normals = sdf_normals(query, hit, face)
+    expected = face.clone()
+    expected[3] = -face[3]
+    torch.testing.assert_close(normals, expected, rtol=0.0, atol=0.0)
+
+
+def test_sdf_normals_degenerate_hit_face_keeps_the_raw_direction(device):
+    """A zero face normal marks a degenerate face, which is never substituted."""
+    eps = torch.finfo(torch.float32).eps
+    query = torch.tensor([[0.0, 0.0, 4.0 * eps]], device=device)
+    hit = torch.zeros(1, 3, device=device)
+    normals = sdf_normals(query, hit, torch.zeros(1, 3, device=device))
+    expected = torch.tensor([[0.0, 0.0, 1.0]], device=device)
+    torch.testing.assert_close(normals, expected)
+
+
+def test_sdf_normals_match_the_mesh_query(device):
+    """With ``signed_distance_field`` outputs, sphere normals are radial.
+
+    The tolerance is the faceting of the 40-ring sphere, seen from 1.5 radii.
+    """
+    mesh = _uv_sphere_mesh().to(device)
+    points = torch.nn.functional.normalize(
+        torch.randn(64, 3, generator=torch.Generator().manual_seed(0)), dim=-1
+    ).to(device=device, dtype=mesh.points.dtype)
+    query = points * 1.5
+    _, hit, faces = signed_distance_field(mesh, query)
+    normals = sdf_normals(query, hit, mesh.cell_normals[faces])
+    torch.testing.assert_close(normals, points, atol=5e-2, rtol=0.0)

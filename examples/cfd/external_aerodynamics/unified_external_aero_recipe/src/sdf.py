@@ -35,13 +35,11 @@ Import this module before Hydra instantiation to register the components.
 
 from __future__ import annotations
 
-import torch
-
 from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.spatial.sdf import signed_distance_field
+from physicsnemo.mesh.spatial.sdf import sdf_normals, signed_distance_field
 
 
 @register()
@@ -140,39 +138,13 @@ class ComputeSDFFromBoundary(MeshTransform):
 
         # Optionally compute approximate normals from closest-point direction
         if self.normals_field is not None:
-            normals = query_points - closest_points
-
-            # Near the wall, (query - closest) is float32 roundoff, so use the
-            # hit-face normal, the exact limit of its direction at the wall.
-            # Roundoff scales with eps * |coordinate|; 128 eps leaves a wide
-            # margin. Mask rather than branch on ``near_surface.any()``: that
-            # host readback would stall the prefetch stream.
-            dist = torch.norm(normals, dim=-1)
-            coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
-            surface_tolerance = 128.0 * torch.finfo(torch.float32).eps * coord_scale
-            near_surface = dist < surface_tolerance
-            face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
-            # A degenerate (zero-area) hit face has no meaningful normal --
-            # ``cell_normals`` returns a zero vector for it. Keep the raw
-            # closest-point direction there instead of substituting zeros.
-            face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
-            # Take the side from the offset along the face normal, not the
-            # SDF: |sdf| also carries tangential closest-point roundoff, which
-            # reaches tens of ulps on thin faces. Within a few ulps the side
-            # is unresolved; default to outward, as volume points lie outside.
-            sign_tolerance = 8.0 * torch.finfo(torch.float32).eps * coord_scale
-            genuinely_inside = (normals * face_normals).sum(-1) < -sign_tolerance
-            oriented = torch.where(
-                genuinely_inside.unsqueeze(-1), -face_normals, face_normals
+            # Volume points lie outside the surface, so an unresolved side
+            # defaults to the outward face normal.
+            new_pd[self.normals_field] = sdf_normals(
+                query_points,
+                closest_points,
+                surface.cell_normals[hit_faces],
             )
-            normals = torch.where(
-                (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
-            )
-
-            # Normalize to unit vectors
-            norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
-            normals = normals / norm
-            new_pd[self.normals_field] = normals
 
         new_interior = domain.interior.with_data(point_data=new_pd)
 

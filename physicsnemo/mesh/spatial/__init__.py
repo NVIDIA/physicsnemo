@@ -33,7 +33,7 @@ from physicsnemo.mesh.spatial.cluster_tree import (
     DualInteractionPlan,
     SourceAggregates,
 )
-from physicsnemo.mesh.spatial.sdf import signed_distance_field
+from physicsnemo.mesh.spatial.sdf import sdf_normals, signed_distance_field
 
 __all__ = [
     "BVH",
@@ -42,5 +42,6 @@ __all__ = [
     "SourceAggregates",
     "canonical_frame",
     "frame_coordinates",
+    "sdf_normals",
     "signed_distance_field",
 ]

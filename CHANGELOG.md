@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contexts, input scaling and chunked forward decoding, and a finite-difference
   vorticity helper that undoes coordinate and velocity scaling.
 
+- `physicsnemo.mesh.spatial.sdf_normals` gives the unit direction from the
+  closest surface point to each query point, and the hit face's normal for a
+  query on the surface. The unified external aerodynamics recipe's
+  `ComputeSDFFromBoundary` calls it.
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
