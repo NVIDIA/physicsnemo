@@ -22,6 +22,8 @@ This module provides data structures and algorithms for fast spatial queries:
 - ClusterTree for dual-tree Barnes-Hut acceleration of kernel/attention operators
 - Signed distance field (:func:`signed_distance_field`) over a triangle
   surface mesh, backed by NVIDIA Warp mesh queries (CPU and CUDA)
+- Unit direction from the closest surface point to each query
+  (:func:`sdf_normals`), with the hit face's normal for a query on the surface
 - A canonical frame of a weighted point cloud (:func:`canonical_frame`), and
   coordinates in it (:func:`frame_coordinates`), the same in every pose of the cloud
 """

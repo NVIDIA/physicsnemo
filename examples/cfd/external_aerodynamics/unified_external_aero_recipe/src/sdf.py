@@ -141,9 +141,7 @@ class ComputeSDFFromBoundary(MeshTransform):
             # Volume points lie outside the surface, so an unresolved side
             # defaults to the outward face normal.
             new_pd[self.normals_field] = sdf_normals(
-                query_points,
-                closest_points,
-                surface.cell_normals[hit_faces],
+                surface, query_points, closest_points, hit_faces
             )
 
         new_interior = domain.interior.with_data(point_data=new_pd)

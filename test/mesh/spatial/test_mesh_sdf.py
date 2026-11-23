@@ -872,7 +872,7 @@ _CUDA = torch.cuda.is_available()
 
 @pytest.mark.skipif(not _CUDA, reason="CUDA required to check stream-sync-free SDF")
 def test_sdf_no_winding_path_is_sync_free():
-    """The default (pseudo-normal) SDF path issues no host<->device syncs.
+    """The default (pseudo-normal) SDF path and ``sdf_normals`` issue no host<->device syncs.
 
     The SDF transform runs on the dataloader's preprocessing stream; any host
     sync blocks the main thread mid-enqueue and prevents the prep-stream SDF
@@ -892,8 +892,17 @@ def test_sdf_no_winding_path_is_sync_free():
     # loading, ``wp.init()``, caching-allocator growth) legitimately
     # synchronize. The guarded run below reuses the same query shape so no new
     # allocation is triggered.
-    signed_distance_field(mesh, query, use_sign_winding_number=False)
+    def run(mesh):
+        _, hit, faces = signed_distance_field(
+            mesh, query, use_sign_winding_number=False
+        )
+        sdf_normals(mesh, query, hit, faces)
+
+    run(mesh)
     torch.cuda.synchronize()
+    # A fresh mesh, so the guarded run computes the face normals of
+    # ``sdf_normals`` rather than reading the warm-up's cache.
+    mesh = Mesh(points=mesh.points, cells=mesh.cells)
 
     # ``error`` mode raises on *implicit* synchronizing ops (``.item()``,
     # ``.cpu()``, ``torch.unique``, ``nonzero`` ...) at enqueue time, so the
@@ -903,7 +912,7 @@ def test_sdf_no_winding_path_is_sync_free():
     prev = torch.cuda.get_sync_debug_mode()
     torch.cuda.set_sync_debug_mode("error")
     try:
-        signed_distance_field(mesh, query, use_sign_winding_number=False)
+        run(mesh)
     finally:
         torch.cuda.set_sync_debug_mode(prev)
     torch.cuda.synchronize()
@@ -1022,13 +1031,53 @@ def test_sdf_backward_is_sync_free():
     torch.cuda.synchronize()
 
 
+def _flat_triangle_mesh() -> Mesh:
+    """One triangle in the plane z = 0 with normal +z and largest coordinate 10."""
+    points = torch.tensor([[8.0, -1.0, 0.0], [10.0, -1.0, 0.0], [9.0, 1.0, 0.0]])
+    return Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+
+def _box_mesh(scale: float = 1.0) -> Mesh:
+    """A closed box, x in (0, 10), y in (-0.5, 0.5), z in (0, 1), times ``scale``."""
+    points = torch.tensor(
+        [
+            [0.0, -0.5, 0.0],
+            [10.0, -0.5, 0.0],
+            [10.0, 0.5, 0.0],
+            [0.0, 0.5, 0.0],
+            [0.0, -0.5, 1.0],
+            [10.0, -0.5, 1.0],
+            [10.0, 0.5, 1.0],
+            [0.0, 0.5, 1.0],
+        ]
+    )
+    cells = torch.tensor(
+        [
+            [0, 2, 1],
+            [0, 3, 2],  # bottom, -z
+            [4, 5, 6],
+            [4, 6, 7],  # top, +z
+            [0, 1, 5],
+            [0, 5, 4],  # -y side
+            [3, 7, 6],
+            [3, 6, 2],  # +y side
+            [0, 4, 7],
+            [0, 7, 3],  # -x side
+            [1, 2, 6],
+            [1, 6, 5],  # +x side
+        ]
+    )
+    return Mesh(points=points * scale, cells=cells)
+
+
 def test_sdf_normals_far_points_are_the_closest_point_direction(device):
     """Away from the surface the normal is the unit vector from hit to query."""
-    query = torch.tensor([[0.0, 0.0, 2.0], [3.0, 4.0, 0.0]], device=device)
-    hit = torch.zeros(2, 3, device=device)
-    face = torch.tensor([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device=device)
+    mesh = _flat_triangle_mesh().to(device)
+    hit = torch.tensor([[9.0, 0.0, 0.0]], device=device).expand(2, 3)
+    query = hit + torch.tensor([[0.0, 0.0, 2.0], [3.0, 4.0, 0.0]], device=device)
+    faces = torch.zeros(2, dtype=torch.int64, device=device)
     expected = torch.tensor([[0.0, 0.0, 1.0], [0.6, 0.8, 0.0]], device=device)
-    torch.testing.assert_close(sdf_normals(query, hit, face), expected)
+    torch.testing.assert_close(sdf_normals(mesh, query, hit, faces), expected)
 
 
 def test_sdf_normals_on_the_surface_are_the_face_normal(device):
@@ -1039,28 +1088,37 @@ def test_sdf_normals_on_the_surface_are_the_face_normal(device):
     but still within the on-surface band gets the reversed normal.
     """
     eps = torch.finfo(torch.float32).eps
+    mesh = _flat_triangle_mesh().to(device)
     face = torch.tensor([[0.0, 0.0, 1.0]], device=device).expand(4, 3)
-    hit = torch.tensor([[10.0, 0.0, 0.0]], device=device).expand(4, 3)
-    # The band scales with the largest coordinate, here 10.
+    hit = torch.tensor([[9.0, 0.0, 0.0]], device=device).expand(4, 3)
+    # The band scales with the largest coordinate of the query and its hit
+    # face, here the face's 10.
     offsets = torch.tensor([0.0, 2.0, -2.0, -50.0], device=device) * eps * 10.0
     query = hit.clone()
     query[:, 2] = offsets
     # A tangential offset of the same size must not tilt the normal.
     query[:, 1] = 3.0 * eps * 10.0
-    normals = sdf_normals(query, hit, face)
+    faces = torch.zeros(4, dtype=torch.int64, device=device)
+    normals = sdf_normals(mesh, query, hit, faces)
     expected = face.clone()
     expected[3] = -face[3]
     torch.testing.assert_close(normals, expected, rtol=0.0, atol=0.0)
 
 
 def test_sdf_normals_degenerate_hit_face_keeps_the_raw_direction(device):
-    """A zero face normal marks a degenerate face, which is never substituted."""
+    """A degenerate hit face has no normal, so it is never substituted.
+
+    A query that coincides with its hit point there gets a zero vector.
+    """
     eps = torch.finfo(torch.float32).eps
-    query = torch.tensor([[0.0, 0.0, 4.0 * eps]], device=device)
-    hit = torch.zeros(1, 3, device=device)
-    normals = sdf_normals(query, hit, torch.zeros(1, 3, device=device))
-    expected = torch.tensor([[0.0, 0.0, 1.0]], device=device)
-    torch.testing.assert_close(normals, expected)
+    points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 1]])).to(device)
+    hit = torch.tensor([[0.5, 0.0, 0.0]], device=device).expand(2, 3)
+    query = hit + torch.tensor([[0.0, 0.0, 4.0 * eps], [0.0, 0.0, 0.0]], device=device)
+    faces = torch.zeros(2, dtype=torch.int64, device=device)
+    normals = sdf_normals(mesh, query, hit, faces)
+    expected = torch.tensor([[0.0, 0.0, 1.0], [0.0, 0.0, 0.0]], device=device)
+    torch.testing.assert_close(normals, expected, rtol=0.0, atol=0.0)
 
 
 def test_sdf_normals_match_the_mesh_query(device):
@@ -1074,5 +1132,73 @@ def test_sdf_normals_match_the_mesh_query(device):
     ).to(device=device, dtype=mesh.points.dtype)
     query = points * 1.5
     _, hit, faces = signed_distance_field(mesh, query)
-    normals = sdf_normals(query, hit, mesh.cell_normals[faces])
+    normals = sdf_normals(mesh, query, hit, faces)
     torch.testing.assert_close(normals, points, atol=5e-2, rtol=0.0)
+
+
+def test_sdf_normals_keep_the_leading_shape_and_the_query_dtype(device):
+    """Any leading shape gives the flattened result, in the dtype of the queries."""
+    mesh = _uv_sphere_mesh().to(device)
+    query = torch.randn(2, 3, 16, 3, generator=torch.Generator().manual_seed(0)).to(
+        device
+    )
+    _, hit, faces = signed_distance_field(mesh, query)
+    normals = sdf_normals(mesh, query, hit.double(), faces)
+    flat = sdf_normals(mesh, query.reshape(-1, 3), hit.reshape(-1, 3), faces.flatten())
+    assert normals.dtype == query.dtype
+    torch.testing.assert_close(normals, flat.reshape(2, 3, 16, 3), rtol=0.0, atol=0.0)
+
+
+def test_sdf_normals_are_nan_beyond_max_dist(device):
+    """A query the banded search does not reach has no closest point."""
+    mesh = _uv_sphere_mesh().to(device)
+    query = torch.tensor([[0.0, 0.0, 1.05], [0.0, 0.0, 3.0]], device=device)
+    _, hit, faces = signed_distance_field(mesh, query, max_dist=0.5)
+    normals = sdf_normals(mesh, query, hit, faces)
+    assert torch.isfinite(normals[0]).all()
+    assert torch.isnan(normals[1]).all()
+
+
+@pytest.mark.parametrize("use_sign_winding_number", [False, True])
+@pytest.mark.parametrize("offset", [(0.0, 0.0, 0.0), (1e4, 0.0, 0.0), (1e4, 1e4, 1e4)])
+def test_sdf_normals_preserve_resolved_sides_after_translation(
+    device, use_sign_winding_number, offset
+):
+    """Resolved interior normals stay inward inside the on-surface band."""
+    # At coordinate scale 1e4 the on-surface band is ~0.153 and the side band
+    # ~0.0095. Depths 0.1 and 0.01 use the face normal; 0.01 is just past the
+    # side band, so raising its 8 eps factor above ~8.2 fails here. Depth 0.2
+    # takes the closest-point direction.
+    offset = torch.tensor(offset)
+    box = _box_mesh()
+    mesh = Mesh(points=box.points + offset, cells=box.cells).to(device)
+    heights = [0.8, 0.9, 0.99, 1.0, 1.01, 1.1]
+    query = (torch.tensor([[5.0, 0.0, z] for z in heights]) + offset).to(device)
+
+    sdf, hit, faces = signed_distance_field(
+        mesh, query, use_sign_winding_number=use_sign_winding_number
+    )
+    normals = sdf_normals(mesh, query, hit, faces)
+
+    expected = torch.tensor(
+        [[0.0, 0.0, z] for z in [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]], device=device
+    )
+    torch.testing.assert_close(normals, expected)
+    # The SDF matches the translated float32 geometry.
+    torch.testing.assert_close(sdf, query[:, 2] - mesh.points[4, 2])
+
+
+def test_sdf_normals_band_does_not_depend_on_the_unit_of_length(device):
+    """A query resolved off a small body keeps its closest-point direction.
+
+    On a box 0.1 long, a query 1e-5 off the edge between the top and the +y
+    side is hundreds of ulps of its coordinates away, so the normal is the
+    diagonal between the two faces, not the normal of either.
+    """
+    mesh = _box_mesh(scale=0.01).to(device)
+    step = 1e-5 / math.sqrt(2.0)
+    query = torch.tensor([[0.05, 0.005 + step, 0.01 + step]], device=device)
+    _, hit, faces = signed_distance_field(mesh, query)
+    normals = sdf_normals(mesh, query, hit, faces)
+    expected = torch.tensor([[0.0, 1.0, 1.0]], device=device) / math.sqrt(2.0)
+    torch.testing.assert_close(normals, expected, atol=1e-2, rtol=0.0)
