@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `physicsnemo.mesh.spatial.sdf_normals` gives the unit direction from the
+  closest surface point to each query point, and the hit face's normal for a
+  query on the surface. The unified external aerodynamics recipe's
+  `ComputeSDFFromBoundary` calls it. The on-surface band scales with the
+  coordinates of the query and its hit face, so the recipe's normals change
+  for queries closer to the wall than its former fixed band of `1.5e-5` where
+  those coordinates are below one unit.
+
 ### Changed
 
 ### Deprecated

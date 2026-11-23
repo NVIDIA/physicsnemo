@@ -122,6 +122,9 @@ Use the following guidelines to choose a structure:
   is a :class:`~physicsnemo.mesh.Mesh`-typed wrapper around the Warp-backed
   :func:`physicsnemo.nn.functional.signed_distance_field` function, which runs
   NVIDIA Warp mesh queries on CPU and CUDA.
+- :func:`sdf_normals` gives the unit direction from the closest surface point
+  to each query point. For a query on the surface, where that direction is
+  roundoff, it returns the normal of the hit face.
 
 ``use_sign_winding_number`` selects one of two methods for the sign of the
 distance:
@@ -154,6 +157,7 @@ Summary
    SourceAggregates
    canonical_frame
    frame_coordinates
+   sdf_normals
    signed_distance_field
 
 Related Topics
