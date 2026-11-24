@@ -462,14 +462,13 @@ V2_TOL = {("cpu", D): 1e-12, ("cpu", F): 1e-5, ("cuda", D): 1e-12, ("cuda", F): 
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("config", list(V2_CONFIGS))
-def test_isla_forward_non_regression_v2(device, config, monkeypatch):
+def test_isla_forward_non_regression_v2(device, config, no_tf32_matmul):
     """The outputs of each configuration of :data:`V2_CONFIGS` against
     ``isla_release_v2.pth`` (recorded on one CPU thread with the reference kernels),
     at :data:`V2_TOL`. ``dtt_draw_f32`` pins the draw of 512 of its cells
     (its hits keep 1e-9 off the cells' boundaries).
     Regenerate: ``python -m test.experimental.models.isla._release_cases
     isla_release_v2.pth``."""
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     out = _v2_outputs(config, device)
     kind = "cpu" if device == "cpu" else "cuda"
     _assert_scaled_close(
@@ -480,7 +479,7 @@ def test_isla_forward_non_regression_v2(device, config, monkeypatch):
 
 
 @pytest.mark.parametrize("device", DEVICES)
-def test_isla_query_chunks_non_regression(device, monkeypatch):
+def test_isla_query_chunks_non_regression(device, no_tf32_matmul):
     """``query_chunks`` (every public method has a golden): the outputs of three
     ranges of the interior model's points, its pair counts (exact), and every parameter's
     gradient after the chunks' backward passes and ``chunks.backward()`` (each as a
@@ -488,7 +487,6 @@ def test_isla_query_chunks_non_regression(device, monkeypatch):
     :data:`V2_TOL` of the largest sum of magnitudes of a projection's terms).
     Regenerate: ``python -m test.experimental.models.isla._release_cases
     isla_release_v2.pth``."""
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     out = _chunks_golden(device)
     ref = _load_reference(RELEASE_V2, "query_chunks")
     tol = V2_TOL[("cpu" if device == "cpu" else "cuda", D)]
