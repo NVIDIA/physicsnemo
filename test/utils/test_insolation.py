@@ -31,7 +31,7 @@ named zones), every ``datetime64`` unit, and every ISO offset spelling.
 
 import datetime as dt
 import itertools
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import pytest
@@ -50,12 +50,17 @@ OFFSETS = {
     "+05:30": dt.timezone(dt.timedelta(hours=5, minutes=30)),
     "+05:45": dt.timezone(dt.timedelta(hours=5, minutes=45)),
     "+14:00": dt.timezone(dt.timedelta(hours=14)),
-    "US/Eastern": ZoneInfo("America/New_York"),
-    "Europe/Berlin": ZoneInfo("Europe/Berlin"),
-    "Asia/Kolkata": ZoneInfo("Asia/Kolkata"),
-    "Pacific/Kiritimati": ZoneInfo("Pacific/Kiritimati"),
-    "Pacific/Apia": ZoneInfo("Pacific/Apia"),
 }
+try:
+    OFFSETS |= {
+        "US/Eastern": ZoneInfo("America/New_York"),
+        "Europe/Berlin": ZoneInfo("Europe/Berlin"),
+        "Asia/Kolkata": ZoneInfo("Asia/Kolkata"),
+        "Pacific/Kiritimati": ZoneInfo("Pacific/Kiritimati"),
+        "Pacific/Apia": ZoneInfo("Pacific/Apia"),
+    }
+except ZoneInfoNotFoundError:
+    pass  # no time zone database, as on Windows without the tzdata package
 
 # Naive wall-clock times spanning the year: one per month, leap days, and the
 # instants on either side of every year boundary where a UTC offset can move

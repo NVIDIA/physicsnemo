@@ -17,8 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates of the query and its hit face, so the recipe's normals change
   for queries closer to the wall than its former fixed band of `1.5e-5` where
   those coordinates are below one unit.
+- Adds `physicsnemo.utils.logging.NonBlockingLogger`, which logs scalars from
+  the GPU without making the host wait for the GPU, so a training loop can log
+  every step without stalling the next one. It packs each call's scalars into
+  one buffer, can average them across ranks, and copies them to the host in
+  one transfer.
 
 ### Changed
+
+- Unified external aero recipe: training steps no longer wait for the GPU to
+  log their values (with `precision: float16`, `GradScaler` still waits once
+  per step), so the datapipe's prefetch overlaps compute. The logged
+  `step_time_s` now includes waits for the GPU inside the step and reads
+  higher, so compare speed by epoch wall time per step.
 
 ### Deprecated
 
@@ -26,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `split_nonmanifold_edges` measures each copy of a triangle at the same angle
+  around its edges, so it drops a reversed copy of a face on every platform.
+  On macOS it could split the face's edges instead.
+- `Mesh.cell_normals` and `Mesh.point_normals` compile with `fullgraph=True`
+  on Python 3.11.
 - ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
   to the boundary's vertices through its clusters, which shape sensitivities
   need. Predictions and training are unchanged.
@@ -667,6 +683,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percentile decisions and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
+- `group_norm` on a `ShardTensor` sharded along the batch dimension raises
+  `MissingShardPatch`, and the message points to DDP and FSDP2 for the batch.
+  On hosts with CUDA, it used to combine the statistics of different samples
+  and return wrong values with no error.
 - `torch.compile` with ShardTensor: neighborhood attention (`na1d`/`na2d`/
   `na3d`) keeps its halo exchange when compiled, `select` handles a negative
   `dim`, dynamic shapes no longer fail in the spec hash, a plain DTensor
