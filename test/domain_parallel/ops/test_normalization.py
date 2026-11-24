@@ -30,6 +30,7 @@ from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
 
 from .utils import generate_image_like_data, numerical_shard_tensor_check
 
@@ -121,31 +122,14 @@ def test_group_norm_1d(distributed_mesh, num_groups, affine, backward, amp):
 
 
 @pytest.mark.multigpu_static
-@pytest.mark.parametrize("extra_samples", [0, 1])
-@pytest.mark.parametrize("backward", [False])
-def test_group_norm_batch_sharded(distributed_mesh, backward, extra_samples):
-    H = 16
-    C_in = 8
-
+def test_group_norm_batch_sharded_raises(distributed_mesh):
+    """ShardTensor shards spatial dimensions, so a sharded batch is rejected."""
     dm = DistributedManager()
 
-    # Two samples per rank, so each rank normalizes samples no other rank holds.
-    # One extra sample makes the shards uneven.
-    batch_size = 2 * dm.world_size + extra_samples
-    image = generate_image_like_data(batch_size, C_in, (H, H), device=dm.device)
+    image = generate_image_like_data(2 * dm.world_size, 8, (16, 16), device=dm.device)
+    sharded_image = scatter_tensor(image, 0, distributed_mesh, (Shard(0),))
 
-    placements = (Shard(0),)
+    module = torch.nn.GroupNorm(num_groups=4, num_channels=8).to(dm.device)
 
-    sharded_image = scatter_tensor(
-        image, 0, distributed_mesh, placements, requires_grad=backward
-    )
-
-    module = torch.nn.GroupNorm(num_groups=4, num_channels=C_in)
-
-    numerical_shard_tensor_check(
-        distributed_mesh,
-        module,
-        [sharded_image],
-        {},
-        check_grads=backward,
-    )
+    with pytest.raises(MissingShardPatch, match="batch dimension"):
+        module(sharded_image)

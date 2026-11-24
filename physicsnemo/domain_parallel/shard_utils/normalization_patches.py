@@ -37,9 +37,6 @@ import torch.distributed._functional_collectives as funcol
 from torch.distributed.tensor import DTensor
 
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
-from physicsnemo.domain_parallel.shard_tensor import (
-    _torch_function_fallback_via_dtensor,
-)
 from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
 
 __all__ = [
@@ -119,6 +116,16 @@ class PartialGroupNorm(torch.autograd.Function):
             )
 
         sharded_dim = spec.placements[0].dim
+        # The reduction below sums per-sample statistics across ranks, so every
+        # rank must hold part of the same samples.
+        if sharded_dim == 0:
+            raise MissingShardPatch(
+                "Group normalization is not implemented for sharded tensors along "
+                "the batch dimension. ShardTensor is meant for spatial dimensions. "
+                "To parallelize over the batch, use DDP or FSDP2, as the "
+                "physicsnemo.domain_parallel documentation shows. If dim 0 is a "
+                "spatial dimension of one sample, add a leading batch dimension."
+            )
         if sharded_dim == 1:
             raise MissingShardPatch(
                 "Group normalization is not implemented for sharded tensors along the channel dimension"
@@ -380,12 +387,6 @@ def group_norm_wrapper(
         Normalized tensor with the same sharding as input.
     """
     input, num_groups, weight, bias, eps = repackage_group_norm_args(*args, **kwargs)
-
-    # PartialGroupNorm reduces per-sample statistics across ranks, which
-    # assumes every rank holds part of the same samples. With the batch
-    # dimension sharded, each rank holds different samples.
-    if any(p.is_shard() and p.dim == 0 for p in input._spec.placements):
-        return _torch_function_fallback_via_dtensor(func, args, kwargs)
 
     # Gather any distributed weights/bias
     if isinstance(weight, (ShardTensor, DTensor)):
