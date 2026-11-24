@@ -862,18 +862,19 @@ class ISLA(Module):
         the output jumps where a cluster's admission changes, in the point and in
         the boundary's vertices. Between the jumps a cluster's position, normal,
         measure and means of the cells' values take their cells' gradient, the
-        cells' weights included. Its means of the boundary's vector and tensor
-        inputs take none. With more than one declared condition, a cluster's
-        share shift (the per-condition quadrature, module docstring) takes no
-        gradient from its condition's total measure. At 0 the read is smooth,
-        and the model's derivatives in the prediction points and in the
-        boundary's vertices are complete. When the interior task keeps fewer
-        boundary tokens than cells, the kept set changes in jumps as the
+        cells' weights included. Its means of the boundary's vector inputs take
+        their weights' gradient alone: those inputs come from learned maps, and a
+        gradient in them would change training. With more than one
+        declared condition, a cluster's share shift (the per-condition quadrature,
+        module docstring) takes no gradient from its condition's total measure. At
+        0 the read is smooth, and the model's derivatives in the prediction points
+        and in the boundary's vertices are complete. When the interior task keeps
+        fewer boundary tokens than cells, the kept set changes in jumps as the
         vertices move, and the vertex derivative holds the kept cells and their
         inclusion probabilities fixed (the token draw, in the module docstring).
-        Read a model at the angle it was trained at: a cluster's aggregate is
-        what the kernel learns to read. A finite number at least 0; a surface
-        task takes only the default.
+        Read a model at the angle it was trained at: a cluster's aggregate is what
+        the kernel learns to read. A finite number at least 0; a surface task
+        takes only the default.
     tree_read_leaf_size : int, optional, default=4
         Interior task only: the boundary cells per leaf of the read's trees. At
         :math:`\theta > 0` a leaf that is not read as a cluster is read cell by

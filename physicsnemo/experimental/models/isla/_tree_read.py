@@ -82,17 +82,19 @@ same far-field list for every point, up to ties of that frame (equal variances, 
 symmetric axis), so the read is the same approximation in every pose. At
 :math:`\theta > 0` the read is piecewise smooth: the output jumps where a cluster's
 admission changes, as the point or the boundary's vertices move. Between the jumps a
-virtual cell takes the gradient of its definition in its cells: its position, normal
-and measure in their positions, normals and weights (:class:`_ClusterGeometry`), and
-its means of the cells' keys and values in those values and weights
-(:func:`read_node_means`). Its means of the cells' rank-1 inputs take none. With more
-than one declared condition, a node's share shift takes no gradient from its
-condition's total measure :math:`A_k` (:func:`walk_range_pairs`). At :math:`\theta = 0`
-the read is smooth, and the read's own derivatives in the prediction points and in the
-boundary's cells are complete: the pair invariants take a gradient whenever the
-geometry requires one (:func:`_chunked_basis_from_plan`). The whole model's derivative
-in the boundary's vertices also passes through the token draw's weights and the slice
-blocks (see ``tree_read_theta`` in :class:`~physicsnemo.experimental.models.isla.ISLA`).
+virtual cell takes the gradient of its definition in its cells: its position, normal and
+measure in their positions, normals and weights (:class:`_ClusterGeometry`), and its
+means of the cells' keys and values in those values and weights
+(:func:`read_node_means`). Its means of the cells' rank-1 inputs take the weights'
+gradient alone (:func:`tree_read_walk`): those inputs come from learned maps, and a
+gradient in them would change training. With more than one declared condition, a node's
+share shift takes no gradient from its condition's total measure :math:`A_k`
+(:func:`walk_range_pairs`). At :math:`\theta = 0` the read is smooth, and the read's own
+derivatives in the prediction points and in the boundary's cells are complete: the pair
+invariants take a gradient whenever the geometry requires one
+(:func:`_chunked_basis_from_plan`). The whole model's derivative in the boundary's
+vertices also passes through the token draw's weights and the slice blocks (see
+``tree_read_theta`` in :class:`~physicsnemo.experimental.models.isla.ISLA`).
 
 Rounding. Rounding makes no discrete choice of the forest that an error bound can
 settle, and the caller's precision makes none. The forest is built and
@@ -141,7 +143,6 @@ from physicsnemo.experimental.models.isla._segment_softmax import (
 )
 from physicsnemo.experimental.models.isla._tree_build import forest_tables, resolve_tree_build
 from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
-from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
 logger = logging.getLogger(__name__)
@@ -770,14 +771,34 @@ def node_means(x: torch.Tensor, forest: BoundaryForest, omega: torch.Tensor) -> 
     return (sums / measure[:, None]).to(x.dtype).reshape(forest.n_nodes, *x.shape[1:])
 
 
+def _inverse_measure(forest: BoundaryForest) -> torch.Tensor:
+    """The inverse of the nodes' measures ``(M, 1)`` float64, zero for a node of zero
+    measure: its means are zero and take no gradient."""
+    w = forest.measure.double()
+    return torch.where(w > 0, 1 / w.where(w > 0, 1), 0)[:, None]
+
+
+def _sum_down_tree(acc: torch.Tensor, forest: BoundaryForest) -> torch.Tensor:
+    """Each cell's sum ``(N, D)`` of the rows ``acc`` ``(M, D)`` of the nodes that
+    hold it: ``acc`` summed down each tree, root to leaf, in place (the transpose of
+    :func:`node_means`' sums up the tree), then gathered from each cell's leaf. No
+    atomic add and no scan, so its bits repeat on CUDA."""
+    for nodes, left, right in reversed(forest.levels):
+        acc[left] += acc[nodes]
+        acc[right] += acc[nodes]
+    per_cell = acc.new_empty(forest.n_cells, acc.shape[1])
+    per_cell[forest.cells] = acc[forest.leaf_ids][forest.position_leaf]
+    return per_cell
+
+
 class _NodeMeanWeights(torch.autograd.Function):
     r"""The weights' gradient of the nodes' means: ``apply(means, x, omega, forest)``
-    returns ``means`` ``(M, D)`` (:func:`node_means` of the cells' rows ``x`` ``(N, D)``)
-    as they are, passes their gradient through, and adds that of :math:`\bar x_m =
-    \sum_{j \in m} \omega_j x_j / \Omega_m` in the weights ``omega`` ``(N,)``:
-    :math:`\partial \bar x_m / \partial \omega_j = (x_j - \bar x_m) / \Omega_m`. Backward
-    runs in float64 and sums each node's coefficients down its tree, as
-    :class:`_ClusterGeometry`'s does, with no atomic add, so its bits repeat on CUDA."""
+    returns ``means`` ``(M, D)`` (the nodes' means of the cells' rows ``x`` ``(N, D)``, as
+    :func:`node_means` or the forest's build makes them) as they are, passes their
+    gradient through, and adds that of :math:`\bar x_m = \sum_{j \in m} \omega_j x_j /
+    \Omega_m` in the weights ``omega`` ``(N,)``: :math:`\partial \bar x_m / \partial
+    \omega_j = (x_j - \bar x_m) / \Omega_m`. Backward runs in float64 and sums each
+    node's coefficients down its tree (:func:`_sum_down_tree`)."""
 
     @staticmethod
     def forward(ctx, means, x, omega, forest: BoundaryForest):
@@ -789,15 +810,8 @@ class _NodeMeanWeights(torch.autograd.Function):
     @once_differentiable
     def backward(ctx, g):
         f, (means, x, omega) = ctx.forest, ctx.saved_tensors
-        w = f.measure.double()
-        ### A node of zero measure has means of zero (node_means) and no gradient.
-        a = g.double() * torch.where(w > 0, 1 / w.where(w > 0, 1), 0)[:, None]
-        acc = torch.cat([a, (a * means.double()).sum(-1, keepdim=True)], dim=1)
-        for nodes, left, right in reversed(f.levels):
-            acc[left] += acc[nodes]
-            acc[right] += acc[nodes]
-        per_cell = acc.new_empty(f.n_cells, acc.shape[1])
-        per_cell[f.cells] = acc[f.leaf_ids][f.position_leaf]
+        a = g.double() * _inverse_measure(f)
+        per_cell = _sum_down_tree(torch.cat([a, (a * means.double()).sum(-1, keepdim=True)], dim=1), f)
         g_w = (x.double() * per_cell[:, :-1]).sum(-1) - per_cell[:, -1]
         return g, None, g_w.to(omega.dtype), None
 
@@ -839,21 +853,14 @@ class _ClusterGeometry(torch.autograd.Function):
     @once_differentiable
     def backward(ctx, g_center, g_normal, g_measure):
         f, (r, n, omega) = ctx.forest, ctx.saved_tensors
-        w = f.measure.double()
-        ### A node of zero measure has means of zero and no gradient.
-        inv_w = torch.where(w > 0, 1 / w.where(w > 0, 1), 0)[:, None]
+        inv_w = _inverse_measure(f)
         u, length = f.normal.double(), f.normal_length.double()
         scale = length.clamp_min(ctx.eps)[:, None]
         g_n = g_normal.double()
         g_n = torch.where(length[:, None] > ctx.eps, g_n - u * (u * g_n).sum(-1, keepdim=True), g_n) / scale
         a, b = g_center.double() * inv_w, g_n * inv_w
         s = g_measure.double() - (a * f.center.double()).sum(-1) - (b * u * scale).sum(-1)
-        acc = torch.cat([a, b, s[:, None]], dim=1)
-        for nodes, left, right in reversed(f.levels):
-            acc[left] += acc[nodes]
-            acc[right] += acc[nodes]
-        per_cell = acc.new_empty(f.n_cells, acc.shape[1])
-        per_cell[f.cells] = acc[f.leaf_ids][f.position_leaf]
+        per_cell = _sum_down_tree(torch.cat([a, b, s[:, None]], dim=1), f)
         d = r.shape[-1]
         a, b, s = per_cell[:, :d], per_cell[:, d : 2 * d], per_cell[:, 2 * d]
         w_j = omega.double()[:, None]
@@ -1057,9 +1064,13 @@ def tree_read_walk(
     at ``theta`` (:meth:`BoundaryForest.frame_pairs`). The forest and the walk run
     without gradient (a numerical device). At ``theta > 0``, when the cells' positions,
     normals or measures require a gradient, the nodes' virtual cells take their cells'
-    (:class:`_ClusterGeometry`, the same values). The pair invariants take a gradient
-    when the geometry requires one (:func:`geometry_requires_grad`), and the basis
-    (:func:`walk_range_pairs`) carries gradients to the kernel MLP's weights.
+    (:class:`_ClusterGeometry`, the same values). When the measures require one, the
+    nodes' means of the rank-1 inputs take the weights' gradient
+    (:class:`_NodeMeanWeights`, the same values) but none in the inputs: those come
+    from learned maps, and a gradient in them would change training. The pair
+    invariants take a gradient when the geometry requires one
+    (:func:`geometry_requires_grad`), and the basis (:func:`walk_range_pairs`)
+    carries gradients to the kernel MLP's weights.
 
     ``walk`` names the walk's implementation (:func:`resolve_walk`) and ``build`` the
     forest's (:meth:`BoundaryForest.build`). ``kernel`` names the read's, recorded for
@@ -1099,17 +1110,21 @@ def tree_read_walk(
             node_measure = forest.measure.to(log_frac.dtype)
             if conditions is not None:
                 node_conditions.append(conditions[i][forest.cells[forest.range_start]])
-        center, normal = forest.center, forest.normal
+        center, normal, node_vecs = forest.center, forest.normal, forest.vecs
         live = boundary_r.requires_grad or boundary_n.requires_grad or log_frac.requires_grad
         if theta > 0 and torch.is_grad_enabled() and live:
-            center, normal, node_measure = _ClusterGeometry.apply(
-                boundary_r[i], boundary_n[i], torch.exp(log_frac[i]), forest, eps
-            )
+            omega = torch.exp(log_frac[i])
+            center, normal, node_measure = _ClusterGeometry.apply(boundary_r[i], boundary_n[i], omega, forest, eps)
             node_measure = node_measure.to(log_frac.dtype)
+            if has_vecs and omega.requires_grad:
+                ### The weights' gradient alone, the rank-1 inputs held fixed.
+                node_vecs = _NodeMeanWeights.apply(
+                    node_vecs.flatten(1), boundary_vecs[i].flatten(1).detach(), omega, forest
+                ).view_as(forest.vecs)
         src_r = torch.cat([boundary_r[i], center.to(boundary_r.dtype)])
         src_n = torch.cat([boundary_n[i], normal.to(boundary_n.dtype)])
         src_vecs = (
-            torch.cat([boundary_vecs[i], forest.vecs.to(boundary_vecs.dtype)])
+            torch.cat([boundary_vecs[i], node_vecs.to(boundary_vecs.dtype)])
             if has_vecs
             else None
         )

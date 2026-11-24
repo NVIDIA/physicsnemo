@@ -28,8 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
   to the boundary's vertices through its clusters, which shape sensitivities
-  need, for boundaries without vector or tensor fields. Predictions and
-  training are unchanged.
+  need. Predictions and training are unchanged.
 
 ### Security
 

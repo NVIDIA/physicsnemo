@@ -1251,19 +1251,29 @@ def test_virtual_cells_gradient_leaves_the_forward_bitwise_unchanged(
     assert _within_rerun(grad, grad_base, grad_again) == (theta == 0.0)
 
 
-def test_virtual_cells_take_no_gradient_work_in_training(monkeypatch):
+@pytest.mark.parametrize("vectors", [False, True], ids=["plain", "boundary_vectors"])
+def test_virtual_cells_take_no_gradient_work_in_training(vectors, monkeypatch):
     """A training step (parameters requiring gradients, no boundary input requiring
     one) never builds the virtual cells' gradient nor the means' gradient in the
     cells' weights: neither ``_ClusterGeometry`` nor ``_NodeMeanWeights`` is called,
-    and the walk reads the forest's own tensors, as the read did before. A
-    vertex-gradient call runs each: once per case, and once per block."""
+    and the walk reads the forest's own tensors, as the read did before, with and
+    without a rank-1 boundary input (whose values require a gradient in training). A
+    vertex-gradient call runs each: once per case, and once per block, plus once per
+    case for the means of the rank-1 inputs."""
     calls = []
     cells, means = tree_read._ClusterGeometry, tree_read._NodeMeanWeights
     for fn, spy in _spies(calls).items():
         monkeypatch.setattr(fn, "apply", spy)
-    m = _model(3, TREE_READ_THETA).train()
+    extra = {"boundary_schemas": {"wall": {"tr": {"rank": 1}}}} if vectors else {}
+    m = _model(3, TREE_READ_THETA, **extra).train()
     mesh, drv, q = _case()
-    mesh = Mesh(points=mesh.points, cells=mesh.cells)  # the measures from the vertices
+    tr = torch.randn(
+        mesh.n_cells, 3, generator=torch.Generator().manual_seed(5), dtype=D
+    )
+    ### The measures from the vertices.
+    mesh = Mesh(
+        points=mesh.points, cells=mesh.cells, cell_data={"tr": tr} if vectors else {}
+    )
     mesh, drv, q = mesh.to(torch.float32), drv.float(), q.float()
     out = m(
         boundary_meshes={"wall": mesh},
@@ -1274,7 +1284,8 @@ def test_virtual_cells_take_no_gradient_work_in_training(monkeypatch):
     assert not calls
     assert all(p.grad is not None for p in m.parameters())
     _vertex_grad_forward(m, mesh, drv, q)
-    assert calls.count(cells) == 1 and calls.count(means) == len(m.kernel_reads)
+    assert calls.count(cells) == 1
+    assert calls.count(means) == len(m.kernel_reads) + int(vectors)
 
 
 def test_tree_read_starts_as_no_update_and_is_live_everywhere():

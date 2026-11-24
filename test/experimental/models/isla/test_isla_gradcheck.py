@@ -441,7 +441,7 @@ def test_the_eager_references_pass_gradcheck():
 
 
 # --------------------------------------------------------------------------- the whole model
-def _ellipsoid_model(interior=True):
+def _ellipsoid_model(interior=True, conditions=("wall",)):
     """An interior model at ``tree_read_theta=0`` in float64 with every parameter
     shifted by seeded noise (some layers start at zero, the reads among them), an
     ellipsoid's boundary and three prediction points outside it (``interior=False``:
@@ -454,7 +454,7 @@ def _ellipsoid_model(interior=True):
     points = s.points.to(D) * torch.tensor([2.0, 1.0, 0.5], dtype=D)
     model = ISLA(
         output_schema={"p": {"rank": 0}},
-        boundary_schemas={"wall": {}},
+        boundary_schemas={name: {} for name in conditions},
         hidden=32,
         n_layers=2,
         n_slices=8,
@@ -643,17 +643,17 @@ def test_cluster_gradients_refuse_a_second_derivative(function):
         (gw.square().sum() + omega.sum()).backward()
 
 
-def _jittered_ellipsoid(subdivisions):
+def _jittered_ellipsoid(subdivisions, seed=5):
     """The vertices and cells of an ellipsoid sheared along one axis (as in
     ``test_outputs_vertex_derivative_matches_central_differences``) with its vertices
-    jittered by 0.02, which breaks the icosphere's ties of the box test, so that a
-    step of 1e-6 in the vertices keeps every point's clusters."""
+    jittered by 0.02 (seeded by ``seed``), which breaks the icosphere's ties of the
+    box test, so that a step of 1e-6 in the vertices keeps every point's clusters."""
     from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
     s = sphere_icosahedral.load(subdivisions=subdivisions)
     p = s.points.to(D) * torch.tensor([2.0, 1.0, 0.5], dtype=D)
     p[:, 0] += 0.3 * p[:, 1] ** 2
-    g = torch.Generator().manual_seed(5)
+    g = torch.Generator().manual_seed(seed)
     return p + 0.02 * torch.randn(p.shape, generator=g, dtype=D), s.cells
 
 
@@ -674,116 +674,164 @@ def _cluster_weights_fixed(r, n, omega, forest, eps):
     return center, normal, measure
 
 
+@pytest.mark.parametrize("layout", ["one_case", "two_cases", "two_conditions"])
+@pytest.mark.parametrize("vectors", [False, True], ids=["no_vectors", "rank1_input"])
 @pytest.mark.parametrize("theta", [0.5, 1.0])
 def test_tree_read_vertex_derivative_at_finite_theta_matches_central_differences(
-    theta, monkeypatch
+    theta, vectors, layout, monkeypatch
 ):
     """The tree read at ``theta > 0``, float64 on CPU, as a function of a mesh's
     vertices: the cells' centroids, normals and log measure fractions from the
-    vertices, a seeded kernel basis, and the softmax's log normalizer of every point
-    (``logsumexp`` over its pairs of the kernel term plus the log measure), whose
-    derivative passes through the clusters' positions, normals and measures. With the
-    points' clusters unchanged across the step (asserted), the autograd derivative
-    projected on seeded directions is the central difference's (``h = 1e-6``) to 1e-6
-    of the largest (measured 4e-8 at both). Without the clusters' gradient the two
-    differ by about the derivative itself or more (measured 17 and 1.0 of the
-    largest), and with the cells' weights held fixed in the centroids and normals by
-    1.2 and 0.96: so the weights' gradient is in."""
+    vertices, a seeded kernel basis, and two terms. One is the softmax's log
+    normalizer of every point (``logsumexp`` over its pairs of the kernel term plus
+    the log measure), whose derivative passes through the clusters' positions,
+    normals, measures and means of the rank-1 inputs. The other is a seeded block
+    read of fixed states (``_TreeKernelRead``), whose derivative also passes through
+    the clusters' means of the cells' keys and values. The read runs over one case,
+    a batch of two (each its own mesh, so a wrong case's slice of the weights shows)
+    and two declared conditions (one forest per condition), with and without one
+    fixed rank-1 input per cell. With the points' clusters unchanged across the step
+    (asserted), each term's autograd derivative projected on seeded directions is
+    the central difference's (``h = 1e-6``) to 1e-6 of the largest (measured 2e-10
+    to 8e-8). Each part's gradient is in. Without the clusters' gradient the log
+    normalizers' derivative is off by 0.59 to 24 of the largest and the block read's
+    by 0.18 to 0.41. With the cells' weights held fixed in the centroids and normals,
+    the log normalizers' is off by 0.29 to 1.2. With the means' weights held fixed,
+    the block read's is off by 0.74 to 1.5, and with a rank-1 input the log
+    normalizers' by 0.37 to 0.97."""
     from physicsnemo.mesh import Mesh
 
     p, cells = _jittered_ellipsoid(2)
+    n = cells.shape[0]
+    b = 1
+    p = p[None]
+    if layout == "two_cases":
+        b = 2
+        p = torch.cat([p, _jittered_ellipsoid(2, seed=6)[0][None]])
+    conditions = None
+    if layout == "two_conditions":
+        centroids = Mesh(points=p[0], cells=cells).cell_centroids
+        conditions = (centroids[:, 0] > 0.3).long()[None]
     torch.manual_seed(0)
-    basis = tree_read._KernelBasis(tree_read.kernel_geo_width(1, 0)).to(D)
+    basis = tree_read._KernelBasis(tree_read.kernel_geo_width(1, int(vectors))).to(D)
+    reader = tree_read._TreeKernelRead(8).to(D)
     g = torch.Generator().manual_seed(1)
     k = torch.randn(tree_read.KERNEL_READ_BASIS, generator=g, dtype=D)
+    with torch.no_grad():
+        for w in reader.parameters():
+            w.copy_(0.5 * torch.randn(w.shape, generator=g, dtype=D))
     q = torch.tensor(
         [[3.1, 0.4, 0.3], [-0.5, 1.9, 0.2], [0.6, -0.3, 1.1], [-3.0, -1.0, -0.8]],
         dtype=D,
-    )
+    ).expand(b, 4, 3)
+    h_b = torch.randn(b * n, 8, generator=g, dtype=D)
+    h_q = torch.randn(b * 4, 8, generator=g, dtype=D)
+    w_out = torch.randn(b * 4, 8, generator=g, dtype=D)
+    vecs = torch.randn(b, n, 1, 3, generator=g, dtype=D) if vectors else None
     g_unit = torch.nn.functional.normalize(
         torch.tensor([[[0.3, 1.0, 0.2]]], dtype=D), dim=-1
-    )
+    ).expand(b, 1, 3)
     lists = []
 
-    def log_normalizers(points):
-        mesh = Mesh(points=points, cells=cells)
-        a = mesh.cell_areas
+    def read(points):
+        meshes = [Mesh(points=x, cells=cells) for x in points]
+        a = torch.stack([m.cell_areas for m in meshes])
         pairs = tree_read_pairs(
-            basis, query_r=q[None], query_n=torch.nn.functional.normalize(q, dim=-1)[None],
-            query_wall=q.norm(dim=-1)[None] - 1.0, boundary_r=mesh.cell_centroids[None],
-            boundary_n=mesh.cell_normals[None], boundary_vecs=None, log_frac=torch.log(a / a.sum())[None],
-            g_unit=g_unit, theta=theta, eps=1e-12,
+            basis, query_r=q, query_n=torch.nn.functional.normalize(q, dim=-1), query_wall=q.norm(dim=-1) - 1.0,
+            boundary_r=torch.stack([m.cell_centroids for m in meshes]),
+            boundary_n=torch.stack([m.cell_normals for m in meshes]), boundary_vecs=vecs,
+            log_frac=torch.log(a / a.sum(1, keepdim=True)), g_unit=g_unit, theta=theta, eps=1e-12,
+            conditions=conditions,
         )  # fmt: skip
         lists.append((pairs.plan.qi.clone(), pairs.plan.bj.clone()))
         z = pairs.basis @ k + pairs.log_m
         qi = pairs.plan.qi.long()
         top = z.detach().max()
         lse = (
-            torch.log(torch.zeros(4, dtype=D).index_add(0, qi, torch.exp(z - top)))
+            torch.log(torch.zeros(b * 4, dtype=D).index_add(0, qi, torch.exp(z - top)))
             + top
         )
-        return (lse * torch.arange(1, 5, dtype=D)).sum()
+        out = reader(h_b, h_q, pairs)
+        return torch.stack(
+            [(lse * torch.arange(1, b * 4 + 1, dtype=D)).sum(), (out * w_out).sum()]
+        )
 
     v = torch.randn(6, *p.shape, generator=torch.Generator().manual_seed(0), dtype=D)
     h = 1e-6
     with torch.no_grad():
-        log_normalizers(p)
-        assert int((lists[0][1] >= cells.shape[0]).sum()) > 80  # the clusters read
-        fd = torch.stack(
-            [
-                (log_normalizers(p + h * e) - log_normalizers(p - h * e)) / (2 * h)
-                for e in v
-            ]
-        )
+        read(p)
+        assert int((lists[0][1] >= n).sum()) > 80 * b  # the clusters read
+        fd = torch.stack([(read(p + h * e) - read(p - h * e)) / (2 * h) for e in v])
     for qi, bj in lists[1:]:
         assert torch.equal(qi, lists[0][0]) and torch.equal(bj, lists[0][1])
 
-    def error(apply):
+    def error(cells=_virtual_cells, means=None):
+        """Each term's largest error over the largest projected derivative."""
         with monkeypatch.context() as m:
-            m.setattr(tree_read._ClusterGeometry, "apply", apply)
+            m.setattr(tree_read._ClusterGeometry, "apply", cells)
+            if means is not None:
+                m.setattr(tree_read._NodeMeanWeights, "apply", means)
             pg = p.clone().requires_grad_(True)
-            grad = torch.autograd.grad(log_normalizers(pg), pg)[0]
-        return float(
-            (torch.einsum("kij,ij->k", v, grad) - fd).abs().max() / fd.abs().max()
-        )
+            terms = read(pg)
+            grads = [torch.autograd.grad(t, pg, retain_graph=True)[0] for t in terms]
+        ad = torch.stack([torch.einsum("k...,...->k", v, g) for g in grads], dim=1)
+        return ((ad - fd).abs().amax(0) / fd.abs().amax(0)).tolist()
 
-    assert error(_virtual_cells) <= 1e-6
-    assert error(_no_cluster_gradient) > 0.5
-    assert error(_cluster_weights_fixed) > 0.5
+    exact = error()
+    no_gradient = error(_no_cluster_gradient)
+    weights_fixed = error(_cluster_weights_fixed)
+    means_fixed = error(means=lambda means, *_: means)
+    assert max(exact) <= 1e-6
+    assert no_gradient[0] > 0.5 and no_gradient[1] > 0.1
+    assert weights_fixed[0] > 0.2
+    assert means_fixed[1] > 0.5
+    assert means_fixed[0] > 0.3 if vectors else means_fixed[0] <= 1e-6
 
 
-def _summed_outputs(model, points, cells, x):
+def _summed_outputs(model, points, parts, x):
+    """The summed outputs of ``model`` on the boundary of the conditions ``parts``,
+    each its cells of the vertices ``points``."""
     from physicsnemo.mesh import Mesh
     from test.experimental.models.isla._meshes import outputs
 
-    out = model(
-        boundary_meshes={"wall": Mesh(points=points, cells=cells)}, prediction_points=x
-    )
-    return outputs(out)["p"].sum()
+    meshes = {name: Mesh(points=points, cells=c) for name, c in parts.items()}
+    return outputs(model(boundary_meshes=meshes, prediction_points=x))["p"].sum()
 
 
-def _outputs_vertex_grad(model, points, cells, x, theta):
+def _outputs_vertex_grad(model, points, parts, x, theta):
     model.tree_read_theta = theta
     pg = points.clone().requires_grad_(True)
-    return torch.autograd.grad(_summed_outputs(model, pg, cells, x), pg)[0]
+    return torch.autograd.grad(_summed_outputs(model, pg, parts, x), pg)[0]
 
 
-def test_outputs_vertex_derivative_at_theta_one(monkeypatch):
+@pytest.mark.parametrize("conditions", [1, 2], ids=["one_condition", "two_conditions"])
+def test_outputs_vertex_derivative_at_theta_one(conditions, monkeypatch):
     """The whole interior model in float64 (``_ellipsoid_model``'s, seeded, on 320
     cells of a jittered ellipsoid, twelve points at 1.3 to 3 of the body's size), at
-    the default ``theta = 1``: the vertex derivative of the summed outputs is within
-    5 % (relative norm) of the exact read's at ``theta = 0`` (measured 1.2 %), the
-    difference being the approximation of the read itself. Against central
-    differences (``h = 1e-6``, every point's clusters unchanged across the step,
-    asserted) it agrees to 2e-6 of the largest (measured 2e-7). The clusters'
-    positions, normals and measures take their cells' gradient, and so do the means of
-    the cells' keys and values, in the cells' weights too. With those means' weights
-    held fixed the difference is 0.49 % of the largest, and with the clusters taking
-    no gradient at all 2.3 %."""
+    the default ``theta = 1``, with one declared condition and with two (the cells
+    split between them, one forest per condition): the vertex derivative of the
+    summed outputs is within 5 % (relative norm) of the exact read's at ``theta = 0``
+    (measured 1.2 % and 0.92 %), the difference being the approximation of the read
+    itself. Against central differences (``h = 1e-6``, every point's clusters
+    unchanged across the step, asserted) it agrees to 2e-6 of the largest (measured
+    2e-7 and 1e-9). The clusters' positions, normals and measures take their cells'
+    gradient, and so do the means of the cells' keys and values, in the cells' weights
+    too. With those means' weights held fixed the difference is 0.49 % and 1.3 % of
+    the largest, and with the clusters taking no gradient at all 2.3 % and 2.0 %. With
+    two conditions the directions hold each condition's total measure fixed: a
+    node's share shift takes no gradient from it, and along the unprojected
+    directions the difference is 2.0 %."""
+    from physicsnemo.mesh import Mesh
+
     torch.manual_seed(0)  # the parameters' initialization, before their seeded noise
-    model, _, _ = _ellipsoid_model()
+    names = ("wall", "inlet")[:conditions]
+    model, _, _ = _ellipsoid_model(conditions=names)
     model.eval()
     p, cells = _jittered_ellipsoid(2)
+    parts = {"wall": cells}
+    if conditions == 2:
+        front = Mesh(points=p, cells=cells).cell_centroids[:, 0] > 0.3
+        parts = {"wall": cells[~front], "inlet": cells[front]}
     g = torch.Generator().manual_seed(1)
     dirs = torch.nn.functional.normalize(
         torch.randn(12, 3, generator=g, dtype=D), dim=-1
@@ -793,7 +841,7 @@ def test_outputs_vertex_derivative_at_theta_one(monkeypatch):
         * torch.tensor([2.0, 1.0, 0.5], dtype=D)
         * (1.3 + 1.7 * torch.rand(12, 1, generator=g, dtype=D))
     )
-    exact = _outputs_vertex_grad(model, p, cells, x, 0.0)
+    exact = _outputs_vertex_grad(model, p, parts, x, 0.0)
     lists, walk = [], tree_read.BoundaryForest.frame_pairs
 
     def recorded(self, *args, **kwargs):
@@ -803,20 +851,29 @@ def test_outputs_vertex_derivative_at_theta_one(monkeypatch):
         return out
 
     monkeypatch.setattr(tree_read.BoundaryForest, "frame_pairs", recorded)
-    tree = _outputs_vertex_grad(model, p, cells, x, 1.0)
+    tree = _outputs_vertex_grad(model, p, parts, x, 1.0)
     with monkeypatch.context() as m:
         m.setattr(tree_read._NodeMeanWeights, "apply", lambda means, *_: means)
-        weights_fixed = _outputs_vertex_grad(model, p, cells, x, 1.0)
+        weights_fixed = _outputs_vertex_grad(model, p, parts, x, 1.0)
         m.setattr(tree_read._ClusterGeometry, "apply", _no_cluster_gradient)
-        no_gradient = _outputs_vertex_grad(model, p, cells, x, 1.0)
+        no_gradient = _outputs_vertex_grad(model, p, parts, x, 1.0)
     v = torch.randn(2, *p.shape, generator=torch.Generator().manual_seed(0), dtype=D)
+    if conditions == 2:
+        ### Off the gradients of the conditions' total measures.
+        pg = p.clone().requires_grad_(True)
+        totals = [Mesh(points=pg, cells=c).cell_areas.sum() for c in parts.values()]
+        span = torch.linalg.qr(
+            torch.stack([torch.autograd.grad(t, pg)[0].flatten() for t in totals], 1)
+        ).Q
+        flat = v.flatten(1)
+        v = (flat - flat @ span @ span.T).view_as(v)
     h = 1e-6
     with torch.no_grad():
         fd = torch.stack(
             [
                 (
-                    _summed_outputs(model, p + h * e, cells, x)
-                    - _summed_outputs(model, p - h * e, cells, x)
+                    _summed_outputs(model, p + h * e, parts, x)
+                    - _summed_outputs(model, p - h * e, parts, x)
                 )
                 / (2 * h)
                 for e in v
