@@ -57,6 +57,8 @@ import torch.multiprocessing as mp
 from omegaconf import OmegaConf
 from tensordict import TensorDict
 
+from physicsnemo.utils.logging import NonBlockingLogger
+
 ### `train.py` imports `torch.utils.tensorboard.SummaryWriter` at module
 ### load, which transitively requires the `tensorboard` package. That
 ### dep is not declared in pyproject.toml; CI / training environments
@@ -78,7 +80,6 @@ from train import (  # noqa: E402  -- after the skip guard
 )
 
 from physicsnemo.mesh import Mesh  # noqa: E402  -- after the importorskip guard
-from physicsnemo.utils.logging import NonBlockingLogger  # noqa: E402
 
 ### ---------------------------------------------------------------------------
 ### forward_pass: the batch's target_measure reaches the loss and the metrics
@@ -270,7 +271,7 @@ class TestReduceAndAverage:
         """
         losses_td, metrics_td = self._epoch_sums()
         avg_loss, avg_losses, avg_metrics = _reduce_and_average(
-            torch.tensor(15.0), losses_td, metrics_td, 3, device="cpu"
+            torch.tensor(15.0), losses_td, metrics_td, 3
         )
         assert avg_loss == pytest.approx(5.0)
         assert avg_losses == pytest.approx({"pressure": 2.0, "wss": 3.0})
@@ -278,15 +279,13 @@ class TestReduceAndAverage:
 
     def test_none_sentinel_returns_loss_only(self):
         """The "no steps seeded" sentinel (either TD ``None``) yields (loss / n, {}, {})."""
-        loss, losses, metrics = _reduce_and_average(
-            torch.tensor(8.0), None, None, 2, device="cpu"
-        )
+        loss, losses, metrics = _reduce_and_average(torch.tensor(8.0), None, None, 2)
         assert loss == pytest.approx(4.0)
         assert losses == {} and metrics == {}
         ### A single ``None`` is enough to trip the sentinel.
         losses_td, _ = self._epoch_sums()
         loss, losses, metrics = _reduce_and_average(
-            torch.tensor(8.0), losses_td, None, 2, device="cpu"
+            torch.tensor(8.0), losses_td, None, 2
         )
         assert loss == pytest.approx(4.0)
         assert losses == {} and metrics == {}
@@ -301,7 +300,7 @@ class TestReduceAndAverage:
         sums = parts[0][0] + parts[1][0] + parts[2][0]
         counts = parts[0][1] + parts[1][1] + parts[2][1]
         _, _, means = _reduce_and_average(
-            torch.tensor(0.0), TensorDict(), sums, 3, device="cpu", metric_counts=counts
+            torch.tensor(0.0), TensorDict(), sums, 3, metric_counts=counts
         )
         assert means == pytest.approx({"a_l2": 1.0, "b_l2": 3.0})
         ### One step whose field has no finite target: NaN, not 0.
@@ -310,16 +309,13 @@ class TestReduceAndAverage:
             TensorDict(),
             parts[1][0],
             1,
-            device="cpu",
             metric_counts=parts[1][1],
         )
         assert step["a_l2"] == 1.0 and step["b_l2"] != step["b_l2"]
 
     def test_zero_local_count_avoids_zero_division(self):
         """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""
-        loss, losses, metrics = _reduce_and_average(
-            torch.tensor(7.0), None, None, 0, device="cpu"
-        )
+        loss, losses, metrics = _reduce_and_average(torch.tensor(7.0), None, None, 0)
         assert loss == pytest.approx(7.0)
         assert losses == {} and metrics == {}
 
@@ -397,7 +393,8 @@ def _run_test_epoch(
     ``train.forward_pass`` is patched to return step-dependent loss and
     metric values; returns ``(jsonl records, expected per-step records)``,
     where the expected values come from the per-step blocking readback
-    (``_reduce_and_average`` with ``n_samples=1``, main's per-step path).
+    (``_reduce_and_average`` with ``n_samples=1``, as ``_run_epoch`` did
+    before it used ``NonBlockingLogger``).
     ``reference=False`` skips that readback, which syncs. ``mask=True`` turns
     on ``mask_nonfinite_targets`` and adds a metric that is NaN on odd steps.
     ``real_forward=True`` runs the real ``forward_pass``, ``LossCalculator`` and
@@ -419,7 +416,7 @@ def _run_test_epoch(
             kept, counts = _skip_nan(metrics) if mask else (metrics, None)
             expected.append(
                 _reduce_and_average(
-                    loss.detach(), values, kept, 1, device=device, metric_counts=counts
+                    loss.detach(), values, kept, 1, metric_counts=counts
                 )
             )
         return loss, values, metrics
@@ -641,9 +638,7 @@ def _step_log_rank(rank, port):
         }
         with NonBlockingLogger(logged.append, reduce_op=dist.ReduceOp.AVG) as logger:
             logger.log(values)
-        expected = _reduce_and_average(
-            loss, losses, metrics, 1, device="cpu", metric_counts=counts
-        )
+        expected = _reduce_and_average(loss, losses, metrics, 1, metric_counts=counts)
         assert train._step_means(logged[0]) == expected
         assert expected[2]["rank0_l2"] == pytest.approx(1.37)
     finally:

@@ -73,7 +73,7 @@ from utils import (
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
-from physicsnemo.distributed import DistributedManager, fused_all_reduce
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
@@ -131,7 +131,6 @@ def _reduce_and_average(
     metrics_td: TensorDict | None,
     n_samples: int,
     *,
-    device: torch.device | str,
     metric_counts: TensorDict | None = None,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
     """Collapse rank-local loss/metric *sums* into a global mean-of-means.
@@ -139,15 +138,16 @@ def _reduce_and_average(
     Under DDP each rank only sees its own shard, so the numbers we log are
     meaningless until reduced across ranks. This divides the rank-local sums
     (``loss_sum`` plus the 0-D ``losses_td`` / ``metrics_td`` leaves) by the
-    local sample count, then averages those per-rank means across ranks with
-    one fused ``AVG`` ``all_reduce``
-    (:func:`physicsnemo.distributed.fused_all_reduce`). Under even shards
-    (train ``drop_last=True``, val pads) that equals the true global mean and
-    keeps the integer count out of the float reduction buffer. It is
-    granularity-neutral, mirrors the inference-side ``infer._allreduce_sums``,
-    and is called once per epoch, with ``n_samples == n_local`` and the running
-    epoch sums, for the dataset-wide summary (each step's values are averaged
-    as they are logged, in :func:`_run_epoch`).
+    local sample count, then averages those per-rank means across ranks in
+    one ``AVG`` all-reduce. Under even shards (train ``drop_last=True``, val
+    pads) that equals the true global mean and keeps the integer count out of
+    the float reduction buffer. It is granularity-neutral, mirrors the
+    inference-side ``infer._allreduce_sums``, and is called once per epoch,
+    with ``n_samples == n_local`` and the running epoch sums, for the
+    dataset-wide summary. It reduces through the same
+    :class:`~physicsnemo.utils.logging.NonBlockingLogger` and
+    :func:`_step_means` as each step's log in :func:`_run_epoch`, and waits for
+    the result.
 
     Args:
         loss_sum: Rank-local sum of scalar losses over the ``n_samples`` being
@@ -162,8 +162,6 @@ def _reduce_and_average(
         n_samples: Number of samples this rank contributed to ``loss_sum`` and
             the accumulators (``n_local``, equal to the step count because
             the recipe runs ``batch_size == 1``).
-        device: The rank's collective/compute device (``dist_manager.device``),
-            where the ``all_reduce`` runs.
         metric_counts: Optional per-leaf count of the samples behind
             ``metrics_td`` (see :func:`_skip_nan`), to average over instead.
 
@@ -191,26 +189,13 @@ def _reduce_and_average(
     ### mean-of-means equal to the global mean under even shards, with no
     ### integer count entering the float reduction buffer.
     n = max(n_samples, 1)
-    bundle = TensorDict(
-        {
-            "loss": loss_sum / n,
-            "losses": losses_td / n,
-            "metrics": metrics_td / n,
-        },
-    )
+    values = {"loss": loss_sum / n, "losses": losses_td / n, "metrics": metrics_td / n}
     if metric_counts is not None:
-        bundle["metric_counts"] = metric_counts / n
-    ### Pull the reduced bundle host-side once; .item() off the CPU copy is then
-    ### a free index, with no per-leaf device sync (AVG is a no-op single-process).
-    reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device).cpu()
-    metrics = reduced["metrics"]
-    if metric_counts is not None:
-        metrics = metrics / reduced["metric_counts"]
-    return (
-        reduced["loss"].item(),
-        {key: value.item() for key, value in reduced["losses"].items()},
-        {key: value.item() for key, value in metrics.items()},
-    )
+        values["metric_counts"] = metric_counts / n
+    logged = []
+    with NonBlockingLogger(logged.append, reduce_op=dist.ReduceOp.AVG) as logger:
+        logger.log(values)
+    return _step_means(logged[0])
 
 
 def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
@@ -224,11 +209,11 @@ def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
 def _step_means(
     values: dict[str, Any],
 ) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Split one step's logged all-rank means into its loss, losses and metrics.
+    """Split logged all-rank means into their loss, losses and metrics.
 
     With ``metric_counts`` (masked targets), each metric is divided by its
-    count, as in :func:`_reduce_and_average`, and is NaN where no rank had a
-    finite target.
+    count, and is NaN where no rank had a finite target. Each step's log and
+    :func:`_reduce_and_average` both use it.
     """
     metrics = values["metrics"]
     if "metric_counts" in values:
@@ -375,9 +360,9 @@ def _run_epoch(
     Train mode additionally runs the backward / optimizer / scheduler
     step and emits per-step TensorBoard + JSONL entries (``phase:
     "train_step"``); val mode wraps the loop in ``torch.no_grad()``, skips
-    TensorBoard per-step logging, and emits a lighter-weight JSONL record per
-    step (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
-    and ``step_time_s``. Each step's records are logged once its values reach
+    TensorBoard per-step logging, and emits a JSONL record per step (``phase:
+    "val_step"``) carrying ``epoch``, ``val_step``, ``loss``, ``step_time_s``
+    and the per-field losses and metrics (no ``mem_gb``). Each step's records are logged once its values reach
     the host (:class:`~physicsnemo.utils.logging.NonBlockingLogger`), so
     logging never makes a step wait for the GPU.
 
@@ -568,7 +553,6 @@ def _run_epoch(
         total_losses_td,
         total_metrics_td,
         n_local,
-        device=dist_manager.device,
         metric_counts=total_counts,
     )
 
