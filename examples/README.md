@@ -75,6 +75,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Deforming Plate](./structural_mechanics/deforming_plate/)|MeshGraphNet|
 |[Machine Learning Surrogates for Automotive Crash Dynamics](./structural_mechanics/crash)|Transolver, MeshGraphNet|
 |[Truss PINN: Prestressed Modal Analysis of a Pratt Truss Bridge](./structural_mechanics/truss_pinn/)|PINN (FullyConnected)|
+|[Steel Bridge: CAE Reference vs Physics-Informed Neural Network](./structural_mechanics/steel_bridge_pinns)|FullyConnected (PINN), Q4 plane-stress finite elements|
 
 ### Healthcare
 

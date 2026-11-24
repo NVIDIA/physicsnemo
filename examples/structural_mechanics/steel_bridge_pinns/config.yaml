@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Experiment selector: fea | pinn_physics | pinn_warm | supervised | compare
+experiment: compare
+
+seed: 0
+threads: 8
+
+# Simply supported steel plate girder: 12 m span, 1.2 m deep, 20 mm thick web.
+bridge:
+  span: 12.0
+  depth: 1.2
+  thickness: 0.02
+  youngs_modulus: 2.1e11
+  poisson_ratio: 0.3
+  density: 7850.0
+  gravity: 9.81
+  bearing_length: 0.1
+  load_centres: [0.35, 0.55]
+  load_patch_length: 0.6
+  load_per_patch: 60000.0
+
+# CAE reference model (Q4 plane-stress finite elements).
+cae:
+  nx: 240
+  ny: 48
+  sensor_count: 32
+  sensor_seed: 3
+  convergence:
+    - [60, 12]
+    - [120, 24]
+    - [240, 48]
+
+model:
+  num_layers: 5
+  layer_size: 48
+  activation: tanh
+  skip_connections: false
+  # Width of the smooth mask that enforces the bearing pads to zero displacement.
+  bearing_halo: 0.1
+
+training:
+  # Monte-Carlo quadrature points per step.
+  interior_points: 2048
+  patch_points: 64
+  final_lr: 1.0e-5
+  data_weight: 10.0
+  log_every: 250
+  # Short supervised fit used to warm start the data-informed variants.
+  warmstart_steps: 300
+  warmstart_lr: 1.0e-3
+  # Ramp the energy term in over this many steps (0 disables the ramp).
+  energy_ramp_steps: 500
+
+# Per-variant optimisation settings.
+variants:
+  pinn_physics:
+    steps: 8000
+    interior_points: 4096
+    initial_lr: 3.0e-3
+    clip_grad_norm: 0.2
+    use_data: false
+    warm_start: false
+  pinn_warm:
+    steps: 4000
+    interior_points: 2048
+    initial_lr: 5.0e-4
+    clip_grad_norm: 0.5
+    use_data: true
+    warm_start: true
+  supervised:
+    steps: 4300
+    interior_points: 2048
+    initial_lr: 1.0e-3
+    clip_grad_norm: 1.0
+    use_data: true
+    warm_start: false
+    data_only: true
+
+# Metric grid for the final comparison (independent of mesh and collocation points).
+evaluation:
+  nx: 241
+  ny: 61
+  progress_nx: 97
+  progress_ny: 25
+
+# Few-shot study: how the error depends on the number of CAE measurements.
+sweep:
+  enabled: true
+  sensor_counts: [8, 16, 32, 64]
+  steps: 2000
