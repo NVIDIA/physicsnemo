@@ -27,11 +27,15 @@ selected point data to the new vertices.
 
    By default, ``remesh`` first splits long source edges, so that clusters can
    land inside large faces. For a closed input, it then fills holes and
-   repairs folds in the result. If that result changes the input's area, or a
-   closed input's volume, by more than 5%, or leaves a closed input open or
-   inconsistently wound, ``remesh`` clusters the input's own vertices instead,
-   as ``refine=False`` always does. Either way, each connected component of
-   the result is then wound consistently and like the source.
+   repairs folds in the result. ``remesh`` clusters the input's own vertices
+   instead if the result:
+
+   - Changes the input's area or a closed input's volume by more than 5%
+   - Leaves a closed input open or inconsistently wound
+
+   This fallback matches ``refine=False``.
+   In both cases, ``remesh`` winds each connected result component consistently
+   and like the source.
 
 .. note::
 
