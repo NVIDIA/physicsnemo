@@ -30,8 +30,8 @@ from physicsnemo.distributed.fused_all_reduce import _buffer_dtype, _crosses_ran
 class _Record(NamedTuple):
     """One :meth:`NonBlockingLogger.log` call, waiting for its copy to land."""
 
-    keys: list[tuple[str, ...]]  # each scalar's key path, in the order logged
-    packed: list[tuple[str, ...]]  # the same keys, in their order in ``host``
+    keys: list[tuple[str, ...]]  # each leaf's key path, in the order logged
+    packed: list[tuple[str, ...]]  # the scalars' keys, in their order in ``host``
     host: torch.Tensor  # the packed scalars, valid once ``landed`` completes
     landed: torch.cuda.Event | None  # None: the copy was synchronous
     args: tuple[Any, ...]
@@ -40,10 +40,13 @@ class _Record(NamedTuple):
 
 def _leaves(
     values: Mapping[str, Any], prefix: tuple[str, ...] = ()
-) -> Iterator[tuple[tuple[str, ...], torch.Tensor]]:
-    """Yield ``(key path, tensor)`` for each leaf of a nested mapping, in order."""
+) -> Iterator[tuple[tuple[str, ...], Any]]:
+    """Yield ``(key path, leaf)`` for each leaf of a nested mapping, in order.
+
+    An empty nested mapping is a leaf, so that ``log_fn`` gets it back.
+    """
     for key, value in values.items():
-        if isinstance(value, Mapping):
+        if isinstance(value, Mapping) and len(value.keys()):
             yield from _leaves(value, (*prefix, key))
         else:
             yield (*prefix, key), value
@@ -66,7 +69,9 @@ class NonBlockingLogger:
     log_fn : Callable[..., None]
         Called as ``log_fn(values, *args, **kwargs)`` for each :meth:`log`
         call, where ``values`` is a nested ``dict`` of Python floats with the
-        logged scalars' keys.
+        logged scalars' keys. It runs on every rank that calls :meth:`log`.
+        With ``reduce_op``, every rank must call :meth:`log`, so check the
+        rank inside ``log_fn`` to write once.
     reduce_op : torch.distributed.ReduceOp | None, optional
         If given, the scalars are all-reduced over ``group`` with this op, in
         the same buffer and before the copy. For example, ``ReduceOp.AVG``
@@ -81,10 +86,13 @@ class NonBlockingLogger:
     -----
     Leaving a ``with`` block flushes the logger, waiting for the copies still
     in flight. If the block raised, it logs only the records whose copies have
-    landed, without waiting, since the device may be in an error state.
+    landed and drops the rest, without waiting, since the device may be in an
+    error state. Like a buffered file, the logger also flushes when it is
+    deleted, so records still in flight are not lost without a ``with`` block
+    or a final :meth:`flush`.
 
-    Example
-    -------
+    Examples
+    --------
     >>> import torch
     >>> from physicsnemo.utils.logging import NonBlockingLogger
     >>> def show(values, step):
@@ -119,7 +127,17 @@ class NonBlockingLogger:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        self.flush(wait=exc_type is None)
+        if exc_type is None:
+            self.flush()
+            return
+        try:
+            self.flush(wait=False)
+        finally:
+            self._pending.clear()
+
+    def __del__(self) -> None:
+        if getattr(self, "_pending", None):
+            self.flush()
 
     def log(self, values: Mapping[str, Any], /, *args: Any, **kwargs: Any) -> None:
         """Start copying ``values`` to the host and queue ``log_fn``'s call.
@@ -142,8 +160,11 @@ class NonBlockingLogger:
         **kwargs : Any
             Keyword arguments passed on to ``log_fn`` as they are.
         """
-        keys, scalars = [], []
+        keys, scalar_keys, scalars = [], [], []
         for key, value in _leaves(values):
+            keys.append(key)
+            if isinstance(value, Mapping):  # empty, so log_fn gets {} back
+                continue
             scalar = value.detach() if isinstance(value, torch.Tensor) else value
             if type(scalar) is not torch.Tensor or scalar.numel() != 1:
                 raise ValueError(
@@ -151,10 +172,10 @@ class NonBlockingLogger:
                     f"{'/'.join(key)!r} is a {type(value).__name__} of shape "
                     f"{tuple(getattr(value, 'shape', ()))}."
                 )
-            keys.append(key)
+            scalar_keys.append(key)
             scalars.append(scalar.reshape(()))
         ### Pack in key order, so every rank lays out the buffer identically.
-        order = sorted(range(len(keys)), key=keys.__getitem__)
+        order = sorted(range(len(scalars)), key=scalar_keys.__getitem__)
         host, landed = torch.empty(0), None
         if scalars:
             ### fused_all_reduce's dtype rule. Integers opt in to float64, where
@@ -172,7 +193,7 @@ class NonBlockingLogger:
             else:
                 host = buffer.cpu()
         self._pending.append(
-            _Record(keys, [keys[i] for i in order], host, landed, args, kwargs)
+            _Record(keys, [scalar_keys[i] for i in order], host, landed, args, kwargs)
         )
         self.flush(wait=False)
 
@@ -198,5 +219,5 @@ class NonBlockingLogger:
                 node = values
                 for part in key[:-1]:
                     node = node.setdefault(part, {})
-                node[key[-1]] = numbers[key]
+                node[key[-1]] = numbers[key] if key in numbers else {}
             self.log_fn(values, *record.args, **record.kwargs)

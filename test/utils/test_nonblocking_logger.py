@@ -134,6 +134,25 @@ def test_empty_values_still_call_log_fn():
     assert calls == [({}, (3,), {})]
 
 
+def test_empty_nested_mappings_come_back_empty():
+    """An empty nested ``dict`` or ``TensorDict`` reaches ``log_fn`` as ``{}``."""
+    calls, log_fn = _recorder()
+    with NonBlockingLogger(log_fn) as logger:
+        logger.log({"losses": {}, "loss": torch.tensor(0.5), "metrics": TensorDict()})
+    assert calls[0][0] == {"losses": {}, "loss": 0.5, "metrics": {}}
+    assert list(calls[0][0]) == ["losses", "loss", "metrics"]
+
+
+def test_landed_records_are_logged_during_log():
+    """Each :meth:`log` call logs the records whose copies have landed (on the
+    CPU, its own) before it returns, so records do not wait for the end."""
+    calls = []
+    logger = NonBlockingLogger(lambda values, step: calls.append(step))
+    for step in range(3):
+        logger.log({"loss": torch.tensor(float(step))}, step)
+        assert calls == list(range(step + 1))
+
+
 class _Subclass(torch.Tensor):
     """Stands in for tensor subclasses such as ``DTensor``."""
 
@@ -192,8 +211,25 @@ def test_error_exit_logs_only_landed_records_without_waiting(monkeypatch):
             logger.log({"loss": torch.zeros((), device="cuda")}, 1)
             raise RuntimeError("step failed")
     assert calls == [({"loss": 1.0}, (0,), {})]
+    del logger  # the record still in flight was dropped, not left to the deletion
+    assert calls == [({"loss": 1.0}, (0,), {})]
     assert waits == []
     torch.cuda.synchronize()
+
+
+@requires_cuda
+def test_deleting_the_logger_logs_the_records_still_in_flight():
+    """Without a ``with`` block or a final :meth:`flush`, deleting the logger
+    waits for the copies still in flight and logs them, as a buffered file
+    flushes when it is closed."""
+    calls, log_fn = _recorder()
+    logger = NonBlockingLogger(log_fn)
+    torch.cuda._sleep(_BUSY_CYCLES)
+    for step in range(2):
+        logger.log({"loss": torch.full((), step + 0.5, device="cuda")}, step)
+    assert calls == []
+    del logger
+    assert calls == [({"loss": step + 0.5}, (step,), {}) for step in range(2)]
 
 
 def _reduce_rank(rank, port):
