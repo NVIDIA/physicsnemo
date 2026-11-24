@@ -392,10 +392,10 @@ def _run_test_epoch(
 
     ``train.forward_pass`` is patched to return step-dependent loss and
     metric values; returns ``(jsonl records, expected per-step records)``,
-    where the expected values come from the per-step blocking readback
-    (``_reduce_and_average`` with ``n_samples=1``, as ``_run_epoch`` did
-    before it used ``NonBlockingLogger``).
-    ``reference=False`` skips that readback, which syncs. ``mask=True`` turns
+    where the expected values are each step's own values, read with
+    ``.item()``: on one process they are the all-rank means, so the reference
+    shares no code with the logged path. ``reference=False`` skips that read,
+    which syncs. ``mask=True`` turns
     on ``mask_nonfinite_targets`` and adds a metric that is NaN on odd steps.
     ``real_forward=True`` runs the real ``forward_pass``, ``LossCalculator`` and
     ``MetricCalculator`` on the loader's collated batches instead.
@@ -413,10 +413,13 @@ def _run_test_epoch(
             odd = batch["k"] % 2
             metrics["odd_l2"] = loss.detach() + (float("nan") if odd else 0.0)
         if reference:
-            kept, counts = _skip_nan(metrics) if mask else (metrics, None)
+            ### On one process each step's all-rank means are its own values
+            ### (NaN for a metric with no finite target), read here directly.
             expected.append(
-                _reduce_and_average(
-                    loss.detach(), values, kept, 1, metric_counts=counts
+                (
+                    loss.detach().item(),
+                    {k: v.item() for k, v in values.items()},
+                    {k: v.item() for k, v in metrics.items()},
                 )
             )
         return loss, values, metrics
@@ -477,9 +480,9 @@ def _check_steps(records, expected, mode, n_steps):
 def test_every_step_logged_once_in_order_with_blocking_values(
     monkeypatch, device, mode, mask
 ):
-    """Each of 10 steps is logged once, in order, with the per-step blocking
-    readback's loss, losses and metrics, bitwise (single process, so the
-    all-reduce is the identity on both paths). On CUDA the records log as
+    """Each of 10 steps is logged once, in order, with its own loss, losses
+    and metrics read with ``.item()``, bitwise (on one process those are the
+    all-rank means). On CUDA the records log as
     their copies land, and the epoch's end drains the rest. With masked
     targets, a step whose field has no finite target logs NaN for it."""
     loader = [{"k": float(k)} for k in range(10)]
@@ -638,9 +641,18 @@ def _step_log_rank(rank, port):
         }
         with NonBlockingLogger(logged.append, reduce_op=dist.ReduceOp.AVG) as logger:
             logger.log(values)
-        expected = _reduce_and_average(loss, losses, metrics, 1, metric_counts=counts)
-        assert train._step_means(logged[0]) == expected
-        assert expected[2]["rank0_l2"] == pytest.approx(1.37)
+        ### Each rank computes both ranks' values, so the all-rank means are
+        ### known without the logger: the float32 sum of the two, halved.
+        both = [torch.tensor(1.37 * (r + 1)) for r in range(2)]
+
+        def mean(f):
+            return ((f(both[0]) + f(both[1])) / 2).item()
+
+        assert train._step_means(logged[0]) == (
+            mean(lambda t: t),
+            {"loss/test": mean(lambda t: t * 7)},
+            {"test_l2": mean(torch.sqrt), "rank0_l2": torch.tensor(1.37).item()},
+        )
     finally:
         dist.destroy_process_group()
 
@@ -653,9 +665,8 @@ def _step_log_rank(rank, port):
 )
 def test_step_log_is_the_all_rank_mean():
     """Across two CPU ranks with different values, each step's logged values
-    are the all-rank means, equal to the blocking per-step readback
-    (``_reduce_and_average`` with ``n_samples=1``). A metric whose target is
-    finite on one rank only averages over that rank."""
+    are the all-rank means, computed without the logger. A metric whose
+    target is finite on one rank only averages over that rank."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]

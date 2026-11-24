@@ -362,9 +362,10 @@ def _run_epoch(
     "train_step"``); val mode wraps the loop in ``torch.no_grad()``, skips
     TensorBoard per-step logging, and emits a JSONL record per step (``phase:
     "val_step"``) carrying ``epoch``, ``val_step``, ``loss``, ``step_time_s``
-    and the per-field losses and metrics (no ``mem_gb``). Each step's records are logged once its values reach
-    the host (:class:`~physicsnemo.utils.logging.NonBlockingLogger`), so
-    logging never makes a step wait for the GPU.
+    and the per-field losses and metrics (no ``mem_gb``). Each step's records
+    are logged once its values reach the host
+    (:class:`~physicsnemo.utils.logging.NonBlockingLogger`), so logging never
+    makes a step wait for the GPU.
 
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
