@@ -65,7 +65,14 @@ def thin_matmul(
             f"rows of length {rows.shape[-1]} cannot multiply a matrix of shape "
             f"{tuple(matrix.shape)}"
         )
+    dtype = torch.promote_types(rows.dtype, matrix.dtype)
+    if rows.shape[-1] == 0:
+        return rows.new_zeros((*rows.shape[:-1], matrix.shape[1]), dtype=dtype)
+    ### float16 and bfloat16 sum in float32: a partial sum can overflow float16
+    ### where the product does not
+    work = torch.float32 if dtype in (torch.float16, torch.bfloat16) else dtype
+    rows, matrix = rows.to(work), matrix.to(work)
     out = rows[..., :1] * matrix[0]
     for k in range(1, rows.shape[-1]):
         out = out + rows[..., k : k + 1] * matrix[k]
-    return out
+    return out.to(dtype)

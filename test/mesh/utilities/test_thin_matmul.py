@@ -38,3 +38,22 @@ def test_thin_matmul_refuses_mismatched_sizes():
         thin_matmul(torch.ones(5, 3), torch.ones(4, 3))
     with pytest.raises(ValueError, match="cannot multiply"):
         thin_matmul(torch.ones(5, 3), torch.ones(2, 3))
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_thin_matmul_sums_reduced_precision_in_float32(dtype):
+    """A partial sum beyond the float16 range does not turn a finite product into NaN."""
+    rows = torch.tensor([[40000.0, 40000.0]], dtype=dtype)
+    matrix = torch.tensor([[2.0, 0.0], [-2.0, 1.0]], dtype=dtype)
+
+    out = thin_matmul(rows, matrix)
+
+    assert out.dtype == dtype
+    torch.testing.assert_close(out, torch.tensor([[0.0, 40000.0]], dtype=dtype))
+
+
+def test_thin_matmul_of_zero_length_rows():
+    """Rows of length zero give zeros, as ``@`` does."""
+    out = thin_matmul(torch.ones(5, 0), torch.ones(0, 3))
+
+    torch.testing.assert_close(out, torch.zeros(5, 3))

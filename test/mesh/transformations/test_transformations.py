@@ -927,6 +927,40 @@ class TestTransform:
             )
 
 
+class TestTransformEdgeShapes:
+    """Transforms at the edges of the float16 range and of the spatial dimension."""
+
+    def test_float16_partial_sums_do_not_overflow(self, device):
+        """A float16 transform with a finite result stays finite when a partial
+        sum of its products exceeds the float16 range."""
+        points = torch.tensor(
+            [[40000.0, 40000.0], [1.0, 2.0], [3.0, 4.0]],
+            dtype=torch.float16,
+            device=device,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]], device=device))
+        matrix = torch.tensor(
+            [[2.0, -2.0], [0.0, 1.0]], dtype=torch.float16, device=device
+        )
+
+        out = transform(mesh, matrix)
+
+        assert out.points.dtype == torch.float16
+        expected = torch.tensor([0.0, 40000.0], dtype=torch.float16, device=device)
+        torch.testing.assert_close(out.points[0], expected)
+
+    def test_transform_zero_spatial_dims(self, device):
+        """A mesh with zero spatial dimensions transforms without coordinates."""
+        mesh = Mesh(
+            points=torch.zeros(4, 0, device=device),
+            cells=torch.tensor([[0], [1]], device=device),
+        )
+
+        out = transform(mesh, torch.eye(0, device=device))
+
+        assert out.points.shape == (4, 0)
+
+
 class TestTransformAccuracy:
     """A float32 mesh moves at float32 accuracy, on CUDA also with TF32 allowed."""
 
