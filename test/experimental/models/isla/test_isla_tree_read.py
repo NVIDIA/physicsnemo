@@ -67,7 +67,6 @@ from physicsnemo.experimental.models.isla._tree_read import (
     normal_error_bound,
     normal_faces,
     tree_pair_invariants,
-    tree_read_pairs,
 )
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
@@ -81,6 +80,10 @@ from test.experimental.models.isla._kernel_cases import (
     _SinkRead,
     _to,
     _two_x,
+    node_cells,
+    pair_invariants,
+    point_pairs,
+    tree_read_pairs,
 )
 from test.experimental.models.isla._marks import (
     DEVICES,
@@ -347,7 +350,7 @@ def test_tree_read_pairs_cover_the_boundary_measure_once(theta):
 
 
 def _node_cells(f, i):
-    cells, _ = f.node_cells(torch.tensor([i]))
+    cells, _ = node_cells(f, torch.tensor([i]))
     return cells
 
 
@@ -511,7 +514,7 @@ def test_point_pairs_admit_only_separated_coherent_nodes_and_cover_every_cell(th
     pts, nrm, w, _ = cloud(700, d=3, seed=6)
     q, _, _, _ = cloud(90, d=3, seed=7, scale=(3.0, 3.0, 3.0))
     f = BoundaryForest.build(pts, w, nrm, None, theta=theta)
-    qi, si, n_node = f.point_pairs(q)
+    qi, si, n_node = point_pairs(f, q)
     n = f.n_cells
     assert torch.equal(qi, qi.sort().values)
     is_node = si >= n
@@ -526,7 +529,7 @@ def test_point_pairs_admit_only_separated_coherent_nodes_and_cover_every_cell(th
     counts.index_put_(
         (qi[~is_node], si[~is_node]), torch.ones_like(qi[~is_node]), accumulate=True
     )
-    cells, which = f.node_cells(node)
+    cells, which = node_cells(f, node)
     counts.index_put_(
         (qi[is_node][which], cells), torch.ones_like(cells), accumulate=True
     )
@@ -534,7 +537,7 @@ def test_point_pairs_admit_only_separated_coherent_nodes_and_cover_every_cell(th
     if theta == 0.0:
         assert n_node == 0
     ### Query independence of the list itself.
-    qi_one, si_one, _ = f.point_pairs(q[17:18])
+    qi_one, si_one, _ = point_pairs(f, q[17:18])
     assert torch.equal(torch.sort(si_one).values, torch.sort(si[qi == 17]).values)
     assert bool((qi_one == 0).all())
 
@@ -556,8 +559,8 @@ def test_fast_walk_gives_the_reference_lists_in_the_reference_order(dim, dtype, 
     q[6, 0] = float("inf")
     with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
         f = BoundaryForest.build(pts, w, nrm, None, theta=theta)
-        qi, si, n_node = f.point_pairs(q, walk="reference")
-        qi_f, si_f, n_node_f = f.point_pairs(q, walk="fast")
+        qi, si, n_node = point_pairs(f, q, walk="reference")
+        qi_f, si_f, n_node_f = point_pairs(f, q, walk="fast")
     assert torch.equal(qi_f, qi) and torch.equal(si_f, si)
     assert n_node_f == n_node > 0
     assert torch.equal(torch.sort(si[qi == 5]).values, torch.arange(f.n_cells))
@@ -622,8 +625,8 @@ def test_forest_and_every_list_are_the_same_in_every_pose_at_finite_theta(
     assert torch.equal(f1.coherent, f0.coherent)
     assert torch.allclose(f1.center, k * f0.center @ R.T + t, atol=1e-9)
     assert torch.allclose(f1.normal, f0.normal @ R.T, atol=1e-9)
-    qi0, si0, n0 = f0.point_pairs(q, walk=kernel)
-    qi1, si1, n1 = f1.point_pairs(k * q @ R.T + t, walk=kernel)
+    qi0, si0, n0 = point_pairs(f0, q, walk=kernel)
+    qi1, si1, n1 = point_pairs(f1, k * q @ R.T + t, walk=kernel)
     assert n0 == n1 and torch.equal(qi0, qi1) and torch.equal(si0, si1)
 
 
@@ -683,7 +686,7 @@ def _lattice_forest(R=None, t=None, kernel="reference"):
         theta=TREE_READ_THETA,
         build=kernel,
     )
-    return f, f.point_pairs(q.float(), walk=kernel)
+    return f, point_pairs(f, q.float(), walk=kernel)
 
 
 def _float32_cells(simplex):
@@ -744,7 +747,7 @@ def test_forest_is_bitwise_the_same_under_bf16_autocast(device):
         f = BoundaryForest.build(
             pts, w, nrm, None, theta=TREE_READ_THETA, build="reference"
         )
-        return f, f.point_pairs(q32, walk="reference")
+        return f, point_pairs(f, q32, walk="reference")
 
     f0, l0 = forest()
     with torch.autocast(device, dtype=torch.bfloat16):
@@ -779,12 +782,12 @@ def test_forest_is_the_same_under_renumbering_of_the_cells():
     f0 = BoundaryForest.build(
         pts, w, nrm, None, theta=TREE_READ_THETA, build="reference"
     )
-    qi0, si0, _ = f0.point_pairs(q, walk="reference")
+    qi0, si0, _ = point_pairs(f0, q, walk="reference")
     perm = torch.randperm(pts.shape[0], generator=torch.Generator().manual_seed(4))
     f1 = BoundaryForest.build(
         pts[perm], w, nrm[perm], None, theta=TREE_READ_THETA, build="reference"
     )
-    qi1, si1, _ = f1.point_pairs(q, walk="reference")
+    qi1, si1, _ = point_pairs(f1, q, walk="reference")
     assert torch.equal(perm[f1.cells], f0.cells)
     n = pts.shape[0]
     mapped = torch.where(si1 < n, perm[si1.clamp_max(n - 1)], si1)
@@ -848,12 +851,12 @@ def test_box_test_ties_are_opened():
         torch.randperm(inner.numel(), generator=torch.Generator().manual_seed(1))[:400]
     ]
     q = _tie_queries(f, nodes, TREE_READ_THETA)
-    qi, si, _ = f.point_pairs(q, walk="reference")
+    qi, si, _ = point_pairs(f, q, walk="reference")
     admitted = (si == f.n_cells + nodes[qi]).sum()
     assert int(admitted) == 0
     ### A point a little beyond the tie (1 % farther) reads the node whole.
     far = _tie_queries(f, nodes, TREE_READ_THETA / 1.01)
-    qi, si, _ = f.point_pairs(far, walk="reference")
+    qi, si, _ = point_pairs(f, far, walk="reference")
     assert float((si == f.n_cells + nodes[qi]).sum()) >= 0.9 * nodes.numel()
 
 
@@ -907,7 +910,7 @@ def test_a_nearly_tied_frame_widens_the_separation_test_by_the_nodes_own_size(
         tree_read, "frame_rotation_bound", lambda x, wt, u: torch.zeros((), dtype=D)
     )
     exact = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA)
-    n_tied, n_exact = tied.point_pairs(q)[0].numel(), exact.point_pairs(q)[0].numel()
+    n_tied, n_exact = point_pairs(tied, q)[0].numel(), point_pairs(exact, q)[0].numel()
     assert n_tied <= 1.6 * n_exact, (n_tied, n_exact)
 
 
@@ -918,7 +921,7 @@ def _admitted_boxes_in(f, q, qi, si, frame_map):
     n = f.n_cells
     is_node = si >= n
     node = si[is_node] - n
-    cells, which = f.node_cells(node)
+    cells, which = node_cells(f, node)
     pts_f = frame_map(frame_coordinates(f._points - f.origin, f.frame))
     p = frame_map(frame_coordinates(q.double() - f.origin, f.frame))[qi[is_node]]
     lo = torch.full((node.numel(), 3), math.inf, dtype=D).scatter_reduce(
@@ -947,7 +950,7 @@ def test_admitted_nodes_are_separated_in_every_frame_within_the_rotation_bound(
     q, _, _, _ = cloud(150, d=3, seed=7, scale=(3.0, 3.0, 3.0))
     f = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA)
     f._points = pts
-    qi, si, n_node = f.point_pairs(q)
+    qi, si, n_node = point_pairs(f, q)
     assert n_node > 0
     g = torch.Generator().manual_seed(2)
     for k in range(6):
@@ -1470,8 +1473,8 @@ def test_fast_walk_on_cuda_gives_the_reference_lists_in_the_reference_order(dim,
     pts, nrm, w, q = (t.to(dev) for t in (pts, nrm, w, q))
     f = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA)
     assert tree_read.resolve_walk("auto", q, TREE_READ_THETA, f) == "fast"
-    qi, si, n_node = f.point_pairs(q, walk="reference")
-    qi_f, si_f, n_node_f = f.point_pairs(q)
+    qi, si, n_node = point_pairs(f, q, walk="reference")
+    qi_f, si_f, n_node_f = point_pairs(f, q)
     assert torch.equal(qi_f, qi) and torch.equal(si_f, si)
     assert n_node_f == n_node > 0
 
@@ -1602,7 +1605,7 @@ def _check_fast_build(dim, dtype, device, autocast):
                 for b in ("reference", "fast")
             ]
             q = pts[:50] * 1.5 + 0.25
-            (qa, sa, na), (qb, sb, nb) = (f.point_pairs(q) for f in forests)
+            (qa, sa, na), (qb, sb, nb) = (point_pairs(f, q) for f in forests)
         ### The fast build follows the precision the reference builds in (under
         ### autocast too): _forest_differences compares dtypes as well as bits.
         assert not _forest_differences(*forests), (pts.shape[0], leaf)
@@ -1643,9 +1646,9 @@ def test_fast_forest_build_makes_its_trees_on_first_use():
     f = BoundaryForest.build(
         pts, w, nrm, None, theta=1.0, groups=torch.arange(1500) % 3, build="fast"
     )
-    fast = f.point_pairs(q, walk="fast")
+    fast = point_pairs(f, q, walk="fast")
     assert "_per_tree" not in vars(f)
-    ref = f.point_pairs(q, walk="reference")
+    ref = point_pairs(f, q, walk="reference")
     assert "_per_tree" in vars(f) and f.trees is f.trees
     assert len(f.trees) == len(f.tree_cells) == int(f.node_offset.shape[0]) - 1
     assert ref[2] == fast[2] > 0
@@ -1765,8 +1768,8 @@ def test_fast_forest_and_walk_are_the_reference_on_face_and_box_ties(device):
                     for k in ("reference", "fast")
                 )
                 lists = [
-                    ref.point_pairs(q, walk="reference"),
-                    fast.point_pairs(q, walk="fast"),
+                    point_pairs(ref, q, walk="reference"),
+                    point_pairs(fast, q, walk="fast"),
                 ]
             assert not _forest_differences(ref, fast), (i, autocast)
             (qa, sa, na), (qb, sb, nb) = lists
@@ -1784,8 +1787,8 @@ def test_fast_forest_and_walk_are_the_reference_on_face_and_box_ties(device):
     inner = (ref.left >= 0).nonzero().squeeze(-1)[:400]
     q = _tie_queries(ref, inner.cpu(), TREE_READ_THETA).to(device)
     (qa, sa, na), (qb, sb, nb) = (
-        ref.point_pairs(q, walk="reference"),
-        fast.point_pairs(q, walk="fast"),
+        point_pairs(ref, q, walk="reference"),
+        point_pairs(fast, q, walk="fast"),
     )
     assert na == nb and torch.equal(qa, qb) and torch.equal(sa, sb)
 
@@ -2751,7 +2754,7 @@ def test_walk_of_a_range_of_points_is_those_rows_of_the_walk_of_every_point(
     assert lazy.lists == [None]
     qi, si, n_node = full.lists[0]
     with torch.autocast(device, dtype=torch.bfloat16, enabled=autocast):
-        ref = full.forests[0].point_pairs(q, walk=walk)  # the forest's own walk
+        ref = point_pairs(full.forests[0], q, walk=walk)  # the forest's own walk
     assert torch.equal(ref[0], qi) and torch.equal(ref[1], si) and ref[2] == n_node
     assert 0 < n_node < qi.numel()
     counts = tree_read.walk_pair_counts(lazy)
@@ -2855,7 +2858,7 @@ def test_fused_kernel_basis_matches_the_reference_basis(
     geo_c, plan_c = _to(geometry, dev, torch.float32), _to(plan, dev, torch.float32)
     basis_c = copy.deepcopy(basis).float().to(dev)
     assert fused_basis.unsupported_reason(basis_c, geo_c) is None
-    inv = fused_basis.pair_invariants(plan_c.qi, plan_c.bj, 0, 0, geo_c)
+    inv = pair_invariants(plan_c.qi, plan_c.bj, 0, 0, geo_c)
     inv_ref = tree_pair_invariants(plan_c.qi.long(), plan_c.bj.long(), **geo_c)
     assert torch.allclose(inv, inv_ref, rtol=1e-6, atol=1e-6)
     seed_c = seed.float().to(dev)
@@ -3092,7 +3095,7 @@ def test_a_forced_reference_runs_the_cluster_trees_torch_code(device, monkeypatc
         forest = BoundaryForest.build(
             pts, w / w.sum(), nrm, None, theta=0.5, build=kind
         )
-        forest.point_pairs(q, walk=kind)
+        point_pairs(forest, q, walk=kind)
         if kind == "reference":
             assert {s[0] for s in seen} == {"_resolve_build", "_resolve_walk"}
             assert all(s[1:] == ("torch", "torch") for s in seen), seen

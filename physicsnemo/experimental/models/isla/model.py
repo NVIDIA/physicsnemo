@@ -138,7 +138,7 @@ but no rank: :math:`e_\theta(\hat u, \hat a)` is :math:`-\hat a` projected off
 :math:`\hat u`, so it lies in the span of :math:`\hat u` and :math:`\hat a`, and
 the true vectors span at most :math:`K + 2` directions. With no global direction
 in three dimensions, every even-parity vector output therefore lies in the plane
-of :math:`\hat n` and :math:`\hat u` (a known limit, ``test_isla_heads.py``).
+of :math:`\hat n` and :math:`\hat u` (a known limit).
 
 **The frame.** ISLA has no frame origin: positions enter only as point-to-anchor
 differences. The one length scale :math:`L` is the measure-weighted
@@ -332,7 +332,7 @@ blocks take plain tensors.
 
 The surface task's whole model, ``Mesh`` inputs and output included, compiles with
 ``model.compile(fullgraph=True, dynamic=True)`` into one graph for every boundary
-count, boundary inputs up to rank 2 (``test_isla_compile.py``). **Compile it with**
+count, boundary inputs up to rank 2. **Compile it with**
 :meth:`~physicsnemo.experimental.models.isla.ISLA.compile`, **not** ``torch.compile(model)``: on torch 2.13
 Inductor's default options make the compiled model compute a different function
 wherever it runs the eager geometry region, without an error or a warning. The interior task
@@ -1282,7 +1282,7 @@ class ISLA(Module):
         self._global_scalar_layout = _schema_layout({k: () for k in self._global_scalar_names})
         ### The execution choices (module docstring, *Kernels*), resolved at the first
         ### forward pass (_resolve_geo_kernel, _resolve_geometry_kernel); reference_kernels
-        ### sets them, and tests force one.
+        ### sets them.
         self._geo_kernel = "auto"
         self._geometry_kernel = "auto"
         ### How much of their default saved activations the compiled blocks

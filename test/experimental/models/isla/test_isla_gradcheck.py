@@ -51,7 +51,7 @@ from physicsnemo.experimental.models.isla import _tree_read as tree_read
 from physicsnemo.experimental.models.isla._geometry import exact_boundary_geometry
 from physicsnemo.mesh.geometry import compute_cell_normals
 from test.experimental.models.isla._geometry_cases import _circle, _sphere
-from test.experimental.models.isla._kernel_cases import _SinkRead
+from test.experimental.models.isla._kernel_cases import _SinkRead, tree_read_pairs
 from test.experimental.models.isla._marks import DEVICES, requires_cuda_triton
 
 D = torch.float64
@@ -549,7 +549,7 @@ def test_tree_read_basis_passes_gradcheck_in_the_geometry():
     )
 
     def read(q_r, q_n, q_wall, b_r, b_n):
-        pairs = tree_read.tree_read_pairs(
+        pairs = tree_read_pairs(
             basis, query_r=q_r[None], query_n=q_n[None], query_wall=q_wall[None], boundary_r=b_r[None],
             boundary_n=b_n[None], boundary_vecs=None, log_frac=torch.log(w / w.sum())[None], g_unit=g_unit,
             theta=0.0, eps=1e-12,
@@ -708,7 +708,7 @@ def test_tree_read_vertex_derivative_at_finite_theta_matches_central_differences
     def log_normalizers(points):
         mesh = Mesh(points=points, cells=cells)
         a = mesh.cell_areas
-        pairs = tree_read.tree_read_pairs(
+        pairs = tree_read_pairs(
             basis, query_r=q[None], query_n=torch.nn.functional.normalize(q, dim=-1)[None],
             query_wall=q.norm(dim=-1)[None] - 1.0, boundary_r=mesh.cell_centroids[None],
             boundary_n=mesh.cell_normals[None], boundary_vecs=None, log_frac=torch.log(a / a.sum())[None],

@@ -603,25 +603,6 @@ class BoundaryForest:
             coherent=length > coherent_length,
         )
 
-    def node_cells(self, nodes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """The cells of the listed nodes: ``(cell, which)`` with ``which`` the index into
-        ``nodes`` each cell belongs to."""
-        pos, which = _ragged_arange(self.range_start[nodes], self.range_count[nodes])
-        return self.cells[pos], which
-
-    def point_pairs(self, points: torch.Tensor, walk: str = "auto") -> tuple[torch.Tensor, torch.Tensor, int]:
-        """Every point's list ``(qi, si, n_node)``, sorted by point. ``si`` below
-        ``n_cells`` names a cell and ``n_cells + m`` names node ``m``; ``n_node`` counts
-        the node entries. Each tree is walked once per point at the forest's ``theta``,
-        for which its diameters and coherence were made. A node is admitted only when
-        its box is well separated from the point and its normals are coherent, so each
-        point's list holds every cell exactly once, as itself or inside one node.
-        ``walk`` picks how, never what (:func:`resolve_walk`): the fast walk gives the
-        same lists in the same order. In each point's list the cells come first, tree by
-        tree, then the nodes, tree by tree; each tree's entries are in the order of its
-        walk (:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`)."""
-        return self.frame_pairs(self.frame_points(points), walk)
-
     def frame_points(self, points: torch.Tensor) -> torch.Tensor:
         """The points in the trees' coordinates, as the cells are (:meth:`build`):
         about each group's origin in float64, in the forest's frame, rounded once to the
@@ -636,9 +617,19 @@ class BoundaryForest:
     def frame_pairs(
         self, points_f: torch.Tensor, walk: str = "auto", count_only: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor, int] | torch.Tensor:
-        """:meth:`point_pairs` of points already in the trees' coordinates
-        (:meth:`frame_points`); with ``count_only`` each point's number of pairs
-        ``(Q,)`` alone, which the walk counts without making the lists."""
+        """Every point's list ``(qi, si, n_node)``, sorted by point, for points already
+        in the trees' coordinates (:meth:`frame_points`). ``si`` below ``n_cells`` names
+        a cell and ``n_cells + m`` names node ``m``; ``n_node`` counts the node entries.
+        Each tree is walked once per point at the forest's ``theta``, for which its
+        diameters and coherence were made. A node is admitted only when its box is well
+        separated from the point and its normals are coherent, so each point's list
+        holds every cell exactly once, as itself or inside one node. ``walk`` picks how,
+        never what (:func:`resolve_walk`): the fast walk gives the same lists in the same
+        order. In each point's list the cells come first, tree by tree, then the nodes,
+        tree by tree; each tree's entries are in the order of its walk
+        (:meth:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree.find_point_interaction_pairs`).
+        With ``count_only`` each point's number of pairs ``(Q,)`` alone, which the walk
+        counts without making the lists."""
         with torch.autocast(points_f.device.type, enabled=False):
             return self._frame_pairs(points_f, self.theta, walk, count_only)
 
@@ -692,7 +683,7 @@ class BoundaryForest:
 
 
 def resolve_walk(walk: str, points: torch.Tensor, theta: float, forest: BoundaryForest) -> str:
-    """The walk :meth:`BoundaryForest.point_pairs` runs: ``"reference"`` (GLOBE's
+    """The walk :meth:`BoundaryForest.frame_pairs` runs: ``"reference"`` (GLOBE's
     cluster-tree traversal, tree by tree) or ``"fast"`` (one library walk of the whole
     forest, :attr:`BoundaryForest.walk_tree`, in Warp where it can walk: the same pairs
     in the same order). ``"auto"`` picks the fast walk for CUDA points, else the
@@ -1030,13 +1021,6 @@ class TreeReadWalk:
     node_condition: list[torch.Tensor] | None = None  # per case (M,), each node's condition
 
 
-def tree_read_pairs(basis: _KernelBasis, **inputs) -> TreeReadPairs:
-    """The tree read's pairs of every point of a batch of cases, with their kernel
-    basis: :func:`walk_range_pairs` of :func:`tree_read_walk` (which takes the
-    keyword arguments)."""
-    return walk_range_pairs(basis, tree_read_walk(**inputs))
-
-
 def tree_read_walk(
     *,
     query_r: torch.Tensor,
@@ -1070,7 +1054,7 @@ def tree_read_walk(
 
     Per case, the forest over the cells (:class:`BoundaryForest`, with the measure
     fractions as the measure) holds the nodes' virtual cells, and each point walks it
-    at ``theta`` (:meth:`BoundaryForest.point_pairs`). The forest and the walk run
+    at ``theta`` (:meth:`BoundaryForest.frame_pairs`). The forest and the walk run
     without gradient (a numerical device). At ``theta > 0``, when the cells' positions,
     normals or measures require a gradient, the nodes' virtual cells take their cells'
     (:class:`_ClusterGeometry`, the same values). The pair invariants take a gradient
