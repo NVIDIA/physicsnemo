@@ -199,7 +199,11 @@ class TestSplitNonmanifoldEdges:
         result, stats = split_nonmanifold_edges(
             Mesh(points=cube.points, cells=torch.cat([cube.cells, copy]))
         )
-        assert stats["n_cells_dropped"] == 2
+        assert stats == {
+            "n_edges_split": 0,
+            "n_vertices_duplicated": 0,
+            "n_cells_dropped": 2,
+        }
         assert torch.equal(result.cells, cube.cells)
 
     @pytest.mark.parametrize("inverted", [False, True])
