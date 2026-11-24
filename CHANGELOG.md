@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `split_nonmanifold_edges` measures each copy of a triangle at the same angle
+  around its edges, so it drops a reversed copy of a face on every platform.
+  On macOS it could split the face's edges instead.
+- `Mesh.cell_normals` and `Mesh.point_normals` compile with `fullgraph=True`
+  on Python 3.11.
 - `Mesh.transform`, and `rotate` and `scale` through it, keep float32
   accuracy on CUDA when TF32 matmuls are allowed, which is the default of NGC
   PyTorch containers. Their float32 matrix products rounded points, cached
@@ -682,6 +687,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percentile decisions and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
+- `group_norm` on a `ShardTensor` sharded along the batch dimension raises
+  `MissingShardPatch`, and the message points to DDP and FSDP2 for the batch.
+  On hosts with CUDA, it used to combine the statistics of different samples
+  and return wrong values with no error.
 - `torch.compile` with ShardTensor: neighborhood attention (`na1d`/`na2d`/
   `na3d`) keeps its halo exchange when compiled, `select` handles a negative
   `dim`, dynamic shapes no longer fail in the spec hash, a plain DTensor
