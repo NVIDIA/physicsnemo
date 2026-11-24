@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `split_nonmanifold_edges` measures each copy of a triangle at the same angle
+  around its edges, so it drops a reversed copy of a face on every platform.
+  On macOS it could split the face's edges instead.
+- `Mesh.cell_normals` and `Mesh.point_normals` compile with `fullgraph=True`
+  on Python 3.11.
+
 ### Security
 
 ### Dependencies
