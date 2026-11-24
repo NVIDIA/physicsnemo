@@ -309,17 +309,6 @@ if HAS_TRITON:
         return p, msk, qi, si
 
     @triton.jit
-    def _inv_kernel(
-        qi_ptr, si_ptr, n, q_off, s_off, qr_ptr, qn_ptr, qw_ptr, sr_ptr, sn_ptr, sv_ptr, g_ptr, out_ptr, eps,
-        D: tl.constexpr, K: tl.constexpr, PB: tl.constexpr, G: tl.constexpr, GP: tl.constexpr, BLOCK: tl.constexpr,
-    ):  # fmt: skip
-        """One tile's invariants ``(BLOCK, G)`` float32 (:func:`pair_invariants`)."""
-        p, msk, qi, si = _pair_rows(qi_ptr, si_ptr, tl.program_id(0).to(tl.int64), n, q_off, s_off, BLOCK)
-        inv = _invariants(qi, si, msk, qr_ptr, qn_ptr, qw_ptr, sr_ptr, sn_ptr, sv_ptr, g_ptr, eps, D, K, PB, GP, BLOCK)
-        cc = tl.arange(0, GP)
-        tl.store(out_ptr + p[:, None] * G + cc[None, :], inv, mask=msk[:, None] & (cc < G)[None, :])
-
-    @triton.jit
     def _basis_fwd_kernel(
         qi_ptr, si_ptr, n, q_off, s_off, qr_ptr, qn_ptr, qw_ptr, sr_ptr, sn_ptr, sv_ptr, g_ptr,
         w1_ptr, b1_ptr, w2_ptr, b2_ptr, w3_ptr, b3_ptr, ftab_ptr, out_ptr, eps,
@@ -539,19 +528,3 @@ def fused_kernel_basis(
     :func:`unsupported_reason` to return ``None``."""
     geo, pb = _geometry_args(geometry)
     return _FusedBasis.apply(qi, si, int(q_off), int(s_off), float(geometry["eps"]), pb, *geo, *weights)
-
-
-def pair_invariants(qi: torch.Tensor, si: torch.Tensor, q_off: int, s_off: int, geometry: dict) -> torch.Tensor:
-    """The fused kernels' invariants ``(P, G)`` float32 of the same pairs, for tests."""
-    geo, pb = _geometry_args(geometry)
-    k = int(geometry["g_unit"].shape[0])
-    g = 6 + 2 * k + 2 * pb
-    n = int(qi.shape[0])
-    out = torch.empty(n, g, device=qi.device, dtype=torch.float32)
-    if n:
-        _inv_kernel[(triton.cdiv(n, BASIS_BLOCK),)](
-            qi, si, n, int(q_off), int(s_off), *geo, out, float(geometry["eps"]), D=int(geo[0].shape[1]), K=k, PB=pb,
-            G=g, GP=max(16, triton.next_power_of_2(g)), BLOCK=BASIS_BLOCK, num_warps=BASIS_WARPS,
-            enable_fp_fusion=False,
-        )  # fmt: skip
-    return out

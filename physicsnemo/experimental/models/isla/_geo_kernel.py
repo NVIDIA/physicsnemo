@@ -48,8 +48,7 @@ bfloat16, the pre-logit plus bias sum to the pre-logits' dtype, and the softmax 
 float32. The fused forward thus matches the eager forward up to floating-point
 reordering. The backward's reductions accumulate in float32 where autocast's GEMM
 backward rounds to bfloat16. Only there do the two paths differ by more than
-reordering, and the fused gradient is the more precise. Float64 is supported for
-exactness tests.
+reordering, and the fused gradient is the more precise. Float64 is supported.
 """
 
 from __future__ import annotations

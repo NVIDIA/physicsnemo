@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On macOS it could split the face's edges instead.
 - `Mesh.cell_normals` and `Mesh.point_normals` compile with `fullgraph=True`
   on Python 3.11.
+- ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
+  to the boundary's vertices through its clusters, which shape sensitivities
+  need. Predictions and training are unchanged.
 
 ### Security
 
