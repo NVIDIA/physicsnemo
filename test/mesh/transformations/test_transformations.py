@@ -31,6 +31,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     rotation_matrix,
@@ -926,6 +927,67 @@ class TestTransform:
             )
 
 
+class TestTransformAccuracy:
+    """A float32 mesh moves at float32 accuracy, on CUDA also with TF32 allowed."""
+
+    @pytest.mark.parametrize("op", ["rotate", "scale", "shear"])
+    def test_float32_mesh_keeps_float32_accuracy(self, op, device):
+        """Regression: with TF32 allowed (the default of NGC PyTorch containers),
+        the float32 matrix products of a transform on CUDA rounded points,
+        centroids, normals, and vector and tensor fields to about three digits."""
+        torch.set_float32_matmul_precision("high")
+        sphere = sphere_icosahedral.load(radius=3.0, subdivisions=6, device=device)
+        points = sphere.points + 5.0  # 40,962 points with coordinates of a few units
+        velocity = points.flip(-1)
+        stress = points[:, :, None] * velocity[:, None, :]
+        piezo = stress[:, :, :, None] * (points + 1.0)[:, None, None, :]
+        mesh = Mesh(
+            points=points,
+            cells=sphere.cells,
+            point_data={"velocity": velocity, "stress": stress, "piezo": piezo},
+        )
+        centroids = mesh.cell_centroids.double()
+        cell_normals = mesh.cell_normals.double()
+        point_normals = mesh.point_normals.double()
+
+        if op == "rotate":
+            angle, axis = 0.7, [1.0, 2.0, 3.0]
+            out = rotate(mesh, angle, axis, transform_point_data=True)
+            M = rotation_matrix(angle, axis, 3, points.device, torch.float64)
+        elif op == "scale":
+            factor = [2.5, 0.4, 1.7]
+            out = scale(mesh, factor, transform_point_data=True)
+            M = scale_matrix(factor, 3, points.device, torch.float64)
+        else:
+            M = torch.eye(3, dtype=torch.float64, device=points.device)
+            M[0, 1] = 0.5
+            out = transform(mesh, M.float(), transform_point_data=True)
+
+        def assert_float32_accurate(actual, expected):
+            # TF32 misses this bound by a factor of about 100.
+            atol = 16 * torch.finfo(torch.float32).eps * expected.abs().max().item()
+            torch.testing.assert_close(actual.double(), expected, rtol=0, atol=atol)
+
+        def normals_through(normals):
+            return torch.nn.functional.normalize(normals @ torch.linalg.inv(M), dim=-1)
+
+        assert_float32_accurate(out.points, points.double() @ M.T)
+        assert_float32_accurate(out.point_data["velocity"], velocity.double() @ M.T)
+        assert_float32_accurate(out.point_data["stress"], M @ stress.double() @ M.T)
+        assert_float32_accurate(
+            out.point_data["piezo"],
+            torch.einsum("ia,jb,kc,nabc->nijk", M, M, M, piezo.double()),
+        )
+        assert_float32_accurate(out._cache["cell", "centroids"], centroids @ M.T)
+        assert_float32_accurate(
+            out._cache["cell", "normals"], normals_through(cell_normals)
+        )
+        if op == "rotate":  # the other two are not similarities and drop this cache
+            assert_float32_accurate(
+                out._cache["point", "normals"], normals_through(point_normals)
+            )
+
+
 ###############################################################################
 # Error Handling Tests
 ###############################################################################
@@ -997,6 +1059,26 @@ class TestTransformErrors:
 
         with pytest.raises(ValueError, match="must equal mesh.n_spatial_dims"):
             transform(mesh, matrix)
+
+    def test_transform_with_other_dtype_raises(self):
+        """Test that a matrix of another dtype than the points raises ValueError."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0]]), cells=torch.tensor([[0, 1]])
+        )
+
+        with pytest.raises(ValueError, match="matrix dtype must equal"):
+            transform(mesh, torch.eye(2, dtype=torch.float64))
+
+    @pytest.mark.parametrize("dtype", [torch.int64, torch.bool])
+    def test_transform_integer_field_raises(self, dtype):
+        """Test that a vector field of an integer or boolean dtype raises ValueError."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0]]), cells=torch.tensor([[0, 1]])
+        )
+        mesh.point_data["index"] = torch.ones(mesh.n_points, 2).to(dtype)
+
+        with pytest.raises(ValueError, match="Only floating-point and complex"):
+            transform(mesh, torch.eye(2), transform_point_data=True)
 
     def test_transform_incompatible_field_raises(self):
         """Test that incompatible fields raise ValueError."""
