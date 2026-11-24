@@ -1135,6 +1135,145 @@ def test_tree_read_every_parameter_receives_a_gradient(randomize):
         )
 
 
+def _vertex_grad_forward(m, mesh, drv, q, autocast=False):
+    """The outputs of a forward pass whose boundary vertices require a gradient, and
+    that gradient of their sum."""
+    pts = mesh.points.clone().requires_grad_(True)
+    wall = Mesh(points=pts, cells=mesh.cells, cell_data=mesh.cell_data)
+    with torch.autocast(q.device.type, dtype=torch.bfloat16, enabled=autocast):
+        out = outputs(
+            m(
+                boundary_meshes={"wall": wall},
+                prediction_points=points_mesh(q),
+                global_data={"g": drv},
+            )
+        )
+    (grad,) = torch.autograd.grad(sum(o.float().sum() for o in out.values()), pts)
+    return {k: v.detach() for k, v in out.items()}, grad
+
+
+def _within_rerun(a, b, b_again) -> bool:
+    """``a`` equals ``b`` as a rerun of ``b`` does: bitwise where ``b`` repeats bitwise
+    (``b_again`` is its rerun), else within rounding: four times the rerun's largest
+    difference, and at least a thousand units in the last place of ``b``'s largest
+    entry, since two reruns alone do not bound the spread of a third."""
+    spread = (b - b_again).abs().max()
+    if spread == 0:
+        return torch.equal(a, b)
+    ulp = torch.finfo(b.dtype).eps * b.abs().max()
+    return bool((a - b).abs().max() <= torch.maximum(4 * spread, 1000 * ulp))
+
+
+def _spies(calls):
+    """Spies of ``_ClusterGeometry.apply`` and ``_NodeMeanWeights.apply`` that record
+    each call's Function in ``calls``, by Function."""
+    real = {
+        f: f.apply for f in (tree_read._ClusterGeometry, tree_read._NodeMeanWeights)
+    }
+
+    def spy(fn):
+        def apply(*args):
+            calls.append(fn)
+            return real[fn](*args)
+
+        return apply
+
+    return {f: spy(f) for f in real}
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize(
+    "dtype, autocast, compiled",
+    [
+        (torch.float32, False, False),
+        (torch.float64, False, False),
+        (torch.float32, True, False),
+        pytest.param(torch.float32, False, True, marks=pytest.mark.slow),
+    ],
+    ids=["float32", "float64", "bf16_autocast", "compiled_blocks"],
+)
+@pytest.mark.parametrize("theta", [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("measures", ["effective", "geometric"])
+def test_virtual_cells_gradient_leaves_the_forward_bitwise_unchanged(
+    measures, theta, dtype, autocast, compiled, device, monkeypatch
+):
+    """When the boundary's vertices require a gradient at ``theta > 0``, the read's
+    virtual cells take their cells' gradient (``_ClusterGeometry``, called once per
+    case), and so do the nodes' means of the cells' keys and values in the cells'
+    weights (``_NodeMeanWeights``, once per block). Both give the values as they are:
+    the outputs are those of the read whose virtual cells and means take no such
+    gradient, at ``theta`` 0.5 and 1, in float32, float64, bf16 autocast and with
+    compiled blocks, and the vertex gradient changes. At ``theta = 0`` no cluster is
+    read and neither runs: outputs and vertex gradient are the same. The cells'
+    measures are either given (``EFFECTIVE_MEASURE_KEY``, so the weights take no
+    gradient and the means' weights gradient never runs) or the cells' own, from the
+    vertices. "The same" is measured against a rerun of the read without the gradient:
+    bitwise where that rerun repeats bitwise (every CPU case, and float32 and bf16 on
+    CUDA), else within rounding as ``_within_rerun`` defines it (float64 on CUDA, whose
+    forward does not repeat bitwise run to run, at ``theta = 0`` too)."""
+    m = _model(3, theta, compile_blocks=compiled).to(device, dtype).eval()
+    mesh, drv, q = _case()
+    if measures == "geometric":
+        mesh = Mesh(points=mesh.points, cells=mesh.cells)
+    mesh, drv, q = mesh.to(device).to(dtype), drv.to(device, dtype), q.to(device, dtype)
+    calls = []
+    cells, means = tree_read._ClusterGeometry, tree_read._NodeMeanWeights
+    spies = _spies(calls)
+
+    def without_gradient(r, n, omega, forest, eps):
+        return forest.center, forest.normal, forest.measure
+
+    runs = []
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)  # the vertex gradient's CPU sums repeat on one thread
+    try:
+        for gradient in (True, False, False):
+            with monkeypatch.context() as mp:
+                mp.setattr(
+                    cells, "apply", spies[cells] if gradient else without_gradient
+                )
+                mp.setattr(
+                    means, "apply", spies[means] if gradient else lambda x, *_: x
+                )
+                runs.append(_vertex_grad_forward(m, mesh, drv, q, autocast))
+    finally:
+        torch.set_num_threads(threads)
+    (out, grad), (out_base, grad_base), (out_again, grad_again) = runs
+    assert calls.count(cells) == (1 if theta > 0 else 0)
+    live = theta > 0 and measures == "geometric"
+    assert calls.count(means) == (len(m.kernel_reads) if live else 0)
+    assert out.keys() == out_base.keys() == out_again.keys()
+    assert all(_within_rerun(out[k], out_base[k], out_again[k]) for k in out)
+    assert torch.isfinite(grad).all()
+    assert _within_rerun(grad, grad_base, grad_again) == (theta == 0.0)
+
+
+def test_virtual_cells_take_no_gradient_work_in_training(monkeypatch):
+    """A training step (parameters requiring gradients, no boundary input requiring
+    one) never builds the virtual cells' gradient nor the means' gradient in the
+    cells' weights: neither ``_ClusterGeometry`` nor ``_NodeMeanWeights`` is called,
+    and the walk reads the forest's own tensors, as the read did before. A
+    vertex-gradient call runs each: once per case, and once per block."""
+    calls = []
+    cells, means = tree_read._ClusterGeometry, tree_read._NodeMeanWeights
+    for fn, spy in _spies(calls).items():
+        monkeypatch.setattr(fn, "apply", spy)
+    m = _model(3, TREE_READ_THETA).train()
+    mesh, drv, q = _case()
+    mesh = Mesh(points=mesh.points, cells=mesh.cells)  # the measures from the vertices
+    mesh, drv, q = mesh.to(torch.float32), drv.float(), q.float()
+    out = m(
+        boundary_meshes={"wall": mesh},
+        prediction_points=points_mesh(q),
+        global_data={"g": drv},
+    )
+    sum(v.square().sum() for v in outputs(out).values()).backward()
+    assert not calls
+    assert all(p.grad is not None for p in m.parameters())
+    _vertex_grad_forward(m, mesh, drv, q)
+    assert calls.count(cells) == 1 and calls.count(means) == len(m.kernel_reads)
+
+
 def test_tree_read_starts_as_no_update_and_is_live_everywhere():
     """With the zero-initialized output projection the read adds nothing (the model
     equals itself without the read); with trained-like weights it changes every
@@ -2112,6 +2251,43 @@ def test_fused_node_means_match_the_reference(dtype):
     _two_x(
         "means", res[1][0], res[0][0], exact, 1e-6 if dtype == torch.float32 else 1e-3
     )
+
+
+@pytest.mark.cuda
+@requires_cuda_triton
+def test_fused_node_means_take_the_weights_gradient_as_the_reference():
+    """``read_node_means`` through the fused kernels, float32 on CUDA, on a forest of a
+    sphere: the means' gradient in the cells' weights repeats bitwise, and is the
+    reference node means' to float32 rounding (their forwards differ in the order of
+    each leaf's sum) and the float64 reference's to 1e-5 of the largest."""
+    from physicsnemo.experimental.models.isla import _fused_read as fused_read
+
+    mesh, _, _ = _sphere_case(n=3000, nq=10)
+    dev = torch.device("cuda")
+    pts = mesh.cell_centroids.float().to(dev)
+    nrm = mesh.cell_normals.float().to(dev)
+    w = mesh.cell_data[EFFECTIVE_MEASURE_KEY].float().to(dev)
+    omega = w / w.sum()
+    forest = BoundaryForest.build(pts, omega, nrm, None, theta=1.0)
+    g = torch.Generator(device=dev).manual_seed(6)
+    x0 = torch.randn(pts.shape[0], 96, generator=g, device=dev)
+    gout = torch.randn(forest.n_nodes, 96, generator=g, device=dev)
+
+    def weights_grad(kernel, dtype=torch.float32):
+        weights = omega.to(dtype, copy=True).requires_grad_(True)
+        x = x0.to(dtype, copy=True).requires_grad_(True)
+        tree_read.read_node_means(x, forest, weights, kernel).backward(gout.to(dtype))
+        return weights.grad
+
+    with ran(fused_read.fused_node_means, tree_read._NodeMeanWeights) as r:
+        fused, again = weights_grad("fused"), weights_grad("fused")
+    assert r.count(fused_read.fused_node_means) == 2
+    assert r.count(tree_read._NodeMeanWeights) == 2
+    assert torch.equal(fused, again)
+    ref = weights_grad("reference")
+    exact = weights_grad("reference", torch.float64)
+    assert (fused - ref).abs().max() <= 1e-5 * ref.abs().max()
+    assert (fused.double() - exact).abs().max() <= 1e-5 * exact.abs().max()
 
 
 @pytest.mark.cuda

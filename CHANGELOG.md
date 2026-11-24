@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ISLA's tree read at `tree_read_theta > 0` now passes the gradient of the
+  boundary's vertices through its clusters, which it had left out, so
+  derivatives with respect to the vertices, such as shape sensitivities, are
+  complete. Predictions and training are unchanged.
+
 ### Security
 
 ### Dependencies
