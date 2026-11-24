@@ -16,7 +16,6 @@
 
 """Non-blocking logging of scalars that live on the GPU."""
 
-import functools
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from types import TracebackType
@@ -24,6 +23,8 @@ from typing import Any, NamedTuple
 
 import torch
 import torch.distributed as dist
+
+from physicsnemo.distributed.fused_all_reduce import _buffer_dtype, _crosses_ranks
 
 
 class _Record(NamedTuple):
@@ -156,19 +157,13 @@ class NonBlockingLogger:
         order = sorted(range(len(keys)), key=keys.__getitem__)
         host, landed = torch.empty(0), None
         if scalars:
-            all_float = all(s.is_floating_point() for s in scalars)
-            dtype = functools.reduce(
-                torch.promote_types,
-                (s.dtype for s in scalars),
-                torch.float32 if all_float else torch.float64,
-            )
+            ### fused_all_reduce's dtype rule. Integers opt in to float64, where
+            ### they stay exact up to 2**53, since log_fn gets floats anyway.
+            dtypes = [s.dtype for s in scalars]
+            all_float = all(dtype.is_floating_point for dtype in dtypes)
+            dtype = _buffer_dtype(dtypes, None if all_float else torch.float64)
             buffer = torch.stack([scalars[i].to(dtype) for i in order])
-            if (
-                self.reduce_op is not None
-                and dist.is_available()
-                and dist.is_initialized()
-                and dist.get_world_size(self.group) > 1
-            ):
+            if self.reduce_op is not None and _crosses_ranks(self.group):
                 dist.all_reduce(buffer, op=self.reduce_op, group=self.group)
             if buffer.is_cuda:
                 ### A non-blocking copy to the host lands in pinned memory.
