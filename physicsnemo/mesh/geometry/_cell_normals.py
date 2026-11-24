@@ -123,7 +123,9 @@ def _compute_cell_normals_from_points(
         (gather_rows(points, cells[:, k]) - v0).to(dtype)
         for k in range(1, cells.shape[1])
     ]
-    del v0
+    # Not `del v0`: on Python 3.11, deleting a variable that a comprehension
+    # uses takes a bytecode that torch.compile cannot trace
+    v0 = None
 
     if points.shape[-1] == 2:
         # 90-degree CCW rotation, as in _normals_2d
