@@ -85,12 +85,14 @@ admission changes, as the point or the boundary's vertices move. Between the jum
 virtual cell takes the gradient of its definition in its cells: its position, normal
 and measure in their positions, normals and weights (:class:`_ClusterGeometry`), and
 its means of the cells' keys and values in those values and weights
-(:func:`read_node_means`). At :math:`\theta = 0` the read is smooth, and the
-read's own derivatives in the prediction points and in the boundary's cells are complete:
-the pair invariants take a gradient whenever the geometry requires one
-(:func:`_chunked_basis_from_plan`). The whole model's derivative in the boundary's
-vertices also passes through the token draw's weights and the slice blocks (see
-``tree_read_theta`` in :class:`~physicsnemo.experimental.models.isla.ISLA`).
+(:func:`read_node_means`). Its means of the cells' rank-1 inputs take none. With more
+than one declared condition, a node's share shift takes no gradient from its
+condition's total measure :math:`A_k` (:func:`walk_range_pairs`). At :math:`\theta = 0`
+the read is smooth, and the read's own derivatives in the prediction points and in the
+boundary's cells are complete: the pair invariants take a gradient whenever the
+geometry requires one (:func:`_chunked_basis_from_plan`). The whole model's derivative
+in the boundary's vertices also passes through the token draw's weights and the slice
+blocks (see ``tree_read_theta`` in :class:`~physicsnemo.experimental.models.isla.ISLA`).
 
 Rounding. Rounding makes no discrete choice of the forest that an error bound can
 settle, and the caller's precision makes none. The forest is built and
@@ -128,6 +130,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tensordict import TensorDict
+from torch.autograd.function import once_differentiable
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.experimental.models.isla import _fused_basis as fused_basis
@@ -792,6 +795,7 @@ class _NodeMeanWeights(torch.autograd.Function):
         return means
 
     @staticmethod
+    @once_differentiable
     def backward(ctx, g):
         f, (means, x, omega) = ctx.forest, ctx.saved_tensors
         w = f.measure.double()
@@ -812,8 +816,9 @@ def read_node_means(x: torch.Tensor, forest: BoundaryForest, omega: torch.Tensor
     through the fused read's kernels (``kernel`` ``"fused"``,
     :func:`~physicsnemo.experimental.models.isla._fused_read.fused_node_means`) where
     they apply, else :func:`node_means`. At ``theta > 0``, under gradient and when the
-    weights ``omega`` require one (the boundary's measures do), the means take the
-    weights' gradient too (:class:`_NodeMeanWeights`, the same values)."""
+    weights ``omega`` require one (as they do when the boundary's measures require
+    one), the means take the weights' gradient too (:class:`_NodeMeanWeights`, the same
+    values)."""
     fused = kernel == "fused" and fused_read.node_means_supported(x)
     means = (fused_read.fused_node_means if fused else node_means)(x, forest, omega)
     if forest.theta > 0 and torch.is_grad_enabled() and omega.requires_grad:
@@ -840,6 +845,7 @@ class _ClusterGeometry(torch.autograd.Function):
         return forest.center.clone(), forest.normal.clone(), forest.measure.clone()
 
     @staticmethod
+    @once_differentiable
     def backward(ctx, g_center, g_normal, g_measure):
         f, (r, n, omega) = ctx.forest, ctx.saved_tensors
         w = f.measure.double()
@@ -1067,8 +1073,8 @@ def tree_read_walk(
     at ``theta`` (:meth:`BoundaryForest.point_pairs`). The forest and the walk run
     without gradient (a numerical device). At ``theta > 0``, when the cells' positions,
     normals or measures require a gradient, the nodes' virtual cells take their cells'
-    (:class:`_ClusterGeometry`, the same values). The pair invariants take a gradient when the
-    geometry requires one (:func:`geometry_requires_grad`), and the basis
+    (:class:`_ClusterGeometry`, the same values). The pair invariants take a gradient
+    when the geometry requires one (:func:`geometry_requires_grad`), and the basis
     (:func:`walk_range_pairs`) carries gradients to the kernel MLP's weights.
 
     ``walk`` names the walk's implementation (:func:`resolve_walk`) and ``build`` the

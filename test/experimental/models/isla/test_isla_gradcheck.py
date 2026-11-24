@@ -625,6 +625,24 @@ def test_node_means_pass_gradcheck_in_their_weights(build):
     )
 
 
+@pytest.mark.parametrize("function", ["clusters", "means"])
+def test_cluster_gradients_refuse_a_second_derivative(function):
+    """``_ClusterGeometry`` and ``_NodeMeanWeights`` give first derivatives only: a
+    second backward pass through either raises instead of leaving out its terms."""
+    pts, nrm, w, g = _forest_inputs()
+    forest = tree_read.BoundaryForest.build(pts, w, nrm, None, theta=1.0, leaf_size=4)
+    r, n, omega = (t.clone().requires_grad_(True) for t in (pts, nrm, w))
+    if function == "clusters":
+        out = tree_read._ClusterGeometry.apply(r, n, omega, forest, 1e-12)
+    else:
+        x = torch.randn(60, 5, generator=g, dtype=D)
+        out = (tree_read.read_node_means(x, forest, omega, "reference"),)
+    loss = sum(o.square().sum() for o in out)
+    (gw,) = torch.autograd.grad(loss, omega, create_graph=True)
+    with pytest.raises(RuntimeError, match="once_differentiable"):
+        (gw.square().sum() + omega.sum()).backward()
+
+
 def _jittered_ellipsoid(subdivisions):
     """The vertices and cells of an ellipsoid sheared along one axis (as in
     ``test_outputs_vertex_derivative_matches_central_differences``) with its vertices
@@ -668,9 +686,9 @@ def test_tree_read_vertex_derivative_at_finite_theta_matches_central_differences
     points' clusters unchanged across the step (asserted), the autograd derivative
     projected on seeded directions is the central difference's (``h = 1e-6``) to 1e-6
     of the largest (measured 4e-8 at both). Without the clusters' gradient the two
-    differ by more than the derivative itself (measured 17 and 1.0 of the largest),
-    and with the cells' weights held fixed in the centroids and normals by 1.2 and
-    0.96: so the weights' gradient is in."""
+    differ by about the derivative itself or more (measured 17 and 1.0 of the
+    largest), and with the cells' weights held fixed in the centroids and normals by
+    1.2 and 0.96: so the weights' gradient is in."""
     from physicsnemo.mesh import Mesh
 
     p, cells = _jittered_ellipsoid(2)
