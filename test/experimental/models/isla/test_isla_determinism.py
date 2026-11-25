@@ -59,6 +59,7 @@ from test.experimental.models.isla._geometry_cases import (
     _near_wall,
     _sphere,
 )
+from test.experimental.models.isla._kernel_cases import tree_read_pairs
 from test.experimental.models.isla._marks import requires_cuda, requires_cuda_triton
 from test.experimental.models.isla._meshes import (
     cloud,
@@ -343,7 +344,7 @@ def test_the_reference_tree_read_on_cuda_spreads_within_its_bound():
     )
     basis = _KernelBasis(kernel_geo_width(1, 0)).to(dev)
     with torch.no_grad():
-        pairs = tree_read.tree_read_pairs(basis, kernel="reference", **kw)
+        pairs = tree_read_pairs(basis, kernel="reference", **kw)
     assert pairs.kernel == "reference" and pairs.n_pairs_node > 0
     read = _TreeKernelRead(64).to(dev)
     with torch.no_grad():

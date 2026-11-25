@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On macOS it could split the face's edges instead.
 - `Mesh.cell_normals` and `Mesh.point_normals` compile with `fullgraph=True`
   on Python 3.11.
+- ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
+  to the boundary's vertices through its clusters, which shape sensitivities
+  need. Predictions and training are unchanged.
 - `Mesh.transform`, and `rotate` and `scale` through it, keep float32
   accuracy on CUDA when TF32 matmuls are allowed, which is the default of NGC
   PyTorch containers. Their float32 matrix products rounded points, cached
@@ -626,6 +629,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GLOBE now splits a large set of prediction points into random chunks instead
+  of chunks in input order. At `theta` > 0 each chunk's far-field approximation
+  depends on the points in it, so chunks of neighboring points shifted
+  predictions.
 - `load_checkpoint` keeps a resumed optimizer's step counts on the CPU, where a
   fresh AdamW keeps them, unless the optimizer is fused or capturable. Step
   counts on the GPU forced host syncs in every later eager optimizer step and
