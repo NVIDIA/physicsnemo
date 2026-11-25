@@ -420,17 +420,20 @@ class Driver(p.DriverProtocol):
             return
 
         if opt_cfg.scheduler_cls is not None and self.optimizer is not None:
+            sched_kwargs = dict(opt_cfg.scheduler_kwargs)
+            sched_params = inspect.signature(opt_cfg.scheduler_cls).parameters
+            if opt_cfg.rebuild_scheduler_per_phase and "total_steps" in sched_params:
+                # Placeholder; each training phase rebuilds it with its real length.
+                sched_kwargs.setdefault("total_steps", 1)
             try:
                 _ = inspect.signature(opt_cfg.scheduler_cls).bind(
-                    self.optimizer, **opt_cfg.scheduler_kwargs
+                    self.optimizer, **sched_kwargs
                 )
             except TypeError as e:
                 raise ValueError(
                     f"Invalid LR scheduler kwargs for {opt_cfg.scheduler_cls}; {e}"
                 )
-            self.lr_scheduler = opt_cfg.scheduler_cls(
-                self.optimizer, **opt_cfg.scheduler_kwargs
-            )
+            self.lr_scheduler = opt_cfg.scheduler_cls(self.optimizer, **sched_kwargs)
         else:
             self.lr_scheduler = None
         # in the case where we want to reset optimizer states between active learning steps
@@ -446,6 +449,53 @@ class Driver(p.DriverProtocol):
     def is_lr_scheduler_configured(self) -> bool:
         """Returns whether the LR scheduler is configured."""
         return getattr(self, "lr_scheduler", None) is not None
+
+    def _rebuild_lr_scheduler(self, total_steps: int) -> None:
+        """Build a fresh scheduler for this training phase.
+
+        Used with ``OptimizerConfig.rebuild_scheduler_per_phase``. Each param
+        group's lr is first reset to its ``initial_lr``, undoing the previous
+        phase's decay. From the second active-learning step on,
+        ``fine_tuning_scheduler_kwargs`` are merged over ``scheduler_kwargs``
+        and ``fine_tuning_lr`` replaces the first group's ``max_lr`` when the
+        scheduler takes one (otherwise it is the first group's starting lr).
+        A ``total_steps`` argument is set to ``total_steps``. With
+        ``fine_tuning_constant_lr``, later steps get no scheduler and train at
+        each group's peak lr (its ``max_lr`` if given).
+
+        Parameters
+        ----------
+        total_steps : int
+            Optimizer steps in this phase (epochs x batches).
+        """
+        opt_cfg = self.training_config.optimizer_config
+        fine_tuning = self.active_learning_step_idx > 0
+        params = inspect.signature(opt_cfg.scheduler_cls).parameters
+        kwargs = dict(opt_cfg.scheduler_kwargs)
+        if fine_tuning:
+            kwargs.update(opt_cfg.fine_tuning_scheduler_kwargs)
+        if "total_steps" in params:
+            kwargs["total_steps"] = max(int(total_steps), 1)
+        groups = self.optimizer.param_groups
+        for group in groups:
+            group["lr"] = group.pop("initial_lr", group["lr"])
+        max_lr = kwargs.get("max_lr") if "max_lr" in params else None
+        if max_lr is not None and not isinstance(max_lr, (list, tuple)):
+            max_lr = [max_lr] * len(groups)
+        ft_lr = self.config.fine_tuning_lr
+        if fine_tuning and ft_lr is not None:
+            groups[0]["lr"] = ft_lr
+            if max_lr is not None:
+                max_lr = [ft_lr, *max_lr[1:]]
+        if max_lr is not None:
+            kwargs["max_lr"] = list(max_lr)
+        if fine_tuning and opt_cfg.fine_tuning_constant_lr:
+            if max_lr is not None:
+                for group, lr in zip(groups, max_lr):
+                    group["lr"] = lr
+            self.lr_scheduler = None
+            return
+        self.lr_scheduler = opt_cfg.scheduler_cls(self.optimizer, **kwargs)
 
     def attach_strategies(self) -> None:
         """Calls ``strategy.attach`` for all available strategies."""
@@ -1259,6 +1309,14 @@ class Driver(p.DriverProtocol):
                 self.train_loop_fn.checkpoint_frequency = (
                     self.config.model_checkpoint_frequency
                 )
+
+            opt_cfg = self.training_config.optimizer_config
+            # Not is_lr_scheduler_configured: a constant-lr phase leaves it None.
+            if (
+                opt_cfg.rebuild_scheduler_per_phase
+                and opt_cfg.scheduler_cls is not None
+            ):
+                self._rebuild_lr_scheduler(epochs_to_train * len(train_loader))
 
             self.train_loop_fn(
                 self.learner,

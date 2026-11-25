@@ -327,6 +327,33 @@ class VariationalGPHead(nn.Module):
             float_value=self._jitter[0], double_value=self._jitter[1]
         )
 
+    def set_num_data(self, n: int) -> None:
+        r"""Set the dataset size :math:`N` that normalizes the ELBO.
+
+        Update it when the training set grows (e.g. active learning) instead
+        of rebuilding the head; a larger ``n`` weakens the KL term.
+
+        Parameters
+        ----------
+        n : int
+            Number of training samples (one per pooled embedding). Values
+            below 1 are clamped to 1.
+        """
+        self.mll.num_data = max(int(n), 1)
+
+    def _apply(self, fn, recurse=True):
+        r"""Keep the GP internals in float64 through ``.to()``, ``.float()``, etc.
+
+        A blanket dtype cast of the parent model would otherwise downcast the
+        GP layer while :meth:`_apply_fe` still upcasts embeddings to float64.
+        The feature extractor stays in the backbone's precision.
+        """
+        super()._apply(fn, recurse)
+        if self._use_double:
+            self.gp_layer.double()
+            self.likelihood.double()
+        return self
+
     def _apply_fe(
         self, embedding: Float[torch.Tensor, "batch dim"]
     ) -> Float[torch.Tensor, "batch gp_dim"]:

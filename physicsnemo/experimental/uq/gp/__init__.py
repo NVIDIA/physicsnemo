@@ -24,6 +24,12 @@ from .field_variational_gp_head import (
     FieldVariationalGPHead,
     FieldVariationalGPPrediction,
 )
+from .training import (
+    kmeans_medoids,
+    latent_distance_penalty,
+    linear_warmup,
+    subsample_points,
+)
 from .variational_gp_head import GPPrediction, VariationalGPHead
 
 __all__ = [
@@ -31,4 +37,8 @@ __all__ = [
     "FieldVariationalGPPrediction",
     "GPPrediction",
     "VariationalGPHead",
+    "kmeans_medoids",
+    "latent_distance_penalty",
+    "linear_warmup",
+    "subsample_points",
 ]

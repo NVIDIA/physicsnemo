@@ -82,7 +82,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation with interacting surface/volume anchors, reusable query
   contexts, input scaling and chunked forward decoding, and a finite-difference
   vorticity helper that undoes coordinate and velocity scaling.
-
+- `active_learning.OptimizerConfig.rebuild_scheduler_per_phase`: the `Driver`
+  builds a fresh LR scheduler for every training phase, sizing `total_steps`
+  (e.g. `OneCycleLR`) to that phase's epochs x batches as the pool grows, and
+  using `fine_tuning_lr` as the first group's `max_lr` after the first step.
+  `fine_tuning_scheduler_kwargs` override the scheduler's arguments for the
+  fine-tuning steps, and `fine_tuning_constant_lr` trains them at constant
+  peak lr instead.
+- GP training recipe in `experimental.uq.gp`:
+  `FieldVariationalGPHead.seed_inducing_points` places inducing points on
+  k-means++ medoids of candidate features (or a uniform draw), after
+  re-estimating the radial BatchNorm; `set_num_data` on both GP heads updates
+  the ELBO's dataset size, e.g. as an active-learning pool grows;
+  `FieldVariationalGPHead.param_groups` returns the reference recipe's GP /
+  network optimizer groups. New helpers `linear_warmup`, `subsample_points`,
+  `latent_distance_penalty` and `kmeans_medoids`; the field-GP example now uses
+  them instead of its private copies.
 - `physicsnemo.mesh.sampling.sample_cells_systematic` draws a fixed number of
   a mesh's cells with probability proportional to their measure, with
   Horvitz-Thompson weights for unbiased sums. The sample is spread over the
@@ -681,6 +696,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right signs for DrivAerML and HighLiftAeroML. A dataset YAML now declares
   where its surface normals point and which side its wall shear stress acts
   on (`surface_normals_point`, `wall_shear_acts_on`).
+- `VariationalGPHead` and `FieldVariationalGPHead` keep their GP internals in
+  float64 when a parent module is cast with `.to(dtype)` / `.float()` (as the
+  active-learning `Driver` does), instead of failing in gpytorch on mixed
+  float32 / float64 operands.
 - `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
   instead of the file store that current MLflow rejects.
 - `docs/test_scripts` run again on current PhysicsNeMo.
