@@ -202,6 +202,11 @@ histograms online or out of memory.
 Tensor-Aware Streaming Moments
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+For worked examples of streaming predictions, combining Gaussian process
+moments, and reducing distributed ``ShardTensor`` inputs, see
+`Streaming Statistics for Uncertainty Quantification
+<https://docs.nvidia.com/physicsnemo/latest/user-guide/streaming_statistics.html>`_.
+
 ``Mean`` and ``Variance`` retain their legacy interfaces. Opt into detached,
 layout-aware accumulation with ``mode="tensor"``:
 
