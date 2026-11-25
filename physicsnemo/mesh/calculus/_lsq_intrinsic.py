@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.calculus.gradient import _unoriented_point_normals
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.utils._small_linalg import (
     _lstsq_solver,
@@ -105,6 +106,10 @@ def _compute_point_gradients_lsq_intrinsic(
     n_manifold_dims = mesh.n_manifold_dims
     device = mesh.points.device
 
+    for field in point_values:
+        if not torch.is_floating_point(field):
+            raise TypeError("values must be floating-point")
+
     if mesh.codimension == 0:
         # No manifold structure: use standard LSQ
         from physicsnemo.mesh.calculus._lsq_reconstruction import (
@@ -126,7 +131,7 @@ def _compute_point_gradients_lsq_intrinsic(
     # shape (n_points, n_spatial_dims, n_manifold_dims): each column is a tangent vector.
     if mesh.codimension == 1:
         # Codimension-1: derive the tangent plane from the (unique) point normal.
-        point_normals = mesh.point_normals  # (n_points, n_spatial_dims)
+        point_normals = _unoriented_point_normals(mesh)  # (n_points, n_spatial_dims)
         tangent_bases = _build_tangent_bases_vectorized(
             point_normals, n_manifold_dims
         )  # (n_points, n_spatial_dims, n_manifold_dims)

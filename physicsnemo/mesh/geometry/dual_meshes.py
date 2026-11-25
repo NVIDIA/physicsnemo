@@ -679,18 +679,19 @@ def compute_dual_volumes_1(
 ) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
     r"""Compute dual 1-cell volumes (dual to edges).
 
-    The dual 1-cell of an edge is the portion of the circumcentric dual mesh
-    associated with that edge. For a 2D triangle mesh, it consists of segments
-    from the edge midpoint to the circumcenters of adjacent triangles,
+    The result is
 
     .. math::
 
         |{\star}e| = |e| \, w_{ij},
 
-    where :math:`w_{ij}` is the FEM cotangent weight for the edge. This
-    relationship holds for any manifold dimension; the FEM stiffness matrix
-    approach (see :func:`compute_cotan_weights_fem`) derives these weights from
-    the gradient dot products of barycentric basis functions.
+    where :math:`w_{ij}` is the FEM cotangent weight for the edge, which the
+    FEM stiffness matrix approach (see :func:`compute_cotan_weights_fem`)
+    derives from the gradient dot products of barycentric basis functions.
+    For manifold dimension at most 2 this is the volume of the circumcentric
+    dual 1-cell: for a 2D triangle mesh, the segments from the edge midpoint
+    to the circumcenters of the adjacent triangles. In 3D and higher it
+    approximates that volume.
 
     Parameters
     ----------

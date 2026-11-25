@@ -146,12 +146,27 @@ The notebooks render 3D figures with PyVista as static images
 rotate and zoom a 3D figure, install `trame` (`pip install "pyvista[jupyter]"`)
 and change the backend to `"trame"`.
 
+### Run Without a Display
+
+The 3D figures need OpenGL. On a machine without a display, such as the
+PhysicsNeMo container or a remote server, VTK draws off screen through EGL or
+OSMesa. If neither library is installed, the Jupyter kernel stops at the first
+3D figure of Tutorials 1, 3, 4, 5, 7, and 9. Install OSMesa before you start
+Jupyter:
+
+```bash
+apt-get update && apt-get install -y libosmesa6
+```
+
+Tutorials 2, 6, and 8 draw with matplotlib only, so they run without it.
+
 ## More Information
 
 The following pages have more information:
 
 - [PhysicsNeMo-Mesh User Guide](https://docs.nvidia.com/physicsnemo/latest/user-guide/mesh.html)
 - [PhysicsNeMo-Mesh API Reference](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api/mesh/index.html)
+- [PhysicsNeMo-Mesh paper](https://arxiv.org/abs/2610.39072)
 - [physicsnemo.mesh README](../../../physicsnemo/mesh/README.md)
 - [TensorDict](https://github.com/pytorch/tensordict) and
   [PyVista](https://pyvista.org/)

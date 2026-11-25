@@ -31,6 +31,18 @@ Install the required dependencies by running below:
 pip install -r requirements.txt
 ```
 
+The preprocessing kNN runs faster with RAPIDS cuML (refer to
+[Memory Pool Optimizations](#memory-pool-optimizations)). cuML is optional and
+is not in `requirements.txt`, because its package depends on your CUDA version.
+Install the one that matches your CUDA toolkit:
+
+```bash
+pip install cuml-cu13  # CUDA 13
+pip install cuml-cu12  # CUDA 12
+```
+
+The PhysicsNeMo container already includes cuML.
+
 ## Getting started with the DrivAerML example
 
 ### Configuration basics

@@ -49,7 +49,8 @@ or new meshes that keep the point indices of the parent.
       :shadow: md
       :class-card: sd-card-hover
 
-      ``mesh.is_watertight()`` is ``True`` when no facet is on the boundary.
+      ``mesh.is_watertight()`` is ``True`` when every facet is shared by
+      exactly two cells.
 
    .. grid-item-card:: Manifold
       :link: physicsnemo.mesh.boundaries.is_manifold

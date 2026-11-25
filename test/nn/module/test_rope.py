@@ -26,6 +26,7 @@ from physicsnemo.nn.module.rope import (
     apply_rotary_pos_emb,
     build_axial_rope_cos_sin_2d,
     build_rope_cos_sin_1d,
+    build_rope_cos_sin_1d_continuous,
 )
 
 
@@ -258,3 +259,52 @@ def test_rotary_1d_tables_checkpoint_round_trip(tmp_path):
     assert loaded.cos.shape == (max_seq_len, head_dim)
     cos_out, sin_out = loaded()
     assert torch.equal(cos_out, cos_ref) and torch.equal(sin_out, sin_ref)
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+)
+def test_continuous_rope_precision_and_coordinate_gradients(dtype, device):
+    """Continuous tables and rotations match complex arithmetic, including fp64."""
+    compute_dtype = torch.float64 if dtype == torch.float64 else torch.float32
+    positions = torch.tensor(
+        [[-1000.123456789, 0.3, 1000.123456789]],
+        device=device,
+        dtype=compute_dtype,
+        requires_grad=True,
+    )
+    frequencies = torch.tensor([1.0, 0.123456789], device=device, dtype=compute_dtype)
+    x = (
+        torch.linspace(-2, 2, 12, device=device, dtype=compute_dtype)
+        .reshape(1, 3, 4)
+        .to(dtype)
+        .requires_grad_()
+    )
+    cos, sin = build_rope_cos_sin_1d_continuous(positions, frequencies)
+    actual = apply_rotary_pos_emb(x, cos, sin)
+    phase = positions[..., None] * frequencies
+    pairs = torch.view_as_complex(x.to(compute_dtype).reshape(1, 3, 2, 2))
+    reference = (
+        torch.view_as_real(pairs * torch.polar(torch.ones_like(phase), phase))
+        .flatten(-2)
+        .to(dtype)
+    )
+    assert cos.dtype == sin.dtype == compute_dtype
+    assert actual.dtype == dtype
+    torch.testing.assert_close(
+        actual,
+        reference,
+        rtol=1e-6 if dtype != torch.float64 else 1e-14,
+        atol=1e-7 if dtype != torch.float64 else 1e-14,
+    )
+    actual_grads = torch.autograd.grad(actual.to(compute_dtype).sum(), (x, positions))
+    reference_grads = torch.autograd.grad(
+        reference.to(compute_dtype).sum(), (x, positions)
+    )
+    for actual_grad, reference_grad in zip(actual_grads, reference_grads):
+        torch.testing.assert_close(
+            actual_grad,
+            reference_grad,
+            rtol=1e-6 if dtype != torch.float64 else 1e-14,
+            atol=1e-6 if dtype != torch.float64 else 1e-14,
+        )

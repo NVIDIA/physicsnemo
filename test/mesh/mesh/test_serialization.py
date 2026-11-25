@@ -24,6 +24,7 @@ that reads cells keep working.
 import subprocess
 import sys
 
+import pytest
 import torch
 from tensordict import TensorClass, TensorDict
 
@@ -294,6 +295,41 @@ class TestMemmapRoundTrip:
         assert loaded.n_spatial_dims == mesh.n_spatial_dims
         assert loaded.n_points == mesh.n_points
         assert loaded.n_cells == mesh.n_cells
+
+    @pytest.mark.parametrize("mode", [None, "r"])
+    def test_loaded_mesh_saves_to_a_new_path(self, tmp_path, mode):
+        """A mesh read from disk holds memory-mapped tensors; save copies them."""
+        mesh = two_triangles_2d.load()
+        mesh.cell_data["c_scalar"] = torch.randn(mesh.n_cells)
+        mesh.save(tmp_path / "a")
+        load_kwargs = {} if mode is None else {"mode": mode}
+        loaded = Mesh.load(tmp_path / "a", **load_kwargs)
+
+        # translate() replaces the points; cells and cell_data stay memory-mapped.
+        loaded.translate([1.0, 0.0]).save(tmp_path / "b")
+        reloaded = Mesh.load(tmp_path / "b")
+
+        assert torch.equal(reloaded.cells, mesh.cells)
+        assert torch.allclose(reloaded.points, mesh.points + torch.tensor([1.0, 0.0]))
+        assert torch.equal(reloaded.cell_data["c_scalar"], mesh.cell_data["c_scalar"])
+        with pytest.raises(RuntimeError, match="copy_existing"):
+            loaded.save(tmp_path / "c", copy_existing=False)
+
+    def test_loaded_domain_mesh_saves_to_a_new_path(self, tmp_path):
+        """A DomainMesh read as the datapipe readers read it saves to a new path."""
+        mesh = two_triangles_2d.load()
+        domain = DomainMesh(
+            interior=mesh,
+            boundaries={"wall": mesh.clone()},
+            global_data={"rho": torch.tensor(1.2)},
+        )
+        domain.save(tmp_path / "a")
+
+        DomainMesh.load(tmp_path / "a", mode="r").save(tmp_path / "b")
+        reloaded = DomainMesh.load(tmp_path / "b")
+
+        assert torch.equal(reloaded.boundaries["wall"].cells, mesh.cells)
+        assert torch.equal(reloaded.global_data["rho"], domain.global_data["rho"])
 
 
 ### Pickle (torch.save / torch.load) Round-Trip Tests ###

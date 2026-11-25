@@ -163,6 +163,36 @@ class TestMergeDuplicatePoints:
         temperatures = cleaned.point_data["temperature"]
         assert torch.any(torch.isclose(temperatures, torch.tensor(20.0, device=device)))
 
+    def test_merge_sums_point_measures(self, device):
+        """Merged points carry the sum of their point measures, so point
+        quadrature integrals are unchanged; other fields are averaged."""
+        from physicsnemo.mesh.calculus import point_measures, set_point_measures
+
+        ### Unit square of two triangles, the diagonal's vertices duplicated
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2], [3, 4, 5]], device=device)
+        mesh = Mesh(points=points, cells=cells)
+        mesh.point_data["temperature"] = torch.arange(6.0, device=device)
+        set_point_measures(
+            mesh, torch.tensor([1.0, 2, 3, 4, 5, 6], device=device), dimension=2
+        )
+
+        cleaned = mesh.clean()
+
+        ### Points 0 and 3, and 2 and 4, merge
+        order = torch.argsort(cleaned.point_data["temperature"])
+        torch.testing.assert_close(
+            point_measures(cleaned)[order],
+            torch.tensor([2.0, 1 + 4, 3 + 5, 6], device=device),
+        )
+        torch.testing.assert_close(
+            cleaned.point_data["temperature"][order],
+            torch.tensor([1.0, 1.5, 3, 5], device=device),
+        )
+
 
 class TestRemoveDuplicateCells:
     """Test duplicate cell removal."""

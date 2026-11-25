@@ -1,16 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # [imports]
+import logging
+
 import torch
 
 import physicsnemo
 from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
-from physicsnemo.launch.logging import LaunchLogger, PythonLogger
-from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils.logging import LaunchLogger, PythonLogger
+from physicsnemo.utils.logging.wandb import initialize_wandb
 from physicsnemo.metrics.general.mse import mse
 from physicsnemo.models.fno.fno import FNO
 
 # [imports]
 
 # [code]
+# the loggers need the distributed manager, even for a single process
+DistributedManager.initialize()
+
+# PythonLogger and LaunchLogger log at INFO through the standard logging module,
+# which drops INFO by default outside a framework like Hydra
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s - %(name)s - %(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 normaliser = {
     "permeability": (1.25, 0.75),
     "darcy": (3.63e-2, 2.44e-2),
@@ -61,6 +91,7 @@ for i in range(20):
             truth = batch["darcy"]
             pred = model(batch["permeability"])
             loss = mse(pred, truth)
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             scheduler.step()

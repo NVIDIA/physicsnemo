@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DeFormer corrector on the frozen Yaris network (px_yaris_deformer). The teacher
+# (model.teacher: the network's architecture, model.teacher_weights: its
+# checkpoint, passed on the command line) is recomputed on the fly; the
+# DeFormer corrector (conf/model/deformer_corrector.yaml) reads its predicted
+# shape through message passing on the shell mesh edges and on contact edges
+# discovered on that shape (crossing-aware node-to-facet search, 5 mm band,
+# 10 mm reference clearance), eight layers of width 128, zero-initialised
+# decoder, so epoch 0 reproduces the teacher. 30 epochs with a one-epoch linear
+# learning-rate warm-up, otherwise the network's optimizer, schedule and loss.
+# At evaluation the corrected positions are clamped at the rigid wall plane
+# x = 100 mm (datapipe.rigid_wall_position, model.final_clamp_to_wall); the
+# penetration metrics score the shell surface and the wall against the truth.
+defaults:
+  - px_yaris_deformer
+  - model@model.teacher: deformer_time_conditional
+  - override model: deformer_corrector
+  - _self_
+
+experiment_name: PX-Yaris-DeFormer-Corrector
+
+datapipe:
+  contact_surface: true
+  mesh_edges: true
+  rigid_wall_position: 100.0
+
+model:
+  teacher_weights: ???   # the network's .mdlus checkpoint
+  final_clamp_to_wall: true
+
+training:
+  epochs: 30
+  lr_warmup_epochs: 1
+  validation_freq: 2
+  save_checkpoint_freq: 1
+  auxiliary_loss_weight: 0.0   # no provisional head
+  validation_penetration:
+    enabled: true
+    tolerance_mm: 0.5
+    activation_distance_mm: 5.0
+    reference_clearance_mm: 10.0

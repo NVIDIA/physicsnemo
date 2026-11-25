@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: datapipe.CrashPointCloudDataset
+_target_: datapipes.datapipe.CrashPointCloudDataset
 _convert_: all
 data_dir: ${training.raw_data_dir}
 global_features_filepath: ${training.global_features_filepath}

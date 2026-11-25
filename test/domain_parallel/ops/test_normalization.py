@@ -30,6 +30,7 @@ from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
 
 from .utils import generate_image_like_data, numerical_shard_tensor_check
 
@@ -118,3 +119,17 @@ def test_group_norm_1d(distributed_mesh, num_groups, affine, backward, amp):
         rtol=rtol,
         amp=amp,
     )
+
+
+@pytest.mark.multigpu_static
+def test_group_norm_batch_sharded_raises(distributed_mesh):
+    """ShardTensor shards spatial dimensions, so a sharded batch is rejected."""
+    dm = DistributedManager()
+
+    image = generate_image_like_data(2 * dm.world_size, 8, (16, 16), device=dm.device)
+    sharded_image = scatter_tensor(image, 0, distributed_mesh, (Shard(0),))
+
+    module = torch.nn.GroupNorm(num_groups=4, num_channels=8).to(dm.device)
+
+    with pytest.raises(MissingShardPatch, match="batch dimension"):
+        module(sharded_image)

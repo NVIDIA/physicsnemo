@@ -25,7 +25,7 @@ import torch
 
 pytest.importorskip("gpytorch", reason="VariationalGPHead requires gpytorch")
 
-from physicsnemo.experimental.uq import VariationalGPHead  # noqa: E402
+from physicsnemo.experimental.uq.gp import VariationalGPHead  # noqa: E402
 
 INPUT_DIM = 16
 N_TRAIN = 3200

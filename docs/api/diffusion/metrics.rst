@@ -96,3 +96,8 @@ API Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: physicsnemo.diffusion.metrics.fid.calculate_fid_from_inception_stats
+
+:code:`wasserstein_from_normal`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: physicsnemo.diffusion.metrics.wasserstein.wasserstein_from_normal
