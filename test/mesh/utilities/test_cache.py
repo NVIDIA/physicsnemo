@@ -465,6 +465,84 @@ class TestWithCells:
         with pytest.raises(TypeError, match="integer dtype"):
             mesh.with_cells(mesh.cells.to(torch.float32))
 
+    def test_reordered_rows_keep_cached_centroids(self):
+        mesh = Mesh(
+            points=torch.rand(4, 3, generator=torch.Generator().manual_seed(0)),
+            cells=torch.tensor([[0, 1, 2], [0, 1, 3]]),
+        )
+        # A sentinel, which no recompute can match
+        mesh._cache["cell", "centroids"] = torch.full((2, 3), 7.0)
+
+        updated = mesh.with_cells(torch.tensor([[1, 2, 0], [0, 2, 3]]))
+
+        cached = updated._cache["cell", "centroids"]
+        assert torch.equal(cached[0], torch.full((3,), 7.0))
+        torch.testing.assert_close(cached[1], mesh.points[[0, 2, 3]].mean(dim=0))
+
+    @pytest.mark.parametrize("dtype", [torch.uint16, torch.uint32, torch.uint64])
+    def test_reordering_unsigned_cells_keeps_measures_and_centroids(self, dtype):
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+
+        mesh = Mesh(
+            points=torch.rand(3, 3, generator=torch.Generator().manual_seed(0)),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        set_cell_measures(mesh, torch.tensor([1.5]))
+        sentinel = torch.full((1, 3), 7.0)
+        mesh._cache["cell", "centroids"] = sentinel
+
+        updated = mesh.with_cells(mesh.cells[:, [0, 2, 1]].to(dtype))
+
+        assert updated.cells.dtype == torch.int64
+        assert torch.equal(cell_measures(updated), torch.tensor([1.5]))
+        assert torch.equal(updated._cache["cell", "centroids"], sentinel)
+
+    def test_reordering_an_empty_mesh(self):
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+
+        mesh = Mesh(points=torch.rand(3, 3), cells=torch.empty(0, 3, dtype=torch.int64))
+        set_cell_measures(mesh, torch.empty(0))
+        _ = mesh.cell_centroids
+
+        updated = mesh.with_cells(mesh.cells[:, [0, 2, 1]])
+
+        assert cell_measures(updated).shape == (0,)
+        assert updated._cache["cell", "centroids"].shape == (0, 3)
+
+    def test_keep_retains_the_area_cache_through_the_measure_transfer(self):
+        """A retained area cache is used as is, even for a row whose vertices change."""
+        from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
+
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]]
+            ),
+            cells=torch.tensor([[0, 1, 2], [0, 2, 1]]),
+        )
+        set_cell_measures(mesh, torch.tensor([3.0, 5.0]))
+        areas = mesh.cell_areas
+
+        updated = mesh.with_cells(
+            torch.tensor([[0, 2, 1], [0, 3, 1]]), keep=("cell", "areas")
+        )
+
+        assert torch.equal(updated._cache["cell", "areas"], areas)
+        assert torch.equal(cell_measures(updated), torch.tensor([3.0, 5.0]))
+
+    def test_reordering_writes_no_cache_when_points_require_grad(self):
+        from physicsnemo.mesh.calculus.measure import set_cell_measures
+
+        mesh = Mesh(
+            points=torch.rand(3, 3).requires_grad_(),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        set_cell_measures(mesh, torch.ones(1))
+        mesh._cache["cell", "centroids"] = torch.zeros(1, 3)
+
+        updated = mesh.with_cells(mesh.cells[:, [0, 2, 1]])
+
+        assert not updated._cache["cell"].keys()
+
     def test_result_containers_are_independent(self):
         mesh = self._cached_triangle()
 

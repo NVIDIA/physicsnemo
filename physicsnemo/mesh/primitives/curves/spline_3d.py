@@ -30,8 +30,9 @@ as z departs from zero, creating a "spool" or "hourglass" shape.
 
 Note
 ----
-Identical to PyVista's ``pv.examples.load_spline()`` but implemented
-without PyVista dependency.
+The same parametric curve as PyVista's ``pv.examples.load_spline()``,
+sampled uniformly in theta (PyVista resamples it by arc length), and
+implemented without PyVista dependency.
 """
 
 import torch

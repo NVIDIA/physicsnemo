@@ -38,6 +38,7 @@ import pytest
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.transforms.mesh import MeshToDomainMesh
 from physicsnemo.mesh import DomainMesh, Mesh
 
 from collate import _add_batch_dim_token, build_collate_fn
@@ -236,6 +237,49 @@ class TestMeshInputCollate:
         assert batch["targets"].batch_size == torch.Size([6])
         assert tuple(batch["targets"]["pressure"].shape) == (6,)
         assert tuple(batch["targets"]["wss"].shape) == (6, 3)
+
+
+### ---------------------------------------------------------------------------
+### Target measure
+### ---------------------------------------------------------------------------
+
+
+class TestTargetMeasure:
+    """Targets at cell centroids carry their cells' measure into the batch."""
+
+    @staticmethod
+    def _centroid_domain() -> tuple[DomainMesh, torch.Tensor]:
+        """Two triangles of different areas, targets moved to their centroids."""
+        surface = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [3.0, 3.0, 0.0]]
+            ),
+            cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+            cell_data={"pressure": torch.tensor([1.0, 2.0])},
+        )
+        domain = MeshToDomainMesh(cell_data_targets=["pressure"])(surface)
+        return domain, surface.cell_areas
+
+    def test_tensor_input_measure_gets_the_targets_batch_dim(self):
+        """Tensor input: the measure is ``(1, N)``, like a scalar target."""
+        domain, areas = self._centroid_domain()
+        collate = build_collate_fn(
+            "tensors", {"x": "interior.points"}, {"pressure": "scalar"}
+        )
+        batch = collate([(domain, {})])
+        assert set(batch) == {"forward_kwargs", "targets", "target_measure"}
+        assert batch["target_measure"].shape == batch["targets"]["pressure"].shape
+        torch.testing.assert_close(batch["target_measure"], areas.unsqueeze(0))
+
+    def test_mesh_input_measure_stays_unbatched(self):
+        """Mesh input: the measure is ``(N,)``, aligned with the targets."""
+        domain, areas = self._centroid_domain()
+        collate = build_collate_fn(
+            "mesh", {"x": "interior.points"}, {"pressure": "scalar"}
+        )
+        batch = collate([(domain, {})])
+        torch.testing.assert_close(batch["target_measure"], areas)
+        assert "_effective_measure" not in batch["targets"].keys()
 
 
 ### ---------------------------------------------------------------------------

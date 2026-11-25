@@ -656,7 +656,7 @@ So attaching it to DoMINO, MeshGraphNet or any other point-wise encoder means
 exposing whatever that model computes before its final projection:
 
 ```python
-from physicsnemo.experimental.uq import FieldVariationalGPHead
+from physicsnemo.experimental.uq.gp import FieldVariationalGPHead
 
 head = FieldVariationalGPHead(
     input_dim=feat_dim,  # backbone feature width

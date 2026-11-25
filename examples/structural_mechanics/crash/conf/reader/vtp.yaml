@@ -14,5 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: vtp_reader.Reader
+_target_: readers.vtp_reader.Reader
 _convert_: all
+cache_dir: null
+include_contact_topology: false  # also cache the shell cells (contact facets) for datapipe.contact_surface

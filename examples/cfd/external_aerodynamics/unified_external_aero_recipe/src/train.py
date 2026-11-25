@@ -33,6 +33,7 @@ Usage::
     python src/train.py benchmark_io=true +training.benchmark_max_steps=20
 """
 
+import math
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -47,7 +48,12 @@ from jaxtyping import Float
 from loss import LossCalculator
 from metrics import MetricCalculator, resolve_metrics
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import IOType, normalize_output_to_tensordict, require_output_type
+from output_normalize import (
+    IOType,
+    normalize_output_to_tensordict,
+    require_output_type,
+    resolve_output_layout,
+)
 from tabulate import tabulate
 from tensordict import TensorDict
 from torch.amp import GradScaler
@@ -61,17 +67,21 @@ from utils import (
     get_autocast_context,
     make_jsonl_logger,
     recursive_to_device,
-    resolve_dict,
+    resolve_field_weights,
     set_seed,
 )
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
-from physicsnemo.distributed import DistributedManager, fused_all_reduce
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import (
+    NonBlockingLogger,
+    PythonLogger,
+    RankZeroLoggingWrapper,
+)
 from physicsnemo.utils.profiling import Profiler, profile
 
 ### When `cfg.profile` is set, every train / val epoch breaks out of its
@@ -121,42 +131,39 @@ def _reduce_and_average(
     metrics_td: TensorDict | None,
     n_samples: int,
     *,
-    device: torch.device | str,
+    metric_counts: TensorDict | None = None,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
     """Collapse rank-local loss/metric *sums* into a global mean-of-means.
 
     Under DDP each rank only sees its own shard, so the numbers we log are
     meaningless until reduced across ranks. This divides the rank-local sums
     (``loss_sum`` plus the 0-D ``losses_td`` / ``metrics_td`` leaves) by the
-    local sample count, then averages those per-rank means across ranks with
-    one fused ``AVG`` ``all_reduce``
-    (:func:`physicsnemo.distributed.fused_all_reduce`). Under even shards
-    (train ``drop_last=True``, val pads) that equals the true global mean and
-    keeps the integer count out of the float reduction buffer. It is
-    granularity-neutral, mirrors the inference-side ``infer._allreduce_sums``,
-    and is called at two boundaries:
-
-    - Per step, with ``n_samples == 1``, so the logged iteration curves are
-      global all-rank means rather than rank-0's shard.
-    - Per epoch, with ``n_samples == n_local`` and the running epoch sums, for
-      the dataset-wide summary.
+    local sample count, then averages those per-rank means across ranks in
+    one ``AVG`` all-reduce. Under even shards (train ``drop_last=True``, val
+    pads) that equals the true global mean and keeps the integer count out of
+    the float reduction buffer. It is granularity-neutral, mirrors the
+    inference-side ``infer._allreduce_sums``, and is called once per epoch,
+    with ``n_samples == n_local`` and the running epoch sums, for the
+    dataset-wide summary. It reduces through the same
+    :class:`~physicsnemo.utils.logging.NonBlockingLogger` and
+    :func:`_step_means` as each step's log in :func:`_run_epoch`, and waits for
+    the result.
 
     Args:
         loss_sum: Rank-local sum of scalar losses over the ``n_samples`` being
-            collapsed, as a 0-D on-device tensor -- one step's detached
-            ``loss`` per step, or the running epoch-loss tensor -- not a mean.
+            collapsed, as a 0-D on-device tensor (the running epoch loss),
+            not a mean.
         losses_td: Rank-local per-field loss sum: a 0-D (``batch_size=[]``)
             ``TensorDict`` whose leaves are summed scalar losses, one per loss
-            term. ``None`` is the "zero samples" sentinel (see Notes); it does
-            not arise on the per-step path, where a batch is always present.
+            term. ``None`` is the "zero samples" sentinel (see Returns).
         metrics_td: The matching per-field metric-sum accumulator, with the
             same ``None`` sentinel. Seeded in lock-step with ``losses_td``, so
             the two are ``None`` together or populated together.
         n_samples: Number of samples this rank contributed to ``loss_sum`` and
-            the accumulators (``1`` per step, ``n_local`` per epoch; equal to
-            the step count because the recipe runs ``batch_size == 1``).
-        device: The rank's collective/compute device (``dist_manager.device``),
-            where the ``all_reduce`` runs.
+            the accumulators (``n_local``, equal to the step count because
+            the recipe runs ``batch_size == 1``).
+        metric_counts: Optional per-leaf count of the samples behind
+            ``metrics_td`` (see :func:`_skip_nan`), to average over instead.
 
     Returns:
         A ``(avg_loss, avg_losses, avg_metrics)`` tuple of Python floats:
@@ -168,9 +175,8 @@ def _reduce_and_average(
         collective.
 
     Notes:
-        The per-step collective is deadlock-free only because every rank runs
-        the same step count (train ``drop_last=True``, val pads) and packs the
-        same leaves in the same order (all ranks share one ``target_config``).
+        Every rank packs the same leaves in the same order (all ranks share
+        one ``target_config``), so the collective matches up across ranks.
         Single-process skips the reduction, leaving single-GPU logs unchanged.
     """
     ### Inputs are plain tensors even under domain parallelism: ``forward_pass``
@@ -183,21 +189,39 @@ def _reduce_and_average(
     ### mean-of-means equal to the global mean under even shards, with no
     ### integer count entering the float reduction buffer.
     n = max(n_samples, 1)
-    bundle = TensorDict(
-        {
-            "loss": loss_sum / n,
-            "losses": losses_td / n,
-            "metrics": metrics_td / n,
-        },
-    )
-    ### Pull the reduced bundle host-side once; .item() off the CPU copy is then
-    ### a free index, with no per-leaf device sync (AVG is a no-op single-process).
-    reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device).cpu()
+    values = {"loss": loss_sum / n, "losses": losses_td / n, "metrics": metrics_td / n}
+    if metric_counts is not None:
+        values["metric_counts"] = metric_counts / n
+    logged = []
+    with NonBlockingLogger(logged.append, reduce_op=dist.ReduceOp.AVG) as logger:
+        logger.log(values)
+    return _step_means(logged[0])
+
+
+def _skip_nan(metrics: TensorDict) -> tuple[TensorDict, TensorDict]:
+    """Split *metrics* into NaN-free values and per-leaf counts of non-NaN ones."""
     return (
-        reduced["loss"].item(),
-        {key: value.item() for key, value in reduced["losses"].items()},
-        {key: value.item() for key, value in reduced["metrics"].items()},
+        metrics.apply(lambda v: torch.where(v.isnan(), 0.0, v)),
+        metrics.apply(lambda v: (~v.isnan()).float()),
     )
+
+
+def _step_means(
+    values: dict[str, Any],
+) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Split logged all-rank means into their loss, losses and metrics.
+
+    With ``metric_counts`` (masked targets), each metric is divided by its
+    count, and is NaN where no rank had a finite target. Each step's log and
+    :func:`_reduce_and_average` both use it.
+    """
+    metrics = values["metrics"]
+    if "metric_counts" in values:
+        counts = values["metric_counts"]
+        metrics = {
+            k: v / counts[k] if counts[k] else math.nan for k, v in metrics.items()
+        }
+    return values["loss"], values["losses"], metrics
 
 
 ### ---------------------------------------------------------------------------
@@ -236,12 +260,14 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
+    output_layout: dict[str, Any] | None = None,
 ) -> tuple[Float[torch.Tensor, ""], TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
     Args:
         batch: ``{"forward_kwargs": ..., "targets": TensorDict}`` produced
-            by the collate function. ``"targets"`` is a TensorDict with
+            by the collate function, plus ``"target_measure"`` when the
+            dataset provides one. ``"targets"`` is a TensorDict with
             batch_size ``[N]`` (mesh-input mode) or ``[1, N]``
             (tensor-input mode).
         model: Model whose ``forward`` accepts the resolved
@@ -256,6 +282,8 @@ def forward_pass(
             output is unpacked into a TensorDict.
         target_config: ``{name: "scalar"|"vector"}``; used to split tensor
             outputs and validate Mesh outputs.
+        output_layout: The model's ``output_groups`` or ``output_sets``
+            (:func:`output_normalize.resolve_output_layout`), if any.
 
     Returns:
         ``(loss, loss_td, metric_td)``. The two TensorDicts are kept
@@ -273,15 +301,20 @@ def forward_pass(
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
-    pred_td = normalize_output_to_tensordict(output, target_config, output_type)
+    pred_td = normalize_output_to_tensordict(
+        output, target_config, output_type, targets=targets, **(output_layout or {})
+    )
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
     target_f32 = targets.float()
+    target_measure = batch.get("target_measure")
+    if target_measure is not None:
+        target_measure = target_measure.float()
 
-    loss, loss_td = loss_calculator(pred_f32, target_f32)
+    loss, loss_td = loss_calculator(pred_f32, target_f32, target_measure)
     with torch.no_grad():
-        metric_td = metric_calculator(pred_f32, target_f32)
+        metric_td = metric_calculator(pred_f32, target_f32, target_measure)
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
@@ -325,11 +358,14 @@ def _run_epoch(
     Train and val share the same per-batch loop (``forward_pass`` +
     metric accumulation + per-step console log + per-epoch summary).
     Train mode additionally runs the backward / optimizer / scheduler
-    step and emits per-step TensorBoard + JSONL entries (``phase: "step"``);
-    val mode wraps the loop in ``torch.no_grad()``, skips TensorBoard
-    per-step logging, and emits a lighter-weight JSONL record per step
-    (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
-    and ``step_time_s``.
+    step and emits per-step TensorBoard + JSONL entries (``phase:
+    "train_step"``); val mode wraps the loop in ``torch.no_grad()``, skips
+    TensorBoard per-step logging, and emits a JSONL record per step (``phase:
+    "val_step"``) carrying ``epoch``, ``val_step``, ``loss``, ``step_time_s``
+    and the per-field losses and metrics (no ``mem_gb``). Each step's records
+    are logged once its values reach the host
+    (:class:`~physicsnemo.utils.logging.NonBlockingLogger`), so logging never
+    makes a step wait for the GPU.
 
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
@@ -355,18 +391,84 @@ def _run_epoch(
     is_rank0 = dist_manager.rank == 0
 
     ### All three accumulators live on-device, so epoch sums build up with no
-    ### per-step host sync (the only per-step D2H is inside _reduce_and_average).
+    ### per-step host sync (per-step values are read back without waiting, below).
     ### total_loss is float64 for accumulation precision, downcast to float32 at
     ### the epoch reduce. None = not yet seeded; n_local is this rank's local
     ### sample count.
     total_loss = torch.zeros((), dtype=torch.float64, device=dist_manager.device)
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
+    total_counts: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
+    output_layout = resolve_output_layout(cfg)
+
+    def log_step(
+        values: dict[str, Any], i: int, step_dt: float, mem_gb: float, lr: float | None
+    ) -> None:
+        """Log one step once its values, global all-rank means, reach the host."""
+        step_loss, step_losses, step_metrics = _step_means(values)
+        ### Train mode includes Mem in the per-step line; val drops it
+        ### because the no_grad path is the lowest-noise place to look.
+        mem_str = f" Mem: {mem_gb:.2f}GB" if is_train else ""
+        logger.info(
+            f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
+            f"Loss: {step_loss:.6f} "
+            f"Step: {step_dt:.3f}s"
+            f"{mem_str}"
+        )
+
+        ### Per-step TensorBoard is train-only (val_writer is epoch-only);
+        ### per-step JSONL is written in both modes so downstream tooling gets
+        ### val step-times directly. The logged values are global all-rank
+        ### means (rank 0 is only the writer).
+        if is_rank0:
+            if is_train:
+                global_step = epoch * num_steps + i
+                if writer is not None:
+                    ### Tags: iteration/loss/... and iteration/metrics/...
+                    _log_to_tensorboard(writer, step_losses, "iteration", global_step)
+                    _log_to_tensorboard(
+                        writer, step_metrics, "iteration/metrics", global_step
+                    )
+                    for tag, value in (
+                        ("lr", lr),
+                        ("performance/mem_gb", mem_gb),
+                        ("performance/step_time_s", step_dt),
+                    ):
+                        writer.add_scalar(f"iteration/{tag}", value, global_step)
+                if log_jsonl is not None:
+                    log_jsonl(
+                        {
+                            "phase": "train_step",
+                            "global_step": global_step,
+                            "loss": step_loss,
+                            "mem_gb": mem_gb,
+                            "step_time_s": step_dt,
+                            **step_losses,
+                            **step_metrics,
+                        }
+                    )
+            elif log_jsonl is not None:
+                ### Val records name their epoch and omit mem_gb (lowest-noise path).
+                log_jsonl(
+                    {
+                        "phase": "val_step",
+                        "epoch": epoch,
+                        "val_step": i,
+                        "loss": step_loss,
+                        "step_time_s": step_dt,
+                        **step_losses,
+                        **step_metrics,
+                    }
+                )
+
     epoch_t0 = time.perf_counter()
-    with grad_ctx:
+    ### Each step logs once its values reach the host, usually a step later;
+    ### the block's end waits for the rest.
+    step_logger = NonBlockingLogger(log_step, reduce_op=dist.ReduceOp.AVG)
+    with grad_ctx, step_logger:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
             batch = recursive_to_device(batch, dist_manager.device)
@@ -379,6 +481,7 @@ def _run_epoch(
                 metric_calculator,
                 output_type=output_type,
                 target_config=target_config,
+                output_layout=output_layout,
             )
 
             if is_train:
@@ -399,17 +502,24 @@ def _run_epoch(
             ### (the joint ``is None`` check exists to satisfy the type
             ### checker, which can't see the invariant from per-variable
             ### narrowing).
+            ### Masked targets: skip a field's NaN metrics (no finite target).
+            counts = None
+            if metric_calculator.mask_nonfinite_targets:
+                metrics, counts = _skip_nan(metrics)
             if total_losses_td is None or total_metrics_td is None:
                 total_losses_td = losses.clone()
                 total_metrics_td = metrics.clone()
+                total_counts = counts
             else:
                 total_losses_td.add_(losses)
                 total_metrics_td.add_(metrics)
+                if counts is not None:
+                    total_counts = total_counts + counts
             n_local += 1
 
             ### Detached scalar loss: accumulate the epoch sum on-device (no
-            ### host sync) and feed the per-step reducer below. Materialized
-            ### so the plain accumulator never sees a ShardTensor.
+            ### host sync) and keep it for this step's log below.
+            ### Materialized so the plain accumulator never sees a ShardTensor.
             loss_det = materialize(loss.detach())
             total_loss += loss_det
 
@@ -420,93 +530,14 @@ def _run_epoch(
                 else 0
             )
 
-            ### Reduce this step's loss + metrics across ranks so the iteration
-            ### logs are global all-rank means, not rank-0's shard. This is a
-            ### collective: EVERY rank must call it, so it sits outside the
-            ### rank-0 logging gate below. ``n_samples=1`` is this step's local
-            ### sample count (one batch == one sample), matching the
-            ### ``n_local += 1`` accumulation above. Equal per-rank step counts
-            ### keep the per-step collective deadlock-free (see
-            ### ``_reduce_and_average``).
-            step_loss, step_losses, step_metrics = _reduce_and_average(
-                loss_det, losses, metrics, 1, device=dist_manager.device
-            )
-
-            ### Train mode includes Mem in the per-step line; val drops it
-            ### because the no_grad path is the lowest-noise place to look.
-            mem_str = f" Mem: {mem_gb:.2f}GB" if is_train else ""
-            logger.info(
-                f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
-                f"Loss: {step_loss:.6f} "
-                f"Step: {step_dt:.3f}s"
-                f"{mem_str}"
-            )
-
-            ### Per-step TensorBoard is train-only (val_writer is epoch-only);
-            ### per-step JSONL is written in both modes so downstream tooling gets
-            ### val step-times directly. The logged values are global all-rank
-            ### means (rank 0 is only the writer).
-            if is_rank0:
-                if is_train:
-                    global_step = epoch * num_steps + i
-                    if writer is not None:
-                        ### Loss keys already start with `loss/`, so the iteration
-                        ### prefix yields tags like `iteration/loss/pressure`;
-                        ### metric tags get an explicit `iteration/metrics/...`
-                        ### namespace so we never have to split by string prefix.
-                        _log_to_tensorboard(
-                            writer, step_losses, "iteration", global_step
-                        )
-                        _log_to_tensorboard(
-                            writer, step_metrics, "iteration/metrics", global_step
-                        )
-                        writer.add_scalar(
-                            "iteration/lr",
-                            scheduler.get_last_lr()[0],
-                            global_step=global_step,
-                        )
-                        writer.add_scalar(
-                            "iteration/performance/mem_gb",
-                            mem_gb,
-                            global_step=global_step,
-                        )
-                        writer.add_scalar(
-                            "iteration/performance/step_time_s",
-                            step_dt,
-                            global_step=global_step,
-                        )
-                    if log_jsonl is not None:
-                        log_jsonl(
-                            {
-                                "phase": "train_step",
-                                "global_step": global_step,
-                                "loss": step_loss,
-                                "mem_gb": mem_gb,
-                                "step_time_s": step_dt,
-                                **step_losses,
-                                **step_metrics,
-                            }
-                        )
-                elif log_jsonl is not None:
-                    ### Val per-step record. ``epoch`` is explicit (unlike
-                    ### the train ``step`` records, which the parser infers
-                    ### from surrounding ``train`` markers) so val_step
-                    ### records can be associated with an epoch without
-                    ### relying on surrounding context. ``mem_gb`` is
-                    ### intentionally omitted -- the no_grad path is the
-                    ### lowest-noise place to measure step time and we
-                    ### don't want allocator state hopping in TB.
-                    log_jsonl(
-                        {
-                            "phase": "val_step",
-                            "epoch": epoch,
-                            "val_step": i,
-                            "loss": step_loss,
-                            "step_time_s": step_dt,
-                            **step_losses,
-                            **step_metrics,
-                        }
-                    )
+            ### Averaging across ranks is a collective, so every rank logs,
+            ### outside the rank-0 logging gate; equal per-rank step counts
+            ### keep it deadlock-free.
+            lr = scheduler.get_last_lr()[0] if is_train else None
+            values = {"loss": loss_det, "losses": losses, "metrics": metrics}
+            if counts is not None:
+                values["metric_counts"] = counts
+            step_logger.log(values, i, step_dt, mem_gb, lr)
 
             if cfg.profile and i >= _PROFILE_MAX_STEPS:
                 break
@@ -523,7 +554,7 @@ def _run_epoch(
         total_losses_td,
         total_metrics_td,
         n_local,
-        device=dist_manager.device,
+        metric_counts=total_counts,
     )
 
     logger.info(
@@ -928,18 +959,25 @@ def main(cfg: DictConfig) -> None:
     ### source. Falls back to the recipe's default set when unset.
     metrics_list = resolve_metrics(cfg)
 
-    field_weights = resolve_dict(cfg, "training.field_weights")
+    field_weights = resolve_field_weights(cfg)
+    measure_weighted = bool(cfg.get("measure_weighted", True))
+    mask_nonfinite_targets = bool(cfg.training.get("mask_nonfinite_targets", False))
 
     metric_calculator = MetricCalculator(
         target_config=target_config,
         metrics=metrics_list,
+        measure_weighted=measure_weighted,
+        mask_nonfinite_targets=mask_nonfinite_targets,
     )
     loss_calculator = LossCalculator(
         target_config=target_config,
         loss_type=cfg.training.get("loss_type", "huber"),
         field_weights=field_weights,
+        measure_weighted=measure_weighted,
+        mask_nonfinite_targets=mask_nonfinite_targets,
     )
     output_type = require_output_type(cfg)
+    resolve_output_layout(cfg)  # fail fast on a bad layout, before epoch 1
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
     logger.info(

@@ -27,6 +27,8 @@ This module consolidates tests from:
 - Code coverage tests (error handling, edge conditions)
 """
 
+import math
+
 import pytest
 import torch
 
@@ -307,6 +309,18 @@ class TestGradient:
         # Laplacian should be positive (correct sign)
         assert mean_lap > 0, "Laplacian should be positive for convex function"
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    @pytest.mark.parametrize("gradient_type", ["intrinsic", "extrinsic"])
+    def test_integer_field_raises(self, dtype, gradient_type):
+        """LSQ gradients of integer fields raise, rather than truncate."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        mesh = sphere_icosahedral.load(subdivisions=1).to(dtype=dtype)
+        labels = (10 * mesh.points[:, 0]).round().long()
+
+        with pytest.raises(TypeError, match="floating-point"):
+            mesh.gradient(labels, gradient_type=gradient_type)
+
 
 class TestDivergence:
     """Test divergence computation with analytical fields."""
@@ -375,6 +389,22 @@ class TestDivergence:
         # ∂(yz)/∂x + ∂(xz)/∂y + ∂(xy)/∂z = 0 + 0 + 0 = 0
         # Quadratic components have O(h) LSQ error; lumpy_ball is moderate resolution.
         assert divergence.abs().mean() < 0.15
+
+    def test_dec_divergence_millimetre_tet_float32(self):
+        """div(x) = 3 is scale-free, so a float32 tet mesh a few mm across in
+        metres gives 3 at its interior points, as at unit scale."""
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        cube = cube_volume.load(subdivisions=4)
+        mesh = Mesh(points=2e-3 * cube.points, cells=cube.cells)
+        p = mesh.points
+        inner = ((p > p.min(0).values + 1e-9) & (p < p.max(0).values - 1e-9)).all(1)
+
+        divergence = mesh.divergence(mesh.points, method="dec")
+
+        torch.testing.assert_close(
+            divergence[inner], torch.full((int(inner.sum()),), 3.0), rtol=1e-4, atol=0
+        )
 
 
 class TestCurl:
@@ -565,9 +595,149 @@ class TestLaplacian:
         mean_error = (lap - expected).abs().mean()
         assert mean_error < 0.05, f"Mean error: {mean_error:.4f}"
 
+    def test_dec_laplacian_gradient_after_no_grad_call(self):
+        """A DEC Laplacian call under no_grad leaves a later gradient unchanged."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        sphere = sphere_icosahedral.load(subdivisions=1)
+        phi = sphere.points[:, 0].double() ** 2
+
+        def points_gradient(call_under_no_grad_first: bool) -> torch.Tensor:
+            points = sphere.points.double().clone().requires_grad_()
+            mesh = Mesh(points=points, cells=sphere.cells)
+            if call_under_no_grad_first:
+                with torch.no_grad():
+                    compute_laplacian_points_dec(mesh, phi)
+            compute_laplacian_points_dec(mesh, phi).sum().backward()
+            return points.grad
+
+        torch.testing.assert_close(points_gradient(True), points_gradient(False))
+
+
+def _hinge(fold_degrees: float, reverse_second_flap: bool = False) -> Mesh:
+    """Two flaps of four triangles on the hinge x = 0..2, whose normals are
+    ``fold_degrees`` apart when consistently wound."""
+    half = math.radians(90 - fold_degrees / 2)  # of each flap from the y axis
+    c, s = math.cos(half), math.sin(half)
+    hinge = torch.tensor([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+    points = torch.cat(
+        [hinge, hinge + torch.tensor([0, c, s]), hinge + torch.tensor([0, c, -s])]
+    )
+    cells = torch.tensor([[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]])
+    second = torch.tensor([[1, 0, 6], [1, 6, 7], [2, 1, 7], [2, 7, 8]])
+    if reverse_second_flap:
+        second = second[:, [0, 2, 1]]
+    return Mesh(points=points, cells=torch.cat([cells, second]))
+
 
 class TestManifolds:
     """Test calculus on manifolds (surfaces in higher dimensions)."""
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    @pytest.mark.parametrize("name", ["sphere", "torus", "cone", "wedge"])
+    def test_intrinsic_gradient_on_consistently_wound_mesh(self, name, dtype):
+        """Consistently wound meshes take their tangent planes from
+        point_normals, bit for bit, also at the cone's apex and at the fold of
+        a 10 degree wedge."""
+        from physicsnemo.mesh.calculus.gradient import _unoriented_point_normals
+        from physicsnemo.mesh.primitives.surfaces import cone, sphere_icosahedral, torus
+
+        if name == "wedge":
+            mesh = _hinge(170)
+        else:
+            loaders = {"sphere": sphere_icosahedral, "torus": torus, "cone": cone}
+            mesh = loaders[name].load()
+        mesh = mesh.to(dtype=dtype)
+        p = mesh.points
+        phi = p @ torch.tensor([1.0, -2.0, 0.5], dtype=dtype) + p[:, 0] ** 2
+
+        # The LSQ tangent bases are built from these normals
+        assert torch.equal(_unoriented_point_normals(mesh), mesh.point_normals)
+        extrinsic = mesh.gradient(phi, method="dec", gradient_type="extrinsic")
+        normals = mesh.point_normals
+        projected = extrinsic - (extrinsic * normals).sum(-1, keepdim=True) * normals
+        assert torch.equal(mesh.gradient(phi, method="dec"), projected)
+
+    @pytest.mark.parametrize("method", ["lsq", "dec"])
+    @pytest.mark.parametrize(
+        "case", ["sphere", "hinge-30", "hinge-90", "hinge-135", "cube", "square"]
+    )
+    def test_intrinsic_gradient_does_not_depend_on_winding(self, case, method):
+        """Intrinsic gradients are those of the same mesh wound consistently,
+        at any angle between neighboring cells: tangent planes have no
+        orientation. The meshes reverse a random half of a sphere's cells, one
+        flap of a hinge, or come from get_boundary_mesh(), whose facets carry no
+        orientation: there the edges and corners of a cube and of a square."""
+        from physicsnemo.mesh.primitives.planar import unit_square
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+        from physicsnemo.mesh.repair import fix_orientation
+
+        if case == "sphere":
+            consistent = sphere_icosahedral.load(subdivisions=2)
+            torch.manual_seed(0)
+            flip = torch.rand(consistent.n_cells) < 0.5
+            cells = consistent.cells
+            mixed = Mesh(
+                points=consistent.points,
+                cells=torch.where(flip[:, None], cells[:, [0, 2, 1]], cells),
+            )
+        elif case.startswith("hinge"):
+            fold = float(case.split("-")[1])
+            consistent, mixed = _hinge(fold), _hinge(fold, reverse_second_flap=True)
+        else:
+            volume = {"cube": cube_volume, "square": unit_square}[case].load()
+            mixed = volume.get_boundary_mesh()
+            consistent, _ = fix_orientation(mixed)
+        consistent, mixed = consistent.to(torch.float64), mixed.to(torch.float64)
+        p = mixed.points
+        g = torch.tensor([1.0, -2.0, 0.5][: mixed.n_spatial_dims], dtype=p.dtype)
+        phi = p @ g + p[:, 0] ** 2
+
+        torch.testing.assert_close(
+            mixed.gradient(phi, method=method),
+            consistent.gradient(phi, method=method),
+            rtol=0,
+            atol=1e-12,
+        )
+
+    def test_intrinsic_gradient_on_boundary_of_volume_mesh(self):
+        """The facets of get_boundary_mesh() carry no orientation; the intrinsic
+        gradient of a linear field is still exact inside the faces of a cube."""
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        volume = cube_volume.load(subdivisions=3).to(dtype=torch.float64)
+        surface = volume.get_boundary_mesh()
+        p = surface.points
+        on_face = (p - p.min(0).values).abs().lt(1e-9) | (p - p.max(0).values).abs().lt(
+            1e-9
+        )
+        face_interior = on_face.sum(1) == 1  # on one face, not on a cube edge
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=p.dtype)
+        expected = g.expand(int(face_interior.sum()), 3).clone()
+        expected[on_face[face_interior]] = 0.0  # projection onto the face
+
+        for method in ("lsq", "dec"):
+            gradient = surface.gradient(p @ g, method=method)
+            torch.testing.assert_close(
+                gradient[face_interior], expected, rtol=0, atol=1e-12
+            )
+
+    def test_intrinsic_gradient_on_mobius_strip_is_tangent(self):
+        """The Mobius strip has no consistent winding; its intrinsic gradients
+        are tangent to it, normal to the plane of each vertex's 1-ring."""
+        from physicsnemo.mesh.primitives.surfaces import mobius_strip
+
+        mesh = mobius_strip.load().to(dtype=torch.float64)
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=torch.float64)
+        gradient = mesh.gradient(mesh.points @ g)
+
+        adjacency = mesh.get_point_to_points_adjacency()
+        for i, neighbors in enumerate(adjacency.to_list()):
+            offsets = mesh.points[neighbors] - mesh.points[i]
+            normal = torch.linalg.svd(offsets)[2][-1]  # of the 1-ring's best plane
+            assert (gradient[i] @ normal).abs() < 0.1 * g.norm()
 
     def test_intrinsic_gradient_orthogonal_to_normal(self):
         """Intrinsic gradient should be perpendicular to surface normal."""
@@ -598,6 +768,40 @@ class TestManifolds:
         # Extrinsic gradient should be finite and have correct shape
         assert torch.all(torch.isfinite(grad_extrinsic))
         assert grad_extrinsic.shape == grad_intrinsic.shape
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    def test_intrinsic_gradient_of_surface_in_4d(self, dtype):
+        """A flat quad of two triangles in R^4: the intrinsic gradient of a
+        linear field is its projection onto the plane at all four vertices,
+        two of which have only two neighbors."""
+        u = torch.tensor([0.0, 0.6, 0.0, 0.8], dtype=dtype)
+        v = torch.tensor([0.0, 0.0, 1.0, 0.0], dtype=dtype)
+        uv = torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=dtype)
+        points = uv[:, :1] * u + uv[:, 1:] * v + torch.tensor([1.0, 2, 3, 4])
+        mesh = Mesh(points=points.to(dtype), cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+        g = torch.tensor([1.0, 2.0, -3.0, 0.5], dtype=dtype)
+
+        gradient = mesh.gradient(mesh.points @ g)
+
+        expected = ((g @ u) * u + (g @ v) * v).expand(4, 4)
+        torch.testing.assert_close(gradient, expected)
+
+    def test_dec_intrinsic_gradient_at_curve_endpoints(self):
+        """At the endpoints of a polyline in 3D, the intrinsic DEC gradient of a
+        linear field is its projection onto the end edge."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 2.0, 2.0], [2.0, 2.0, 4.0], [3.0, 4.0, 3.0]],
+            dtype=torch.float64,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1], [1, 2], [2, 3]]))
+        g = torch.tensor([1.0, 2.0, -3.0], dtype=torch.float64)
+
+        gradient = mesh.gradient(points @ g, method="dec")
+
+        for end, neighbor in ((0, 1), (3, 2)):
+            edge = points[neighbor] - points[end]
+            expected = (g @ edge) * edge / (edge @ edge)
+            torch.testing.assert_close(gradient[end], expected)
 
 
 class TestCalculusIdentities:
@@ -1506,6 +1710,39 @@ class TestDECOperators:
         # Just verify it runs and returns correct shape
         assert grad.shape == (mesh.n_points, mesh.n_spatial_dims)
         assert torch.isfinite(grad).all()
+
+    def test_dec_gradient_2d_ignores_padding(self):
+        """The zero-area cells of Mesh.pad do not change the DEC gradient of
+        a planar mesh at its real points."""
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+        padded = mesh.pad(target_n_cells=4)  # on a real point, with no new points
+        phi = points @ torch.tensor([1.0, 2.0])
+
+        grad = compute_gradient_points_dec(padded, phi)
+
+        torch.testing.assert_close(grad, compute_gradient_points_dec(mesh, phi))
+
+    def test_dec_gradient_2d_with_collinear_triangle(self):
+        """A zero-area triangle of distinct collinear vertices contributes
+        nothing to the DEC gradient, as for the same mesh embedded in 3D."""
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 2.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2], [0, 3, 4]])
+        phi = points @ torch.tensor([1.0, 2.0], dtype=torch.float64)
+        embedded = Mesh(points=torch.nn.functional.pad(points, (0, 1)), cells=cells)
+
+        grad = compute_gradient_points_dec(Mesh(points=points, cells=cells), phi)
+
+        torch.testing.assert_close(
+            grad, compute_gradient_points_dec(embedded, phi)[:, :2]
+        )
 
     @pytest.mark.parametrize("n_cells", [1, 3])
     def test_flat_operator_matches_per_component(self, n_cells):

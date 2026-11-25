@@ -74,7 +74,7 @@ The following example runs the four queries on a small square mesh:
     from physicsnemo.mesh.primitives.planar import unit_square
 
     mesh = unit_square.load(subdivisions=1)  # 9 points, 8 triangles
-    print(mesh.cells[0].tolist())  # [0, 1, 3]
+    print(mesh.cells[0].tolist())  # [0, 3, 1]
 
     p2p = mesh.get_point_to_points_adjacency()
     print(p2p.offsets.tolist())  # [0, 2, 6, 9, 13, 19, 23, 26, 30, 32]
@@ -82,7 +82,7 @@ The following example runs the four queries on a small square mesh:
 
     print(mesh.get_point_to_cells_adjacency().to_list()[4])  # [1, 2, 3, 4, 5, 6]
     print(mesh.get_cell_to_cells_adjacency().to_list()[0])  # [1]
-    print(mesh.get_cell_to_points_adjacency().to_list()[0])  # [0, 1, 3]
+    print(mesh.get_cell_to_points_adjacency().to_list()[0])  # [0, 3, 1]
 
     # Ragged arrays as (source, target) pairs, for example to build a graph.
     sources, targets = p2p.expand_to_pairs()

@@ -145,6 +145,48 @@ def _reduce_keyed(
     return reduced, work  # type: ignore[return-value]
 
 
+def _buffer_dtype(
+    dtypes: Sequence[torch.dtype], buffer_dtype: torch.dtype | None = None
+) -> torch.dtype:
+    """Return the dtype to pack and reduce values of ``dtypes`` in.
+
+    An explicit ``buffer_dtype`` wins: the caller opts in to any cast.
+    Otherwise it is the promotion of ``dtypes``, floored at ``float32`` for
+    16-bit floats, whose sums would lose too much precision (mirroring
+    :func:`~physicsnemo.distributed.utils._reduce`). Integer or bool values
+    mixed with floating ones raise ``ValueError``, since a floating buffer
+    would round large or index-like integers. Shared with
+    :class:`~physicsnemo.utils.logging.NonBlockingLogger`.
+    """
+    if buffer_dtype is not None:
+        return buffer_dtype
+    work_dtype = functools.reduce(torch.promote_types, dtypes)
+    if work_dtype.is_floating_point:
+        if not all(dtype.is_floating_point for dtype in dtypes):
+            raise ValueError(
+                "fused_all_reduce would cast integer/bool leaves into a "
+                f"{work_dtype} buffer, silently corrupting large or "
+                "index-like values. Reduce integer leaves on their own (a "
+                "homogeneous integer bundle is exact), or pass buffer_dtype= "
+                "to opt in to the cast."
+            )
+        if work_dtype.itemsize < 4:
+            work_dtype = torch.float32
+    return work_dtype
+
+
+def _crosses_ranks(group: dist.ProcessGroup | None) -> bool:
+    """Whether a collective over ``group`` reaches more than one rank.
+
+    Shared with :class:`~physicsnemo.utils.logging.NonBlockingLogger`.
+    """
+    return (
+        dist.is_available()
+        and dist.is_initialized()
+        and dist.get_world_size(group=group) > 1
+    )
+
+
 @torch.no_grad()
 def _fused_reduce_tensors(
     tensors: list[torch.Tensor],
@@ -201,37 +243,13 @@ def _fused_reduce_tensors(
         return [], (_FusedAllReduceWork() if async_op else None)
     detached = [t.detach() for t in tensors]
 
-    # Resolve the fused-buffer dtype, refusing a silent lossy int/bool -> float
-    # cast: promoting an integer leaf into a float buffer would round-trip it
-    # through a mantissa and corrupt large / index-like values. Validate BEFORE
-    # the no-op return so the contract fails loud single-process too, not only
-    # under world_size > 1. The accumulation dtype is the promotion of all leaf
-    # dtypes, floored at float32 for 16-bit floats (mirroring
-    # :func:`~physicsnemo.distributed.utils._reduce`) whose half/bfloat16 sums
-    # would lose too much precision.
-    if buffer_dtype is not None:
-        work_dtype = buffer_dtype  # explicit opt-in: the caller owns any casting
-    else:
-        work_dtype = functools.reduce(torch.promote_types, (t.dtype for t in detached))
-        if work_dtype.is_floating_point:
-            if any(not t.dtype.is_floating_point for t in detached):
-                raise ValueError(
-                    "fused_all_reduce would cast integer/bool leaves into a "
-                    f"{work_dtype} buffer, silently corrupting large or "
-                    "index-like values. Reduce integer leaves on their own (a "
-                    "homogeneous integer bundle is exact), or pass buffer_dtype= "
-                    "to opt in to the cast."
-                )
-            if work_dtype.itemsize < 4:
-                work_dtype = torch.float32
+    # Resolve the fused-buffer dtype BEFORE the no-op return, so its int/bool
+    # guard fails loud single-process too, not only under world_size > 1.
+    work_dtype = _buffer_dtype([t.dtype for t in detached], buffer_dtype)
 
     # Single-process / uninitialized: no collective, exact detached clones.
     # (Single-GPU logs stay byte-identical and never touch the network.)
-    if not (
-        dist.is_available()
-        and dist.is_initialized()
-        and dist.get_world_size(group=group) > 1
-    ):
+    if not _crosses_ranks(group):
         return [t.clone() for t in detached], (
             _FusedAllReduceWork() if async_op else None
         )

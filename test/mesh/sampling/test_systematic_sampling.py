@@ -37,7 +37,10 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
 from physicsnemo.mesh.sampling import sample_cells_systematic
 from physicsnemo.mesh.sampling.systematic_sampling import (
+    _cell_line,
+    _cell_lines,
     _cumsum,
+    _draw_inputs,
     _pps_inclusion_probabilities,
     _systematic_sample,
 )
@@ -432,6 +435,46 @@ def test_the_cumsum_op_passes_opcheck(device, dtype):
     torch.library.opcheck(_cumsum, (x,))
 
 
+@pytest.mark.parametrize(
+    "sizes", [[1], [2], [1, 1, 1], [3, 1, 5], [64, 1, 63], [500, 40, 3000, 1]]
+)
+def test_the_grouped_float_scan_is_each_group_s_scan_bitwise(sizes, device):
+    """With ``place``, each element's index in its own group, the float scan restarts
+    at every group: each group's sums are bitwise those of the group scanned alone."""
+    g = torch.Generator().manual_seed(sum(sizes))
+    xs = [(torch.rand(n, generator=g, dtype=D) ** 3).to(device) for n in sizes]
+    place = torch.cat([torch.arange(n, device=device) for n in sizes])
+    grouped = _cumsum(torch.cat(xs), place)
+    assert torch.equal(grouped, torch.cat([_cumsum(x) for x in xs]))
+
+
+def test_the_grouped_float_scan_restarts_along_the_first_axis(device):
+    """``place`` indexes axis 0, so a scan of rows restarts each group's rows and
+    leaves the columns apart: each column is its own grouped scan."""
+    sizes = [3, 1, 6]
+    g = torch.Generator().manual_seed(1)
+    x = torch.rand(sum(sizes), 3, generator=g, dtype=D).to(device)
+    place = torch.cat([torch.arange(n, device=device) for n in sizes])
+    grouped = _cumsum(x, place)
+    columns = torch.stack([_cumsum(x[:, j], place) for j in range(3)], dim=1)
+    assert torch.equal(grouped, columns)
+    rows = torch.cat([_cumsum(part) for part in x.split(sizes)])
+    assert torch.equal(grouped, rows)
+
+
+def test_the_grouped_scan_is_for_floats_only():
+    """The integer scan is ``cumsum``, which has no grouped form."""
+    with pytest.raises(ValueError, match="float x only"):
+        _cumsum(torch.arange(4), torch.arange(4))
+
+
+def test_the_grouped_cumsum_op_passes_opcheck(device):
+    """The grouped float scan is a well-formed custom op as well."""
+    x = torch.arange(1000, device=device, dtype=D) * 3 + 1
+    place = torch.cat([torch.arange(n, device=device) for n in (400, 1, 599)])
+    torch.library.opcheck(_cumsum, (x, place))
+
+
 ### Reproducibility ###
 
 
@@ -484,6 +527,120 @@ def test_the_mesh_draw_is_the_composed_draw(device):
         ref_kept, ref_w = _draw([measure], [centroids], [700], 700, start)
         assert torch.equal(kept, ref_kept)
         assert torch.equal(w.view(torch.int64), ref_w.view(torch.int64))
+
+
+def test_the_draw_helpers_compose_several_groups_into_one_line(device):
+    """``_draw_inputs`` reads a mesh's float64 measures and vertex-mean centroids,
+    and ``_cell_line`` gives one group's probabilities and Morton order in a shared
+    frame: groups laid one after another are the line of :func:`_line`, as a draw
+    over several meshes composes them."""
+    sizes, shares = [500, 40, 3000], [130.0, 40.0, 130.0]
+    measures, centroids = _groups(sizes, device=device)
+    pi, order, _, _ = _line(measures, centroids, shares)
+    frame = canonical_frame(torch.cat(centroids), torch.cat(measures))
+    pis, orders, offset = [], [], 0
+    for a, x, share in zip(measures, centroids, shares):
+        p, o = _cell_line(a, x, a.new_full((), share), frame)
+        pis.append(p)
+        orders.append(o + offset)
+        offset += a.shape[0]
+    assert torch.equal(torch.cat(pis), pi)
+    assert torch.equal(torch.cat(orders), order)
+    for effective in (True, False):
+        mesh = _soup(300, effective=effective).to(device)
+        a, x = _draw_inputs(mesh)
+        ref = mesh.cell_data[EFFECTIVE_MEASURE_KEY] if effective else mesh.cell_areas
+        assert a.dtype == x.dtype == D
+        assert torch.equal(a, ref.double())
+        assert torch.equal(x, mesh.points.double()[mesh.cells].mean(1))
+
+
+def test_the_grouped_cell_lines_are_each_group_s_cell_line_bitwise(device):
+    """``_cell_lines`` lays several groups in one pass, bit for bit ``_cell_line`` of
+    each group with its order shifted to index the concatenation. The groups
+    include one with zero-measure cells, one of zero measure only, one whose share
+    exceeds its positive cells, ones kept whole and a single cell."""
+    sizes = [500, 40, 3000, 1, 7, 12]
+    shares = [130.0, 40.0, 130.0, 1.0, 3.0, 10.0]
+    measures, centroids = _groups(sizes, device=device)
+    measures[0][::7] = 0.0
+    measures[4][:] = 0.0
+    measures[5][:5] = 0.0
+    a, x = torch.cat(measures), torch.cat(centroids)
+    frame = canonical_frame(x, a)
+    share = torch.tensor(shares, dtype=D, device=device)
+    pi, order = _cell_lines(a, x, share, frame, sizes)
+    pis, orders, offset = [], [], 0
+    for m, c, s in zip(measures, centroids, share):
+        p, o = _cell_line(m, c, s, frame)
+        pis.append(p)
+        orders.append(o + offset)
+        offset += m.shape[0]
+    assert torch.equal(pi, torch.cat(pis))
+    assert torch.equal(order, torch.cat(orders))
+
+
+def _frozen_pps_inclusion_probabilities(measures, n_samples):
+    """``_pps_inclusion_probabilities`` as it was before it took groups."""
+    share = torch.as_tensor(n_samples, dtype=torch.float64, device=measures.device)
+    n = measures.shape[0]
+    a, order = measures.sort(descending=True, stable=True)
+    tail = _cumsum(a.flip(0)).flip(0)
+    rank = torch.arange(n, device=a.device, dtype=a.dtype)
+    uncapped = (share - rank) * a < tail
+    m = torch.where(uncapped, torch.arange(n, device=a.device), n).amin()
+    tail_m = tail.gather(0, m.clamp_max(n - 1).reshape(1))[0]
+    c = (share - m) / tail_m.clamp_min(torch.finfo(a.dtype).tiny)
+    pi = torch.where(rank < m, 1.0, (c * a).clamp(max=1.0))
+    n_pos = (a > 0).sum()
+    pi = torch.where(share >= n_pos, (a > 0).to(pi.dtype), pi)
+    return torch.empty_like(pi).scatter_(0, order, pi)
+
+
+def _frozen_cell_line(measures, centroids, share, frame):
+    """``_cell_line`` as it was before it called ``_cell_lines``."""
+    pi = _frozen_pps_inclusion_probabilities(measures, share)
+    zero = measures == 0
+    n_cells = measures.shape[0]
+    n_pos = n_cells - zero.sum()
+    pi = torch.where(
+        zero, ((share - n_pos) / (n_cells - n_pos).clamp_min(1)).clamp_min(0), pi
+    )
+    xyz = frame_coordinates(centroids, frame)
+    inside = (~zero | zero.all())[:, None]
+    lo = torch.where(inside, xyz, torch.inf).amin(0)
+    hi = torch.where(inside, xyz, -torch.inf).amax(0)
+    code = _compute_morton_codes(xyz.clamp(lo, hi), isotropic=True)
+    return pi, code.argsort(stable=True)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_the_cell_line_is_its_ungrouped_form_bitwise(dtype, device):
+    """``_cell_line``, one group of ``_cell_lines``, and the one-group
+    ``_pps_inclusion_probabilities`` give the bits of their ungrouped forms (frozen
+    above): with zero-measure cells, of zero measure only, a share above the
+    positive cells, kept whole, a single cell, and tiny measures."""
+    sizes = [500, 40, 3000, 1, 1, 7, 12, 2000]
+    measures, centroids = _groups(sizes, device=device)
+    measures[0][::7] = 0.0
+    measures[3][:] = 0.0
+    measures[5][:] = 0.0
+    measures[6][:5] = 0.0
+    measures[7][:] = 10.0 ** -torch.arange(2000, device=device, dtype=D).fmod(300)
+    frame = canonical_frame(torch.cat(centroids), torch.cat(measures))
+    for a, x in zip(measures, centroids):
+        a, x = a.to(dtype), x.to(dtype)
+        n = a.shape[0]
+        for s in {1.0, 0.5 * n, n / 3, n - 0.25, float(n)}:
+            share = torch.tensor(s, dtype=D, device=device)
+            p, o = _cell_line(a, x, share, frame.to(dtype))
+            ref_p, ref_o = _frozen_cell_line(a, x, share, frame.to(dtype))
+            assert p.dtype == ref_p.dtype
+            assert torch.equal(p.view(torch.int8), ref_p.view(torch.int8))
+            assert torch.equal(o, ref_o)
+            ref = _frozen_pps_inclusion_probabilities(a, s)
+            pi = _pps_inclusion_probabilities(a, s)
+            assert torch.equal(pi.view(torch.int8), ref.view(torch.int8))
 
 
 def test_the_mesh_draw_keeps_min_cells_and_samples(device):
@@ -645,11 +802,12 @@ def test_cells_on_one_centroid_are_laid_in_index_order(device):
 
 @pytest.mark.parametrize("effective", [True, False])
 def test_a_padded_mesh_keeps_the_same_cells(effective, device):
-    """Mesh.pad's cells sit on the last point, here far outside the other cells, at
-    zero measure: they move neither the canonical frame nor the Morton grid, so the
-    padded mesh keeps the same cells as the mesh itself, while n_samples is at most
-    the count of positive measures. The weights are bitwise the same: the doubling
-    scan of the tails gives the same bits after leading zeros."""
+    """Mesh.pad's cells sit on a copy of the last point, here far outside the other
+    cells, at zero measure: they move neither the canonical frame nor the Morton
+    grid, so the padded mesh keeps the same cells as the mesh itself, while
+    n_samples is at most the count of positive measures. The weights are bitwise
+    the same: the doubling scan of the tails gives the same bits after leading
+    zeros."""
     soup = _soup(3000, effective=effective)
     far = torch.tensor([[40.0, -30.0, 20.0]], dtype=D)  # used by no cell
     mesh = Mesh(

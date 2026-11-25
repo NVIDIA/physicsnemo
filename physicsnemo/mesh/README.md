@@ -20,7 +20,8 @@ PhysicsNeMo-Mesh brings meshes into PyTorch:
 (concepts and choices) ·
 [API Reference](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api/mesh/index.html)
 (one page per submodule) ·
-[Tutorials](../../examples/minimal/mesh/) (nine executed notebooks)
+[Tutorials](../../examples/minimal/mesh/) (nine executed notebooks) ·
+[Paper](https://arxiv.org/abs/2610.39072) (design and benchmarks)
 
 ## Quick Start
 
@@ -358,6 +359,23 @@ one is present:
 7. [Quality, Validation, and Repair](../../examples/minimal/mesh/tutorial_7_quality_repair.ipynb)
 8. [Simulation Domains with DomainMesh](../../examples/minimal/mesh/tutorial_8_domain_mesh.ipynb)
 9. [Meshes in ML Pipelines](../../examples/minimal/mesh/tutorial_9_ml_integration.ipynb)
+
+## Citation
+
+If PhysicsNeMo-Mesh supports your research, cite
+[*PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI*](https://arxiv.org/abs/2610.39072):
+
+```bibtex
+@misc{sharpe2026physicsnemomeshgpunativemeshessimulation,
+      title={PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI},
+      author={Peter D. Sharpe and Corey Adams and Negin Sobhani and Sanjay Choudhry},
+      year={2026},
+      eprint={2610.39072},
+      archivePrefix={arXiv},
+      primaryClass={physics.comp-ph},
+      url={https://arxiv.org/abs/2610.39072},
+}
+```
 
 ## Acknowledgments
 

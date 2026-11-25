@@ -45,7 +45,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 import physicsnemo
-from physicsnemo.experimental.uq import VariationalGPHead
+from physicsnemo.experimental.uq.gp import VariationalGPHead
 from physicsnemo.nn.module.pooling import AttentionPooling, MeanPooling
 from physicsnemo.utils.checkpoint import (
     _get_checkpoint_filename,
