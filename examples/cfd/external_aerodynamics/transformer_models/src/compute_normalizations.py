@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
-# SPDX-License-Identifier: MIT License
+# SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -74,7 +74,8 @@ def compute_mean_std_min_max(
             min_val = torch.full((data.shape[-1],), float("inf"), device=data.device)
             max_val = torch.full((data.shape[-1],), float("-inf"), device=data.device)
         n = data.shape[0]
-        N += n
+        old_N = N
+        N = old_N + n
 
         # Compute batch statistics
         batch_mean = data.mean(axis=(0,))
@@ -90,7 +91,7 @@ def compute_mean_std_min_max(
         # Update running mean and M2 (Welford's algorithm)
         delta = batch_mean - mean
         mean = mean + delta * (batch_n / N)
-        M2 = M2 + batch_M2 + delta**2 * (batch_n * N) / N
+        M2 = M2 + batch_M2 + delta**2 * (batch_n * old_N) / N
         time_end = time.time()
         print(f"Time taken for file {i}: {time_end - time_start:.2f} seconds")
         time_start = time.time()

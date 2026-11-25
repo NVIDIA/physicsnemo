@@ -82,3 +82,9 @@ pipeline:
 targets:
   pressure: scalar
   wss: vector
+
+# Conventions of the stored surface, read by the integrated force coefficients
+# (src/forces.py). The surface normals point out of the car, and the wall shear
+# stress is the stress the fluid exerts on the car.
+surface_normals_point: outward
+wall_shear_acts_on: body

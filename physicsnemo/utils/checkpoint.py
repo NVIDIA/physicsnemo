@@ -54,7 +54,7 @@ from torch.optim.lr_scheduler import LRScheduler
 
 import physicsnemo
 from physicsnemo.core.filesystem import LOCAL_CACHE, _download_cached
-from physicsnemo.core.module import Module
+from physicsnemo.core.module import Module, _atomic_write
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.capture import _StaticCapture
 from physicsnemo.utils.logging import PythonLogger
@@ -793,6 +793,10 @@ def save_checkpoint(
       ``checkpoint.{mp_rank}.{epoch}.pt`` containing their combined
       ``state_dict`` entries, plus ``epoch`` and ``metadata``.
 
+    Each file is written under a temporary name and moved into place once
+    complete, so a process killed mid-save leaves the previous checkpoint
+    loadable instead of a truncated file.
+
     When any model is FSDP-wrapped or contains DTensor/ShardTensor
     parameters the function enters *distributed* mode: all ranks **must**
     call it, state is gathered via DCP collective helpers, and only rank 0
@@ -820,7 +824,8 @@ def save_checkpoint(
         that scaler's state is saved instead.
     epoch : int | None, optional
         Epoch index to embed in the filename and the checkpoint dict.
-        When ``None``, the next available index is used.
+        When ``None``, every file of this save takes the next index after
+        all existing weights and training-state files.
     metadata : dict[str, Any] | None, optional
         Arbitrary key-value pairs persisted alongside the training state
         (e.g. best validation loss, MLflow run ID).
@@ -891,16 +896,32 @@ def save_checkpoint(
     if is_distributed:
         torch.distributed.barrier()
 
+    model_types = {
+        name: "mdlus" if isinstance(_unwrap_fsdp(m), physicsnemo.core.Module) else "pt"
+        for name, m in named_models.items()
+    }
+    # With automatic numbering, every file of this save takes one index: the
+    # next after any existing weights or training state, so files left by an
+    # interrupted save cannot pair with a later save's files.
+    index = epoch
+    if index is None:
+        next_files = [
+            _get_checkpoint_filename(
+                path, name, saving=True, model_type=kind, distributed=is_distributed
+            )
+            for name, kind in [("checkpoint", "pt"), *model_types.items()]
+        ]
+        index = max(int(PurePath(f).name.rsplit(".", 2)[1]) for f in next_files)
+
     # == Saving model checkpoint ==
     for name, model in named_models.items():
         inner = _unwrap_fsdp(model)
-        model_type = "mdlus" if isinstance(inner, physicsnemo.core.Module) else "pt"
         file_name = _get_checkpoint_filename(
             path,
             name,
-            index=epoch,
+            index=index,
             saving=True,
-            model_type=model_type,
+            model_type=model_types[name],
             distributed=is_distributed,
         )
 
@@ -920,7 +941,7 @@ def save_checkpoint(
                 if isinstance(inner, physicsnemo.core.Module):
                     inner.save(file_name, _state_dict=state_dict)
                 else:
-                    with fs.open(file_name, "wb") as fp:
+                    with _atomic_write(fs, file_name) as fp:
                         torch.save(state_dict, fp)
                 checkpoint_logging.success(f"Saved model state dictionary: {file_name}")
         else:
@@ -928,7 +949,7 @@ def save_checkpoint(
                 if isinstance(inner, physicsnemo.core.Module):
                     inner.save(file_name)
                 else:
-                    with fs.open(file_name, "wb") as fp:
+                    with _atomic_write(fs, file_name) as fp:
                         torch.save(model.state_dict(), fp)
                 checkpoint_logging.success(f"Saved model state dictionary: {file_name}")
 
@@ -978,7 +999,7 @@ def save_checkpoint(
 
     output_filename = _get_checkpoint_filename(
         path,
-        index=epoch,
+        index=index,
         saving=True,
         model_type="pt",
         distributed=is_distributed,
@@ -989,9 +1010,35 @@ def save_checkpoint(
         checkpoint_dict["metadata"] = metadata
 
     if bool(checkpoint_dict) and should_write:
-        with fs.open(output_filename, "wb") as fp:
+        with _atomic_write(fs, output_filename) as fp:
             torch.save(checkpoint_dict, fp)
         checkpoint_logging.success(f"Saved training checkpoint: {output_filename}")
+
+
+def _move_step_counts_to_cpu(state_dict: Any) -> None:
+    """Move a non-fused, non-capturable optimizer's step counts to the CPU, in place.
+
+    ``Optimizer.load_state_dict`` moves the other state tensors to their
+    parameters' devices but leaves these where they were loaded. A fresh AdamW
+    keeps them on the CPU; on a GPU, every later step reads them back with host
+    syncs. Handles nested state dicts, such as ``CombinedOptimizer``'s.
+    """
+    if isinstance(state_dict, dict) and "param_groups" in state_dict:
+        state = state_dict.get("state", {})
+        for group in state_dict["param_groups"]:
+            if group.get("fused") or group.get("capturable"):
+                continue
+            for param_id in group["params"]:
+                entry = state.get(param_id)
+                step = entry.get("step") if isinstance(entry, dict) else None
+                if torch.is_tensor(step):
+                    entry["step"] = step.cpu()
+    elif isinstance(state_dict, dict):
+        for value in state_dict.values():
+            _move_step_counts_to_cpu(value)
+    elif isinstance(state_dict, (list, tuple)):
+        for value in state_dict:
+            _move_step_counts_to_cpu(value)
 
 
 def load_checkpoint(
@@ -1038,8 +1085,10 @@ def load_checkpoint(
         If a ``dict`` is provided, it is updated **in-place** with any
         metadata that was persisted by :func:`save_checkpoint`.
     device : str | torch.device, optional
-        Device onto which tensors are mapped during loading.  By default
-        ``"cpu"``.
+        Device onto which plain PyTorch model weights and the training state
+        are mapped during loading (``.mdlus`` models load onto their own
+        device).  By default ``"cpu"``.  The step counts of a non-fused,
+        non-capturable optimizer stay on the CPU.
     optimizer_model : torch.nn.Module | None, optional
         The model whose parameters the ``optimizer`` is tracking.
         Required by the DCP ``set_optimizer_state_dict`` helper when
@@ -1200,6 +1249,7 @@ def load_checkpoint(
     )
 
     if optimizer and "optimizer_state_dict" in checkpoint_dict:
+        _move_step_counts_to_cpu(checkpoint_dict["optimizer_state_dict"])
         optimizer.load_state_dict(checkpoint_dict["optimizer_state_dict"])
         checkpoint_logging.success("Loaded optimizer state dictionary")
 
@@ -1444,6 +1494,9 @@ def _load_checkpoint_distributed(
             None,
         )
         optim_sd = checkpoint_dict.get("optimizer_state_dict", {}) if is_rank0 else {}
+        # Rank 0 read the file onto ``device``. FSDP1's FULL_SHARD optimizer load
+        # keeps rank 0's step counts there, so move them back to the CPU here.
+        _move_step_counts_to_cpu(optim_sd)
         if opt_model is not None and _is_distributed_model(opt_model):
             dtensor_plc = _get_dtensor_param_placements(opt_model)
             if isinstance(opt_model, FSDPModule) and _needs_dcp_broadcast_bypass(
@@ -1497,9 +1550,24 @@ def _load_checkpoint_distributed(
                     opt_model, optimizer, optim_sd, options=broadcast_options
                 )
             checkpoint_logging.success("Loaded optimizer state dictionary")
-        elif optim_sd:
-            optimizer.load_state_dict(optim_sd)
-            checkpoint_logging.success("Loaded optimizer state dictionary")
+        else:
+            # Non-distributed optimizer model (e.g. a small auxiliary model
+            # beside an FSDP model): broadcast the state as bytes, since
+            # pickled CUDA tensors unpickle on rank 0's device, and let each
+            # rank load the tensors onto its own device.
+            buffer = io.BytesIO()
+            if is_rank0:
+                torch.save(optim_sd, buffer)
+            osd_list = [buffer.getvalue()]
+            torch.distributed.broadcast_object_list(osd_list, src=0)
+            optim_sd = torch.load(
+                io.BytesIO(osd_list[0]), map_location=device, weights_only=False
+            )
+            if optim_sd:
+                _move_step_counts_to_cpu(optim_sd)
+                optimizer.load_state_dict(optim_sd)
+                if is_rank0:
+                    checkpoint_logging.success("Loaded optimizer state dictionary")
 
     # Broadcast remaining training state (scheduler, scaler, epoch, metadata)
     rest: dict[str, Any] = {}

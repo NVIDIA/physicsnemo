@@ -71,8 +71,26 @@ from physicsnemo.models.domino.utils import create_directory
 from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
 
 # This is included for GPU memory tracking:
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+from pynvml import (
+    NVMLError_NotSupported,
+    nvmlInit,
+    nvmlDeviceGetHandleByIndex,
+    nvmlDeviceGetMemoryInfo,
+)
 import time
+
+
+def gpu_bytes_in_use(gpu_handle) -> int:
+    """Bytes of memory in use on the GPU behind ``gpu_handle``.
+
+    NVML cannot report memory on GPUs that share system memory with the CPU
+    (for example DGX Spark, GB10) and raises ``NVMLError_NotSupported``. Fall
+    back to CUDA's view of the current device there."""
+    try:
+        return nvmlDeviceGetMemoryInfo(gpu_handle).used
+    except NVMLError_NotSupported:
+        free, total = torch.cuda.mem_get_info()
+        return total - free
 
 
 # Initialize NVML
@@ -212,7 +230,7 @@ def train_epoch(
     last_loss = 0.0
     loss_interval = 1
 
-    gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+    gpu_start_bytes = gpu_bytes_in_use(gpu_handle)
     start_time = time.perf_counter()
     with Profiler():
         io_start_time = time.perf_counter()
@@ -280,9 +298,9 @@ def train_epoch(
             elapsed_time = time.perf_counter() - start_time
             io_time = io_end_time - io_start_time
             start_time = time.perf_counter()
-            gpu_end_info = nvmlDeviceGetMemoryInfo(gpu_handle)
-            gpu_memory_used = gpu_end_info.used / (1024**3)
-            gpu_memory_delta = (gpu_end_info.used - gpu_start_info.used) / (1024**3)
+            gpu_end_bytes = gpu_bytes_in_use(gpu_handle)
+            gpu_memory_used = gpu_end_bytes / (1024**3)
+            gpu_memory_delta = (gpu_end_bytes - gpu_start_bytes) / (1024**3)
 
             logging_string = f"Device {device}, batch processed: {i_batch + 1}\n"
             # Format the loss dict into a string:
@@ -305,7 +323,7 @@ def train_epoch(
             logging_string += f"  GPU memory used: {gpu_memory_used:.3f} Gb (delta: {gpu_memory_delta:.3f})\n"
             logging_string += f"  Timings: (IO: {io_time:.2f}, Model: {elapsed_time - io_time:.2f}, Total: {elapsed_time:.2f})s\n"
             logger.info(logging_string)
-            gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+            gpu_start_bytes = gpu_bytes_in_use(gpu_handle)
             io_start_time = time.perf_counter()
 
     # Per-rank mean over local batches, then one fused AVG across ranks: a

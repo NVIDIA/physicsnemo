@@ -22,6 +22,8 @@ import torch
 import warp as wp
 from jaxtyping import Float
 
+from physicsnemo.core.function_spec import FunctionSpec
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -70,7 +72,7 @@ def marching_cubes(
     -------
     Mesh
         A triangle mesh with ``points`` of shape :math:`(N_v, 3)` (float32)
-        and ``cells`` of shape :math:`(N_f, 3)` (int64).
+        and ``cells`` of shape :math:`(N_f, 3)` (int64), on ``field``'s device.
 
     Raises
     ------
@@ -84,8 +86,11 @@ def marching_cubes(
     Notes
     -----
     This operation is **not differentiable**. The input tensor is detached
-    and transferred to CPU/NumPy before being passed to Warp's marching cubes
-    kernel, so gradients do not flow through this function.
+    before being passed to Warp's marching cubes kernel, so gradients do not
+    flow through this function. A CUDA ``field`` is processed on its own GPU;
+    a CPU ``field`` on Warp's default device (a GPU when one is present). The
+    mesh is returned on ``field``'s device, and ``coords`` may be on any
+    device.
 
     Examples
     --------
@@ -119,26 +124,30 @@ def marching_cubes(
                     f"size {field.shape[dim]} along dimension {dim}"
                 )
 
-    # Convert before crossing the NumPy boundary: NumPy has no bfloat16 dtype,
-    # so ``field.cpu().numpy().astype(...)`` raises before the cast can run.
-    field_np = field.detach().to(device="cpu", dtype=torch.float32).numpy()
-    field_wp = wp.array(field_np)
-
-    mc = wp.MarchingCubes(
-        nx=field_np.shape[0],
-        ny=field_np.shape[1],
-        nz=field_np.shape[2],
-    )
-    mc.surface(field=field_wp, threshold=threshold)
-
-    points = torch.as_tensor(mc.verts.numpy(), dtype=torch.float32)  # (N_v, 3)
-    cells = torch.as_tensor(
-        mc.indices.numpy().reshape(-1, 3), dtype=torch.int64
-    )  # (N_f, 3)
+    # Warp runs marching cubes on the device of its input array, and accepts only
+    # float32 fields.
+    mc = wp.MarchingCubes(nx=field.shape[0], ny=field.shape[1], nz=field.shape[2])
+    if field.is_cuda:
+        # A CUDA field stays on its GPU, read in order on torch's current stream.
+        field_f32 = field.detach().to(torch.float32).contiguous()
+        _, stream = FunctionSpec.warp_launch_context(field_f32)
+        with FunctionSpec.warp_stream_scope(stream):
+            mc.surface(field=wp.from_torch(field_f32), threshold=threshold)
+            points = wp.to_torch(mc.verts).clone()  # (N_v, 3), float32
+            cells = wp.to_torch(mc.indices).reshape(-1, 3).to(torch.int64)
+    else:
+        # A CPU field goes to Warp's default device, a GPU when one is present,
+        # since Warp's CPU kernel is much slower. NumPy has no bfloat16 dtype,
+        # so cast before crossing into NumPy.
+        field_np = field.detach().to(dtype=torch.float32).numpy()
+        mc.surface(field=wp.array(field_np), threshold=threshold)
+        points = torch.as_tensor(mc.verts.numpy(), dtype=torch.float32)  # (N_v, 3)
+        cells = torch.as_tensor(mc.indices.numpy().reshape(-1, 3), dtype=torch.int64)
 
     ### Map from grid-index space to physical coordinates via piecewise linear interp
     if coords is not None:
         for dim, c in enumerate(coords):
+            c = c.to(points.device)
             idx = points[:, dim]
             i = idx.long().clamp(0, c.shape[0] - 2)
             points[:, dim] = c[i] + (idx - i.float()) * (c[i + 1] - c[i])

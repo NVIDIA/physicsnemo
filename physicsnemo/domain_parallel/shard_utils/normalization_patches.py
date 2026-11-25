@@ -116,6 +116,16 @@ class PartialGroupNorm(torch.autograd.Function):
             )
 
         sharded_dim = spec.placements[0].dim
+        # The reduction below sums per-sample statistics across ranks, so every
+        # rank must hold part of the same samples.
+        if sharded_dim == 0:
+            raise MissingShardPatch(
+                "Group normalization is not implemented for sharded tensors along "
+                "the batch dimension. ShardTensor is meant for spatial dimensions. "
+                "To parallelize over the batch, use DDP or FSDP2, as the "
+                "physicsnemo.domain_parallel documentation shows. If dim 0 is a "
+                "spatial dimension of one sample, add a leading batch dimension."
+            )
         if sharded_dim == 1:
             raise MissingShardPatch(
                 "Group normalization is not implemented for sharded tensors along the channel dimension"

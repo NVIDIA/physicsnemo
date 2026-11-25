@@ -27,6 +27,9 @@ To add your work, see `Add your paper`_ below.
    * - `A Systematic Benchmark of Physics-Informed Neural Network Architectures for the Stiff Poisson-Nernst-Planck System: Adaptive Loss Weighting and Multi-Scale Resolution <https://arxiv.org/abs/2606.04125>`__
      - D\. Pankaczy, C. G. T. Feugmo
      - PINNs / PDEs (electrochemistry)
+   * - `AeroZoo: A Benchmark of Well-Posed Flow Problems for Foundation Models of Aerodynamics <https://arxiv.org/abs/2611.17152>`__
+     - P\. Sharpe, C. Gonzales, C. Adams et al.
+     - CFD datasets and benchmarks (aerodynamics, out-of-distribution generalization)
    * - `AI Accelerated Forward Modeling Using Physics Informed Neural Operators for Real-Time Reservoir Management <https://doi.org/10.2523/iptc-25130-ms>`__
      - A\. I. Alrassan, A. A. Alturki, C. E. Etienam et al.
      - reservoir / subsurface
@@ -48,6 +51,9 @@ To add your work, see `Add your paper`_ below.
    * - `Fusion Intelligence for Digital Twinning AI Data Centers: A Synergistic GenAI-PhyAI Approach <https://arxiv.org/abs/2505.19409>`__
      - Wang, Li, Cao et al.
      - AI data center digital twins (cooling/energy optimization)
+   * - `GLOBE: Accurate Surrogates for Boundary-Driven PDEs via Domain-Inspired Architectures and Equivariance <https://arxiv.org/abs/2511.15856>`__
+     - P\. Sharpe
+     - aerodynamics surrogates (equivariant, boundary-element-inspired)
    * - `HealDA: Highlighting the importance of initial errors in end-to-end AI weather forecasts <https://arxiv.org/abs/2601.17636>`__
      - Gupta, Subramaniam, Pritchard et al.
      - weather data assimilation / AI forecasting
@@ -57,6 +63,9 @@ To add your work, see `Add your paper`_ below.
    * - `Hybrid Fourier Neural Operator-Lattice Boltzmann Method <https://arxiv.org/abs/2604.27158>`__
      - Junk, Winter, Tütken et al.
      - computational fluid dynamics (lattice Boltzmann, porous media and unsteady flows)
+   * - `ISLA: A Coordinate-Free, Measure-Weighted Transformer for Boundary-Driven PDEs <https://arxiv.org/abs/2611.17141>`__
+     - P\. Sharpe
+     - aerodynamics surrogates (equivariant transformers)
    * - `KPI-Conditioned Generative Design of Automotive Hood Inner Panels: A Two-Stage Retrieval-Generation Pipeline with Surrogate-Based Performance Estimation <https://arxiv.org/abs/2608.22457>`__
      - Chavare
      - automotive structural design / generative design surrogates
@@ -78,6 +87,9 @@ To add your work, see `Add your paper`_ below.
    * - `Physics-Informed Neural Networks, an Instrument for Solving a 3D Wheel-Rail Interface, to Facilitate Prognostics Root Cause Analysis <https://doi.org/10.1007/978-3-032-18771-0_96>`__
      - A\. Serafini, U. Kumar
      - railway / structural
+   * - `PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI <https://arxiv.org/abs/2610.39072>`__
+     - P\. D. Sharpe, C. Adams, N. Sobhani, S. Choudhry
+     - SciML infrastructure / mesh processing
    * - `Predictive Uncertainty for Neural CAE Surrogates <https://arxiv.org/abs/2609.25430>`__
      - K\. Tangsali, M. A. Nabian, K. Lee et al.
      - uncertainty quantification / external aerodynamics and crash dynamics

@@ -100,9 +100,7 @@ def write_unfinished_store(obj: Mesh | DomainMesh, store) -> None:
 def assert_meshes_equal(a: Mesh, b: Mesh) -> None:
     """Bitwise comparison of two meshes, including nested field trees."""
     assert torch.equal(a.points, b.points)
-    assert a.n_cells == b.n_cells
-    if a.n_cells > 0:
-        assert torch.equal(a.cells, b.cells)
+    assert torch.equal(a.cells, b.cells)  # shapes too, even with zero cells
     for tree in ("point_data", "cell_data", "global_data"):
         ta, tb = getattr(a, tree), getattr(b, tree)
         keys_a = set(ta.keys(include_nested=True, leaves_only=True))

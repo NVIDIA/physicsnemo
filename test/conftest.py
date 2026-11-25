@@ -246,6 +246,24 @@ def seed_random_state():
 
 
 @pytest.fixture(autouse=True, scope="function")
+def full_fp32_matmul():
+    """Start each test with full float32 matmuls (no TF32), PyTorch's default.
+
+    NGC PyTorch containers set ``TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1``, which
+    changes the default float32 matmul precision to ``"high"`` (TF32). The tests
+    are written against PyTorch's own default, ``"highest"``, which is what CI
+    runs with, and many compare float32 results at float32 round-off. Without
+    this, those tests fail only in the container. A test that wants TF32 can
+    still turn it on; the next test starts from ``"highest"`` again.
+
+    ``set_float32_matmul_precision`` sets every backend at once, so it also
+    clears a mix of the legacy and new precision APIs left by an earlier test.
+    """
+    torch.set_float32_matmul_precision("highest")
+    yield
+
+
+@pytest.fixture(autouse=True, scope="function")
 def reset_dynamo_state():
     """Reset torch._dynamo state after each test.
 

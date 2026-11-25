@@ -454,3 +454,22 @@ in order:
 
    validation
    visualization
+
+Citation
+--------
+
+If PhysicsNeMo-Mesh supports your research, cite
+`PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI
+<https://arxiv.org/abs/2610.39072>`__:
+
+.. code:: bibtex
+
+    @misc{sharpe2026physicsnemomeshgpunativemeshessimulation,
+          title={PhysicsNeMo-Mesh: GPU-Native Meshes and Simulation Cases for Physics AI},
+          author={Peter D. Sharpe and Corey Adams and Negin Sobhani and Sanjay Choudhry},
+          year={2026},
+          eprint={2610.39072},
+          archivePrefix={arXiv},
+          primaryClass={physics.comp-ph},
+          url={https://arxiv.org/abs/2610.39072},
+    }

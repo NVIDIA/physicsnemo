@@ -1,0 +1,80 @@
+# @package _global_
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# ISLA -- the interior task on DrivAerML, trained jointly with the vehicle's
+# wall pressure and wall shear.
+# ---------------------------------------------------------------------------
+# Pair with `dataset=drivaer_ml_volume`.
+#
+# isla_volume.yaml, plus a second prediction set: points at a uniform draw of
+# the vehicle's cells, which carry the wall pressure and wall shear the case
+# files store on them. One model predicts at the interior points and at these
+# points in one call, and each set is scored on its own targets.
+defaults:
+  - isla_volume
+  - _self_
+
+# The wall points sit just off the vehicle, on the fluid side, because the
+# model has no length invariant at zero distance from the boundary: at a small
+# offset it reads the wall value as the limit of the interior field.
+extra_task:
+  transforms:      # run after the dataset's and isla_volume's transforms
+    - _target_: ${dp:BoundaryCellsToPoints}
+      source: vehicle
+      name: vehicle_points
+      fields:
+        pMeanTrim: pressure_wall
+        wallShearStressMeanTrim: wss
+      n_cells: ${sampling_resolution}    # as many wall points as interior points
+      # In the coordinates' units (x / L_ref): about 1e-6 of the model's
+      # length unit L, which is 11.9 L_ref on DrivAerML's cases
+      # (physicsnemo.experimental.models.isla.case_scales on a case's five
+      # boundaries).
+      offset: 1.2e-5
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        pressure_wall: pressure
+        wss: stress
+      association: point_data
+      scale_geometry: false    # the dataset's own instance scaled it
+    - _target_: ${dp:NormalizeMeshFields}
+      association: point_data
+      fields:      # drivaer_ml_surface.yaml's constants
+        wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
+  targets:
+    pressure_wall: scalar
+    wss: vector
+  target_sources:
+    pressure_wall: boundaries.vehicle_points.point_data.pressure_wall
+    wss: boundaries.vehicle_points.point_data.wss
+  field_weights:
+    pressure_wall: 1.5
+    wss: 1.5
+
+forward_kwargs:
+  prediction_points:
+    concat_point_sets: [interior, boundaries.vehicle_points]
+
+# The model's outputs at each set: the wall pressure is its pressure output.
+output_sets:
+  interior: {velocity: velocity, pressure: pressure, nut: nut}
+  boundaries.vehicle_points: {pressure_wall: pressure, wss: wss}
+
+model:
+  output_schema:
+    wss: {rank: 1}

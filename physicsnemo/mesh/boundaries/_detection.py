@@ -146,7 +146,8 @@ def get_boundary_cells(
         Codimension of facets defining boundary membership.
 
         - 1 (default): cells with at least one codim-1 boundary facet
-        - 2: cells with at least one codim-2 boundary facet (more permissive)
+        - 2: cells with at least one codim-2 boundary facet (a subset of the
+          cells that codimension 1 flags)
         - k: cells with at least one codim-k boundary facet
 
     Returns

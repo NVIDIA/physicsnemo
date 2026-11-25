@@ -22,13 +22,13 @@ import torch
 
 from .dataset import (
     LoaderSpec,
-    StormCastDataset,
+    CustomDataset,
     default_torch_loader,
     resolve_group_size,
 )
 
 
-class _MockDataset(StormCastDataset):
+class _MockDataset(CustomDataset):
     """A minimal mock dataset implementation for testing without real data.
 
     Args:
