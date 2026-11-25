@@ -99,7 +99,7 @@ pip install "nvidia-physicsnemo[sym]"
 ## Getting Started
 
 The dataset for this example is not publicly available. To get access, please reach out
-to the [NVIDIA PhysicsNeMo team](simnet-team@nvidia.com).
+to the [NVIDIA PhysicsNeMo team](mailto:physicsnemo-team@nvidia.com).
 
 Once you've obtained the dataset, follow these steps to preprocess it:
 
