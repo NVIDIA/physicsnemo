@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
   to the boundary's vertices through its clusters, which shape sensitivities
   need. Predictions and training are unchanged.
+- `Mesh.transform`, and `rotate` and `scale` through it, keep float32
+  accuracy on CUDA when TF32 matmuls are allowed, which is the default of NGC
+  PyTorch containers. Their float32 matrix products rounded points, cached
+  centroids and normals, and vector and rank-2 tensor fields to about three
+  significant digits. `project` with a `transform_*_data` flag rounded the
+  fields it projects in the same way, and now selects their components
+  exactly. `transform` now raises a `ValueError` for a matrix whose
+  dtype differs from the points' dtype, and for a vector or tensor field of an
+  integer or boolean dtype, where the matrix product raised a `RuntimeError`.
 
 ### Security
 
