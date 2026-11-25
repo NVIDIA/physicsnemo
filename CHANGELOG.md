@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per step), so the datapipe's prefetch overlaps compute. The logged
   `step_time_s` now includes waits for the GPU inside the step and reads
   higher, so compare speed by epoch wall time per step.
+- Adds type annotations and NumPy-style docstrings to the helpers in
+  `physicsnemo.distributed.utils` (no behavior change).
 
 ### Deprecated
 
@@ -45,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
   to the boundary's vertices through its clusters, which shape sensitivities
   need. Predictions and training are unchanged.
+- `physicsnemo.distributed.utils.pad_helper` pads the requested `dim`; it
+  previously always padded the last dimension. `split_tensor_along_dim` now
+  formats the values in its too-few-elements error message.
 
 ### Security
 
