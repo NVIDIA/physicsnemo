@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GeoTransolver with local geometry encodings at every mesh node (the recipe's model). Inputs
+# (datapipe.py, sdf=True): node coordinates in units of 100 mm and the one-hot of the node region
+# (7 channels), the geometry context (every node voxel-downsampled at 2 mm), the one-hot of the load
+# case, and the surface triangles (facing outward). Each node pools up to 64 neighbouring nodes within
+# 5 mm and 20 mm and reads signed distances to the surface at a 3x3x3 stencil with spacings of 0.5,
+# 2 and 6 mm. Outputs: displacement (3) and von Mises stress (1), normalized per load case.
+_target_: physicsnemo.experimental.models.geotransolver_sdf.GeoTransolverSDF
+functional_dim: 7
+out_dim: 4
+geometry_dim: 3
+global_dim: 4
+n_layers: 8
+n_hidden: 192
+n_head: 6
+mlp_ratio: 2
+slice_num: 256
+n_hidden_local: 48
+radii: [0.05, 0.2]
+neighbors_in_radius: [8, 32]
+local_caps: [64, 64]
+radius_voxels: [0.015, 0.06]
+radius_query_cap: 128
+sdf_spacings: [0.005, 0.02, 0.06]
+sdf_stencil: 3
+sdf_hidden: 64
+slice_epsilon: 0.01
+slice_epsilon_reference: 4096
+temperature_min: 0.3
+activation_checkpointing: true
