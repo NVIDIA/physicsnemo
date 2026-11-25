@@ -1656,3 +1656,23 @@ class TestProject:
         assert result.cell_data["velocity"].shape == (1, 2)
         expected = torch.tensor([[30.0, 10.0]])
         assert torch.allclose(result.cell_data["velocity"], expected)
+
+    def test_project_selects_field_components_exactly(self, device):
+        """Regression: with TF32 allowed (the default of NGC PyTorch containers),
+        the float32 matrix products of ``project`` on CUDA rounded the fields it
+        projects to about three digits."""
+        torch.set_float32_matmul_precision("high")
+        generator = torch.Generator().manual_seed(0)
+        points = torch.rand(50_000, 3, generator=generator).to(device)
+        velocity = points.flip(-1) + 5.0
+        stress = points[:, :, None] * velocity[:, None, :]
+        mesh = Mesh(
+            points=points,
+            cells=torch.tensor([[0, 1]], device=device),
+            point_data={"velocity": velocity, "stress": stress},
+        )
+
+        result = project(mesh, keep_dims=[2, 0], transform_point_data=True)
+
+        assert torch.equal(result.point_data["velocity"], velocity[:, [2, 0]])
+        assert torch.equal(result.point_data["stress"], stress[:, [2, 0]][:, :, [2, 0]])

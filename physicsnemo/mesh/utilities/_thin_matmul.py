@@ -37,11 +37,12 @@ def thin_matmul(
       are off by up to 5e-4 of the largest coordinate, against 9e-8 as columns.
     - A float64 GEMM this thin runs far below memory bandwidth on GPUs with few
       float64 units: on GB300 at 10M float32 points, the product in float64 with
-      both casts takes 10.3 ms, against 0.34 ms as columns.
+      both casts takes 10.3 ms, against 0.25 ms as columns.
 
     The columns are several kernels where a float32 GEMM is one. On the same
-    GPU they take 0.06 to 0.07 ms against 0.03 ms up to 100,000 points, and
-    0.34 ms against 0.79 ms at 10M points.
+    GPU they take 0.06 to 0.07 ms against 0.02 to 0.03 ms up to 100,000 points,
+    and 0.25 ms against 0.77 ms at 10M points. They accumulate in place, so like
+    the GEMM they hold no temporaries beyond the result.
 
     Parameters
     ----------
@@ -74,5 +75,5 @@ def thin_matmul(
     rows, matrix = rows.to(work), matrix.to(work)
     out = rows[..., :1] * matrix[0]
     for k in range(1, rows.shape[-1]):
-        out = out + rows[..., k : k + 1] * matrix[k]
+        out.addcmul_(rows[..., k : k + 1], matrix[k])
     return out.to(dtype)
