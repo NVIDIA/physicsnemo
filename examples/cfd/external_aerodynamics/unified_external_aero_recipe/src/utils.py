@@ -114,6 +114,18 @@ def build_distributed_meshes(
     return domain_parallel_mesh, data_parallel_mesh
 
 
+def _can_fuse(params: list[torch.Tensor]) -> bool | None:
+    """``True`` if fused AdamW applies to *params* (all CUDA floating point).
+
+    Fused AdamW consumes ``torch.amp.GradScaler``'s scale and inf flag on
+    device, so with Muon (which does too) the combined optimizer steps under
+    fp16 without a per-step host sync. ``None`` keeps PyTorch's default.
+    """
+    if params and all(p.is_cuda and torch.is_floating_point(p) for p in params):
+        return True
+    return None
+
+
 def build_muon_optimizer(
     model: torch.nn.Module, cfg: DictConfig, *, compile_optimizer: bool = False
 ) -> torch.optim.Optimizer:
@@ -156,6 +168,7 @@ def build_muon_optimizer(
                     weight_decay=weight_decay,
                     betas=betas,
                     eps=eps,
+                    fused=_can_fuse(other_params),
                 ),
             ],
             torch_compile_kwargs=compile_kwargs,
@@ -172,7 +185,12 @@ def build_muon_optimizer(
         return opt
     else:
         opt = torch.optim.AdamW(
-            other_params, lr=lr, weight_decay=weight_decay, betas=betas, eps=eps
+            other_params,
+            lr=lr,
+            weight_decay=weight_decay,
+            betas=betas,
+            eps=eps,
+            fused=_can_fuse(other_params),
         )
         if compile_optimizer:
             opt.step = torch.compile(opt.step)

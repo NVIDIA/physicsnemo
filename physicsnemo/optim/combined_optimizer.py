@@ -125,6 +125,11 @@ class CombinedOptimizer(Optimizer):
                     seen_params.add(param_id)
 
         self.optimizers = optimizers
+        # Join torch.amp.GradScaler's sync-free protocol only when every
+        # sub-optimizer does; ``step`` forwards ``grad_scale``/``found_inf``.
+        self._step_supports_amp_scaling = all(
+            getattr(opt, "_step_supports_amp_scaling", False) for opt in optimizers
+        )
         self._torch_compile_kwargs = torch_compile_kwargs
 
         ### Aggregate parameter groups from all optimizers
@@ -190,15 +195,33 @@ class CombinedOptimizer(Optimizer):
         which returns ``float | None``. In practice, most closures return a
         ``torch.Tensor`` loss, and PyTorch optimizers that use the closure will
         call ``.item()`` on it internally before returning.
+
+        If every sub-optimizer supports :class:`torch.amp.GradScaler`'s
+        sync-free protocol (``_step_supports_amp_scaling``), so does this
+        wrapper: the ``grad_scale`` and ``found_inf`` attributes that the scaler
+        sets on it are forwarded to each sub-optimizer for the duration of its
+        step.
         """
+        amp_attrs = {
+            name: getattr(self, name)
+            for name in ("grad_scale", "found_inf")
+            if hasattr(self, name)
+        }
         loss = None
-        for step_fn in self.step_fns:
-            if closure is None:
-                step_fn()
-            else:
-                res = step_fn(closure)
-                if res is not None:
-                    loss = res
+        for opt, step_fn in zip(self.optimizers, self.step_fns):
+            for name, value in amp_attrs.items():
+                setattr(opt, name, value)
+            try:
+                if closure is None:
+                    step_fn()
+                else:
+                    res = step_fn(closure)
+                    if res is not None:
+                        loss = res
+            finally:
+                for name in amp_attrs:
+                    if hasattr(opt, name):
+                        delattr(opt, name)
 
         return loss
 
