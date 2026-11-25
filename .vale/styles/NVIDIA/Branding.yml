@@ -1,0 +1,8 @@
+# NVIDIA writing guidelines: brand and product names use exact casing.
+extends: substitution
+message: "Use '%s' instead of '%s'."
+level: error
+ignorecase: false
+swap:
+  '\b(?:Nvidia|nVidia|nVIDIA)\b': NVIDIA
+  '\b(?:NeMoTron|NemoTron)\b': Nemotron
