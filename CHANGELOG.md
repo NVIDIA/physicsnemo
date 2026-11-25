@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds experimental `SignedDistanceStencil` and `RadiusPooledFeatures` layers to
+  `physicsnemo.experimental.nn`: signed distances to a triangle surface at a stencil of
+  probes around each point, and radius-pooled local features from voxel-downsampled
+  candidate points, as local geometry encodings for GeoTransolver.
 - Unified external aero recipe: adds AB-UPT surface, volume, and joint
   configurations calling the library model directly, configurable independent
   point-set sampling in `DomainMeshReader`, and grouped tensor outputs for
