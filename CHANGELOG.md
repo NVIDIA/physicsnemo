@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.experimental.models.s2transformer.S2Transformer`, a
+  spherical transformer built on torch-harmonics' quadrature-aware global and
+  neighborhood attention. It supports cross-resolution attention encoders and
+  decoders, different input, output and processor grids (equiangular and
+  Legendre-Gauss), and spherical-harmonic positional embeddings added to the
+  tokens or to the attention queries and keys. Needs `torch_harmonics>=0.9.3`,
+  which `pip install nvidia-physicsnemo[model-extras]` installs.
 - Unified external aero recipe: adds AB-UPT surface, volume, and joint
   configurations calling the library model directly, configurable independent
   point-set sampling in `DomainMeshReader`, and grouped tensor outputs for
