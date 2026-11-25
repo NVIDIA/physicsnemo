@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
   to the boundary's vertices through its clusters, which shape sensitivities
   need. Predictions and training are unchanged.
+- AeroJEPA (experimental) honors the `mask` of unbatched `TokenSet`s:
+  `PrototypeTokenJEPAHead` excludes masked-out context tokens (a fully masked
+  context no longer fails in the neighbor search), `pad_token_sets` carries
+  per-set masks into the packed mask and global token, and
+  `flatten_valid_token_features` applies rank-2 masks.
+- `AeroJEPA.decode_field_chunked` rejects unknown `precision` values instead
+  of silently decoding in fp32, rejects non-positive `chunk_size`, and accepts
+  `query_sdf=None` for decoders built with `use_sdf=False`.
+  `QueryTokenDecoder` rejects a non-positive `query_chunk_size`.
 
 ### Security
 
