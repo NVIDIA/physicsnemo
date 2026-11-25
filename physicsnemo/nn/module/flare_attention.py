@@ -23,6 +23,7 @@ an alternative to the PhysicsAttention attention mechanism of the Transolver.
 from __future__ import annotations
 
 import math
+import warnings
 
 import torch
 import torch.nn as nn
@@ -35,6 +36,13 @@ from physicsnemo.core.version_check import OptionalImport
 from .physics_attention import _project_input
 
 te = OptionalImport("transformer_engine.pytorch")
+
+_FLARE_DEPRECATION_MESSAGE = (
+    "physicsnemo.nn.FLARE is deprecated and will be removed in the 27.3 release; "
+    "use physicsnemo.experimental.nn.FLAREv2 or "
+    "physicsnemo.experimental.nn.FLAREPlusPlusv2 for new training. Existing FLARE "
+    "checkpoints still load."
+)
 
 
 def _flare_self_attention(
@@ -129,6 +137,11 @@ class FLARE(nn.Module):
     - FLARE attention: Fast Low-rank Attention Routing Engine
         paper: https://arxiv.org/abs/2508.12594
 
+    .. warning::
+        Deprecated: ``FLARE`` will be removed in the 27.3 release. Use
+        :class:`~physicsnemo.experimental.nn.FLAREv2` or
+        :class:`~physicsnemo.experimental.nn.FLAREPlusPlusv2` for new training.
+
     Parameters
     ----------
     dim : int
@@ -170,6 +183,7 @@ class FLARE(nn.Module):
         n_global_queries: int = 64,
         use_te: bool = False,
     ):
+        warnings.warn(_FLARE_DEPRECATION_MESSAGE, FutureWarning, stacklevel=2)
         super().__init__()
         self.use_te = use_te
         self.heads = heads

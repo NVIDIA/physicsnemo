@@ -43,6 +43,11 @@ from test.domain_parallel.models.harness import (
     run_domain_parallel_model_check,
 )
 
+# FLARE is deprecated and warns on construction; that is tested elsewhere.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:physicsnemo\.models\.flare\.FLARE is deprecated:FutureWarning"
+)
+
 _SIDE_BY_NDIMS = {2: 128, 3: 24}
 
 

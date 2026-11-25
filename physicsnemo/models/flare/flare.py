@@ -23,6 +23,7 @@ and replaces all attention blocks with FLARE blocks.
 
 from __future__ import annotations
 
+import warnings
 from typing import Literal
 
 import torch
@@ -36,6 +37,21 @@ from physicsnemo.nn import FLARE as FLAREAttention
 from physicsnemo.nn import FLAREPlusPlus as FLAREPlusPlusAttention
 
 te = OptionalImport("transformer_engine.pytorch")
+
+_FLARE_DEPRECATION_MESSAGE = (
+    "physicsnemo.models.flare.FLARE is deprecated and will be removed in the "
+    "27.3 release; use physicsnemo.experimental.models.flarev2.FLAREv2 or "
+    "physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2 for new training. "
+    "Existing FLARE checkpoints still load."
+)
+_FLARE_PLUS_PLUS_DEPRECATION_MESSAGE = (
+    "physicsnemo.models.flare.FLAREPlusPlus is deprecated and will be removed in "
+    "the 27.3 release; use physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2 "
+    "for new training. Existing checkpoints still load."
+)
+# Inner FLARE deprecation warnings (the FLARE model and the nn.FLARE layer),
+# suppressed while a model that already warned builds its parts.
+_INNER_FLARE_DEPRECATION = r"physicsnemo\.(models\.flare|nn)\.FLARE is deprecated"
 
 
 class _FLAREBlock(nn.Module):
@@ -131,6 +147,12 @@ class FLARE(CoreTransolver):
     Inherits from the core Transolver and replaces all physics attention blocks
     with FLARE (Fast Low-rank Attention Routing Engine) blocks.
 
+    .. warning::
+        Deprecated: ``FLARE`` will be removed in the 27.3 release. Use
+        :class:`~physicsnemo.experimental.models.flarev2.FLAREv2` or
+        :class:`~physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2` for
+        new training. Existing FLARE checkpoints still load.
+
     Parameters
     ----------
     functional_dim : int
@@ -206,6 +228,7 @@ class FLARE(CoreTransolver):
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
     ) -> None:
+        warnings.warn(_FLARE_DEPRECATION_MESSAGE, FutureWarning, stacklevel=2)
         super().__init__(
             functional_dim=functional_dim,
             out_dim=out_dim,
@@ -227,25 +250,30 @@ class FLARE(CoreTransolver):
             checkpointing_ratio=checkpointing_ratio,
         )
 
-        # Replace physics attention blocks with FLARE blocks
-        self.blocks = nn.ModuleList(
-            [
-                _FLAREBlock(
-                    num_heads=n_head,
-                    hidden_dim=n_hidden,
-                    dropout=dropout,
-                    act=act,
-                    mlp_ratio=mlp_ratio,
-                    last_layer=(i == n_layers - 1),
-                    out_dim=out_dim,
-                    n_global_queries=slice_num,
-                    use_te=use_te,
-                    attention_type=self._attention_type,
-                    attn_scale=self._attention_scale,
-                )
-                for i in range(n_layers)
-            ]
-        )
+        # Replace physics attention blocks with FLARE blocks. The model already
+        # warned about the deprecation; do not repeat it for every layer.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=_INNER_FLARE_DEPRECATION, category=FutureWarning
+            )
+            self.blocks = nn.ModuleList(
+                [
+                    _FLAREBlock(
+                        num_heads=n_head,
+                        hidden_dim=n_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        last_layer=(i == n_layers - 1),
+                        out_dim=out_dim,
+                        n_global_queries=slice_num,
+                        use_te=use_te,
+                        attention_type=self._attention_type,
+                        attn_scale=self._attention_scale,
+                    )
+                    for i in range(n_layers)
+                ]
+            )
         self.initialize_weights()
 
 
@@ -255,6 +283,12 @@ class FLAREPlusPlus(FLARE):
     This is the standalone FLARE++ architecture. It keeps FLARE's residual
     backbone and replaces each fixed-query FLARE mixer with a FLARE++ mixer
     whose routing queries are synthesized from the current block input.
+
+    .. warning::
+        Deprecated: this ``FLAREPlusPlus`` model will be removed in the 27.3
+        release. Use
+        :class:`~physicsnemo.experimental.models.flarev2.FLAREPlusPlusv2` for
+        new training. Existing checkpoints still load.
 
     Parameters
     ----------
@@ -327,27 +361,33 @@ class FLAREPlusPlus(FLARE):
         checkpointing_ratio: float = 1.0,
         attn_scale: float | None = None,
     ) -> None:
+        warnings.warn(_FLARE_PLUS_PLUS_DEPRECATION_MESSAGE, FutureWarning, stacklevel=2)
         if use_te:
             raise ValueError(
                 "FLAREPlusPlus does not support Transformer Engine; set use_te=False."
             )
         self._attention_scale = attn_scale
-        super().__init__(
-            functional_dim=functional_dim,
-            out_dim=out_dim,
-            embedding_dim=embedding_dim,
-            n_layers=n_layers,
-            n_hidden=n_hidden,
-            dropout=dropout,
-            n_head=n_head,
-            act=act,
-            mlp_ratio=mlp_ratio,
-            slice_num=slice_num,
-            unified_pos=unified_pos,
-            ref=ref,
-            structured_shape=structured_shape,
-            time_input=time_input,
-            use_te=use_te,
-            activation_checkpointing=activation_checkpointing,
-            checkpointing_ratio=checkpointing_ratio,
-        )
+        # FLAREPlusPlus already warned; silence the FLARE base-class warning.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=_INNER_FLARE_DEPRECATION, category=FutureWarning
+            )
+            super().__init__(
+                functional_dim=functional_dim,
+                out_dim=out_dim,
+                embedding_dim=embedding_dim,
+                n_layers=n_layers,
+                n_hidden=n_hidden,
+                dropout=dropout,
+                n_head=n_head,
+                act=act,
+                mlp_ratio=mlp_ratio,
+                slice_num=slice_num,
+                unified_pos=unified_pos,
+                ref=ref,
+                structured_shape=structured_shape,
+                time_input=time_input,
+                use_te=use_te,
+                activation_checkpointing=activation_checkpointing,
+                checkpointing_ratio=checkpointing_ratio,
+            )

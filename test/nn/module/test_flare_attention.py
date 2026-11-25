@@ -19,6 +19,7 @@
 import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,12 @@ import torch.nn.functional as F
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import FLARE, FLAREPlusPlus
 from test.conftest import requires_module
+
+# The FLARE layer is deprecated; every construction below warns.
+# test_flare_deprecation_warning checks the warning explicitly.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:physicsnemo\.nn\.FLARE is deprecated:FutureWarning"
+)
 
 
 def _load_or_create_output_reference(
@@ -43,6 +50,26 @@ def _load_or_create_output_reference(
         )
     reference = torch.load(reference_path, weights_only=True)
     return next(iter(reference.values())).to(output.device)
+
+
+def test_flare_deprecation_warning():
+    """Constructing the FLARE layer warns once, at the caller."""
+    with pytest.warns(
+        FutureWarning, match=re.escape("physicsnemo.nn.FLARE is deprecated")
+    ) as record:
+        FLARE(dim=32, heads=4, dim_head=8)
+    deprecations = [w for w in record if "is deprecated" in str(w.message)]
+    assert len(deprecations) == 1
+    assert "27.3" in str(deprecations[0].message)
+    assert "physicsnemo.experimental.nn.FLAREv2" in str(deprecations[0].message)
+    assert deprecations[0].filename == __file__
+
+
+def test_flare_plus_plus_does_not_warn():
+    """The FLARE++ layer is not deprecated (GeoTransolver's GALE_FPP uses it)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        FLAREPlusPlus(dim=32, heads=4, dim_head=8)
 
 
 def test_flare_forward(device):

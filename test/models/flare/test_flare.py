@@ -17,6 +17,7 @@
 import random
 import re
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,13 @@ from test.common import (
     validate_onnx_runtime,
 )
 from test.conftest import requires_module
+
+# FLARE and FLAREPlusPlus are deprecated; every construction below warns. The
+# deprecation tests check the warnings explicitly.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:physicsnemo\.(models\.flare|nn)\.FLARE(PlusPlus)? is deprecated"
+    ":FutureWarning"
+)
 
 
 def _assert_parameter_gradients_close(
@@ -105,6 +113,37 @@ def test_flare_legacy_checkpoint_class_path():
 
     assert LegacyPackageFLARE is FLARE
     assert LegacyModuleFLARE is FLARE
+
+
+def _flare_deprecations(caught) -> list[warnings.WarningMessage]:
+    return [
+        w
+        for w in caught
+        if issubclass(w.category, FutureWarning) and "is deprecated" in str(w.message)
+    ]
+
+
+@pytest.mark.parametrize(
+    "cls, prefix",
+    [
+        (FLARE, "physicsnemo.models.flare.FLARE is deprecated"),
+        (FLAREPlusPlus, "physicsnemo.models.flare.FLAREPlusPlus is deprecated"),
+    ],
+    ids=("flare", "flare_plus_plus"),
+)
+def test_deprecation_warning(cls, prefix):
+    """Constructing the model warns exactly once, at the caller."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cls(functional_dim=2, out_dim=1, embedding_dim=3, n_layers=3, n_hidden=16)
+
+    deprecations = _flare_deprecations(caught)
+    assert len(deprecations) == 1, [str(w.message) for w in deprecations]
+    message = str(deprecations[0].message)
+    assert message.startswith(prefix)
+    assert "physicsnemo.experimental.models.flarev2" in message
+    assert "27.3" in message
+    assert deprecations[0].filename == __file__
 
 
 @pytest.mark.parametrize(
