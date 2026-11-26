@@ -22,8 +22,8 @@ import contextlib
 import pytest
 import torch
 import torch.nn.functional as F
-from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.distributed.tensor.placement_types import Replicate, Shard
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
