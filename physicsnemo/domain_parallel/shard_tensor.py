@@ -331,8 +331,9 @@ def _promote_plain_handler_args(
     ``_convert_args_to_dtensor``, and with the same rules: promotion honors
     the promotion mode (no-op when ``DISABLED``), requires a reference mesh
     from an accompanying ShardTensor, exempts grad-free scalar tensors (which
-    distributed ops handle natively), and promotes only exact
-    ``torch.Tensor`` / ``nn.Parameter`` instances. Reuses
+    distributed ops handle natively), and promotes only plain tensors: exact
+    ``torch.Tensor`` / ``nn.Parameter`` instances, or their ``FakeTensor`` /
+    ``FunctionalTensor`` stand-ins under ``torch.compile`` tracing. Reuses
     :func:`_promote_plain_tensor_to_dtensor`, including its differentiable
     ``from_local`` bridge back to the plain tensor (e.g. a DDP-replicated
     parameter like FLARE's ``q_global``). Walks only the top level of
@@ -346,11 +347,15 @@ def _promote_plain_handler_args(
         return args, kwargs
 
     def promote(obj: object) -> object:
-        # Exact types only: a tensor subclass with its own dispatch behavior
-        # (AsyncCollectiveTensor, functional-tensor wrappers, ...) wrapped in
-        # a DTensor nests distributed wrappers, and view ops on the nested
-        # tensor re-enter this dispatch without terminating.
-        if type(obj) in (torch.Tensor, torch.nn.Parameter) and _needs_promotion(obj):
+        # Exact plain types only: a tensor subclass with its own dispatch
+        # behavior (AsyncCollectiveTensor, ...) wrapped in a DTensor nests
+        # distributed wrappers, and view ops on the nested tensor re-enter
+        # this dispatch without terminating. Under torch.compile a plain
+        # tensor reaches the handler as a FakeTensor (FunctionalTensor in
+        # AOT's trace); it must be promoted as in eager, or the handler meets
+        # an operand without a ``_spec`` (e.g. FLARE's replicated global
+        # queries in SDPA against sharded keys/values).
+        if type(obj) in _PLAIN_TRACED_TYPES and _needs_promotion(obj):
             return _promote_plain_tensor_to_dtensor(obj, mesh)
         return obj
 

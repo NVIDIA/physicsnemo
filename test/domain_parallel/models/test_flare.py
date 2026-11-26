@@ -207,3 +207,80 @@ def test_flare_unified_pos_buffer_sharded(distributed_mesh_2d):
     run_domain_parallel_model_check(
         case, mesh=distributed_mesh_2d, ddp_mesh=ddp_mesh, domain_mesh=domain_mesh
     )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16], ids=str)
+def test_flare_compile_matches_eager(distributed_mesh, dtype):
+    r"""``torch.compile(FLARE)`` on token-sharded inputs matches eager.
+
+    FLARE's learned global queries are a plain parameter that meets the
+    sharded keys/values in SDPA; under tracing it reaches the ShardTensor
+    handler as a ``FakeTensor`` and must still be promoted to ``Replicate``.
+    Compares the compiled forward output and parameter gradients to eager on
+    the same sharded input. The fp16 case runs the replicated-query SDPA on
+    the flash kernel where PyTorch supports it; there compiled and eager are
+    each compared to an fp32 eager reference with the same weights, and the
+    compiled error must stay within twice eager's (inductor's fp16 rounding
+    differs from eager's, so a direct fp16-vs-fp16 bound would be arbitrary).
+    """
+    n_points = 4096
+    device = torch.device("cuda", torch.cuda.current_device())
+    model = _build_flare(None)(device).to(dtype)
+    model.eval()
+
+    fx = torch.randn(1, n_points, 3, device=device, dtype=dtype)
+    embedding = torch.randn(1, n_points, 5, device=device, dtype=dtype)
+    src = dist.get_global_rank(distributed_mesh.get_group(), 0)
+
+    def shard(t):
+        return scatter_tensor(
+            t, src, distributed_mesh, (Shard(1),), requires_grad=False
+        )
+
+    def run(fn, mod, x, emb):
+        mod.zero_grad(set_to_none=True)
+        out = fn(x, embedding=emb)
+        out.float().pow(2).mean().backward()
+        return out, [p.grad.clone() for p in mod.parameters() if p.grad is not None]
+
+    sharded_fx, sharded_embedding = shard(fx), shard(embedding)
+    eager_out, eager_grads = run(model, model, sharded_fx, sharded_embedding)
+    torch._dynamo.reset()
+    compiled_out, compiled_grads = run(
+        torch.compile(model), model, sharded_fx, sharded_embedding
+    )
+
+    _check_output(n_points)(compiled_out)
+    assert compiled_out.dtype == dtype
+    assert len(compiled_grads) == len(eager_grads) > 0
+    assert all(type(g) is torch.Tensor for g in compiled_grads)
+    if dtype == torch.float32:
+        torch.testing.assert_close(
+            compiled_out.to_local(), eager_out.to_local(), atol=1e-4, rtol=1e-4
+        )
+        for got, want in zip(compiled_grads, eager_grads):
+            torch.testing.assert_close(got, want, atol=1e-4, rtol=1e-4)
+        return
+
+    model32 = _build_flare(None)(device)
+    model32.load_state_dict({k: v.float() for k, v in model.state_dict().items()})
+    model32.eval()
+    ref_out, ref_grads = run(
+        model32, model32, shard(fx.float()), shard(embedding.float())
+    )
+
+    def rel_err(a, b):
+        a, b = a.float(), b.float()
+        return ((a - b).norm() / b.norm().clamp_min(1e-6)).item()
+
+    pairs = [(compiled_out.to_local(), eager_out.to_local(), ref_out.to_local())]
+    pairs += list(zip(compiled_grads, eager_grads, ref_grads))
+    for i, (got, eager, ref) in enumerate(pairs):
+        e_c, e_e = rel_err(got, ref), rel_err(eager, ref)
+        name = "output" if i == 0 else f"grad[{i - 1}]"
+        assert e_c <= 2 * e_e + 1e-3, (
+            f"{name}: compiled fp16 rel err {e_c:.3e} vs eager fp16 {e_e:.3e} "
+            "(both against fp32 eager)"
+        )

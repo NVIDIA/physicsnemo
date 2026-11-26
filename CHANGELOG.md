@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every step without stalling the next one. It packs each call's scalars into
   one buffer, can average them across ranks, and copies them to the host in
   one transfer.
+- Domain-parallel SDPA with replicated queries and sharded keys/values now uses
+  flash attention where PyTorch can run it (fp16/bf16 on CUDA), which speeds up
+  sharded FLARE training.
 
 ### Changed
 
@@ -54,6 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly. `transform` now raises a `ValueError` for a matrix whose
   dtype differs from the points' dtype, and for a vector or tensor field of an
   integer or boolean dtype, where the matrix product raised a `RuntimeError`.
+- `torch.compile` now works when a plain tensor meets a `ShardTensor` in a
+  patched function, for example FLARE's learned global queries in
+  `scaled_dot_product_attention` against token-sharded keys and values.
+  Under tracing the plain tensor is a `FakeTensor` and was not promoted to
+  `Replicate`, so compiling FLARE on domain-parallel inputs failed with
+  `'FakeTensor' object has no attribute '_spec'`.
 
 ### Security
 
