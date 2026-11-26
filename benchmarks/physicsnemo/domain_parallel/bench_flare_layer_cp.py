@@ -66,8 +66,8 @@ def run(sizes, out):
 
     DistributedManager.initialize()
     rank, k = dist.get_rank(), dist.get_world_size()
-    torch.cuda.set_device(rank)
-    dev = torch.device("cuda", rank)
+    dev = DistributedManager().device
+    torch.cuda.set_device(dev)
     mesh = init_device_mesh("cuda", (k,)) if k > 1 else None
     rows = []
     for n in sizes:
@@ -111,7 +111,7 @@ def run(sizes, out):
                     mx=max(allt) if ok else None,
                 )
             )
-            x = mod = layer = None
+            x = mod = layer = step = None
             torch.cuda.empty_cache()
             if rank == 0:
                 print(rows[-1], flush=True)
@@ -134,7 +134,7 @@ def report(files):
             "eff | ideal 1-GPU ms @N/k | CP overhead (max/ideal) |"
         )
         print("|---|---|---|---|---|---|---|---|---|")
-        for n in sorted({r["n"] for r in rows if r["k"] > 1 or True}):
+        for n in sorted({r["n"] for r in rows if r["k"] > 1}):
             base = get(n, 1, mode)
             for k in sorted({r["k"] for r in rows}):
                 r = get(n, k, mode)
