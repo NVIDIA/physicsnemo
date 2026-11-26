@@ -25,6 +25,7 @@ from itertools import combinations
 
 import torch
 
+from physicsnemo.utils._index_tuple_ops import unique_rows
 from physicsnemo.utils._small_linalg import small_det
 
 __all__ = [
@@ -97,7 +98,7 @@ def _sub_simplices(cells, sub_size):
 # floor(63 / row_width) bits, which makes `unique` a 1D sort instead of a
 # lexicographic row sort (the mesher's hottest operation).
 def _unique_rows(rows):
-    """`torch.unique(dim=0)` with a packed-int64 fast path for small ids."""
+    """`unique_rows` with a packed-int64 fast path for small ids."""
     n, w = rows.shape
     bits = 63 // w
     if n > 0 and rows.max() < (1 << bits):
@@ -116,7 +117,7 @@ def _unique_rows(rows):
             include_self=False,
         )
         return rows[first], inverse, counts
-    return torch.unique(rows, dim=0, return_inverse=True, return_counts=True)
+    return unique_rows(rows, return_inverse=True, return_counts=True)
 
 
 def facet_census(cells):

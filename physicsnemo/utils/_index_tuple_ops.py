@@ -19,6 +19,7 @@
 import math
 
 import torch
+from jaxtyping import Shaped
 
 # Optimal sorting networks for tuples of up to four entries: positions to
 # compare-exchange, in order (Knuth, TAOCP Vol. 3, Section 5.3.4).
@@ -109,6 +110,55 @@ def _packed_tuple_capacity_fits(index_bound: int, n_columns: int) -> bool:
     return math.log2(index_bound) * n_columns < 63
 
 
+def unique_rows(
+    rows: Shaped[torch.Tensor, "n_rows n_columns"],
+    *,
+    return_inverse: bool = False,
+    return_counts: bool = False,
+) -> Shaped[torch.Tensor, "n_unique n_columns"] | tuple[torch.Tensor, ...]:
+    """The unique rows of ``rows``, sorted, as ``torch.unique(rows, dim=0)``.
+
+    Returns what ``torch.unique(rows, dim=0, sorted=True, return_inverse=...,
+    return_counts=...)`` returns, for rows of any dtype that :func:`torch.sort`
+    orders. Rows are equal where every entry compares equal, and each unique row
+    is the first of its copies in ``rows``; that also decides which copy stands for
+    rows that differ only in a zero's sign, where ``torch.unique``'s choice is
+    arbitrary. The rows are ordered by stable one-dimensional sorts, last column
+    first, which run as radix sorts on CUDA.
+    It exists because ``torch.unique`` over rows on CUDA runs a merge sort that can
+    read out of range while other streams' kernels run (NVIDIA/cccl#5297, in CCCL
+    3.0.1).
+
+    Parameters
+    ----------
+    rows : torch.Tensor
+        Tensor with shape ``(n_rows, n_columns)``.
+    return_inverse : bool, optional
+        Whether to return, for each row, the index of its unique row.
+    return_counts : bool, optional
+        Whether to return the number of copies of each unique row.
+
+    Returns
+    -------
+    torch.Tensor or tuple[torch.Tensor, ...]
+        Same return structure as ``torch.unique(rows, dim=0, ...)``.
+    """
+    n = rows.shape[0]
+    order = torch.arange(n, device=rows.device)
+    for column in reversed(rows.unbind(1)):
+        order = order[torch.sort(column[order], stable=True).indices]
+    rows = rows[order]
+    new = torch.ones(n, dtype=torch.bool, device=rows.device)
+    new[1:] = (rows[1:] != rows[:-1]).any(1)
+    starts = new.nonzero()[:, 0]
+    out = [rows[starts]]
+    if return_inverse:
+        out.append(torch.empty_like(order).index_put_((order,), new.cumsum(0) - 1))
+    if return_counts:
+        out.append(torch.diff(starts, append=order.new_tensor([n])))
+    return out[0] if len(out) == 1 else tuple(out)
+
+
 def unique_index_tuples(
     rows: torch.Tensor,
     index_bound: int,
@@ -145,22 +195,16 @@ def unique_index_tuples(
     if torch.is_floating_point(rows):
         raise TypeError(f"rows must contain integer indices, got {rows.dtype=}.")
     if rows.shape[0] == 0:
-        return torch.unique(
-            rows,
-            dim=0,
-            return_inverse=return_inverse,
-            return_counts=return_counts,
+        return unique_rows(
+            rows, return_inverse=return_inverse, return_counts=return_counts
         )
     if index_bound < 1:
         raise ValueError(f"index_bound must be >= 1, got {index_bound=!r}.")
 
     n_columns = rows.shape[1]
     if n_columns == 0 or not _packed_tuple_capacity_fits(index_bound, n_columns):
-        return torch.unique(
-            rows,
-            dim=0,
-            return_inverse=return_inverse,
-            return_counts=return_counts,
+        return unique_rows(
+            rows, return_inverse=return_inverse, return_counts=return_counts
         )
 
     # Accumulate the keys in place in a copy, which never aliases ``rows``. A
@@ -185,7 +229,7 @@ def unique_index_tuples(
         extra_outputs = ()
     del unique_result
 
-    unique_rows = torch.empty(
+    unique_tuples = torch.empty(
         (unique_packed.numel(), n_columns),
         dtype=rows.dtype,
         device=rows.device,
@@ -194,11 +238,11 @@ def unique_index_tuples(
     remainder = unique_packed
     del unique_packed
     for column_idx in range(n_columns - 1, -1, -1):
-        unique_rows[:, column_idx] = remainder % index_bound
+        unique_tuples[:, column_idx] = remainder % index_bound
         if column_idx > 0:
             remainder.div_(index_bound, rounding_mode="floor")
     del remainder
 
     if extra_outputs:
-        return (unique_rows, *extra_outputs)
-    return unique_rows
+        return (unique_tuples, *extra_outputs)
+    return unique_tuples
