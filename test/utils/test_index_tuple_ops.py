@@ -319,13 +319,28 @@ def test_unique_rows_matches_torch_unique_for_int64_rows(
 def test_unique_rows_matches_torch_unique_for_float64_rows_with_signed_zeros(
     device: str,
 ) -> None:
-    """-0.0 and 0.0 are one value, and each unique row is the first of its copies."""
+    """-0.0 and 0.0 are one value, and each unique row is the first of its copies.
+
+    ``torch.unique`` may keep either copy of rows that differ only in a zero's sign,
+    so the values are compared as numbers, and the zero signs against the first copy.
+    """
     rows = torch.tensor(
         [[0.0, 1.5], [-0.0, 1.5], [-1.0, 0.0], [-1.0, -0.0], [0.0, 1.5], [2.0, 0.5]],
         dtype=torch.float64,
     )
-    _assert_unique_rows_matches_torch_unique(rows.to(device))
-    _assert_unique_rows_matches_torch_unique(rows.flip(0).to(device))
+    for case in (rows, rows.flip(0)):
+        case = case.to(device)
+        uniq, inverse, counts = unique_rows(
+            case, return_inverse=True, return_counts=True
+        )
+        expected = torch.unique(case, dim=0, return_inverse=True, return_counts=True)
+        assert torch.equal(uniq, expected[0])  # numeric equality: -0.0 == 0.0
+        assert torch.equal(inverse, expected[1]) and torch.equal(counts, expected[2])
+        first = torch.tensor(
+            [int((inverse == k).nonzero()[0]) for k in range(uniq.shape[0])],
+            device=case.device,
+        )
+        assert torch.equal(_bits(uniq), _bits(case[first]))
     generator = torch.Generator().manual_seed(1)
     rows = torch.randint(-2, 3, size=(5_000, 3), generator=generator) / 4.0
     _assert_unique_rows_matches_torch_unique(rows.double().to(device))
