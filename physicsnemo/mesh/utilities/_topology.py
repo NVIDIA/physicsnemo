@@ -25,7 +25,11 @@ from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_face
 from physicsnemo.mesh.utilities._duplicate_detection import (
     vectorized_connected_components,
 )
-from physicsnemo.utils._index_tuple_ops import sort_index_tuples, unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import (
+    sort_index_tuples,
+    unique_index_tuples,
+    unique_rows,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -163,7 +167,7 @@ def extract_triangle_hinges(
         hinges = cells.new_empty((0, 4))
     else:
         canonical_faces = sort_index_tuples(cells)
-        if torch.unique(canonical_faces, dim=0).shape[0] != cells.shape[0]:
+        if unique_rows(canonical_faces).shape[0] != cells.shape[0]:
             raise ValueError(
                 "triangle hinges require unique triangles; found a duplicate face"
             )
@@ -234,7 +238,7 @@ def _validate_closed_oriented_triangle_surface(mesh: "Mesh") -> None:
 
     cells = _deformation_energy_cells(mesh)
     canonical_faces = sort_index_tuples(cells)
-    _, face_counts = torch.unique(canonical_faces, dim=0, return_counts=True)
+    _, face_counts = unique_rows(canonical_faces, return_counts=True)
     if bool((face_counts > 1).any().item()):
         raise ValueError(
             "closed-surface volume energy requires unique triangles; found a "
@@ -245,11 +249,8 @@ def _validate_closed_oriented_triangle_surface(mesh: "Mesh") -> None:
     ends = cells[:, (1, 2, 0)].reshape(-1)
     halfedges = torch.stack((starts, ends), dim=1)
     undirected_edges = sort_index_tuples(halfedges)
-    _, inverse, edge_counts = torch.unique(
-        undirected_edges,
-        dim=0,
-        return_inverse=True,
-        return_counts=True,
+    _, inverse, edge_counts = unique_rows(
+        undirected_edges, return_inverse=True, return_counts=True
     )
     if bool((edge_counts != 2).any().item()):
         raise ValueError(

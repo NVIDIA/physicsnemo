@@ -32,6 +32,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.nn.functional import farthest_point_sampling
+from physicsnemo.utils._index_tuple_ops import unique_rows
 
 from .point_utils import chunked_knn_indices
 
@@ -74,7 +75,7 @@ def _voxel_pool_positions(
     voxel_coords = torch.floor((point_positions - origin) / voxel_size_t).to(
         torch.long
     )
-    _, inverse = torch.unique(voxel_coords, dim=0, return_inverse=True)
+    _, inverse = unique_rows(voxel_coords, return_inverse=True)
     num_voxels = int(inverse.max().item()) + 1
 
     pooled_positions = torch.zeros(

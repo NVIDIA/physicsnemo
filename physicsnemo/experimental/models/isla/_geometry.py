@@ -36,6 +36,7 @@ from physicsnemo.mesh.spatial import canonical_frame, frame_coordinates
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 from physicsnemo.mesh.spatial.cluster_tree import _WARP_MAX_ELEMENTS as WARP_MAX_ELEMENTS
 from physicsnemo.nn.functional.geometry.sdf import _closest_point_weights
+from physicsnemo.utils._index_tuple_ops import unique_rows
 
 ### The (query, cell) pairs per chunk of the two-dimensional search, and the (point,
 ### direction) pairs per chunk of the least-norm solver: a bound on their blocks.
@@ -899,7 +900,7 @@ def _grouped_min_norm(group: torch.Tensor, c: torch.Tensor, n_groups: int) -> to
     out = c.new_zeros(n_groups, c.shape[1])
     if group.numel() == 0:
         return out
-    rows = torch.unique(torch.cat([group[:, None].to(c.dtype), c], 1), dim=0)
+    rows = unique_rows(torch.cat([group[:, None].to(c.dtype), c], 1))
     group, c = rows[:, 0].long(), rows[:, 1:]
     ids, counts = torch.unique_consecutive(group, return_counts=True)
     start = torch.cumsum(counts, 0) - counts
@@ -2136,7 +2137,7 @@ def _feature_reached(li, pk, w, cells, flat, n_vertices):
     reached = torch.ones_like(nonzero[:, 0])
     on_feature = key >= 0
     group = torch.stack([li[on_feature], key[on_feature]], -1)
-    _, inverse, counts = torch.unique(group, dim=0, return_inverse=True, return_counts=True)
+    _, inverse, counts = unique_rows(group, return_inverse=True, return_counts=True)
     reached[on_feature] = counts[inverse] == count[on_feature]
     return reached, n_nonzero
 
