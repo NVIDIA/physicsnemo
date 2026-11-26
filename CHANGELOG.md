@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every step without stalling the next one. It packs each call's scalars into
   one buffer, can average them across ranks, and copies them to the host in
   one transfer.
+- Adds `EnsembleMSE` and `EnsembleRMSE` streaming metrics to
+  `physicsnemo.metrics.general.ensemble_metrics`. Like `Mean` and `Variance`,
+  they accumulate over ensemble batches via `__call__` / `update` /
+  `finalize` and all-reduce across ranks when distributed is initialized.
 
 ### Changed
 
