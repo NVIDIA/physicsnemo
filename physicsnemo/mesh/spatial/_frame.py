@@ -23,6 +23,8 @@ space-filling curve or a tree built on them does not depend on the pose.
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.utilities._thin_matmul import thin_matmul
+
 #: Below this weighted normalized third moment along a principal axis, the
 #: axis's sign is a tie (a symmetric body) and is fixed by the lab axis it most
 #: overlaps instead. Computed in float64, so a body's skewness is reproduced under a
@@ -108,7 +110,4 @@ def frame_coordinates(
     torch.Tensor
         The coordinates along each axis, shape ``(n_points, n_spatial_dims)``.
     """
-    out = points[:, :1] * frame[0]
-    for k in range(1, points.shape[1]):
-        out = out + points[:, k : k + 1] * frame[k]
-    return out
+    return thin_matmul(points, frame)

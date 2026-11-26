@@ -169,7 +169,7 @@ def split_nonmanifold_edges(
     head = cells.roll(-1, dims=1).reshape(-1)
     apex = cells.roll(-2, dims=1).reshape(-1)
     lo, hi = torch.minimum(tail, head), torch.maximum(tail, head)
-    _, edge_ids, counts = unique_index_tuples(
+    edges, edge_ids, counts = unique_index_tuples(
         torch.stack([lo, hi], dim=1),
         index_bound=n_points,
         return_inverse=True,
@@ -179,27 +179,41 @@ def split_nonmanifold_edges(
         return mesh, no_change
 
     ### Angle of each half-edge's triangle around its edge, from the widest one
-    axis = points[hi] - points[lo]
+    # Computed once for each distinct triangle at an edge (edge and apex), so
+    # that copies of a cell share one angle: vectorized kernels can round the
+    # same inputs differently at different positions in a tensor
+    flaps, flap_ids = unique_index_tuples(
+        torch.stack([edge_ids, apex], dim=1),
+        index_bound=max(n_points, counts.shape[0]),
+        return_inverse=True,
+    )
+    flap_edge, n_flaps = flaps[:, 0], flaps.shape[0]
+    axis = points[edges[:, 1]] - points[edges[:, 0]]
     axis = axis / axis.norm(dim=-1, keepdim=True).clamp_min(
         torch.finfo(axis.dtype).tiny
     )
-    w = points[apex] - points[lo]
+    axis = axis[flap_edge]
+    w = points[flaps[:, 1]] - points[edges[flap_edge, 0]]
     w = w - (w * axis).sum(dim=-1, keepdim=True) * axis
     width = w.norm(dim=-1)
-    half_edges = torch.arange(3 * n_cells, device=device)
     widest = torch.full_like(width, -1.0).scatter_reduce_(
-        0, edge_ids, width, reduce="amax"
+        0, flap_edge, width, reduce="amax"
     )
-    reference = torch.full_like(counts, 3 * n_cells).scatter_reduce_(
+    reference = torch.full_like(counts, n_flaps).scatter_reduce_(
         0,
-        edge_ids,
-        torch.where(width == widest[edge_ids], half_edges, 3 * n_cells),
+        flap_edge,
+        torch.where(
+            width == widest[flap_edge],
+            torch.arange(n_flaps, device=device),
+            n_flaps,
+        ),
         reduce="amin",
     )
-    u = w[reference[edge_ids]]
+    u = w[reference[flap_edge]]
     angle = torch.atan2(
         (torch.linalg.cross(u, w) * axis).sum(dim=-1), (u * w).sum(dim=-1)
-    )
+    )[flap_ids]
+    half_edges = torch.arange(3 * n_cells, device=device)
     forward = tail == lo
     # At equal angles: forward (lo -> hi) half-edges first, by ascending index,
     # then backward ones by descending index, so the first of several copies

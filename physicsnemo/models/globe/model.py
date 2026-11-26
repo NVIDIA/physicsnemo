@@ -20,7 +20,7 @@ from typing import Any, Literal, Sequence
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from tensordict import PackLayout, TensorDict
 from torch.profiler import record_function
 
@@ -157,7 +157,9 @@ class GLOBE(Module):
         the minimum inter-AABB distance. Larger values approximate more
         aggressively; ``0`` forces all interactions to be exact (no far-field
         approximation). A trained model adapts to its ``theta``, so evaluate it
-        with the value it was trained with.
+        with the value it was trained with. At ``theta > 0``, results also
+        depend on how the prediction points are chunked; see
+        ``prediction_chunk_size``.
     leaf_size : int, optional, default=1
         Maximum number of source points per leaf node in the cluster tree.
         Larger values produce shallower trees (fewer traversal iterations) at
@@ -214,7 +216,12 @@ class GLOBE(Module):
     prediction_chunk_size : int or "auto" or None, optional, default="auto"
         Maximum number of prediction points evaluated in one pass through the
         final hyperlayer. ``"auto"`` uses the total number of boundary faces;
-        ``None`` evaluates all points in one pass.
+        ``None`` evaluates all points in one pass. Chunks are drawn from a
+        fixed-seed random permutation of the points and returned in input
+        order. At ``theta > 0``, results depend on the chunking at the level
+        of the far-field approximation, and random chunks keep each chunk like
+        the random point sets a model is trained on. At ``theta = 0``,
+        chunking changes results only by rounding.
 
     Outputs
     -------
@@ -989,6 +996,12 @@ class GLOBE(Module):
             which gives the final evaluation roughly the same memory
             footprint as the communication layers.  ``None`` disables
             chunking, evaluating all prediction points in one pass.
+            Chunks are drawn from a fixed-seed random permutation of the
+            points and returned in input order.  At ``theta > 0``, results
+            depend on the chunking at the level of the far-field
+            approximation, and random chunks keep each chunk like the
+            random point sets a model is trained on.  At ``theta = 0``,
+            chunking changes results only by rounding.
 
         Returns
         -------
@@ -1144,16 +1157,31 @@ class GLOBE(Module):
         # When n_prediction_points > chunk_size, prediction points are
         # split into chunks to bound memory.  Each chunk builds its own
         # target tree and dual plans (cheap), then evaluates the final
-        # hyperlayer.  Results are concatenated at the end.
+        # hyperlayer.  At theta > 0 results depend on the chunking, so
+        # chunks are drawn from a fixed-seed random permutation, not in
+        # input order, and results are returned in input order.
         n_points = prediction_points.shape[0]
         if prediction_chunk_size == "auto":
             prediction_chunk_size = sum(m.n_cells for m in boundary_meshes.values())
         elif prediction_chunk_size is None:
             prediction_chunk_size = n_points
 
+        permutation: Int[torch.Tensor, "n_points"] | None = None
+        if n_points > prediction_chunk_size:
+            # Built on the CPU with its own generator: the same on every
+            # device, and the global RNG is left alone.
+            permutation = torch.randperm(
+                n_points, generator=torch.Generator().manual_seed(0), device="cpu"
+            ).to(device)
+
         chunk_results: list[torch.Tensor] = []
         for start in range(0, n_points, prediction_chunk_size):
-            chunk_pts = prediction_points[start : start + prediction_chunk_size]
+            if permutation is None:
+                chunk_pts = prediction_points[start : start + prediction_chunk_size]
+            else:
+                chunk_pts = prediction_points[
+                    permutation[start : start + prediction_chunk_size]
+                ]
 
             with record_function("globe::build_prediction_plans"):
                 pred_target_tree, pred_plans = self._build_prediction_plans(
@@ -1181,6 +1209,9 @@ class GLOBE(Module):
             if len(chunk_results) > 1
             else chunk_results[0]
         )
+        del chunk_results
+        if permutation is not None:
+            packed = packed[torch.argsort(permutation)]
 
         ### Wrap as point-cloud Mesh and apply per-field calibration.
         with record_function("globe::calibration"):

@@ -26,7 +26,8 @@ op composes with torch streams (e.g. datapipe prefetch) without host
 synchronization.
 
 :func:`signed_distance_field` returns the signed distance, the closest surface
-point, and the nearest face index for each query.
+point, and the nearest face index for each query. :func:`sdf_normals` turns the
+closest points into unit directions that stay well defined on the surface.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.utilities._normalization import safe_normalize
 from physicsnemo.nn.functional.geometry.sdf import (
     signed_distance_field as _warp_signed_distance_field,
 )
@@ -325,3 +327,79 @@ def signed_distance_field(
         max_dist=max_dist_eff,
         use_sign_winding_number=use_sign_winding_number,
     )
+
+
+def sdf_normals(
+    mesh: Mesh,
+    query_points: Float[torch.Tensor, "... 3"],
+    hit_points: Float[torch.Tensor, "... 3"],
+    hit_faces: Int[torch.Tensor, "..."],
+) -> Float[torch.Tensor, "... 3"]:
+    r"""Unit direction from the closest surface point to each query point.
+
+    Away from the surface this is the normalized ``query_points - hit_points``,
+    the gradient direction of the unsigned distance. It points away from the
+    surface on both sides, so inside a closed surface it is minus the gradient
+    of the signed distance. For a query essentially on the surface that
+    difference is float32 roundoff, so the unit normal of its hit face is used
+    instead, which is the limit of the direction at the surface.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The triangle surface mesh that :func:`signed_distance_field` queried.
+    query_points : torch.Tensor
+        Query points, shape ``(..., 3)``.
+    hit_points : torch.Tensor
+        Closest surface point of each query, shape ``(..., 3)``, as
+        :func:`signed_distance_field` returns it.
+    hit_faces : torch.Tensor
+        Index into ``mesh.cells`` of the nearest face of each query, shape
+        ``query_points.shape[:-1]``, as :func:`signed_distance_field` returns
+        it.
+
+    Returns
+    -------
+    torch.Tensor
+        Unit vectors, shape ``(..., 3)``, in the dtype of ``query_points``. A
+        query that coincides with its hit point on a degenerate face gets a
+        zero vector. A query beyond a finite ``max_dist`` of
+        :func:`signed_distance_field` gets ``NaN``.
+
+    Notes
+    -----
+    A query counts as on the surface when it lies within ``128 * eps * scale``
+    of its hit point. Here ``eps`` is the float32 machine epsilon and ``scale``
+    is the largest absolute coordinate among the query and the vertices of its
+    hit face, which set the roundoff of the closest point. The band therefore
+    does not depend on the unit of length.
+
+    On the surface, the side comes from the offset along the face normal, not
+    from the sign of the distance, which also carries tangential closest-point
+    roundoff. The normal is reversed only when that offset is below
+    ``-8 * eps * scale``. Within a few ulps the side is unresolved and the
+    face normal is kept.
+
+    A query whose hit face is degenerate keeps the raw direction.
+
+    The result is not meant to be differentiated. ``hit_points`` carry no
+    gradient, so autograd holds the closest point fixed, which is wrong for a
+    closest point that moves with the query over a face or an edge.
+
+    The computation has no data-dependent branch and no host readback, so it
+    does not stall a prefetch stream.
+    """
+    dtype = query_points.dtype
+    normals = query_points - hit_points.to(dtype)
+    face_normals = mesh.cell_normals[hit_faces].to(dtype)
+    eps = torch.finfo(torch.float32).eps
+    vertex_scale = mesh.points.abs().amax(dim=-1)[mesh.cells[hit_faces]].amax(dim=-1)
+    coord_scale = torch.maximum(query_points.abs().amax(dim=-1), vertex_scale.to(dtype))
+    near_surface = torch.norm(normals, dim=-1) < 128.0 * eps * coord_scale
+    face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
+    inside = (normals * face_normals).sum(-1) < -8.0 * eps * coord_scale
+    oriented = torch.where(inside.unsqueeze(-1), -face_normals, face_normals)
+    normals = torch.where(
+        (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
+    )
+    return safe_normalize(normals, dim=-1)

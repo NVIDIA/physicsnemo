@@ -364,7 +364,7 @@ F32_BOUND = 1e-4
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("interior", [False, True], ids=["surface", "interior"])
-def test_float32_rigid_motions_on_every_device(device, interior):
+def test_float32_rigid_motions_on_every_device(device, interior, no_tf32_matmul):
     """In float32, on CPU and on CUDA (every kernel at ``auto``): a rotation of the
     boundary, the global direction and the prediction points keeps p and rotates v,
     and a translation changes no output, to F32_BOUND of the largest output."""

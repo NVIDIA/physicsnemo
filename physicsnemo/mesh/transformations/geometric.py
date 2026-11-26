@@ -39,6 +39,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._device import to_device
 from physicsnemo.mesh.utilities._normalization import safe_normalize
+from physicsnemo.mesh.utilities._thin_matmul import thin_matmul
 from physicsnemo.utils._tracing import is_tracing
 
 if TYPE_CHECKING:
@@ -83,7 +84,6 @@ def _transform_tensordict(
         TensorDict with transformed fields (modified in place).
     """
     batch_size = data.batch_size
-    has_batch_dim = len(batch_size) > 0
 
     def transform_field(key: str, value: torch.Tensor) -> torch.Tensor:
         """Transform a single vector or tensor field."""
@@ -92,14 +92,6 @@ def _transform_tensordict(
         ### Scalars are invariant under linear transformations
         if len(shape) == 0:
             return value
-
-        ### Each field keeps its dtype: VTK files often pair float64 points
-        ### (and so a float64 matrix) with float32 fields.
-        field_matrix = (
-            matrix.to(value.dtype)
-            if value.is_floating_point() or value.is_complex()
-            else matrix
-        )
 
         ### Validate spatial dimension compatibility
         if shape[0] != n_spatial_dims:
@@ -110,40 +102,28 @@ def _transform_tensordict(
                 f'transform_{field_type}={{"field_name": True}}.'
             )
 
-        ### Vector field: v' = v @ M^T
-        if len(shape) == 1:
-            return value @ field_matrix.T
+        ### thin_matmul would promote an integer or boolean field to the matrix dtype
+        if not (value.is_floating_point() or value.is_complex()):
+            raise ValueError(
+                f"Cannot transform {field_type} field {key!r} of dtype {value.dtype}. "
+                f"Only floating-point and complex fields transform. "
+                f"Use a dict to select specific fields, e.g. "
+                f'transform_{field_type}={{"field_name": True}}.'
+            )
 
-        ### Rank-2 tensor field: T' = M @ T @ M^T (e.g., stress tensors)
-        if shape == (n_spatial_dims, n_spatial_dims):
-            if has_batch_dim:
-                return torch.einsum("ij,bjk,lk->bil", field_matrix, value, field_matrix)
-            else:
-                return torch.einsum("ij,jk,lk->il", field_matrix, value, field_matrix)
+        ### Each field keeps its dtype: VTK files often pair float64 points
+        ### (and so a float64 matrix) with float32 fields.
+        field_matrix = matrix.to(value.dtype)
 
-        ### Higher-rank tensor field: apply transformation to each spatial index
+        ### Every index transforms by M: v' = v @ M^T for a vector, T' = M @ T @ M^T
+        ### for a rank-2 tensor (a stress tensor), and so on. As column products: a
+        ### float32 GEMM or einsum would run in TF32 where that is allowed.
         if all(s == n_spatial_dims for s in shape):
             result = value
-            # Index chars for einsum (skip 'b' for batch and 'z' for contraction)
-            chars = "acdefghijklmnopqrstuvwxy"
-            batch_prefix = "b" if has_batch_dim else ""
-
-            for dim_idx in range(len(shape)):
-                input_indices = "".join(
-                    chars[i].upper()
-                    if i < dim_idx
-                    else "z"
-                    if i == dim_idx
-                    else chars[i]
-                    for i in range(len(shape))
+            for dim in range(-len(shape), 0):
+                result = thin_matmul(result.movedim(dim, -1), field_matrix.T).movedim(
+                    -1, dim
                 )
-                output_indices = "".join(
-                    chars[i].upper() if i <= dim_idx else chars[i]
-                    for i in range(len(shape))
-                )
-                einsum_str = f"{chars[dim_idx].upper()}z,{batch_prefix}{input_indices}->{batch_prefix}{output_indices}"
-                result = torch.einsum(einsum_str, field_matrix, result)
-
             return result
 
         raise ValueError(
@@ -633,7 +613,15 @@ def transform(
                 f"Got matrix.shape={matrix.shape}, mesh.n_spatial_dims={mesh.n_spatial_dims}"
             )
 
-    new_points = mesh.points @ matrix.T
+    ### thin_matmul would promote where a matrix product refuses mixed dtypes
+    if matrix.dtype != mesh.points.dtype:
+        raise ValueError(
+            f"matrix dtype must equal the dtype of mesh.points.\n"
+            f"Got matrix.dtype={matrix.dtype}, mesh.points.dtype={mesh.points.dtype}"
+        )
+
+    ### As column products: a float32 GEMM would run in TF32 where that is allowed
+    new_points = thin_matmul(mesh.points, matrix.T)
 
     ### Start from the cache policy for coordinate replacement: retain topology,
     # invalidate geometry, then opt individual transformed values back in below.
@@ -669,7 +657,7 @@ def transform(
             # Formula: area' = area * |det(M)| * ||M^{-T} n||
             elif mesh.codimension == 1:
                 # Normals map by the inverse transpose: as rows, n' = n @ M^-1. One
-                # small inverse and a matmul; on CUDA, solve_ex with millions of
+                # small inverse and a product; on CUDA, solve_ex with millions of
                 # right-hand sides is ~200x slower whenever its LU factorization pivots.
                 if any(
                     mesh._cache.get((association, "normals"), None) is not None
@@ -681,7 +669,7 @@ def transform(
 
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = v.to(solve_dtype) @ inverse
+                    transformed = thin_matmul(v.to(solve_dtype), inverse)
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
                         new_cache["cell", "areas"] = (
@@ -710,14 +698,14 @@ def transform(
                         else (not is_tracing() and _is_similarity_transform(matrix))
                     )
                 ):
-                    transformed = v.to(solve_dtype) @ inverse
+                    transformed = thin_matmul(v.to(solve_dtype), inverse)
                     new_cache["point", "normals"] = (
                         det_sign * safe_normalize(transformed, dim=-1)
                     ).to(v.dtype)
 
     ### Opt-in: centroids
     if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:
-        new_cache["cell", "centroids"] = v @ matrix.T
+        new_cache["cell", "centroids"] = thin_matmul(v, matrix.T)
 
     ### Transform user data if requested
     new_point_data = _maybe_transform_data(

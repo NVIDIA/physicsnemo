@@ -6,7 +6,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.0] - 2026-XX-YY
+## [2.4.0] - 2026-XX-YY
+
+### Added
+
+- `physicsnemo.mesh.spatial.sdf_normals` gives the unit direction from the
+  closest surface point to each query point, and the hit face's normal for a
+  query on the surface. The unified external aerodynamics recipe's
+  `ComputeSDFFromBoundary` calls it. The on-surface band scales with the
+  coordinates of the query and its hit face, so the recipe's normals change
+  for queries closer to the wall than its former fixed band of `1.5e-5` where
+  those coordinates are below one unit.
+- Adds `physicsnemo.utils.logging.NonBlockingLogger`, which logs scalars from
+  the GPU without making the host wait for the GPU, so a training loop can log
+  every step without stalling the next one. It packs each call's scalars into
+  one buffer, can average them across ranks, and copies them to the host in
+  one transfer.
+
+### Changed
+
+- Unified external aero recipe: training steps no longer wait for the GPU to
+  log their values (with `precision: float16`, `GradScaler` still waits once
+  per step), so the datapipe's prefetch overlaps compute. The logged
+  `step_time_s` now includes waits for the GPU inside the step and reads
+  higher, so compare speed by epoch wall time per step.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- `split_nonmanifold_edges` measures each copy of a triangle at the same angle
+  around its edges, so it drops a reversed copy of a face on every platform.
+  On macOS it could split the face's edges instead.
+- `Mesh.cell_normals` and `Mesh.point_normals` compile with `fullgraph=True`
+  on Python 3.11.
+- ISLA's tree read at `tree_read_theta > 0` now passes gradients with respect
+  to the boundary's vertices through its clusters, which shape sensitivities
+  need. Predictions and training are unchanged.
+- `Mesh.transform`, and `rotate` and `scale` through it, keep float32
+  accuracy on CUDA when TF32 matmuls are allowed, which is the default of NGC
+  PyTorch containers. Their float32 matrix products rounded points, cached
+  centroids and normals, and vector and rank-2 tensor fields to about three
+  significant digits. `project` with a `transform_*_data` flag rounded the
+  fields it projects in the same way, and now selects their components
+  exactly. `transform` now raises a `ValueError` for a matrix whose
+  dtype differs from the points' dtype, and for a vector or tensor field of an
+  integer or boolean dtype, where the matrix product raised a `RuntimeError`.
+
+### Security
+
+### Dependencies
+
+## [2.3.0] - 2026-11-19
 
 ### Added
 
@@ -584,10 +637,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GLOBE now splits a large set of prediction points into random chunks instead
+  of chunks in input order. At `theta` > 0 each chunk's far-field approximation
+  depends on the points in it, so chunks of neighboring points shifted
+  predictions.
+- `load_checkpoint` keeps a resumed optimizer's step counts on the CPU, where a
+  fresh AdamW keeps them, unless the optimizer is fused or capturable. Step
+  counts on the GPU forced host syncs in every later eager optimizer step and
+  slowed resumed training.
+- At `tree_read_theta > 0`, ISLA's reference boundary read holds each cluster's
+  cell weights fixed in its means, as the fused CUDA kernel does, so both give
+  the same derivatives in the boundary's vertices. They used to disagree there.
 - `from_pyvista` splits again each polygon that VTK splits wrongly, into a fan
   of triangles around one new point at its center, so its output can have more
   points than the input. A closed polygon surface used to convert with holes,
   repeated triangles or stray triangles.
+- ISLA's `query_chunks` works when the cells' measures require gradients,
+  whether they come from the boundary vertices or from a given
+  `_effective_measure`. It used to raise in a later chunk's backward pass or
+  in `QueryChunks.backward`.
+- Distributed `load_checkpoint` restores the optimizer state on every rank when
+  `optimizer_model` is not distributed, such as a small model trained beside an
+  FSDP model. Before, only rank 0 restored it, and the other ranks silently kept
+  a fresh optimizer.
 - `fill_holes` winds each fill like the surrounding surface, fills holes that
   pass through a shared vertex, leaves zero-area slits to
   `stitch_t_junctions`, and fills flat holes without folded triangles.
@@ -630,6 +702,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percentile decisions and isolates scorer initialization from prediction RNGs.
 - Preserve unreduced ShardTensor placement dimensions in `sum` and `mean`
   when `keepdim=True`, including independently sharded simulation and spatial axes.
+- `group_norm` on a `ShardTensor` sharded along the batch dimension raises
+  `MissingShardPatch`, and the message points to DDP and FSDP2 for the batch.
+  On hosts with CUDA, it used to combine the statistics of different samples
+  and return wrong values with no error.
 - `torch.compile` with ShardTensor: neighborhood attention (`na1d`/`na2d`/
   `na3d`) keeps its halo exchange when compiled, `select` handles a negative
   `dim`, dynamic shapes no longer fail in the spec hash, a plain DTensor

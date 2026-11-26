@@ -180,6 +180,32 @@ class TestSplitNonmanifoldEdges:
         }
         assert torch.equal(result.cells, cube.cells)
 
+    @pytest.mark.parametrize("face", [(0, 1), (2, 3), (10, 11)])
+    def test_copies_share_one_angle(self, face, monkeypatch):
+        """The copy of a face still goes when the last angles of a tensor round
+        down, as the remainder loop of a vectorized kernel may round them."""
+        atan2 = torch.atan2
+
+        def last_rounded_down(y, x):
+            angle = atan2(y, x)
+            angle[-2:] = torch.nextafter(
+                angle[-2:], torch.full_like(angle[-2:], -torch.inf)
+            )
+            return angle
+
+        monkeypatch.setattr(torch, "atan2", last_rounded_down)
+        cube = cube_surface.load()
+        copy = cube.cells[list(face)][:, [0, 2, 1]]
+        result, stats = split_nonmanifold_edges(
+            Mesh(points=cube.points, cells=torch.cat([cube.cells, copy]))
+        )
+        assert stats == {
+            "n_edges_split": 0,
+            "n_vertices_duplicated": 0,
+            "n_cells_dropped": 2,
+        }
+        assert torch.equal(result.cells, cube.cells)
+
     @pytest.mark.parametrize("inverted", [False, True])
     def test_two_cubes_sharing_a_face_stay_closed(self, inverted):
         a = cube_surface.load()

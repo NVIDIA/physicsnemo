@@ -31,7 +31,7 @@ measure and of the weighted points, normals and rank-1 inputs from the same
 elementwise operations on the joined table.
 
 The forest's ``trees`` are the library's trees over slices of the forest's tables, so
-the reference walk (:meth:`~._tree_read.BoundaryForest.point_pairs`) runs on them
+the reference walk (:meth:`~._tree_read.BoundaryForest.frame_pairs`) runs on them
 unchanged. They are made when first asked for (``per_tree``), since the fast walk
 reads the table alone.
 
