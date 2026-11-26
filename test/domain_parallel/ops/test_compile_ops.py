@@ -886,7 +886,7 @@ def test_compile_sdpa_plain_q_sharded_kv_flash(
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
     from physicsnemo.domain_parallel.shard_utils.attention_patches import (
-        replicated_q_sdpa_backend,
+        _replicated_q_sdpa_backend,
     )
 
     monkeypatch.setenv("PHYSICSNEMO_DP_SDPA_BACKEND", "auto")
@@ -902,7 +902,7 @@ def test_compile_sdpa_plain_q_sharded_kv_flash(
 
     k_loc = k_s.to_local()
     q_loc = q.expand(batch_size, -1, -1, -1)
-    if replicated_q_sdpa_backend(q_loc, k_loc, k_loc) != "flash":
+    if _replicated_q_sdpa_backend(q_loc, k_loc, k_loc) != "flash":
         pytest.skip(f"flash-ineligible on this device/build for {dtype}")
 
     module = PlainQuerySDPA(q).to(dm.device)

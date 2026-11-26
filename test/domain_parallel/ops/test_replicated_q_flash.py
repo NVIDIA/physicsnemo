@@ -35,7 +35,7 @@ def _ap():
 
 
 def _backend_helper():
-    return _ap().replicated_q_sdpa_backend
+    return _ap()._replicated_q_sdpa_backend
 
 
 def torch_can_use_flash(q, k, v) -> bool:
@@ -99,7 +99,7 @@ def test_replicated_q_flash_parity(
     flash_ok = dtype != torch.float32 and torch_can_use_flash(q, k, v)
     if backend == "flash" and not flash_ok:
         pytest.skip("flash-ineligible: torch.backends.cuda.can_use_flash_attention")
-    got = _ap().replicated_q_sdpa_backend(q, k, v, None, 0.0, False)
+    got = _ap()._replicated_q_sdpa_backend(q, k, v, None, 0.0, False)
     assert got == ("flash" if flash_ok and backend != "efficient" else "efficient")
 
     out = F.scaled_dot_product_attention(sq, sk, sv)

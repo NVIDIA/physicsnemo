@@ -1026,7 +1026,7 @@ def _select_replicated_q_backend(
     return "flash"
 
 
-def replicated_q_sdpa_backend(
+def _replicated_q_sdpa_backend(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -1076,7 +1076,7 @@ class ReplicatedQSDPA(torch.autograd.Function):
     global log-sum-exp, rescale each partial output, and all-reduce.
 
     The local kernel is flash attention or memory-efficient attention, per
-    :func:`replicated_q_sdpa_backend`. The backward mirrors
+    :func:`_replicated_q_sdpa_backend`. The backward mirrors
     :class:`RingSDPABlocking`'s per-block step: the matching backward kernel
     with the *global* output and
     log-sum-exp against the *local* K/V block yields exact block gradients.
@@ -1100,7 +1100,7 @@ class ReplicatedQSDPA(torch.autograd.Function):
         Returns ``(output, global_log_sumexp, philox_seed, philox_offset)``;
         the extras are consumed by backward and marked non-differentiable.
         """
-        backend = replicated_q_sdpa_backend(
+        backend = _replicated_q_sdpa_backend(
             q,
             k,
             v,
@@ -1179,7 +1179,7 @@ class ReplicatedQSDPA(torch.autograd.Function):
         ctx.mesh = mesh
         ctx.attn_args = attn_args
         ctx.use_flash = (
-            replicated_q_sdpa_backend(
+            _replicated_q_sdpa_backend(
                 q,
                 k,
                 v,
