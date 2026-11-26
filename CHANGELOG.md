@@ -54,9 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly. `transform` now raises a `ValueError` for a matrix whose
   dtype differs from the points' dtype, and for a vector or tensor field of an
   integer or boolean dtype, where the matrix product raised a `RuntimeError`.
-- `torch.unique` over rows could read out of range on CUDA under concurrent
-  kernels, from a race in CCCL's merge sort. The mesh library, ISLA and the
-  point tokenizer now find unique rows with radix sorts, with the same results.
+- On CUDA, `torch.unique(dim=0)` could crash with an illegal memory access
+  while other kernels ran, from a race in CCCL's merge sort. The mesh library,
+  ISLA and the point tokenizer now find unique rows with radix sorts, with the
+  same results.
 
 ### Security
 
