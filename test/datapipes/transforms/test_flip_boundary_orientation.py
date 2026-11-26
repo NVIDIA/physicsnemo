@@ -22,7 +22,9 @@ import torch
 from physicsnemo.datapipes.registry import COMPONENT_REGISTRY
 from physicsnemo.datapipes.transforms.mesh import FlipBoundaryOrientation
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
 from physicsnemo.mesh.primitives.basic import single_triangle_3d
+from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
 
 def _surface() -> Mesh:
@@ -56,6 +58,18 @@ class TestFlipBoundaryOrientation:
         assert torch.equal(out.points, mesh.points)
         ### The input keeps its own stored normals.
         torch.testing.assert_close(mesh.cell_data["normals"], mesh.cell_normals)
+
+    def test_effective_measures_keep_their_areas(self):
+        """Each cell keeps its measure and the area it came from, bit for bit,
+        though float32 areas differ between the two vertex orders."""
+        mesh = sphere_icosahedral.load(subdivisions=3)
+        set_cell_measures(mesh, mesh.cell_areas * 2.0)
+        out = FlipBoundaryOrientation()(mesh)
+        assert not torch.equal(
+            Mesh(points=mesh.points, cells=out.cells).cell_areas, mesh.cell_areas
+        )
+        assert torch.equal(cell_measures(out), cell_measures(mesh))
+        assert torch.equal(out.cell_areas, mesh.cell_areas)
 
     def test_flip_twice_is_identity(self):
         """Reversing twice restores the cells and the stored normals exactly."""

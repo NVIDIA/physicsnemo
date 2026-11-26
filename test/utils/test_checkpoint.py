@@ -27,6 +27,8 @@ import torch.nn as nn
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.optim import CombinedOptimizer
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 from test.conftest import requires_module
 
 
@@ -507,3 +509,69 @@ def test_compiled_model_checkpointing(
     new_output = uncompiled_model(sample_input).detach().cpu()
 
     assert torch.allclose(original_output, new_output, rtol=rtol, atol=atol)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.parametrize(
+    "kwargs, step_device",
+    [({}, "cpu"), ({"fused": True}, "cuda"), ({"capturable": True}, "cuda")],
+    ids=("default", "fused", "capturable"),
+)
+def test_load_checkpoint_keeps_adam_step_on_cpu(tmp_path, kwargs, step_device):
+    """A resumed AdamW keeps its step counts where a fresh one keeps them.
+
+    A default AdamW keeps them on the CPU: on the GPU, every later optimizer step
+    would read each count back with a host sync. The rest of the state is restored
+    bitwise on the parameters' device.
+    """
+    source = nn.Linear(8, 8).cuda()
+    optimizer = torch.optim.AdamW(source.parameters(), **kwargs)
+    source(torch.randn(4, 8, device="cuda")).sum().backward()
+    optimizer.step()
+    save_checkpoint(tmp_path, models=source, optimizer=optimizer, epoch=1)
+
+    fresh = nn.Linear(8, 8).cuda()
+    fresh_optimizer = torch.optim.AdamW(fresh.parameters(), **kwargs)
+    restored_epoch = load_checkpoint(
+        tmp_path, models=fresh, optimizer=fresh_optimizer, device="cuda"
+    )
+    assert restored_epoch == 1
+    for p, q in zip(source.parameters(), fresh.parameters()):
+        saved, restored = optimizer.state[p], fresh_optimizer.state[q]
+        assert restored["step"].device.type == step_device
+        for key in ("exp_avg", "exp_avg_sq"):
+            assert restored[key].device == q.device
+            assert torch.equal(restored[key], saved[key])
+        assert torch.equal(restored["step"].cpu(), saved["step"].cpu())
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_load_checkpoint_combined_optimizer_placement(tmp_path):
+    """In a CombinedOptimizer, the default AdamW's step counts stay on the CPU.
+
+    Other tensors still land on ``device``, such as the tensor ``lr`` that a
+    capturable AdamW keeps in its ``param_groups``.
+    """
+
+    def make():
+        model = nn.Linear(8, 8).cuda()
+        lr = torch.tensor(1e-3, device="cuda")
+        optimizer = CombinedOptimizer(
+            [
+                torch.optim.AdamW([model.weight]),
+                torch.optim.AdamW([model.bias], lr=lr, capturable=True),
+            ]
+        )
+        return model, optimizer
+
+    source, optimizer = make()
+    source(torch.randn(4, 8, device="cuda")).sum().backward()
+    optimizer.step()
+    save_checkpoint(tmp_path, models=source, optimizer=optimizer, epoch=1)
+
+    fresh, fresh_optimizer = make()
+    load_checkpoint(tmp_path, models=fresh, optimizer=fresh_optimizer, device="cuda")
+    default, capturable = fresh_optimizer.optimizers
+    assert default.state[fresh.weight]["step"].device.type == "cpu"
+    assert capturable.state[fresh.bias]["step"].device.type == "cuda"
+    assert capturable.param_groups[0]["lr"].device.type == "cuda"

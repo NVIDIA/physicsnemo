@@ -171,14 +171,13 @@ def _assert_same(ref, opt, dtype, out_tol, grad_tol, n=700):
         (3, 1),
     ],
 )
-def test_fused_geo_region_matches_eager_region(dtype, K, P, dim, monkeypatch):
+def test_fused_geo_region_matches_eager_region(dtype, K, P, dim, no_tf32_matmul):
     """Region level: forward outputs (bias, mix, pooled) and every input gradient, for
     K global directions (none included) plus P per-token rank-1 vectors (the
     (5 + K + P)-invariant set in the eager order) with the linear routing-bias head, in
     three and two dimensions."""
     from physicsnemo.experimental.models.isla._geo_kernel import fused_geo_region
 
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     b, n, s = 2, 500, 40
     g = torch.Generator().manual_seed(0)
 
@@ -394,10 +393,9 @@ def test_fused_geo_kernel_model_exact_in_float64(name):
 @pytest.mark.parametrize(
     "geo_kernel", ["eager", pytest.param("fused", marks=requires_cuda_triton)]
 )
-def test_torch_compile_fullgraph_matches_eager(geo_kernel, monkeypatch):
+def test_torch_compile_fullgraph_matches_eager(geo_kernel, no_tf32_matmul):
     """The whole model compiled must stay one graph and reproduce the eager reference
     within the float32 bars."""
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     torch._dynamo.reset()
     ref, opt = _pair(torch.float32, geo_kernel=geo_kernel)
     inputs, _ = _boundary(300)
@@ -651,13 +649,14 @@ def _forced_on_error(run, **kw):
 @pytest.mark.cuda
 @requires_cuda
 @pytest.mark.parametrize("n", [12000, 12001, 12002, 12003])
-def test_compile_blocks_float32_matches_eager_at_every_token_count(n, monkeypatch):
+def test_compile_blocks_float32_matches_eager_at_every_token_count(
+    n, monkeypatch, no_tf32_matmul
+):
     """compile_blocks reproduces the eager model in float32 (outputs and gradients) at
     every token count, at a size where Inductor's mix-order reduction would fuse, and
     builds no mix-order kernel."""
     from physicsnemo.experimental.models.isla import model
 
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     monkeypatch.setattr(model, "_TOKEN_ALIGNMENT", 1)
     inputs, tgt = _boundary(n)
 
@@ -681,7 +680,9 @@ def test_compile_blocks_float32_matches_eager_at_every_token_count(n, monkeypatc
 
 @pytest.mark.cuda
 @requires_cuda
-def test_the_model_s_compile_matches_eager_in_the_eager_region(monkeypatch):
+def test_the_model_s_compile_matches_eager_in_the_eager_region(
+    monkeypatch, no_tf32_matmul
+):
     """The whole model under ISLA.compile reproduces the eager model in float32
     (outputs and gradients) in the eager geometry region, at a token count that is
     not a multiple of 4, and builds no mix-order kernel. Then the positive control:
@@ -693,7 +694,6 @@ def test_the_model_s_compile_matches_eager_in_the_eager_region(monkeypatch):
 
     from physicsnemo.experimental.models.isla import model
 
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     monkeypatch.setattr(model, "_TOKEN_ALIGNMENT", 1)
     n = 12001
     inputs, tgt = _boundary(n)
@@ -727,7 +727,9 @@ def test_the_model_s_compile_matches_eager_in_the_eager_region(monkeypatch):
 @pytest.mark.cuda
 @requires_cuda
 @pytest.mark.parametrize("n", [12001, 12002])
-def test_compile_blocks_interior_float32_at_every_token_count(n, monkeypatch):
+def test_compile_blocks_interior_float32_at_every_token_count(
+    n, monkeypatch, no_tf32_matmul
+):
     """The interior task under compile_blocks in float32, at a size where mix-order
     reduction would fuse and a token count (n boundary cells) that is not a multiple
     of 4: the compiled model reproduces the eager one, and its prediction at a fixed
@@ -736,7 +738,6 @@ def test_compile_blocks_interior_float32_at_every_token_count(n, monkeypatch):
     compiled blocks see the boundary's tokens alone, whatever the query count."""
     from physicsnemo.experimental.models.isla import model
 
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     monkeypatch.setattr(model, "_TOKEN_ALIGNMENT", 1)
     inputs, _ = _boundary(n)
     q = torch.randn(2000, 3, generator=torch.Generator().manual_seed(5)).cuda() * 3.0

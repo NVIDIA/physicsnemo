@@ -30,4 +30,4 @@ def test_fid_calculation():
     fid = calculate_fid_from_inception_stats(mu, sigma, mu_ref, sigma_ref)
     expected_fid = 2.234758220608337
 
-    assert pytest.approx(fid, abs=1e-4) == expected_fid
+    assert float(fid) == pytest.approx(expected_fid, abs=1e-4)

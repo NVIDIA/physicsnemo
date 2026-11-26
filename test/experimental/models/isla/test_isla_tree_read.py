@@ -67,7 +67,6 @@ from physicsnemo.experimental.models.isla._tree_read import (
     normal_error_bound,
     normal_faces,
     tree_pair_invariants,
-    tree_read_pairs,
 )
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
@@ -81,6 +80,10 @@ from test.experimental.models.isla._kernel_cases import (
     _SinkRead,
     _to,
     _two_x,
+    node_cells,
+    pair_invariants,
+    point_pairs,
+    tree_read_pairs,
 )
 from test.experimental.models.isla._marks import (
     DEVICES,
@@ -347,7 +350,7 @@ def test_tree_read_pairs_cover_the_boundary_measure_once(theta):
 
 
 def _node_cells(f, i):
-    cells, _ = f.node_cells(torch.tensor([i]))
+    cells, _ = node_cells(f, torch.tensor([i]))
     return cells
 
 
@@ -511,7 +514,7 @@ def test_point_pairs_admit_only_separated_coherent_nodes_and_cover_every_cell(th
     pts, nrm, w, _ = cloud(700, d=3, seed=6)
     q, _, _, _ = cloud(90, d=3, seed=7, scale=(3.0, 3.0, 3.0))
     f = BoundaryForest.build(pts, w, nrm, None, theta=theta)
-    qi, si, n_node = f.point_pairs(q)
+    qi, si, n_node = point_pairs(f, q)
     n = f.n_cells
     assert torch.equal(qi, qi.sort().values)
     is_node = si >= n
@@ -526,7 +529,7 @@ def test_point_pairs_admit_only_separated_coherent_nodes_and_cover_every_cell(th
     counts.index_put_(
         (qi[~is_node], si[~is_node]), torch.ones_like(qi[~is_node]), accumulate=True
     )
-    cells, which = f.node_cells(node)
+    cells, which = node_cells(f, node)
     counts.index_put_(
         (qi[is_node][which], cells), torch.ones_like(cells), accumulate=True
     )
@@ -534,7 +537,7 @@ def test_point_pairs_admit_only_separated_coherent_nodes_and_cover_every_cell(th
     if theta == 0.0:
         assert n_node == 0
     ### Query independence of the list itself.
-    qi_one, si_one, _ = f.point_pairs(q[17:18])
+    qi_one, si_one, _ = point_pairs(f, q[17:18])
     assert torch.equal(torch.sort(si_one).values, torch.sort(si[qi == 17]).values)
     assert bool((qi_one == 0).all())
 
@@ -556,8 +559,8 @@ def test_fast_walk_gives_the_reference_lists_in_the_reference_order(dim, dtype, 
     q[6, 0] = float("inf")
     with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
         f = BoundaryForest.build(pts, w, nrm, None, theta=theta)
-        qi, si, n_node = f.point_pairs(q, walk="reference")
-        qi_f, si_f, n_node_f = f.point_pairs(q, walk="fast")
+        qi, si, n_node = point_pairs(f, q, walk="reference")
+        qi_f, si_f, n_node_f = point_pairs(f, q, walk="fast")
     assert torch.equal(qi_f, qi) and torch.equal(si_f, si)
     assert n_node_f == n_node > 0
     assert torch.equal(torch.sort(si[qi == 5]).values, torch.arange(f.n_cells))
@@ -622,8 +625,8 @@ def test_forest_and_every_list_are_the_same_in_every_pose_at_finite_theta(
     assert torch.equal(f1.coherent, f0.coherent)
     assert torch.allclose(f1.center, k * f0.center @ R.T + t, atol=1e-9)
     assert torch.allclose(f1.normal, f0.normal @ R.T, atol=1e-9)
-    qi0, si0, n0 = f0.point_pairs(q, walk=kernel)
-    qi1, si1, n1 = f1.point_pairs(k * q @ R.T + t, walk=kernel)
+    qi0, si0, n0 = point_pairs(f0, q, walk=kernel)
+    qi1, si1, n1 = point_pairs(f1, k * q @ R.T + t, walk=kernel)
     assert n0 == n1 and torch.equal(qi0, qi1) and torch.equal(si0, si1)
 
 
@@ -683,7 +686,7 @@ def _lattice_forest(R=None, t=None, kernel="reference"):
         theta=TREE_READ_THETA,
         build=kernel,
     )
-    return f, f.point_pairs(q.float(), walk=kernel)
+    return f, point_pairs(f, q.float(), walk=kernel)
 
 
 def _float32_cells(simplex):
@@ -744,7 +747,7 @@ def test_forest_is_bitwise_the_same_under_bf16_autocast(device):
         f = BoundaryForest.build(
             pts, w, nrm, None, theta=TREE_READ_THETA, build="reference"
         )
-        return f, f.point_pairs(q32, walk="reference")
+        return f, point_pairs(f, q32, walk="reference")
 
     f0, l0 = forest()
     with torch.autocast(device, dtype=torch.bfloat16):
@@ -779,12 +782,12 @@ def test_forest_is_the_same_under_renumbering_of_the_cells():
     f0 = BoundaryForest.build(
         pts, w, nrm, None, theta=TREE_READ_THETA, build="reference"
     )
-    qi0, si0, _ = f0.point_pairs(q, walk="reference")
+    qi0, si0, _ = point_pairs(f0, q, walk="reference")
     perm = torch.randperm(pts.shape[0], generator=torch.Generator().manual_seed(4))
     f1 = BoundaryForest.build(
         pts[perm], w, nrm[perm], None, theta=TREE_READ_THETA, build="reference"
     )
-    qi1, si1, _ = f1.point_pairs(q, walk="reference")
+    qi1, si1, _ = point_pairs(f1, q, walk="reference")
     assert torch.equal(perm[f1.cells], f0.cells)
     n = pts.shape[0]
     mapped = torch.where(si1 < n, perm[si1.clamp_max(n - 1)], si1)
@@ -848,12 +851,12 @@ def test_box_test_ties_are_opened():
         torch.randperm(inner.numel(), generator=torch.Generator().manual_seed(1))[:400]
     ]
     q = _tie_queries(f, nodes, TREE_READ_THETA)
-    qi, si, _ = f.point_pairs(q, walk="reference")
+    qi, si, _ = point_pairs(f, q, walk="reference")
     admitted = (si == f.n_cells + nodes[qi]).sum()
     assert int(admitted) == 0
     ### A point a little beyond the tie (1 % farther) reads the node whole.
     far = _tie_queries(f, nodes, TREE_READ_THETA / 1.01)
-    qi, si, _ = f.point_pairs(far, walk="reference")
+    qi, si, _ = point_pairs(f, far, walk="reference")
     assert float((si == f.n_cells + nodes[qi]).sum()) >= 0.9 * nodes.numel()
 
 
@@ -907,7 +910,7 @@ def test_a_nearly_tied_frame_widens_the_separation_test_by_the_nodes_own_size(
         tree_read, "frame_rotation_bound", lambda x, wt, u: torch.zeros((), dtype=D)
     )
     exact = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA)
-    n_tied, n_exact = tied.point_pairs(q)[0].numel(), exact.point_pairs(q)[0].numel()
+    n_tied, n_exact = point_pairs(tied, q)[0].numel(), point_pairs(exact, q)[0].numel()
     assert n_tied <= 1.6 * n_exact, (n_tied, n_exact)
 
 
@@ -918,7 +921,7 @@ def _admitted_boxes_in(f, q, qi, si, frame_map):
     n = f.n_cells
     is_node = si >= n
     node = si[is_node] - n
-    cells, which = f.node_cells(node)
+    cells, which = node_cells(f, node)
     pts_f = frame_map(frame_coordinates(f._points - f.origin, f.frame))
     p = frame_map(frame_coordinates(q.double() - f.origin, f.frame))[qi[is_node]]
     lo = torch.full((node.numel(), 3), math.inf, dtype=D).scatter_reduce(
@@ -947,7 +950,7 @@ def test_admitted_nodes_are_separated_in_every_frame_within_the_rotation_bound(
     q, _, _, _ = cloud(150, d=3, seed=7, scale=(3.0, 3.0, 3.0))
     f = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA)
     f._points = pts
-    qi, si, n_node = f.point_pairs(q)
+    qi, si, n_node = point_pairs(f, q)
     assert n_node > 0
     g = torch.Generator().manual_seed(2)
     for k in range(6):
@@ -1133,6 +1136,156 @@ def test_tree_read_every_parameter_receives_a_gradient(randomize):
             for n_, p in m.named_parameters()
             if n_.startswith("kernel_reads") or n_.startswith("kernel_basis")
         )
+
+
+def _vertex_grad_forward(m, mesh, drv, q, autocast=False):
+    """The outputs of a forward pass whose boundary vertices require a gradient, and
+    that gradient of their sum."""
+    pts = mesh.points.clone().requires_grad_(True)
+    wall = Mesh(points=pts, cells=mesh.cells, cell_data=mesh.cell_data)
+    with torch.autocast(q.device.type, dtype=torch.bfloat16, enabled=autocast):
+        out = outputs(
+            m(
+                boundary_meshes={"wall": wall},
+                prediction_points=points_mesh(q),
+                global_data={"g": drv},
+            )
+        )
+    (grad,) = torch.autograd.grad(sum(o.float().sum() for o in out.values()), pts)
+    return {k: v.detach() for k, v in out.items()}, grad
+
+
+def _within_rerun(a, b, b_again) -> bool:
+    """``a`` equals ``b`` as a rerun of ``b`` does: bitwise where ``b`` repeats bitwise
+    (``b_again`` is its rerun), else within rounding: four times the rerun's largest
+    difference, and at least a thousand units in the last place of ``b``'s largest
+    entry, since two reruns alone do not bound the spread of a third."""
+    spread = (b - b_again).abs().max()
+    if spread == 0:
+        return torch.equal(a, b)
+    ulp = torch.finfo(b.dtype).eps * b.abs().max()
+    return bool((a - b).abs().max() <= torch.maximum(4 * spread, 1000 * ulp))
+
+
+def _spies(calls):
+    """Spies of ``_ClusterGeometry.apply`` and ``_NodeMeanWeights.apply`` that record
+    each call's Function in ``calls``, by Function."""
+    real = {
+        f: f.apply for f in (tree_read._ClusterGeometry, tree_read._NodeMeanWeights)
+    }
+
+    def spy(fn):
+        def apply(*args):
+            calls.append(fn)
+            return real[fn](*args)
+
+        return apply
+
+    return {f: spy(f) for f in real}
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize(
+    "dtype, autocast, compiled",
+    [
+        (torch.float32, False, False),
+        (torch.float64, False, False),
+        (torch.float32, True, False),
+        pytest.param(torch.float32, False, True, marks=pytest.mark.slow),
+    ],
+    ids=["float32", "float64", "bf16_autocast", "compiled_blocks"],
+)
+@pytest.mark.parametrize("theta", [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("measures", ["effective", "geometric"])
+def test_virtual_cells_gradient_leaves_the_forward_bitwise_unchanged(
+    measures, theta, dtype, autocast, compiled, device, monkeypatch
+):
+    """When the boundary's vertices require a gradient at ``theta > 0``, the read's
+    virtual cells take their cells' gradient (``_ClusterGeometry``, called once per
+    case), and so do the nodes' means of the cells' keys and values in the cells'
+    weights (``_NodeMeanWeights``, once per block). Both give the values as they are:
+    the outputs are those of the read whose virtual cells and means take no such
+    gradient, at ``theta`` 0.5 and 1, in float32, float64, bf16 autocast and with
+    compiled blocks, and the vertex gradient changes. At ``theta = 0`` no cluster is
+    read and neither runs: outputs and vertex gradient are the same. The cells'
+    measures are either given (``EFFECTIVE_MEASURE_KEY``, so the weights take no
+    gradient and the means' weights gradient never runs) or the cells' own, from the
+    vertices. "The same" is measured against a rerun of the read without the gradient:
+    bitwise where that rerun repeats bitwise (every CPU case, and float32 and bf16 on
+    CUDA), else within rounding as ``_within_rerun`` defines it (float64 on CUDA, whose
+    forward does not repeat bitwise run to run, at ``theta = 0`` too)."""
+    m = _model(3, theta, compile_blocks=compiled).to(device, dtype).eval()
+    mesh, drv, q = _case()
+    if measures == "geometric":
+        mesh = Mesh(points=mesh.points, cells=mesh.cells)
+    mesh, drv, q = mesh.to(device).to(dtype), drv.to(device, dtype), q.to(device, dtype)
+    calls = []
+    cells, means = tree_read._ClusterGeometry, tree_read._NodeMeanWeights
+    spies = _spies(calls)
+
+    def without_gradient(r, n, omega, forest, eps):
+        return forest.center, forest.normal, forest.measure
+
+    runs = []
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)  # the vertex gradient's CPU sums repeat on one thread
+    try:
+        for gradient in (True, False, False):
+            with monkeypatch.context() as mp:
+                mp.setattr(
+                    cells, "apply", spies[cells] if gradient else without_gradient
+                )
+                mp.setattr(
+                    means, "apply", spies[means] if gradient else lambda x, *_: x
+                )
+                runs.append(_vertex_grad_forward(m, mesh, drv, q, autocast))
+    finally:
+        torch.set_num_threads(threads)
+    (out, grad), (out_base, grad_base), (out_again, grad_again) = runs
+    assert calls.count(cells) == (1 if theta > 0 else 0)
+    live = theta > 0 and measures == "geometric"
+    assert calls.count(means) == (len(m.kernel_reads) if live else 0)
+    assert out.keys() == out_base.keys() == out_again.keys()
+    assert all(_within_rerun(out[k], out_base[k], out_again[k]) for k in out)
+    assert torch.isfinite(grad).all()
+    assert _within_rerun(grad, grad_base, grad_again) == (theta == 0.0)
+
+
+@pytest.mark.parametrize("vectors", [False, True], ids=["plain", "boundary_vectors"])
+def test_virtual_cells_take_no_gradient_work_in_training(vectors, monkeypatch):
+    """A training step (parameters requiring gradients, no boundary input requiring
+    one) never builds the virtual cells' gradient nor the means' gradient in the
+    cells' weights: neither ``_ClusterGeometry`` nor ``_NodeMeanWeights`` is called,
+    and the walk reads the forest's own tensors, as the read did before, with and
+    without a rank-1 boundary input (whose values require a gradient in training). A
+    vertex-gradient call runs each: once per case, and once per block, plus once per
+    case for the means of the rank-1 inputs."""
+    calls = []
+    cells, means = tree_read._ClusterGeometry, tree_read._NodeMeanWeights
+    for fn, spy in _spies(calls).items():
+        monkeypatch.setattr(fn, "apply", spy)
+    extra = {"boundary_schemas": {"wall": {"tr": {"rank": 1}}}} if vectors else {}
+    m = _model(3, TREE_READ_THETA, **extra).train()
+    mesh, drv, q = _case()
+    tr = torch.randn(
+        mesh.n_cells, 3, generator=torch.Generator().manual_seed(5), dtype=D
+    )
+    ### The measures from the vertices.
+    mesh = Mesh(
+        points=mesh.points, cells=mesh.cells, cell_data={"tr": tr} if vectors else {}
+    )
+    mesh, drv, q = mesh.to(torch.float32), drv.float(), q.float()
+    out = m(
+        boundary_meshes={"wall": mesh},
+        prediction_points=points_mesh(q),
+        global_data={"g": drv},
+    )
+    sum(v.square().sum() for v in outputs(out).values()).backward()
+    assert not calls
+    assert all(p.grad is not None for p in m.parameters())
+    _vertex_grad_forward(m, mesh, drv, q)
+    assert calls.count(cells) == 1
+    assert calls.count(means) == len(m.kernel_reads) + int(vectors)
 
 
 def test_tree_read_starts_as_no_update_and_is_live_everywhere():
@@ -1331,8 +1484,8 @@ def test_fast_walk_on_cuda_gives_the_reference_lists_in_the_reference_order(dim,
     pts, nrm, w, q = (t.to(dev) for t in (pts, nrm, w, q))
     f = BoundaryForest.build(pts, w, nrm, None, theta=TREE_READ_THETA)
     assert tree_read.resolve_walk("auto", q, TREE_READ_THETA, f) == "fast"
-    qi, si, n_node = f.point_pairs(q, walk="reference")
-    qi_f, si_f, n_node_f = f.point_pairs(q)
+    qi, si, n_node = point_pairs(f, q, walk="reference")
+    qi_f, si_f, n_node_f = point_pairs(f, q)
     assert torch.equal(qi_f, qi) and torch.equal(si_f, si)
     assert n_node_f == n_node > 0
 
@@ -1463,7 +1616,7 @@ def _check_fast_build(dim, dtype, device, autocast):
                 for b in ("reference", "fast")
             ]
             q = pts[:50] * 1.5 + 0.25
-            (qa, sa, na), (qb, sb, nb) = (f.point_pairs(q) for f in forests)
+            (qa, sa, na), (qb, sb, nb) = (point_pairs(f, q) for f in forests)
         ### The fast build follows the precision the reference builds in (under
         ### autocast too): _forest_differences compares dtypes as well as bits.
         assert not _forest_differences(*forests), (pts.shape[0], leaf)
@@ -1504,9 +1657,9 @@ def test_fast_forest_build_makes_its_trees_on_first_use():
     f = BoundaryForest.build(
         pts, w, nrm, None, theta=1.0, groups=torch.arange(1500) % 3, build="fast"
     )
-    fast = f.point_pairs(q, walk="fast")
+    fast = point_pairs(f, q, walk="fast")
     assert "_per_tree" not in vars(f)
-    ref = f.point_pairs(q, walk="reference")
+    ref = point_pairs(f, q, walk="reference")
     assert "_per_tree" in vars(f) and f.trees is f.trees
     assert len(f.trees) == len(f.tree_cells) == int(f.node_offset.shape[0]) - 1
     assert ref[2] == fast[2] > 0
@@ -1626,8 +1779,8 @@ def test_fast_forest_and_walk_are_the_reference_on_face_and_box_ties(device):
                     for k in ("reference", "fast")
                 )
                 lists = [
-                    ref.point_pairs(q, walk="reference"),
-                    fast.point_pairs(q, walk="fast"),
+                    point_pairs(ref, q, walk="reference"),
+                    point_pairs(fast, q, walk="fast"),
                 ]
             assert not _forest_differences(ref, fast), (i, autocast)
             (qa, sa, na), (qb, sb, nb) = lists
@@ -1645,8 +1798,8 @@ def test_fast_forest_and_walk_are_the_reference_on_face_and_box_ties(device):
     inner = (ref.left >= 0).nonzero().squeeze(-1)[:400]
     q = _tie_queries(ref, inner.cpu(), TREE_READ_THETA).to(device)
     (qa, sa, na), (qb, sb, nb) = (
-        ref.point_pairs(q, walk="reference"),
-        fast.point_pairs(q, walk="fast"),
+        point_pairs(ref, q, walk="reference"),
+        point_pairs(fast, q, walk="fast"),
     )
     assert na == nb and torch.equal(qa, qb) and torch.equal(sa, sb)
 
@@ -2116,6 +2269,43 @@ def test_fused_node_means_match_the_reference(dtype):
 
 @pytest.mark.cuda
 @requires_cuda_triton
+def test_fused_node_means_take_the_weights_gradient_as_the_reference():
+    """``read_node_means`` through the fused kernels, float32 on CUDA, on a forest of a
+    sphere: the means' gradient in the cells' weights repeats bitwise, and is the
+    reference node means' to float32 rounding (their forwards differ in the order of
+    each leaf's sum) and the float64 reference's to 1e-5 of the largest."""
+    from physicsnemo.experimental.models.isla import _fused_read as fused_read
+
+    mesh, _, _ = _sphere_case(n=3000, nq=10)
+    dev = torch.device("cuda")
+    pts = mesh.cell_centroids.float().to(dev)
+    nrm = mesh.cell_normals.float().to(dev)
+    w = mesh.cell_data[EFFECTIVE_MEASURE_KEY].float().to(dev)
+    omega = w / w.sum()
+    forest = BoundaryForest.build(pts, omega, nrm, None, theta=1.0)
+    g = torch.Generator(device=dev).manual_seed(6)
+    x0 = torch.randn(pts.shape[0], 96, generator=g, device=dev)
+    gout = torch.randn(forest.n_nodes, 96, generator=g, device=dev)
+
+    def weights_grad(kernel, dtype=torch.float32):
+        weights = omega.to(dtype, copy=True).requires_grad_(True)
+        x = x0.to(dtype, copy=True).requires_grad_(True)
+        tree_read.read_node_means(x, forest, weights, kernel).backward(gout.to(dtype))
+        return weights.grad
+
+    with ran(fused_read.fused_node_means, tree_read._NodeMeanWeights) as r:
+        fused, again = weights_grad("fused"), weights_grad("fused")
+    assert r.count(fused_read.fused_node_means) == 2
+    assert r.count(tree_read._NodeMeanWeights) == 2
+    assert torch.equal(fused, again)
+    ref = weights_grad("reference")
+    exact = weights_grad("reference", torch.float64)
+    assert (fused - ref).abs().max() <= 1e-5 * ref.abs().max()
+    assert (fused.double() - exact).abs().max() <= 1e-5 * exact.abs().max()
+
+
+@pytest.mark.cuda
+@requires_cuda_triton
 def test_fused_node_means_refuse_a_second_derivative():
     """The fused node means' backward is one Triton pass, not differentiable: a
     second backward pass through it raises instead of leaving out its term."""
@@ -2575,7 +2765,7 @@ def test_walk_of_a_range_of_points_is_those_rows_of_the_walk_of_every_point(
     assert lazy.lists == [None]
     qi, si, n_node = full.lists[0]
     with torch.autocast(device, dtype=torch.bfloat16, enabled=autocast):
-        ref = full.forests[0].point_pairs(q, walk=walk)  # the forest's own walk
+        ref = point_pairs(full.forests[0], q, walk=walk)  # the forest's own walk
     assert torch.equal(ref[0], qi) and torch.equal(ref[1], si) and ref[2] == n_node
     assert 0 < n_node < qi.numel()
     counts = tree_read.walk_pair_counts(lazy)
@@ -2679,7 +2869,7 @@ def test_fused_kernel_basis_matches_the_reference_basis(
     geo_c, plan_c = _to(geometry, dev, torch.float32), _to(plan, dev, torch.float32)
     basis_c = copy.deepcopy(basis).float().to(dev)
     assert fused_basis.unsupported_reason(basis_c, geo_c) is None
-    inv = fused_basis.pair_invariants(plan_c.qi, plan_c.bj, 0, 0, geo_c)
+    inv = pair_invariants(plan_c.qi, plan_c.bj, 0, 0, geo_c)
     inv_ref = tree_pair_invariants(plan_c.qi.long(), plan_c.bj.long(), **geo_c)
     assert torch.allclose(inv, inv_ref, rtol=1e-6, atol=1e-6)
     seed_c = seed.float().to(dev)
@@ -2837,7 +3027,7 @@ def test_tree_read_pairs_fused_takes_the_reference_basis_when_the_geometry_requi
 @pytest.mark.cuda
 @requires_cuda_triton
 def test_tree_read_pairs_fused_on_cuda_builds_the_basis_in_the_fused_kernel(
-    monkeypatch,
+    monkeypatch, no_tf32_matmul
 ):
     """On CUDA ``tree_read_pairs(kernel="fused")`` builds the basis with the fused
     basis kernel: the reference's plan, and its basis to float32 roundoff; so does
@@ -2916,7 +3106,7 @@ def test_a_forced_reference_runs_the_cluster_trees_torch_code(device, monkeypatc
         forest = BoundaryForest.build(
             pts, w / w.sum(), nrm, None, theta=0.5, build=kind
         )
-        forest.point_pairs(q, walk=kind)
+        point_pairs(forest, q, walk=kind)
         if kind == "reference":
             assert {s[0] for s in seen} == {"_resolve_build", "_resolve_walk"}
             assert all(s[1:] == ("torch", "torch") for s in seen), seen

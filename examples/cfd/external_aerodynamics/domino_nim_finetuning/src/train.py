@@ -62,8 +62,27 @@ from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.models.domino.utils import *
 
 # This is included for GPU memory tracking:
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+from pynvml import (
+    NVMLError_NotSupported,
+    nvmlInit,
+    nvmlDeviceGetHandleByIndex,
+    nvmlDeviceGetMemoryInfo,
+)
 import time
+
+
+def gpu_bytes_in_use(gpu_handle) -> int:
+    """Bytes of memory in use on the GPU behind ``gpu_handle``.
+
+    NVML cannot report memory on GPUs that share system memory with the CPU
+    (for example DGX Spark, GB10) and raises ``NVMLError_NotSupported``. Fall
+    back to CUDA's view of the current device there."""
+    try:
+        return nvmlDeviceGetMemoryInfo(gpu_handle).used
+    except NVMLError_NotSupported:
+        free, total = torch.cuda.mem_get_info()
+        return total - free
+
 
 # Initialize NVML
 nvmlInit()
@@ -673,7 +692,7 @@ def train_epoch(
     last_loss = 0.0
     loss_interval = 1
 
-    gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+    gpu_start_bytes = gpu_bytes_in_use(gpu_handle)
     start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
         sampled_batched = dict_to_device(sample_batched, device)
@@ -717,9 +736,9 @@ def train_epoch(
         running_loss += loss.item()
         elapsed_time = time.perf_counter() - start_time
         start_time = time.perf_counter()
-        gpu_end_info = nvmlDeviceGetMemoryInfo(gpu_handle)
-        gpu_memory_used = gpu_end_info.used / (1024**3)
-        gpu_memory_delta = (gpu_end_info.used - gpu_start_info.used) / (1024**3)
+        gpu_end_bytes = gpu_bytes_in_use(gpu_handle)
+        gpu_memory_used = gpu_end_bytes / (1024**3)
+        gpu_memory_delta = (gpu_end_bytes - gpu_start_bytes) / (1024**3)
 
         logging_string = f"Device {device}, batch processed: {i_batch + 1}\n"
         # Format the loss dict into a string:
@@ -737,7 +756,7 @@ def train_epoch(
         logging_string += f"  GPU memory delta: {gpu_memory_delta:.3f} Gb\n"
         logging_string += f"  Time taken: {elapsed_time:.2f} seconds\n"
         logger.info(logging_string)
-        gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+        gpu_start_bytes = gpu_bytes_in_use(gpu_handle)
 
     last_loss = running_loss / (i_batch + 1)  # loss per batch
     if dist.rank == 0:
