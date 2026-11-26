@@ -874,12 +874,10 @@ def _compile_recording(module: torch.nn.Module, backend: str):
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("backend", ["aot_eager", "inductor"])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16], ids=str)
-def test_compile_sdpa_plain_q_sharded_kv_flash(
-    distributed_mesh, monkeypatch, dtype, backend
-):
+def test_compile_sdpa_plain_q_sharded_kv_flash(distributed_mesh, dtype, backend):
     r"""Half-precision ``torch.compile`` of plain ``q`` vs Shard(2) ``k``/``v``.
 
-    ``auto`` must select the flash kernel (forward and backward) inside the
+    The selector must pick the flash kernel (forward and backward) inside the
     compiled graph, with no graph break (``fullgraph=True``), and the compiled
     output and ``q``/``k``/``v`` gradients must match eager.
     """
@@ -889,7 +887,6 @@ def test_compile_sdpa_plain_q_sharded_kv_flash(
         _replicated_q_sdpa_backend,
     )
 
-    monkeypatch.setenv("PHYSICSNEMO_DP_SDPA_BACKEND", "auto")
     dm = DistributedManager()
     batch_size, num_heads, n_latents, seq_len, head_dim = 2, 4, 16, 1001, 32
     torch.manual_seed(11)
