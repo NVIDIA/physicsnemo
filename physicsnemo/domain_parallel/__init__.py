@@ -95,7 +95,7 @@ if ST_AVAILABLE:
             )
             from .shard_utils import register_shard_wrappers
 
-        register_shard_wrappers()
+            register_shard_wrappers()
 
     # Protect the automatic imports by checking cuda is available.
     if torch.cuda.is_available():

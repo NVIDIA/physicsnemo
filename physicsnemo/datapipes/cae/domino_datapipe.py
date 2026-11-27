@@ -900,18 +900,15 @@ class DoMINODataPipe(Dataset):
         """
 
         # This is a step to make sure we can apply to sharded outputs:
-        if is_shard_tensor(volume_fields) or is_shard_tensor(surface_fields):
-            from physicsnemo.domain_parallel import ShardTensor
-
-        if volume_fields is not None and is_shard_tensor(volume_fields):
+        if is_shard_tensor(volume_fields):
             volume_spec = volume_fields._spec
-            volume_fields = ShardTensor.to_local(volume_fields)
+            volume_fields = volume_fields.to_local()
         else:
             volume_spec = None
 
-        if surface_fields is not None and is_shard_tensor(surface_fields):
+        if is_shard_tensor(surface_fields):
             surface_spec = surface_fields._spec
-            surface_fields = ShardTensor.to_local(surface_fields)
+            surface_fields = surface_fields.to_local()
         else:
             surface_spec = None
 
@@ -933,6 +930,9 @@ class DoMINODataPipe(Dataset):
                 surf_min = self.config.surface_factors[1]
                 surf_max = self.config.surface_factors[0]
                 surface_fields = unnormalize(surface_fields, surf_max, surf_min)
+
+        if volume_spec is not None or surface_spec is not None:
+            from physicsnemo.domain_parallel import ShardTensor
 
         if volume_spec is not None:
             volume_fields = ShardTensor.from_local(

@@ -579,6 +579,16 @@ def is_shard_tensor(value: Any) -> bool:
 
     No ShardTensor exists before ``physicsnemo.domain_parallel`` is imported,
     so this is ``False`` on a torch where that import fails.
+
+    Parameters
+    ----------
+    value : Any
+        Object to test.
+
+    Returns
+    -------
+    bool
+        ``True`` if *value* is a ShardTensor (or a subclass instance).
     """
     module = sys.modules.get("physicsnemo.domain_parallel.shard_tensor")
     cls = getattr(module, "ShardTensor", None)
