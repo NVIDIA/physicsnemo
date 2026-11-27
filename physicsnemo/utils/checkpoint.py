@@ -92,13 +92,15 @@ def _unwrap_ddp_compile(
         (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel),
     ):
         model = model.module
-    if isinstance(model, torch._dynamo.eval_frame.OptimizedModule):
+    # ``torch.compile`` registers the module it wraps as the child ``_orig_mod``
+    orig_mod = dict(model.named_children()).get("_orig_mod")
+    if orig_mod is not None:
         if loading:
             checkpoint_logging.warning(
-                f"Model {type(model._orig_mod).__name__} is already compiled, "
+                f"Model {type(orig_mod).__name__} is already compiled, "
                 "consider loading first and then compiling."
             )
-        model = model._orig_mod
+        model = orig_mod
     return model
 
 
@@ -870,7 +872,7 @@ def save_checkpoint(
     # Prepare models and detect distributed mode
     named_models: dict[str, torch.nn.Module] = {}
     is_distributed = False
-    if models:
+    if models is not None:
         if not isinstance(models, list):
             models = [models]
         named_models = _unique_model_names(models)
@@ -1153,7 +1155,7 @@ def load_checkpoint(
     # Prepare models and detect distributed mode
     named_models: dict[str, torch.nn.Module] = {}
     is_distributed = False
-    if models:
+    if models is not None:
         if not isinstance(models, list):
             models = [models]
         named_models = _unique_model_names(models, loading=True)

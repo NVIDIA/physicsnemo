@@ -591,9 +591,11 @@ class Module(torch.nn.Module):
                     f"File name must end with {self._file_extension} extension"
                 )
 
-        # Strip out torch dynamo wrapper
-        if isinstance(self, torch._dynamo.eval_frame.OptimizedModule):
-            self._orig_mod.save(file_name, verbose)
+        # Strip out the ``torch.compile`` wrapper, whose child ``_orig_mod`` is
+        # the module it wraps
+        orig_mod = dict(self.named_children()).get("_orig_mod")
+        if orig_mod is not None:
+            orig_mod.save(file_name, verbose)
             return
 
         pkg_info = get_physicsnemo_pkg_info()

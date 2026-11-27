@@ -511,6 +511,41 @@ def test_compiled_model_checkpointing(
     assert torch.allclose(original_output, new_output, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize(
+    "model_generator",
+    [lambda: FullyConnected(4, 8, 4, num_layers=2), lambda: nn.Linear(4, 4)],
+    ids=["physicsnemo", "pytorch"],
+)
+def test_checkpoint_single_compiled_model(tmp_path, model_generator):
+    """A compiled model passed on its own saves and loads like the plain model."""
+    from physicsnemo.utils.checkpoint import _extract_mdlus_state_dict
+
+    def saved_state_dicts(path):
+        return {
+            f: _extract_mdlus_state_dict(str(path / f), "cpu")
+            if f.endswith(".mdlus")
+            else torch.load(path / f, weights_only=False)
+            for f in sorted(os.listdir(path))
+        }
+
+    model = model_generator()
+    compiled = torch.compile(model, backend="eager")
+    save_checkpoint(str(tmp_path / "plain"), models=model, epoch=1)
+    save_checkpoint(str(tmp_path / "compiled"), models=compiled, epoch=1)
+
+    plain = saved_state_dicts(tmp_path / "plain")
+    saved = saved_state_dicts(tmp_path / "compiled")
+    assert plain.keys() == saved.keys()
+    for name, state_dict in saved.items():
+        assert state_dict.keys() == plain[name].keys()
+
+    # Round trip into a fresh compiled model
+    restored = torch.compile(model_generator(), backend="eager")
+    load_checkpoint(str(tmp_path / "compiled"), models=restored, epoch=1)
+    for p, q in zip(model.parameters(), restored.parameters()):
+        torch.testing.assert_close(p, q)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 @pytest.mark.parametrize(
     "kwargs, step_device",
