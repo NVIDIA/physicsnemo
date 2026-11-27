@@ -39,6 +39,7 @@ from metrics import DEFAULT_METRICS, MetricCalculator, resolve_metrics
 from omegaconf import OmegaConf
 from tensordict import TensorDict
 from utils import (
+    build_muon_optimizer,
     get_autocast_context,
     make_jsonl_logger,
     recursive_to_device,
@@ -283,3 +284,21 @@ def test_resolve_dict():
     assert resolve_dict(cfg, "a") == {"b": 1}
     assert resolve_dict(cfg, "empty") is None  # empty -> None
     assert resolve_dict(cfg, "missing") is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_build_muon_optimizer_passes_muon_cuda_graph():
+    """``training.optimizer.muon_cuda_graph`` reaches Muon, which then captures
+    its graph inside the compiled ``CombinedOptimizer``."""
+    model = torch.nn.Sequential(
+        torch.nn.Linear(8, 16), torch.nn.GELU(), torch.nn.Linear(16, 4)
+    ).cuda()
+    cfg = OmegaConf.create(
+        {"training": {"optimizer": {"lr": 1e-3, "muon_cuda_graph": True}}}
+    )
+    opt = build_muon_optimizer(model, cfg, compile_optimizer=True)
+    for _ in range(3):
+        opt.zero_grad()
+        model(torch.randn(32, 8, device="cuda")).square().mean().backward()
+        opt.step()
+    assert opt.optimizers[0]._graph is not None
