@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every step without stalling the next one. It packs each call's scalars into
   one buffer, can average them across ranks, and copies them to the host in
   one transfer.
+- `physicsnemo.optim.Muon(cuda_graph=True)` replays its momentum and
+  Newton-Schulz kernels as one CUDA graph, which saves host time and keeps the
+  eager step's results bit for bit, also under a learning-rate schedule. The
+  unified external-aero recipe exposes it as
+  `training.optimizer.muon_cuda_graph`, off by default.
 
 ### Changed
 
@@ -116,12 +121,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constructing a head raises an installation error if it is missing.
 - Adds `GeoTransolver.forward_with_geometry_features` for predictions and detached
   geometry tokens in one pass, preserving the existing `forward` API.
-- `physicsnemo.optim.Muon` takes an optional `cuda_graph` flag that replays
-  its momentum and Newton-Schulz kernels as one CUDA graph, saving host time
-  with results equal to the eager step's bit for bit. A schedule that changes
-  only the learning rate replays the same graph, and the unified external-aero
-  recipe exposes the flag as `training.optimizer.muon_cuda_graph`, off by
-  default, and a step that cannot be captured warns once and runs eagerly.
 - Strata depthwise conditioning convolutions automatically size vmap chunks
   to the 32-bit indexing limit via `DepthwiseConv(chunk_size="auto")`.
 - `MeshDataset(cache_host=True)` reads each sample once and serves repeats from
