@@ -190,12 +190,14 @@ class Muon(_TorchMuon):
         another hyperparameter changes (such as ``momentum``, which
         ``OneCycleLR`` cycles by default), and after loading a state dict. A
         capture synchronizes the device and empties PyTorch's memory caches, so
-        it costs more than an eager step. It runs on a stream from torch's
-        high-priority pool, which torch's data loaders and DDP do not use. The
-        replayed kernels keep that priority, so when other streams run kernels
-        at the same time, the GPU starts the step's blocks first. Needs CUDA
-        parameters. Holds copies of the gradients and of the orthogonalized
-        updates, each the size of the parameters, and the graph's memory pool.
+        it costs more than an eager step. If a capture fails, other than by
+        running out of memory, Muon warns once and steps eagerly from then on.
+        It runs on a stream from torch's high-priority pool, which torch's data
+        loaders and DDP do not use. The replayed kernels keep that priority, so
+        when other streams run kernels at the same time, the GPU starts the
+        step's blocks first. Needs CUDA parameters. Holds copies of the
+        gradients and of the orthogonalized updates, each the size of the
+        parameters, and the graph's memory pool.
         Under ``torch.compile`` the step runs outside the compiled region, so
         the graph replaces compiling it. Default False.
 
@@ -307,7 +309,8 @@ class Muon(_TorchMuon):
         :meth:`_apply_updates`). The eager step runs instead in two cases. One
         is while any parameter with a gradient has no momentum buffer, so no
         buffer is created inside a capture. The other is inside a capture the
-        caller started, which then records the eager step. Under
+        caller started, which then records the eager step. A capture that
+        fails ends cleanly, warns, and turns ``cuda_graph`` off. Under
         ``torch.compile`` this method runs outside the compiled region.
         """
         if torch.cuda.is_current_stream_capturing():
@@ -376,14 +379,23 @@ class Muon(_TorchMuon):
                             warnings.catch_warnings(action="ignore"),
                         ):
                             graph.capture_end()
-                raise RuntimeError(
+                if isinstance(e, torch.OutOfMemoryError):
+                    raise
+                # A capture launches nothing, so the step that failed to
+                # capture runs eagerly below, and so do all later steps.
+                warnings.warn(
                     "Muon(cuda_graph=True) could not capture its step as a CUDA "
-                    "graph (a host sync inside the step cannot be captured); use "
-                    "cuda_graph=False"
-                ) from e
+                    f"graph on torch {torch.__version__} ({type(e).__name__}: {e}); "
+                    "it steps eagerly from now on (the same update, more launches)",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                self.cuda_graph = False
             finally:
                 for p, g in zip(params, grads):
                     p.grad = g
+            if not self.cuda_graph:
+                return self._step()
             self._graph, self._graph_key, self._graph_grads = graph, key, graph_grads
             self._graph_updates = updates
         # Capturing launches nothing, so the step also runs here after a capture.
