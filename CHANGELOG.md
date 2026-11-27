@@ -23,9 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one buffer, can average them across ranks, and copies them to the host in
   one transfer.
 - `physicsnemo.optim.Muon(cuda_graph=True)` replays its momentum and
-  Newton-Schulz kernels as one CUDA graph, which saves host time and keeps the
-  eager step's results bit for bit, also under a learning-rate schedule. The
-  unified external-aero recipe exposes it as
+  Newton-Schulz kernels as one CUDA graph, which saves host time and matches
+  the eager step bit for bit, with or without a learning-rate schedule. The
+  unified external aerodynamics recipe exposes it as
   `training.optimizer.muon_cuda_graph`, off by default.
 
 ### Changed

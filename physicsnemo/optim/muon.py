@@ -61,12 +61,12 @@ _NOT_IN_GRAPH_KEY = frozenset({"params", "lr", "weight_decay", "adjust_lr_fn"})
 def _adjust_lr(lr: float, adjust_lr_fn: str | None, shape: torch.Size) -> float:
     """Learning rate of a parameter under :class:`torch.optim.Muon`'s rule.
 
-    Uses the formulas of its documentation in its own arithmetic, rather than
-    its private helper: ``sqrt(max(1, A / B))`` for ``"original"`` or ``None``,
-    ``0.2 * sqrt(max(A, B))`` for ``"match_rms_adamw"``, and ``sqrt(A / B)``
-    for ``"spectral_unclamped"`` (torch 2.14 and later). It raises for any
-    other name, so an option that a later torch adds cannot change the step
-    silently.
+    Computes the formulas that :class:`torch.optim.Muon` documents, rather
+    than calling its private helper: ``sqrt(max(1, A / B))`` for
+    ``"original"`` or ``None``, ``0.2 * sqrt(max(A, B))`` for
+    ``"match_rms_adamw"``, and ``sqrt(A / B)`` for ``"spectral_unclamped"``
+    (torch 2.14 and later). It raises for any other name, so an option that a
+    later torch adds cannot change the step silently.
 
     Parameters
     ----------
@@ -212,9 +212,9 @@ class Muon(_TorchMuon):
         ``"original"``).
     cuda_graph : bool, optional
         Replay the momentum update and the Newton-Schulz orthogonalization as
-        one CUDA graph, which saves host time and keeps the eager step's
-        result bit for bit (see Notes). Needs every parameter on one CUDA
-        device. Default False.
+        one CUDA graph. It saves host time at the cost of extra GPU memory, and
+        the result equals the eager step's bit for bit (see Notes). Needs every
+        parameter on one CUDA device. Default False.
 
     Forward
     -------
@@ -229,15 +229,17 @@ class Muon(_TorchMuon):
     See :class:`torch.optim.Muon` for the full algorithm description.
 
     With ``cuda_graph=True``, the weight decay and the update run after each
-    replay, so a scheduler's new ``lr``, ``weight_decay`` or ``adjust_lr_fn``
+    replay, so a scheduler's new ``lr``, ``weight_decay``, or ``adjust_lr_fn``
     replays the same graph. Other changes, such as new parameters with
-    gradients, a new ``momentum`` or a loaded state dict, need a new capture,
-    which synchronizes the device and empties PyTorch's memory caches. Muon
-    captures only once such a change has held for a step, so a schedule that
-    changes ``momentum`` every step, as ``OneCycleLR`` does by default, runs
-    eagerly. The graph keeps copies of the gradients and of the orthogonalized
-    updates. A failed capture warns and turns ``cuda_graph`` off. Under
-    ``torch.compile``, the graph step runs outside the compiled region.
+    gradients, a new ``momentum``, or a loaded state dict, need a new capture,
+    which synchronizes the device and empties PyTorch's memory caches. So Muon
+    captures only once such a change has held for a step, first on the third
+    step, and a schedule that changes ``momentum`` every step, as ``OneCycleLR``
+    does by default, runs eagerly. The graph keeps copies of the gradients and
+    of the orthogonalized updates, each the size of the parameters. If a
+    capture fails, Muon warns, turns ``cuda_graph`` off, and steps on without
+    the graph. Under ``torch.compile``, the graph step runs outside the
+    compiled region.
 
     .. important::
         The fused path stacks equally-shaped matrices and orthogonalizes them
