@@ -81,16 +81,20 @@ def test_matches_torch_muon(device, nesterov, adjust_lr_fn):
         torch.testing.assert_close(fused_p, ref_p, atol=1e-3, rtol=1e-3)
 
 
-def test_lazy_adjust_lr_proxy_resolves():
-    """The private torch._adjust_lr is reachable via the lazy OptionalImport.
+def test_adjust_lr_matches_torch():
+    """The local learning-rate adjustment (the formulas of torch.optim.Muon's
+    documentation) equals torch's private helper, where torch has it, bit for bit."""
+    from physicsnemo.optim.muon import _adjust_lr
 
-    physicsnemo.optim.muon imports torch.optim._muon lazily so a future
-    rename/removal fails at step() runtime rather than at module import time.
-    This asserts the proxy resolves the symbol on the installed torch.
-    """
-    from physicsnemo.optim.muon import _torch_muon_internal
-
-    assert callable(_torch_muon_internal._adjust_lr)
+    private = getattr(pytest.importorskip("torch.optim._muon"), "_adjust_lr", None)
+    if private is None:
+        pytest.skip("this torch has no torch.optim._muon._adjust_lr")
+    for fn in (None, "original", "match_rms_adamw", "unknown"):
+        for shape in ((8, 8), (8, 24), (96, 16), (3, 7, 5)):
+            for lr in (0.02, 1e-3, 0.1):
+                assert _adjust_lr(lr, fn, torch.Size(shape)) == private(
+                    lr, fn, torch.Size(shape)
+                )
 
 
 def test_group_params_by_shape(device):

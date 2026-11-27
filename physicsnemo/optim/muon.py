@@ -39,6 +39,7 @@ checkpoints remain interchangeable.
 from __future__ import annotations
 
 import contextlib
+import math
 import warnings
 from collections import defaultdict
 from typing import Callable
@@ -47,17 +48,28 @@ import torch
 from torch import Tensor
 from torch.optim import Muon as _TorchMuon
 
-from physicsnemo.core.version_check import OptionalImport
-
-# Prevent import errors against internal API changes:
-_torch_muon_internal = OptionalImport("torch.optim._muon")
-
 __all__ = ["Muon"]
 
 # The param-group entries left out of Muon(cuda_graph=True)'s graph key: the
 # graph does not read them (the parameters enter the key through their data
 # pointers), so changing them needs no new capture.
 _NOT_IN_GRAPH_KEY = frozenset({"params", "lr", "weight_decay", "adjust_lr_fn"})
+
+
+def _adjust_lr(lr: float, adjust_lr_fn: str | None, shape: torch.Size) -> float:
+    """The learning rate of a ``shape`` parameter under :class:`torch.optim.Muon`'s
+    ``adjust_lr_fn``, by the formulas of its documentation (``"original"`` or
+    ``None``: ``sqrt(max(1, A / B))``, ``"match_rms_adamw"``:
+    ``0.2 * sqrt(max(A, B))``) in its own arithmetic, rather than through its
+    private helper."""
+    a, b = shape[:2]
+    if adjust_lr_fn is None or adjust_lr_fn == "original":
+        ratio = math.sqrt(max(1, a / b))
+    elif adjust_lr_fn == "match_rms_adamw":
+        ratio = 0.2 * math.sqrt(max(a, b))
+    else:
+        ratio = 1.0
+    return lr * ratio
 
 
 def _batched_newton_schulz(
@@ -394,9 +406,7 @@ class Muon(_TorchMuon):
                 lr = lr.item()
             torch._foreach_mul_(params, 1 - lr * group["weight_decay"])
             for shape, group_params, ortho_list in shape_updates:
-                adjusted_lr = _torch_muon_internal._adjust_lr(
-                    lr, group["adjust_lr_fn"], torch.Size(shape)
-                )
+                adjusted_lr = _adjust_lr(lr, group["adjust_lr_fn"], torch.Size(shape))
                 torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
 
     def _step(
@@ -443,9 +453,23 @@ class Muon(_TorchMuon):
             grads: list[Tensor] = []
             momentum_bufs: list[Tensor] = []
 
-            # Reuse the upstream collector: it appends params/grads, rejects
-            # complex/sparse, and lazily initializes the momentum_buffer state.
-            self._init_group(group, params_with_grad, grads, momentum_bufs)
+            # The parameters with a gradient, their gradients and momentum
+            # buffers (zero on first use), as torch.optim.Muon collects them.
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                if torch.is_complex(p):
+                    raise RuntimeError("Muon does not support complex parameters")
+                if p.grad.is_sparse:
+                    raise RuntimeError("Muon does not support sparse gradients")
+                params_with_grad.append(p)
+                grads.append(p.grad)
+                state = self.state[p]
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = torch.zeros_like(
+                        p.grad, memory_format=torch.preserve_format
+                    )
+                momentum_bufs.append(state["momentum_buffer"])
 
             if not params_with_grad:
                 continue
@@ -489,9 +513,7 @@ class Muon(_TorchMuon):
                 if deferred is not None:
                     shape_updates.append((shape, group_params, ortho_list))
                     continue
-                adjusted_lr = _torch_muon_internal._adjust_lr(
-                    lr, adjust_lr_fn, torch.Size(shape)
-                )
+                adjusted_lr = _adjust_lr(lr, adjust_lr_fn, torch.Size(shape))
                 torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
 
         return loss
