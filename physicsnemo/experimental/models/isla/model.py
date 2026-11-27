@@ -138,7 +138,7 @@ but no rank: :math:`e_\theta(\hat u, \hat a)` is :math:`-\hat a` projected off
 :math:`\hat u`, so it lies in the span of :math:`\hat u` and :math:`\hat a`, and
 the true vectors span at most :math:`K + 2` directions. With no global direction
 in three dimensions, every even-parity vector output therefore lies in the plane
-of :math:`\hat n` and :math:`\hat u` (a known limit, ``test_isla_heads.py``).
+of :math:`\hat n` and :math:`\hat u` (a known limit).
 
 **The frame.** ISLA has no frame origin: positions enter only as point-to-anchor
 differences. The one length scale :math:`L` is the measure-weighted
@@ -332,7 +332,7 @@ blocks take plain tensors.
 
 The surface task's whole model, ``Mesh`` inputs and output included, compiles with
 ``model.compile(fullgraph=True, dynamic=True)`` into one graph for every boundary
-count, boundary inputs up to rank 2 (``test_isla_compile.py``). **Compile it with**
+count, boundary inputs up to rank 2. **Compile it with**
 :meth:`~physicsnemo.experimental.models.isla.ISLA.compile`, **not** ``torch.compile(model)``: on torch 2.13
 Inductor's default options make the compiled model compute a different function
 wherever it runs the eager geometry region, without an error or a warning. The interior task
@@ -860,15 +860,21 @@ class ISLA(Module):
         dimensions, 0.77 in two), the default included, the coherence test
         rejects no cluster. At :math:`\theta > 0` the read is piecewise smooth:
         the output jumps where a cluster's admission changes, in the point and in
-        the boundary's vertices, and a cluster's position and normal take no
-        gradient. At 0 the read is smooth, and the model's derivatives in the
-        prediction points and in the boundary's vertices are complete. When the
-        interior task keeps fewer boundary tokens than cells, the kept set
-        changes in jumps as the vertices move, and the vertex derivative holds
-        the kept cells and their inclusion probabilities fixed (the token draw,
-        in the module docstring). Read a model at the angle it was trained
-        at: a cluster's aggregate is what the kernel learns to read. A finite
-        number at least 0; a surface task takes only the default.
+        the boundary's vertices. Between the jumps a cluster's position, normal,
+        measure and means of the cells' values take their cells' gradient, the
+        cells' weights included. Its means of the boundary's vector inputs take
+        their weights' gradient alone: those inputs come from learned maps, and a
+        gradient in them would change training. With more than one
+        declared condition, a cluster's share shift (the per-condition quadrature,
+        module docstring) takes no gradient from its condition's total measure. At
+        0 the read is smooth, and the model's derivatives in the prediction points
+        and in the boundary's vertices are complete. When the interior task keeps
+        fewer boundary tokens than cells, the kept set changes in jumps as the
+        vertices move, and the vertex derivative holds the kept cells and their
+        inclusion probabilities fixed (the token draw, in the module docstring).
+        Read a model at the angle it was trained at: a cluster's aggregate is what
+        the kernel learns to read. A finite number at least 0; a surface task
+        takes only the default.
     tree_read_leaf_size : int, optional, default=4
         Interior task only: the boundary cells per leaf of the read's trees. At
         :math:`\theta > 0` a leaf that is not read as a cluster is read cell by
@@ -1277,7 +1283,7 @@ class ISLA(Module):
         self._global_scalar_layout = _schema_layout({k: () for k in self._global_scalar_names})
         ### The execution choices (module docstring, *Kernels*), resolved at the first
         ### forward pass (_resolve_geo_kernel, _resolve_geometry_kernel); reference_kernels
-        ### sets them, and tests force one.
+        ### sets them.
         self._geo_kernel = "auto"
         self._geometry_kernel = "auto"
         ### How much of their default saved activations the compiled blocks
@@ -2795,12 +2801,14 @@ class QueryChunks:
             self._surface = (self._leaf(self._surface[0]), self._surface[1])
             if self._scales is not None:
                 self._scales = {k: self._leaf(v) for k, v in self._scales.items()}
-            ### The read's sources too: their pair invariants take a gradient when the geometry requires one.
+            ### The read's sources too: their pair invariants take a gradient when the geometry requires one, and
+            ### their log measures take one when the cells' measures do (from the vertices, or given).
             sources = ("src_r", "src_n", "src_vecs", "g_unit")
             self._walk.geometry = [
                 {k: self._leaf(v) if k in sources and v is not None else v for k, v in g.items()}
                 for g in self._walk.geometry
             ]
+            self._walk.src_logm = [self._leaf(t) for t in self._walk.src_logm]
         ### The blocks' log weights take the shift (the forest took the raw ones); each
         ### chunk's read takes the cells' and the conditions' shifts as leaves.
         self._log_shift = self._condition_shift = None

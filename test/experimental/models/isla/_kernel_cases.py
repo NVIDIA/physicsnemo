@@ -16,19 +16,26 @@
 
 """Cases shared by the ISLA kernel tests: the kernel basis's geometry, plan and MLP,
 its chunked basis and gradients, a move of a case to a device and dtype, the 2x-error
-rule of a fast kernel against its eager reference, a fused-read case, and a CPU
-stand-in read for the fused read's basis-gradient sink."""
+rule of a fast kernel against its eager reference, a fused-read case, a CPU stand-in
+read for the fused read's basis-gradient sink, the tree read's pairs in one call, a
+forest's walk of points and its nodes' cells, and the fused kernels' invariants alone."""
 
 import types
 
 import torch
 
+from physicsnemo.experimental.models.isla import _fused_basis as fused_basis
 from physicsnemo.experimental.models.isla import _fused_read as fused_read
 from physicsnemo.experimental.models.isla import _tree_read as tree_read
 from physicsnemo.experimental.models.isla._tree_read import (
+    TreeReadPairs,
     _KernelBasis,
     kernel_geo_width,
+    tree_read_walk,
+    walk_range_pairs,
 )
+from physicsnemo.experimental.models.isla._triton import HAS_TRITON, tl, triton
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
 D = torch.float64
 
@@ -148,3 +155,58 @@ class _SinkRead(torch.autograd.Function):
         if acc is not None:
             acc += dout @ w
         return None, None if acc is None else basis.new_empty(0), None, dout.t() @ basis
+
+
+def tree_read_pairs(basis: _KernelBasis, **inputs) -> TreeReadPairs:
+    """The tree read's pairs of every point of a batch of cases, with their kernel
+    basis: :func:`walk_range_pairs` of :func:`tree_read_walk` (which takes the
+    keyword arguments), as the model composes them."""
+    return walk_range_pairs(basis, tree_read_walk(**inputs))
+
+
+def point_pairs(forest, points, walk="auto"):
+    """Every point's list ``(qi, si, n_node)`` of ``forest`` for points in the case's
+    coordinates: :meth:`~physicsnemo.experimental.models.isla._tree_read.BoundaryForest.frame_pairs`
+    of :meth:`~physicsnemo.experimental.models.isla._tree_read.BoundaryForest.frame_points`."""
+    return forest.frame_pairs(forest.frame_points(points), walk)
+
+
+def node_cells(forest, nodes):
+    """The cells of the listed nodes of ``forest``: ``(cell, which)`` with ``which``
+    the index into ``nodes`` each cell belongs to."""
+    pos, which = _ragged_arange(forest.range_start[nodes], forest.range_count[nodes])
+    return forest.cells[pos], which
+
+
+if HAS_TRITON:
+    _invariants, _pair_rows = fused_basis._invariants, fused_basis._pair_rows
+
+    # fmt: off
+    @triton.jit
+    def _inv_kernel(
+        qi_ptr, si_ptr, n, q_off, s_off, qr_ptr, qn_ptr, qw_ptr, sr_ptr, sn_ptr, sv_ptr, g_ptr, out_ptr, eps,
+        D: tl.constexpr, K: tl.constexpr, PB: tl.constexpr, G: tl.constexpr, GP: tl.constexpr, BLOCK: tl.constexpr,
+    ):
+        """One tile's invariants ``(BLOCK, G)`` float32 (:func:`pair_invariants`)."""
+        p, msk, qi, si = _pair_rows(qi_ptr, si_ptr, tl.program_id(0).to(tl.int64), n, q_off, s_off, BLOCK)
+        inv = _invariants(qi, si, msk, qr_ptr, qn_ptr, qw_ptr, sr_ptr, sn_ptr, sv_ptr, g_ptr, eps, D, K, PB, GP, BLOCK)
+        cc = tl.arange(0, GP)
+        tl.store(out_ptr + p[:, None] * G + cc[None, :], inv, mask=msk[:, None] & (cc < G)[None, :])
+    # fmt: on
+
+
+def pair_invariants(qi, si, q_off, s_off, geometry):
+    """The fused kernels' invariants ``(P, G)`` float32 of the pairs, as the fused
+    basis computes them before its MLP (CUDA and Triton)."""
+    geo, pb = fused_basis._geometry_args(geometry)
+    k = int(geometry["g_unit"].shape[0])
+    g = 6 + 2 * k + 2 * pb
+    n = int(qi.shape[0])
+    out = torch.empty(n, g, device=qi.device, dtype=torch.float32)
+    if n:
+        _inv_kernel[(triton.cdiv(n, fused_basis.BASIS_BLOCK),)](
+            qi, si, n, int(q_off), int(s_off), *geo, out, float(geometry["eps"]), D=int(geo[0].shape[1]), K=k, PB=pb,
+            G=g, GP=max(16, triton.next_power_of_2(g)), BLOCK=fused_basis.BASIS_BLOCK,
+            num_warps=fused_basis.BASIS_WARPS, enable_fp_fusion=False,
+        )  # fmt: skip
+    return out

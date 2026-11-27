@@ -40,6 +40,7 @@ from physicsnemo.experimental.models.isla._tree_read import (
     canonical_frame,
     frame_coordinates,
 )
+from test.experimental.models.isla._kernel_cases import node_cells, point_pairs
 from test.experimental.models.isla._meshes import cloud, points_mesh, soup, transform
 
 F = torch.float32
@@ -169,7 +170,7 @@ def test_one_group_is_the_ungrouped_forest_bitwise(dim, kernel):
         assert a.tree_group.tolist() == [0] * len(a.trees)
         assert torch.equal(a.group_origin, a.origin[None])
         assert a.frame_points(q).shape == (150, dim)
-        for x, y in zip(a.point_pairs(q, walk=kernel), b.point_pairs(q, walk=kernel)):
+        for x, y in zip(point_pairs(a, q, walk=kernel), point_pairs(b, q, walk=kernel)):
             assert _equal(x, y)
 
 
@@ -211,11 +212,11 @@ def test_each_tree_holds_one_condition_about_its_centroid_and_lists_cover_every_
         ]
     ).to(F)
     assert f.frame_points(q).shape == (len(present), 120, d)
-    qi, si, _ = f.point_pairs(q, walk=kernel)
+    qi, si, _ = point_pairs(f, q, walk=kernel)
     for p in range(q.shape[0]):
         s = si[qi == p]
-        node_cells, _ = f.node_cells(s[s >= n] - n)
-        count = torch.bincount(torch.cat([s[s < n], node_cells]), minlength=n)
+        in_nodes, _ = node_cells(f, s[s >= n] - n)
+        count = torch.bincount(torch.cat([s[s < n], in_nodes]), minlength=n)
         assert torch.equal(count, torch.ones(n, dtype=count.dtype))
     ### Each condition's trees live about its own measure-weighted centroid, in the
     ### whole boundary's frame.
@@ -259,7 +260,7 @@ def test_the_fast_build_and_walk_are_the_reference_s_with_groups(case):
             pts32, w32, nrm32, None, theta=theta, groups=groups, build="fast"
         )
         assert _differing(ref, fast) == []
-        lists = [ref.point_pairs(q, walk=walk) for walk in ("reference", "fast")]
+        lists = [point_pairs(ref, q, walk=walk) for walk in ("reference", "fast")]
         assert _equal(lists[0], lists[1])
         counts = ref.frame_pairs(ref.frame_points(q), walk="fast", count_only=True)
         assert torch.equal(counts, torch.bincount(lists[0][0], minlength=200))
@@ -479,8 +480,8 @@ def test_a_condition_with_nearly_equal_variances_uses_the_frames_rotation_bound(
             t,
             int(grouped.tree_group[t]),
         )
-    n_grouped = grouped.point_pairs(q, walk=kernel)[0].numel()
-    n_whole = whole.point_pairs(q, walk=kernel)[0].numel()
+    n_grouped = point_pairs(grouped, q, walk=kernel)[0].numel()
+    n_whole = point_pairs(whole, q, walk=kernel)[0].numel()
     assert n_grouped < 2 * n_whole, (n_grouped, n_whole)
 
 

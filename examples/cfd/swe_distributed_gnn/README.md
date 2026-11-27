@@ -261,10 +261,14 @@ This example requires the `gnns` optional dependency group to be installed. This
 `torch_geometric`, `torch_scatter`, `torch_sparse`, and `torch_cluster` which are needed
 for the distributed GraphCast model.
 
+The data generator also needs `torch-harmonics` (the shallow water solver) and
+`cartopy` (used only for the 3D plots), which are listed in `requirements.txt`.
+
 To install the required dependencies, run:
 
 ```bash
 pip install nvidia-physicsnemo[gnns]
+pip install -r requirements.txt
 ```
 
 ## Getting Started

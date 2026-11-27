@@ -120,9 +120,7 @@ def _step(model, domain, dist_manager):
         target_config=_TARGETS,
     )
     loss.backward()
-    avg_loss, _, _ = _reduce_and_average(
-        loss.detach(), losses, metrics, 1, device=dist_manager.device
-    )
+    avg_loss, _, _ = _reduce_and_average(loss.detach(), losses, metrics, 1)
     grads = [p.grad.detach().clone() for p in model.parameters()]
     return avg_loss, grads
 

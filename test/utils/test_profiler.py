@@ -82,8 +82,7 @@ class MockProfiler(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singleton):
         pass
 
 
-@pytest.fixture(autouse=True)
-def reset_profiler():
+def _reset_profiler_state():
     Profiler._clear_instance()
     Profiler._profilers.clear()
     Profiler._initialized = False
@@ -91,7 +90,22 @@ def reset_profiler():
     ProfileRegistry._clear()
     _register_profilers()
     MockProfiler._clear_instance()
+
+
+@pytest.fixture(autouse=True)
+def reset_profiler():
+    """Start each test with a fresh Profiler, and leave one behind.
+
+    The reset after the test matters: Profiler is a process-wide singleton, and
+    a test that leaves it initialized with the mock profiler enabled makes every
+    later ``@profile``-decorated function go through ``MockProfiler.__call__``,
+    which returns ``None``. FIGConvUNet, imported lazily by its tests, then ends
+    up with ``forward = None`` when it runs after this file.
+    """
+    _reset_profiler_state()
     ProfileRegistry.register_profiler("mock", MockProfiler)
+    yield
+    _reset_profiler_state()
 
 
 def test_profiler_initialization():

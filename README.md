@@ -290,6 +290,23 @@ cd physicsnemo
 uv sync --extra cu13
 ```
 
+### Notice and Disclaimer
+
+Installing PhysicsNeMo downloads its dependencies. Some datapipes and examples
+also download datasets or model checkpoints when you ask them to.
+
+> NOTICE AND DISCLAIMER: This software automatically retrieves, accesses or interacts
+> with external materials. Those retrieved materials are not distributed with this
+> software and are governed solely by separate terms, conditions and licenses. You are
+> solely responsible for finding, reviewing and complying with all applicable terms,
+> conditions, and licenses, and for verifying the security, integrity and suitability
+> of any retrieved materials for your specific use case. This software is provided "AS
+> IS", without warranty of any kind. The author makes no representations or warranties
+> regarding any retrieved materials, and assumes no liability for any losses, damages,
+> liabilities or legal consequences from your use or inability to use this software or
+> any retrieved materials. Use this software and the retrieved materials at your own
+> risk.
+
 ## Learning Resources
 
 Learn through the [PhysicsNeMo notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo),
@@ -342,3 +359,5 @@ directly and open a pull request.
 
 PhysicsNeMo is licensed under the
 [Apache License 2.0](https://github.com/NVIDIA/physicsnemo/blob/main/LICENSE.txt).
+Third-party code included in this repository is listed in
+[THIRD_PARTY_NOTICES.md](https://github.com/NVIDIA/physicsnemo/blob/main/THIRD_PARTY_NOTICES.md).

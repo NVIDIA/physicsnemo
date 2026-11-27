@@ -43,6 +43,9 @@ from physicsnemo.mesh.generate._simplex_ops import (
     signed_volumes,
     volume_length_quality,
 )
+from physicsnemo.mesh.utilities._duplicate_detection import (
+    vectorized_connected_components,
+)
 from physicsnemo.utils._small_linalg import (
     best_base_first,
     normalized_inverse,
@@ -56,10 +59,10 @@ __all__ = [
 ]
 
 
-def split_pinched_vertices(points, cells, max_rounds: int = 32):
+def split_pinched_vertices(points, cells):
     """Duplicate vertices whose cell-star is facet-disconnected.
 
-    Star components are found by min-label propagation over (vertex, cell)
+    Star components are the connected components of (vertex, cell)
     incidence nodes, with edges given by interior facets containing the
     vertex. Returns ``(points, cells, n_split)``.
     """
@@ -77,7 +80,6 @@ def split_pinched_vertices(points, cells, max_rounds: int = 32):
     node_c = torch.arange(m, device=device).repeat_interleave(dp1)
     key = node_v * m + node_c
     key_sorted, key_order = torch.sort(key)
-    labels = torch.arange(key.shape[0], device=device)
 
     def node_id(v, c):
         return torch.searchsorted(key_sorted, v * m + c)
@@ -85,14 +87,7 @@ def split_pinched_vertices(points, cells, max_rounds: int = 32):
     ev = fverts.reshape(-1)
     na = node_id(ev, pairs[:, 0].repeat_interleave(dp1 - 1))
     nb = node_id(ev, pairs[:, 1].repeat_interleave(dp1 - 1))
-    for _ in range(max_rounds):
-        la, lb = labels[na], labels[nb]
-        new = torch.minimum(la, lb)
-        changed = bool((la != new).any() or (lb != new).any())
-        labels.scatter_reduce_(0, na, new, reduce="amin")
-        labels.scatter_reduce_(0, nb, new, reduce="amin")
-        if not changed:
-            break
+    labels = vectorized_connected_components(torch.stack([na, nb], dim=1), key.shape[0])
 
     v_sorted = node_v[key_order]
     vc = v_sorted * (key.shape[0] + 1) + labels

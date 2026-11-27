@@ -625,9 +625,11 @@ class TestCompileMultiGuidance:
     """torch.compile tests for MultiDiffusionDPSScorePredictor, multiple guidances."""
 
     @pytest.mark.xfail(reason=_COMPILE_XFAIL, strict=False)
-    def test_compile(self, device, monkeypatch, multi_config, multi_desc):
+    # Use torch's config.patch, not monkeypatch: monkeypatch's undo deletes the
+    # attribute, which hides donated_buffer and breaks later torch.compile calls.
+    @_functorch_config.patch(donated_buffer=False)
+    def test_compile(self, device, multi_config, multi_desc):
         torch._dynamo.config.error_on_recompile = True
-        monkeypatch.setattr(_functorch_config, "donated_buffer", False)
 
         predictor = _make_predictor("uncond", chunk_size=CHUNK_SIZE, device=device)
         guidances = _make_multi_guidance(
