@@ -43,6 +43,7 @@ import math
 import sys
 import warnings
 from collections import defaultdict
+from collections.abc import Iterable
 from typing import Callable
 
 import torch
@@ -92,6 +93,15 @@ def _adjust_lr(lr: float, adjust_lr_fn: str | None, shape: torch.Size) -> float:
     else:
         raise ValueError(f"Muon does not implement adjust_lr_fn={adjust_lr_fn!r}")
     return lr * ratio
+
+
+def _check_one_cuda_device(params: Iterable[Tensor]) -> None:
+    """Raise unless every parameter is on one CUDA device, as a graph needs."""
+    devices = {p.device for p in params}
+    if len(devices) != 1 or devices.pop().type != "cuda":
+        raise ValueError(
+            "Muon(cuda_graph=True) needs every parameter on one CUDA device"
+        )
 
 
 def _batched_newton_schulz(
@@ -202,27 +212,9 @@ class Muon(_TorchMuon):
         ``"original"``).
     cuda_graph : bool, optional
         Replay the momentum update and the Newton-Schulz orthogonalization as
-        one CUDA graph instead of launching their kernels one by one from
-        Python. The weight decay and the update, the only parts that read the
-        learning rate, run after each replay as the eager step's own calls with
-        the group's current values. So the result equals the eager step's bit
-        for bit, and a new ``lr``, ``weight_decay`` or ``adjust_lr_fn`` (such
-        as a scheduler's) replays the same graph. The first step runs eagerly
-        and creates the momentum buffers, and the next step captures the graph.
-        It is captured again when the parameters with gradients change, when
-        another hyperparameter changes (such as ``momentum``, which
-        ``OneCycleLR`` cycles by default), and after loading a state dict. A
-        capture synchronizes the device and empties PyTorch's memory caches, so
-        it costs more than an eager step. If a capture fails, Muon warns once
-        and steps eagerly from then on. It runs on a stream from torch's
-        high-priority pool, which torch's data loaders and DDP do not use. The
-        replayed kernels keep that priority, so when other streams run kernels
-        at the same time, the GPU starts the step's blocks first. Needs CUDA
-        parameters. Holds copies of the
-        gradients and of the orthogonalized updates, each the size of the
-        parameters, and the graph's memory pool.
-        Under ``torch.compile`` the step runs outside the compiled region, so
-        the graph replaces compiling it. Default False.
+        one CUDA graph, which saves host time and keeps the eager step's
+        result bit for bit (see Notes). Needs every parameter on one CUDA
+        device. Default False.
 
     Forward
     -------
@@ -235,6 +227,17 @@ class Muon(_TorchMuon):
     Notes
     -----
     See :class:`torch.optim.Muon` for the full algorithm description.
+
+    With ``cuda_graph=True``, the weight decay and the update run after each
+    replay, so a scheduler's new ``lr``, ``weight_decay`` or ``adjust_lr_fn``
+    replays the same graph. Other changes, such as new parameters with
+    gradients, a new ``momentum`` or a loaded state dict, need a new capture,
+    which synchronizes the device and empties PyTorch's memory caches. Muon
+    captures only once such a change has held for a step, so a schedule that
+    changes ``momentum`` every step, as ``OneCycleLR`` does by default, runs
+    eagerly. The graph keeps copies of the gradients and of the orthogonalized
+    updates. A failed capture warns and turns ``cuda_graph`` off. Under
+    ``torch.compile``, the graph step runs outside the compiled region.
 
     .. important::
         The fused path stacks equally-shaped matrices and orthogonalizes them
@@ -281,13 +284,11 @@ class Muon(_TorchMuon):
 
     def __init__(self, params, *args, cuda_graph: bool = False, **kwargs) -> None:
         super().__init__(params, *args, **kwargs)
-        if cuda_graph and not all(
-            p.is_cuda for g in self.param_groups for p in g["params"]
-        ):
-            raise ValueError("Muon(cuda_graph=True) needs every parameter on CUDA")
+        if cuda_graph:
+            _check_one_cuda_device(p for g in self.param_groups for p in g["params"])
         self.cuda_graph = cuda_graph
-        self._graph = self._graph_key = self._graph_grads = self._graph_stream = None
-        self._graph_updates = None
+        self._key = self._graph = self._graph_grads = self._graph_updates = None
+        self._graph_stream = None
 
     def __getstate__(self) -> dict:
         return {**super().__getstate__(), "cuda_graph": self.cuda_graph}
@@ -298,15 +299,13 @@ class Muon(_TorchMuon):
         self.__dict__.setdefault("cuda_graph", False)
         self.__dict__.setdefault("_graph_stream", None)
         # A graph cannot be copied, so a copy captures its own.
-        self._graph = self._graph_key = self._graph_grads = None
-        self._graph_updates = None
+        self._key = self._graph = self._graph_grads = self._graph_updates = None
 
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
-        """Perform a single optimization step (see :meth:`_step`).
+        """Perform a single optimization step.
 
-        With ``cuda_graph`` set and no closure, the step is replayed as a CUDA
-        graph (see :meth:`_graph_step`).
+        With ``cuda_graph`` set and no closure, the step replays a CUDA graph.
 
         Parameters
         ----------
@@ -327,14 +326,12 @@ class Muon(_TorchMuon):
     def _graph_step(self) -> None:
         """Replay the step as a CUDA graph, capturing it first if needed.
 
-        The graph leaves the parameters alone: the weight decay and the update,
-        which read the learning rate, run after each replay (see
-        :meth:`_apply_updates`). The eager step runs instead in two cases. One
-        is while any parameter with a gradient has no momentum buffer, so no
-        buffer is created inside a capture. The other is inside a capture the
-        caller started, which then records the eager step. A capture that
-        fails ends cleanly, warns, and turns ``cuda_graph`` off. Under
-        ``torch.compile`` this method runs outside the compiled region.
+        Steps eagerly inside a capture the caller started, which then records
+        the eager step, and while a parameter with a gradient has no momentum
+        buffer, so that no buffer is made in a capture. A capture costs more
+        than an eager step, so it also steps eagerly when the key (what the
+        graph reads) differs from the previous step's, and captures only a key
+        that held for two steps.
         """
         if torch.cuda.is_current_stream_capturing():
             return self._step()
@@ -348,94 +345,93 @@ class Muon(_TorchMuon):
         bufs = [self.state[p]["momentum_buffer"] for p in params]
         key = (
             [t.data_ptr() for t in params + bufs],
-            # The group dicts themselves too: _apply_updates reads them.
+            # The group dicts themselves too: the update after the replay
+            # reads them.
             [
                 (id(g), {k: v for k, v in g.items() if k not in _NOT_IN_GRAPH_KEY})
                 for g in self.param_groups
             ],
         )
-        if key != self._graph_key:
-            if len({p.device for p in params}) != 1 or not params[0].is_cuda:
-                raise ValueError(
-                    "Muon(cuda_graph=True) needs every parameter on one CUDA device"
-                )
-            # Free the old graph, gradient copies and updates before capturing.
-            self._graph = self._graph_key = self._graph_grads = None
-            self._graph_updates = None
-            # The graph reads the gradients from copies of its own, refilled
-            # before every replay.
-            grads = [p.grad for p in params]
-            graph_grads = [g.clone() for g in grads]
-            # One capture stream for all captures, from torch's high-priority
-            # pool. torch hands out each pool's 32 streams in turn, and work
-            # that a default-priority user, such as a loader thread, put on
-            # it during a capture would be recorded instead of run. Captured
-            # kernels keep this priority, so the replayed step's blocks start
-            # first when other streams run kernels at the same time.
-            device = params[0].device
-            if self._graph_stream is None or self._graph_stream.device != device:
-                self._graph_stream = torch.cuda.Stream(device, priority=-1)
-            stream = self._graph_stream
-            graph = torch.cuda.CUDAGraph()
-            updates: list = []
-            outer = sys.exception()  # the caller's error, if it steps in an except
-            try:
-                for p, g in zip(params, graph_grads):
-                    p.grad = g
-                # Other threads, such as a data loader's, may allocate or sync
-                # meanwhile. In the default "global" mode that would invalidate
-                # the capture. The outer stream context restores the current
-                # stream when a failed capture skips torch.cuda.graph's exit.
-                with (
-                    torch.cuda.stream(stream),
-                    torch.cuda.graph(
-                        graph, stream=stream, capture_error_mode="thread_local"
-                    ),
-                ):
-                    self._step(deferred=updates)
-            except Exception as e:
-                # A failure in capture_begin, or in capture_end before it ends
-                # the capture, leaves the stream capturing: end it here.
-                with torch.cuda.stream(stream):
-                    if torch.cuda.is_current_stream_capturing():
-                        with (
-                            contextlib.suppress(Exception),
-                            warnings.catch_warnings(action="ignore"),
-                        ):
-                            graph.capture_end()
-                # Name the first error: one in the step makes capture_end
-                # raise again, about "a previous error during capture".
-                cause = e
-                while (c := cause.__cause__ or cause.__context__) not in (None, outer):
-                    cause = c
-                reason = f"{type(cause).__name__}: {cause}"
-                # Its traceback holds the capture's tensors: free them for the
-                # eager step.
-                del cause
-                # A capture launches nothing, so the step that failed to
-                # capture runs eagerly below, and so do all later steps.
-                self.cuda_graph = False
-                warnings.warn(
-                    "Muon(cuda_graph=True) could not capture its step as a CUDA "
-                    f"graph on torch {torch.__version__}, so it steps eagerly from "
-                    f"now on (the same update, more launches). The first error: "
-                    f"{reason}",
-                    RuntimeWarning,
-                )
-            finally:
-                for p, g in zip(params, grads):
-                    p.grad = g
-            if not self.cuda_graph:
-                # Free the graph's memory before the eager step.
-                del graph, graph_grads, updates
-                return self._step()
-            self._graph, self._graph_key, self._graph_grads = graph, key, graph_grads
-            self._graph_updates = updates
-        # Capturing launches nothing, so the step also runs here after a capture.
+        if key != self._key:
+            self._key = key
+            self._graph = self._graph_grads = self._graph_updates = None
+            return self._step()
+        if self._graph is None and not self._capture(params):
+            return self._step()
         torch._foreach_copy_(self._graph_grads, [p.grad for p in params])
         self._graph.replay()
         self._apply_updates()
         return None
+
+    def _capture(self, params: list[Tensor]) -> bool:
+        """Capture the momentum update and orthogonalization as a CUDA graph.
+
+        Returns whether the capture succeeded. One that fails anywhere ends
+        cleanly, warns, and turns ``cuda_graph`` off.
+        """
+        _check_one_cuda_device(params)
+        # The graph reads the gradients from copies of its own, refilled
+        # before every replay.
+        grads = [p.grad for p in params]
+        graph_grads = [g.clone() for g in grads]
+        # One stream for every capture, from torch's high-priority pool, which
+        # default-priority users such as loader threads never get: their work
+        # on it during a capture would be recorded instead of run. Replayed
+        # kernels keep the priority, so they start first when others compete.
+        device = params[0].device
+        if self._graph_stream is None or self._graph_stream.device != device:
+            self._graph_stream = torch.cuda.Stream(device, priority=-1)
+        stream = self._graph_stream
+        graph = torch.cuda.CUDAGraph()
+        updates: list = []
+        outer = sys.exception()  # the caller's error, if it steps in an except
+        try:
+            for p, g in zip(params, graph_grads):
+                p.grad = g
+            # "thread_local": other threads, such as a data loader's, may sync
+            # meanwhile. The outer stream context restores the current stream
+            # when a failed capture skips torch.cuda.graph's exit.
+            with (
+                torch.cuda.stream(stream),
+                torch.cuda.graph(
+                    graph, stream=stream, capture_error_mode="thread_local"
+                ),
+            ):
+                self._step(deferred=updates)
+        except Exception as e:
+            # A failure in capture_begin, or in capture_end before it ends
+            # the capture, leaves the stream capturing: end it here.
+            with torch.cuda.stream(stream):
+                if torch.cuda.is_current_stream_capturing():
+                    with (
+                        contextlib.suppress(Exception),
+                        warnings.catch_warnings(action="ignore"),
+                    ):
+                        graph.capture_end()
+            # Name the first error: one in the step makes capture_end raise
+            # again, about "a previous error during capture".
+            cause = e
+            while (c := cause.__cause__ or cause.__context__) not in (None, outer):
+                cause = c
+            reason = f"{type(cause).__name__}: {cause}"
+            # Its traceback holds the capture's tensors: free them for the
+            # eager step.
+            del cause
+            self.cuda_graph = False
+            warnings.warn(
+                "Muon(cuda_graph=True) could not capture its step as a CUDA "
+                f"graph on torch {torch.__version__}, so it steps eagerly from "
+                f"now on (the same update, more launches). The first error: "
+                f"{reason}",
+                RuntimeWarning,
+            )
+            return False
+        finally:
+            for p, g in zip(params, grads):
+                p.grad = g
+        self._graph, self._graph_grads = graph, graph_grads
+        self._graph_updates = updates
+        return True
 
     def _apply_updates(self) -> None:
         """Apply the weight decay and the updates the graph orthogonalized.
