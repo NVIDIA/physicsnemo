@@ -43,7 +43,7 @@ import math
 import sys
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import Callable
 
 import torch
@@ -360,7 +360,8 @@ class Muon(_TorchMuon):
             return self._step()
         torch._foreach_copy_(self._graph_grads, [p.grad for p in params])
         self._graph.replay()
-        self._apply_updates()
+        for update in self._graph_updates:
+            self._apply(*update)
         return None
 
     def _capture(self, params: list[Tensor]) -> bool:
@@ -383,7 +384,6 @@ class Muon(_TorchMuon):
             self._graph_stream = torch.cuda.Stream(device, priority=-1)
         stream = self._graph_stream
         graph = torch.cuda.CUDAGraph()
-        updates: list = []
         outer = sys.exception()  # the caller's error, if it steps in an except
         try:
             for p, g in zip(params, graph_grads):
@@ -397,7 +397,10 @@ class Muon(_TorchMuon):
                     graph, stream=stream, capture_error_mode="thread_local"
                 ),
             ):
-                self._step(deferred=updates)
+                updates = [
+                    (group, ps, list(shape_updates))
+                    for group, ps, shape_updates in self._updates()
+                ]
         except Exception as e:
             # A failure in capture_begin, or in capture_end before it ends
             # the capture, leaves the stream capturing: end it here.
@@ -433,64 +436,17 @@ class Muon(_TorchMuon):
         self._graph_updates = updates
         return True
 
-    def _apply_updates(self) -> None:
-        """Apply the weight decay and the updates the graph orthogonalized.
+    def _updates(self) -> Iterator[tuple[dict, list[Tensor], Iterator[tuple]]]:
+        """Update each parameter group's momentum and yield its update.
 
-        These are the eager step's kernels with the group's current learning
-        rate and weight decay as host scalars, in the eager step's order on
-        each parameter, so the parameters equal the eager step's bit for bit
-        at any learning rate.
+        For each group with gradients, yields ``(group, params,
+        shape_updates)``, where ``shape_updates`` yields ``(shape,
+        group_params, ortho_list)`` per group of equally-shaped parameters,
+        orthogonalized with one batched Newton-Schulz. Both are lazy, so the
+        eager step holds one shape group's update at a time.
         """
-        for group, params, shape_updates in self._graph_updates:
-            lr = group["lr"]
-            if isinstance(lr, Tensor):
-                lr = lr.item()
-            torch._foreach_mul_(params, 1 - lr * group["weight_decay"])
-            for shape, group_params, ortho_list in shape_updates:
-                adjusted_lr = _adjust_lr(lr, group["adjust_lr_fn"], torch.Size(shape))
-                torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
-
-    def _step(
-        self,
-        closure: Callable[[], float] | None = None,
-        deferred: list | None = None,
-    ) -> float | None:
-        """Perform a single optimization step.
-
-        Parameters
-        ----------
-        closure : Callable[[], float], optional
-            Optional callable that reevaluates the model and returns the loss.
-            Default None.
-        deferred : list, optional
-            If given (in a graph capture), the step leaves the parameters alone
-            and appends, per parameter group, ``(group, params_with_grad,
-            [(shape, group_params, ortho_list), ...])`` for
-            :meth:`_apply_updates`. Default None.
-
-        Returns
-        -------
-        float or None
-            The loss returned by *closure*, or ``None`` if no closure was given.
-        """
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
         for group in self.param_groups:
-            lr = group["lr"]
-            if isinstance(lr, Tensor) and deferred is None:
-                lr = lr.item()
-            weight_decay = group["weight_decay"]
-            momentum = group["momentum"]
-            nesterov = group["nesterov"]
-            ns_coefficients = group["ns_coefficients"]
-            eps = group["eps"]
-            ns_steps = group["ns_steps"]
-            adjust_lr_fn = group["adjust_lr_fn"]
-
-            params_with_grad: list[Tensor] = []
+            params: list[Tensor] = []
             grads: list[Tensor] = []
             momentum_bufs: list[Tensor] = []
 
@@ -503,7 +459,7 @@ class Muon(_TorchMuon):
                     raise RuntimeError("Muon does not support complex parameters")
                 if p.grad.is_sparse:
                     raise RuntimeError("Muon does not support sparse gradients")
-                params_with_grad.append(p)
+                params.append(p)
                 grads.append(p.grad)
                 state = self.state[p]
                 if "momentum_buffer" not in state:
@@ -512,7 +468,7 @@ class Muon(_TorchMuon):
                     )
                 momentum_bufs.append(state["momentum_buffer"])
 
-            if not params_with_grad:
+            if not params:
                 continue
 
             for g in grads:
@@ -520,43 +476,67 @@ class Muon(_TorchMuon):
                     raise ValueError("Param gradient must be a 2D matrix")
 
             # Momentum (fused across all shapes): buf = momentum*buf + (1-momentum)*grad
+            momentum = group["momentum"]
             torch._foreach_lerp_(momentum_bufs, grads, 1 - momentum)
-            if nesterov:
+            if group["nesterov"]:
                 # update = grad + momentum*(buf - grad)
                 updates = torch._foreach_lerp(grads, momentum_bufs, momentum)
             else:
                 updates = list(momentum_bufs)
+            yield group, params, self._orthogonalize(group, params, updates)
 
-            # Decoupled weight decay (fused across all shapes).
-            shape_updates: list = []
-            if deferred is None:
-                torch._foreach_mul_(params_with_grad, 1 - lr * weight_decay)
-            else:
-                deferred.append((group, params_with_grad, shape_updates))
+    def _orthogonalize(
+        self, group: dict, params: list[Tensor], updates: list[Tensor]
+    ) -> Iterator[tuple[tuple, list[Tensor], tuple[Tensor, ...]]]:
+        """Yield each shape group's orthogonalized update (see :meth:`_updates`)."""
+        ns_args = group["ns_coefficients"], group["ns_steps"], group["eps"]
+        for (shape, _, _), idxs in self._group_params_by_shape(params).items():
+            stacked = torch.stack([updates[i] for i in idxs], dim=0)
+            ortho = _batched_newton_schulz(stacked, *ns_args)
+            group_params = [params[i] for i in idxs]
+            # Cast back to the parameter dtype (NS runs in bf16), once per
+            # group: the group key includes the dtype. For float32 parameters
+            # the cast also makes the updates contiguous, so a tall group
+            # (transposed by NS) keeps _foreach_add_ fused.
+            ortho_list = ortho.to(
+                group_params[0].dtype, memory_format=torch.contiguous_format
+            ).unbind(0)
+            yield shape, group_params, ortho_list
 
-            # Group equally-shaped updates and orthogonalize each group with one
-            # batched Newton-Schulz, then apply the (per-group, shape-dependent)
-            # learning rate.
-            groups = self._group_params_by_shape(params_with_grad)
+    @staticmethod
+    def _apply(
+        group: dict, params: list[Tensor], shape_updates: Iterable[tuple]
+    ) -> None:
+        """Apply the decoupled weight decay, then each shape group's update,
+        at the group's current learning rate and weight decay."""
+        lr = group["lr"]
+        if isinstance(lr, Tensor):
+            lr = lr.item()
+        torch._foreach_mul_(params, 1 - lr * group["weight_decay"])
+        for shape, group_params, ortho_list in shape_updates:
+            adjusted_lr = _adjust_lr(lr, group["adjust_lr_fn"], torch.Size(shape))
+            torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
 
-            for (shape, _dtype, _device), idxs in groups.items():
-                stacked = torch.stack([updates[i] for i in idxs], dim=0)
-                ortho = _batched_newton_schulz(stacked, ns_coefficients, ns_steps, eps)
+    def _step(self, closure: Callable[[], float] | None = None) -> float | None:
+        """Perform a single optimization step eagerly.
 
-                group_params = [params_with_grad[i] for i in idxs]
-                # Cast back to the parameter dtype (NS runs in bf16), once per
-                # group: the group key includes the dtype. For float32
-                # parameters the cast also makes the updates contiguous, so a
-                # tall group (transposed by NS) keeps _foreach_add_ fused.
-                ortho_list = ortho.to(
-                    group_params[0].dtype, memory_format=torch.contiguous_format
-                ).unbind(0)
-                if deferred is not None:
-                    shape_updates.append((shape, group_params, ortho_list))
-                    continue
-                adjusted_lr = _adjust_lr(lr, adjust_lr_fn, torch.Size(shape))
-                torch._foreach_add_(group_params, ortho_list, alpha=-adjusted_lr)
+        Parameters
+        ----------
+        closure : Callable[[], float], optional
+            Optional callable that reevaluates the model and returns the loss.
+            Default None.
 
+        Returns
+        -------
+        float or None
+            The loss returned by *closure*, or ``None`` if no closure was given.
+        """
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for update in self._updates():
+            self._apply(*update)
         return loss
 
     def __repr__(self) -> str:
