@@ -57,11 +57,26 @@ _NOT_IN_GRAPH_KEY = frozenset({"params", "lr", "weight_decay", "adjust_lr_fn"})
 
 
 def _adjust_lr(lr: float, adjust_lr_fn: str | None, shape: torch.Size) -> float:
-    """The learning rate of a ``shape`` parameter under :class:`torch.optim.Muon`'s
-    ``adjust_lr_fn``, by the formulas of its documentation (``"original"`` or
-    ``None``: ``sqrt(max(1, A / B))``, ``"match_rms_adamw"``:
-    ``0.2 * sqrt(max(A, B))``) in its own arithmetic, rather than through its
-    private helper."""
+    """Learning rate of a parameter under :class:`torch.optim.Muon`'s rule.
+
+    Uses the formulas of its documentation in its own arithmetic, rather than
+    its private helper: ``sqrt(max(1, A / B))`` for ``"original"`` or ``None``,
+    and ``0.2 * sqrt(max(A, B))`` for ``"match_rms_adamw"``.
+
+    Parameters
+    ----------
+    lr : float
+        Learning rate of the parameter group.
+    adjust_lr_fn : str or None
+        One of ``"original"``, ``"match_rms_adamw"`` or None.
+    shape : torch.Size
+        Shape ``(A, B, ...)`` of the parameter.
+
+    Returns
+    -------
+    float
+        The adjusted learning rate.
+    """
     a, b = shape[:2]
     if adjust_lr_fn is None or adjust_lr_fn == "original":
         ratio = math.sqrt(max(1, a / b))
@@ -190,12 +205,12 @@ class Muon(_TorchMuon):
         another hyperparameter changes (such as ``momentum``, which
         ``OneCycleLR`` cycles by default), and after loading a state dict. A
         capture synchronizes the device and empties PyTorch's memory caches, so
-        it costs more than an eager step. If a capture fails, other than by
-        running out of memory, Muon warns once and steps eagerly from then on.
-        It runs on a stream from torch's high-priority pool, which torch's data
-        loaders and DDP do not use. The replayed kernels keep that priority, so
-        when other streams run kernels at the same time, the GPU starts the
-        step's blocks first. Needs CUDA parameters. Holds copies of the
+        it costs more than an eager step. If a capture fails, Muon warns once
+        and steps eagerly from then on. It runs on a stream from torch's
+        high-priority pool, which torch's data loaders and DDP do not use. The
+        replayed kernels keep that priority, so when other streams run kernels
+        at the same time, the GPU starts the step's blocks first. Needs CUDA
+        parameters. Holds copies of the
         gradients and of the orthogonalized updates, each the size of the
         parameters, and the graph's memory pool.
         Under ``torch.compile`` the step runs outside the compiled region, so
@@ -379,22 +394,28 @@ class Muon(_TorchMuon):
                             warnings.catch_warnings(action="ignore"),
                         ):
                             graph.capture_end()
-                if isinstance(e, torch.OutOfMemoryError):
-                    raise
+                # Name the first error: one in the step makes capture_end
+                # raise again, about "a previous error during capture".
+                cause = e
+                while (c := cause.__cause__ or cause.__context__) is not None:
+                    cause = c
                 # A capture launches nothing, so the step that failed to
                 # capture runs eagerly below, and so do all later steps.
                 warnings.warn(
                     "Muon(cuda_graph=True) could not capture its step as a CUDA "
-                    f"graph on torch {torch.__version__} ({type(e).__name__}: {e}); "
-                    "it steps eagerly from now on (the same update, more launches)",
+                    f"graph on torch {torch.__version__} "
+                    f"({type(cause).__name__}: {cause}); it steps eagerly from "
+                    "now on (the same update, more launches)",
                     RuntimeWarning,
-                    stacklevel=3,
+                    stacklevel=5,
                 )
                 self.cuda_graph = False
             finally:
                 for p, g in zip(params, grads):
                     p.grad = g
             if not self.cuda_graph:
+                # Free the graph's memory before the eager step.
+                del graph, graph_grads, updates
                 return self._step()
             self._graph, self._graph_key, self._graph_grads = graph, key, graph_grads
             self._graph_updates = updates

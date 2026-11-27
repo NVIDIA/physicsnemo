@@ -392,9 +392,9 @@ def test_cuda_graph_capture_with_loader_thread():
         assert torch.equal(pe, pg)
 
 
-def _fail_once(monkeypatch, name, after, error=RuntimeError):
-    """Make ``torch.cuda.CUDAGraph.<name>`` raise *error* once, after running
-    or before it."""
+def _fail_once(monkeypatch, name, after):
+    """Make ``torch.cuda.CUDAGraph.<name>`` raise once, after running or
+    before it."""
     original = getattr(torch.cuda.CUDAGraph, name)
     calls = []
 
@@ -404,7 +404,7 @@ def _fail_once(monkeypatch, name, after, error=RuntimeError):
         calls.append(None)
         if after:
             original(self, *args, **kwargs)
-        raise error(f"{name} failed")
+        raise RuntimeError(f"{name} failed")
 
     monkeypatch.setattr(torch.cuda.CUDAGraph, name, failing)
 
@@ -421,13 +421,16 @@ def _assert_no_capture_open(opt, stream, params, grads):
 
 
 @_requires_cuda
-@pytest.mark.parametrize("where", ["capture_begin", "step", "capture_end"])
+@pytest.mark.parametrize(
+    "where", ["capture_begin", "step", "out_of_memory", "capture_end"]
+)
 def test_cuda_graph_capture_failure(monkeypatch, where):
     """A capture that fails at its start (as capture_begin does under
     torch.cuda.set_sync_debug_mode("error")), in the step (a host sync, which
-    cannot be captured) or at its end warns once, leaves no capture open, and
-    leaves the user's gradients and current stream in place. That step and
-    every later one run eagerly, equal to an eager optimizer's bit for bit."""
+    cannot be captured, or running out of memory) or at its end warns once,
+    naming the first error, leaves no capture open, and leaves the user's
+    gradients and current stream in place. That step and every later one run
+    eagerly, equal to an eager optimizer's bit for bit."""
     import physicsnemo.optim.muon as muon_module
 
     params = _make_params(_GRAPH_SHAPES, "cuda", seed=6)
@@ -438,26 +441,39 @@ def test_cuda_graph_capture_failure(monkeypatch, where):
         _set_grads(ps, seed=0)
         o.step()
 
-    if where == "step":
+    if where in ("step", "out_of_memory"):
         newton_schulz = muon_module._batched_newton_schulz
 
-        def syncing_newton_schulz(updates, *args):
-            updates.sum().item()
+        def failing_newton_schulz(updates, *args):
+            if where == "step":
+                updates.sum().item()
+            elif torch.cuda.is_current_stream_capturing():
+                raise torch.OutOfMemoryError("CUDA out of memory")
             return newton_schulz(updates, *args)
 
         monkeypatch.setattr(
-            muon_module, "_batched_newton_schulz", syncing_newton_schulz
+            muon_module, "_batched_newton_schulz", failing_newton_schulz
         )
     else:
         _fail_once(monkeypatch, where, after=where == "capture_begin")
+    causes = {
+        "capture_begin": "capture_begin failed",
+        "out_of_memory": "OutOfMemoryError",
+        "capture_end": "capture_end failed",
+    }
     stream = torch.cuda.current_stream()
     for seed in (1, 2, 3):
         _set_grads(params, seed=seed)
         _set_grads(eager_params, seed=seed)
         grads = [p.grad for p in params]
         if seed == 1:
-            with pytest.warns(RuntimeWarning, match="steps eagerly"):
+            with pytest.warns(RuntimeWarning, match="steps eagerly") as record:
                 opt.step()
+            assert len(record) == 1
+            # It names the first error, not capture_end's follow-on one.
+            message = str(record[0].message)
+            assert causes.get(where, "") in message
+            assert "previous error" not in message
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
@@ -466,28 +482,6 @@ def test_cuda_graph_capture_failure(monkeypatch, where):
         _assert_no_capture_open(opt, stream, params, grads)
         assert not opt.cuda_graph
         assert all(torch.equal(p, q) for p, q in zip(params, eager_params))
-
-
-@_requires_cuda
-def test_cuda_graph_capture_out_of_memory(monkeypatch):
-    """Running out of memory in a capture is not a capture failure: it raises,
-    leaves no capture open, and keeps the graph on; the next step captures."""
-    params = _make_params(_GRAPH_SHAPES, "cuda", seed=6)
-    opt = Muon(params, lr=0.02, cuda_graph=True)
-    _set_grads(params, seed=0)
-    opt.step()
-
-    _fail_once(monkeypatch, "capture_end", after=False, error=torch.OutOfMemoryError)
-    _set_grads(params, seed=1)
-    grads = [p.grad for p in params]
-    stream = torch.cuda.current_stream()
-    with pytest.raises(torch.OutOfMemoryError):
-        opt.step()
-    _assert_no_capture_open(opt, stream, params, grads)
-    assert opt.cuda_graph
-    monkeypatch.undo()
-    opt.step()
-    assert opt._graph is not None
 
 
 @_requires_cuda
