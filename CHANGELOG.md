@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly. `transform` now raises a `ValueError` for a matrix whose
   dtype differs from the points' dtype, and for a vector or tensor field of an
   integer or boolean dtype, where the matrix product raised a `RuntimeError`.
+- `physicsnemo.datapipes` and the diffusion samplers import
+  `physicsnemo.domain_parallel` only when they shard, so a PyTorch release
+  that moves a private API ShardTensor needs no longer breaks their import.
+  `import physicsnemo.domain_parallel` then raises one `ImportError` naming
+  the torch version and the missing API.
 
 ### Security
 

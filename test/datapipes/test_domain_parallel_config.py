@@ -23,6 +23,8 @@ behavior is covered in ``test/domain_parallel/datapipes/``.
 
 import dataclasses
 import logging
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -32,6 +34,7 @@ from physicsnemo.datapipes._domain_parallel import (
     DomainParallelConfig,
     ShardedProto,
     assemble_if_proto,
+    is_shard_tensor,
     resolve_leaf_placements,
 )
 from physicsnemo.datapipes.readers.base import Reader
@@ -442,3 +445,59 @@ def test_unsupported_reader_rejects_domain_parallel():
     with pytest.raises(ValueError, match="does not support domain-parallel"):
         _NoDomainParallelReader(domain_parallel={}, device_mesh=_StubMesh(2))
     _NoDomainParallelReader()  # no domain parallelism: fine
+
+
+# Runs in a fresh interpreter whose torch lacks one private API that
+# ``physicsnemo.domain_parallel`` imports (``sys.argv[1:]``: module, name), as a
+# future torch release may. Torch's own modules load first, as they would be
+# updated along with it.
+_MISSING_TORCH_INTERNAL_SNIPPET = """
+import importlib, sys
+import torch
+import torch._dynamo
+import torch.distributed.tensor
+
+module, name = sys.argv[1:]
+delattr(importlib.import_module(module), name)
+
+import physicsnemo.datapipes
+import physicsnemo.datapipes.cae
+import physicsnemo.diffusion.samplers
+from physicsnemo.datapipes._domain_parallel import is_shard_tensor
+
+assert not is_shard_tensor(torch.zeros(3))
+try:
+    import physicsnemo.domain_parallel
+except ImportError as e:
+    message = str(e)
+else:
+    raise AssertionError("physicsnemo.domain_parallel imported")
+for part in ("physicsnemo.domain_parallel", torch.__version__, name):
+    assert part in message, message
+"""
+
+
+@pytest.mark.parametrize(
+    "module, name",
+    [
+        ("torch.distributed.tensor._redistribute", "_gen_transform_infos"),
+        ("torch.distributed.device_mesh", "_mesh_resources"),
+    ],
+)
+def test_missing_torch_internal_spares_generic_imports(module, name):
+    """Without a private torch API that domain parallelism needs, datapipes and
+    samplers still import, and ``physicsnemo.domain_parallel`` raises one
+    ImportError naming the feature, the torch version and the missing API."""
+    result = subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
+        [sys.executable, "-c", _MISSING_TORCH_INTERNAL_SNIPPET, module, name],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_is_shard_tensor_plain_tensor():
+    """A plain tensor is not a ShardTensor."""
+    assert not is_shard_tensor(torch.zeros(3))
+    assert not is_shard_tensor(None)

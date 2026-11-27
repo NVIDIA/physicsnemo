@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import itertools
 import math
+import operator
 from typing import Any, Callable
 
 import torch
-from torch._prims_common import canonicalize_dim
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import (
     Replicate,
@@ -48,6 +48,21 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
 )
 
 aten = torch.ops.aten
+
+
+def _canonicalize_dim(ndim: int, dim: int) -> int:
+    r"""``dim`` as a non-negative index into ``ndim`` dims, raising like ATen.
+
+    A local copy of ``torch._prims_common.canonicalize_dim``, a private API.
+    """
+    ndim = max(ndim, 1)  # a 0-d tensor indexes like a 1-d one
+    dim = operator.index(dim)
+    if not -ndim <= dim < ndim:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of "
+            f"[{-ndim}, {ndim - 1}], but got {dim})"
+        )
+    return dim % ndim
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +902,7 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
     input_spec = tensor._spec
     # Dispatch passes ``dim`` as written (e.g. -1 from stack's backward);
     # out-of-range dims raise like ATen instead of wrapping.
-    dim = canonicalize_dim(len(input_spec.shape), dim)
+    dim = _canonicalize_dim(len(input_spec.shape), dim)
 
     input_placements = input_spec.placements
 
@@ -989,7 +1004,7 @@ def sharded_select_backward_helper(
     # If it's along an unsharded dimension, there is nearly nothing to do.
 
     input_placements = grad_output._spec.placements
-    dim = canonicalize_dim(len(input_sizes), dim)
+    dim = _canonicalize_dim(len(input_sizes), dim)
 
     output_stride = _stride_from_contiguous_shape_C_style(input_sizes)
 

@@ -38,12 +38,12 @@ from omegaconf import DictConfig
 from torch.distributed.tensor.placement_types import Replicate, Shard
 from torch.utils.data import Dataset
 
+from physicsnemo.datapipes._domain_parallel import is_shard_tensor
 from physicsnemo.datapipes.cae.cae_dataset import (
     CAEDataset,
     compute_mean_std_min_max,
 )
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
 from physicsnemo.models.domino.utils import (
     calculate_center_of_mass,
     create_grid,
@@ -801,6 +801,8 @@ class DoMINODataPipe(Dataset):
 
         # For domain parallelism, shard everything appropriately:
         if self.config.shard_grid or self.config.shard_points:
+            from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
+
             # Mesh was defined above!
             output_dict = {}
 
@@ -898,13 +900,16 @@ class DoMINODataPipe(Dataset):
         """
 
         # This is a step to make sure we can apply to sharded outputs:
-        if volume_fields is not None and isinstance(volume_fields, ShardTensor):
+        if is_shard_tensor(volume_fields) or is_shard_tensor(surface_fields):
+            from physicsnemo.domain_parallel import ShardTensor
+
+        if volume_fields is not None and is_shard_tensor(volume_fields):
             volume_spec = volume_fields._spec
             volume_fields = ShardTensor.to_local(volume_fields)
         else:
             volume_spec = None
 
-        if surface_fields is not None and isinstance(surface_fields, ShardTensor):
+        if surface_fields is not None and is_shard_tensor(surface_fields):
             surface_spec = surface_fields._spec
             surface_fields = ShardTensor.to_local(surface_fields)
         else:
