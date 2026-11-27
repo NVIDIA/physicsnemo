@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per step), so the datapipe's prefetch overlaps compute. The logged
   `step_time_s` now includes waits for the GPU inside the step and reads
   higher, so compare speed by epoch wall time per step.
+- `physicsnemo.datapipes` and the diffusion samplers import
+  `physicsnemo.domain_parallel` only when they shard, so they still import if
+  a PyTorch release moves one of the private PyTorch APIs that
+  `domain_parallel` uses.
 
 ### Deprecated
 
@@ -54,11 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly. `transform` now raises a `ValueError` for a matrix whose
   dtype differs from the points' dtype, and for a vector or tensor field of an
   integer or boolean dtype, where the matrix product raised a `RuntimeError`.
-- `physicsnemo.datapipes` and the diffusion samplers import
-  `physicsnemo.domain_parallel` only when they shard, so a PyTorch release
-  that moves one of its private APIs no longer breaks them.
-  `import physicsnemo.domain_parallel` then raises one `ImportError` naming
-  the torch version and the missing API.
 
 ### Security
 

@@ -469,11 +469,9 @@ assert not is_shard_tensor(torch.zeros(3))
 try:
     import physicsnemo.domain_parallel
 except ImportError as e:
-    message = str(e)
+    assert name in str(e), e
 else:
     raise AssertionError("physicsnemo.domain_parallel imported")
-for part in ("physicsnemo.domain_parallel", torch.__version__, name):
-    assert part in message, message
 """
 
 
@@ -486,8 +484,7 @@ for part in ("physicsnemo.domain_parallel", torch.__version__, name):
 )
 def test_missing_torch_internal_spares_generic_imports(module, name):
     """Without a private torch API that domain parallelism needs, datapipes and
-    samplers still import, and ``physicsnemo.domain_parallel`` raises one
-    ImportError naming the feature, the torch version and the missing API."""
+    samplers still import, and only ``physicsnemo.domain_parallel`` fails."""
     result = subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
         [sys.executable, "-c", _MISSING_TORCH_INTERNAL_SNIPPET, module, name],
         capture_output=True,

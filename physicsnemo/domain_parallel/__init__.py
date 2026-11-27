@@ -36,8 +36,6 @@ This module requires PyTorch >= 2.6.0. Earlier versions are not supported.
 # - 2.6.0+ is supported
 # - 2.5.x and earlier are not supported
 
-import contextlib
-
 import torch
 
 from physicsnemo.core.version_check import check_version_spec
@@ -45,38 +43,16 @@ from physicsnemo.core.version_check import check_version_spec
 ST_AVAILABLE = check_version_spec("torch", "2.6.0a0", hard_fail=False)
 
 
-@contextlib.contextmanager
-def _torch_internals():
-    """Turn a failed import of a PyTorch internal into one clear ImportError.
-
-    ShardTensor builds on private PyTorch APIs (DTensor's spec and
-    redistribution planner, functional collectives, fake tensors), which a
-    PyTorch release may move or remove.
-    """
-    try:
-        yield
-    except ImportError as e:
-        if e.name is None or e.name.partition(".")[0] != "torch":
-            raise
-        raise ImportError(
-            f"physicsnemo.domain_parallel (ShardTensor) cannot be used with "
-            f"torch {torch.__version__}, which lacks a PyTorch internal it "
-            f"needs: {e}. Install a torch version that this PhysicsNeMo "
-            f"release supports to use domain parallelism."
-        ) from e
-
-
 if ST_AVAILABLE:
     # In minumum versions are met, we can import the shard tensor and spec.
 
-    with _torch_internals():
-        from ._shard_tensor_spec import ShardTensorSpec, validate_aligned_sharding
-        from .shard_tensor import (
-            ShardTensor,
-            TensorPromotionMode,
-            scatter_tensor,
-        )
-        from .sync import sync_module_over_mesh
+    from ._shard_tensor_spec import ShardTensorSpec, validate_aligned_sharding
+    from .shard_tensor import (
+        ShardTensor,
+        TensorPromotionMode,
+        scatter_tensor,
+    )
+    from .sync import sync_module_over_mesh
 
     def register_custom_ops():
         """Register all custom ShardTensor ops and shard-aware wrappers.
@@ -86,16 +62,15 @@ if ST_AVAILABLE:
         """
         # These imports will register the custom ops with the ShardTensor class.
         # It's done here to avoid an import cycle.
-        with _torch_internals():
-            from .custom_ops import (  # noqa: F401
-                _tensor_ops,
-                mean_wrapper,
-                sum_wrapper,
-                unbind_wrapper,
-            )
-            from .shard_utils import register_shard_wrappers
+        from .custom_ops import (  # noqa: F401
+            _tensor_ops,
+            mean_wrapper,
+            sum_wrapper,
+            unbind_wrapper,
+        )
+        from .shard_utils import register_shard_wrappers
 
-            register_shard_wrappers()
+        register_shard_wrappers()
 
     # Protect the automatic imports by checking cuda is available.
     if torch.cuda.is_available():
