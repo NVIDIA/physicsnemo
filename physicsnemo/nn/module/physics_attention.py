@@ -170,7 +170,7 @@ def _compute_slices_from_projections(
         slice_weights = gumbel_softmax(slice_projections, clamped_temp)  # (B, N, H, S)
     else:
         # Standard Transolver uses global temperature
-        clamped_temp = torch.clamp(temperature, min=0.5, max=5).to(
+        clamped_temp = torch.clamp(temperature, min=0.5, max=5.0).to(
             slice_projections.dtype
         )
         slice_weights = nn.functional.softmax(
