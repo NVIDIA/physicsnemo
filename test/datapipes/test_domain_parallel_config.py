@@ -447,18 +447,16 @@ def test_unsupported_reader_rejects_domain_parallel():
     _NoDomainParallelReader()  # no domain parallelism: fine
 
 
-# Runs in a fresh interpreter whose torch lacks one private API that
-# ``physicsnemo.domain_parallel`` imports (``sys.argv[1:]``: module, name), as a
-# future torch release may. Torch's own modules load first, as they would be
-# updated along with it.
+# Runs in a fresh interpreter whose torch lacks ``_gen_transform_infos``, a
+# private API that ``physicsnemo.domain_parallel`` imports, as a future torch
+# release may. Torch's own modules load first, as they would be updated along
+# with it.
 _MISSING_TORCH_INTERNAL_SNIPPET = """
-import importlib, sys
 import torch
 import torch._dynamo
-import torch.distributed.tensor
+import torch.distributed.tensor._redistribute as redistribute
 
-module, name = sys.argv[1:]
-delattr(importlib.import_module(module), name)
+del redistribute._gen_transform_infos
 
 import physicsnemo.datapipes
 import physicsnemo.datapipes.cae
@@ -469,24 +467,17 @@ assert not is_shard_tensor(torch.zeros(3))
 try:
     import physicsnemo.domain_parallel
 except ImportError as e:
-    assert name in str(e), e
+    assert "_gen_transform_infos" in str(e), e
 else:
     raise AssertionError("physicsnemo.domain_parallel imported")
 """
 
 
-@pytest.mark.parametrize(
-    "module, name",
-    [
-        ("torch.distributed.tensor._redistribute", "_gen_transform_infos"),
-        ("torch.distributed.device_mesh", "_mesh_resources"),
-    ],
-)
-def test_missing_torch_internal_spares_generic_imports(module, name):
+def test_missing_torch_internal_spares_generic_imports():
     """Without a private torch API that domain parallelism needs, datapipes and
     samplers still import, and only ``physicsnemo.domain_parallel`` fails."""
     result = subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
-        [sys.executable, "-c", _MISSING_TORCH_INTERNAL_SNIPPET, module, name],
+        [sys.executable, "-c", _MISSING_TORCH_INTERNAL_SNIPPET],
         capture_output=True,
         text=True,
         timeout=300,

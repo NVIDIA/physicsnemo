@@ -590,7 +590,7 @@ def is_shard_tensor(value: Any) -> bool:
     bool
         ``True`` if *value* is a ShardTensor (or a subclass instance).
     """
-    module = sys.modules.get("physicsnemo.domain_parallel.shard_tensor")
+    module = sys.modules.get("physicsnemo.domain_parallel")
     cls = getattr(module, "ShardTensor", None)
     return cls is not None and isinstance(value, cls)
 
