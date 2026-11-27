@@ -30,6 +30,7 @@ import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.datapipes import Dataset
+from physicsnemo.datapipes._domain_parallel import is_shard_tensor
 from physicsnemo.datapipes.readers.zarr import ZarrReader
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor
@@ -79,6 +80,7 @@ def _make_dataset(zarr_root, distributed_mesh, **reader_kwargs):
 
 def _assert_sharded_key(td, key, reference, device):
     assert isinstance(td[key], ShardTensor)
+    assert is_shard_tensor(td[key])
     assert td[key]._spec.placements == (Shard(0),)
     torch.testing.assert_close(
         td[key].full_tensor(), torch.from_numpy(reference).to(device)
@@ -87,6 +89,7 @@ def _assert_sharded_key(td, key, reference, device):
 
 def _assert_replicated_key(td, key, reference, device):
     assert not isinstance(td[key], ShardTensor)
+    assert not is_shard_tensor(td[key])
     torch.testing.assert_close(td[key], torch.from_numpy(reference).to(device))
 
 

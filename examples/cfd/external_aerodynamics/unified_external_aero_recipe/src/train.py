@@ -74,7 +74,6 @@ from utils import (
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import (
@@ -907,6 +906,8 @@ def main(cfg: DictConfig) -> None:
     model.to(device)
 
     if domain_parallel_mesh is not None:
+        from physicsnemo.domain_parallel import sync_module_over_mesh
+
         # All ranks in a domain group process the same sample and must hold
         # identical weights; DDP below all-reduces gradients over the flat
         # world, which covers both the ddp and domain axes.

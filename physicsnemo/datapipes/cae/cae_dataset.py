@@ -14,12 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import importlib
 import json
 import pathlib
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -29,7 +32,9 @@ from torch.distributed.tensor import Replicate, Shard
 from physicsnemo.core.version_check import OptionalImport, check_version_spec
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.distributed.utils import compute_split_shapes
-from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
+
+if TYPE_CHECKING:
+    from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 
 zarr = OptionalImport("zarr")
 
@@ -1077,6 +1082,8 @@ class CAEDataset:
 
         if self.device_mesh is None:
             return tensors
+
+        from physicsnemo.domain_parallel import ShardTensor
 
         spec_dict = self.shard_spec.pop(filename)
         result = {}

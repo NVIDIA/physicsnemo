@@ -28,7 +28,6 @@ from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.diffusion.base import Denoiser
 from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
-from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 
 from .base import Solver
 from .dpmpp_2m import DPMPlusPlus2M
@@ -121,6 +120,8 @@ def _maybe_replicate_timesteps(
     xN_mesh = getattr(xN, "device_mesh", None)
     if xN_mesh is None or hasattr(t_steps, "device_mesh"):
         return t_steps
+
+    from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 
     source_rank = dist.get_global_rank(xN_mesh.get_group(), 0)
     return scatter_tensor(

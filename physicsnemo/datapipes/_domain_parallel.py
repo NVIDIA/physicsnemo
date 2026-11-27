@@ -76,6 +76,7 @@ rank-identical value is required.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Literal, Mapping
 
@@ -85,10 +86,10 @@ from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.datapipes.keys import NestedKey, key_to_str
-from physicsnemo.domain_parallel import ShardTensor
-from physicsnemo.domain_parallel._shard_tensor_spec import (
-    compute_sharding_shapes_from_chunking_global_shape,
-)
+
+# ``physicsnemo.domain_parallel`` is imported only where domain-parallel
+# reading needs it: it builds on private PyTorch APIs, and a torch release
+# that moves one must not break datapipes that never shard.
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,10 @@ def chunk_bounds(global_n: int, device_mesh: DeviceMesh) -> tuple[int, int]:
     tuple[int, int]
         Half-open ``[start, stop)`` range of entries owned by this rank.
     """
+    from physicsnemo.domain_parallel._shard_tensor_spec import (
+        compute_sharding_shapes_from_chunking_global_shape,
+    )
+
     shapes = compute_sharding_shapes_from_chunking_global_shape(
         device_mesh, PLACEMENTS, (global_n,)
     )
@@ -546,6 +551,7 @@ def wrap_sharded_leaves(
         Same structure; sharded leaves are ``Shard(0)`` ShardTensors,
         replicated leaves pass through as plain tensors.
     """
+    from physicsnemo.domain_parallel import ShardTensor
 
     def wrap(td: TensorDict, prefix: tuple[str, ...]) -> TensorDict:
         out: dict[str, Any] = {}
@@ -566,6 +572,27 @@ def wrap_sharded_leaves(
         return TensorDict(out, batch_size=[], device=td.device)
 
     return wrap(tensors, ())
+
+
+def is_shard_tensor(value: Any) -> bool:
+    r"""``isinstance(value, ShardTensor)``, without importing ``domain_parallel``.
+
+    No ShardTensor exists before ``physicsnemo.domain_parallel`` is imported,
+    so this is ``False`` on a torch where that import fails.
+
+    Parameters
+    ----------
+    value : Any
+        Object to test.
+
+    Returns
+    -------
+    bool
+        ``True`` if *value* is a ShardTensor (or a subclass instance).
+    """
+    module = sys.modules.get("physicsnemo.domain_parallel")
+    cls = getattr(module, "ShardTensor", None)
+    return cls is not None and isinstance(value, cls)
 
 
 def as_leaf_key(key: NestedKey) -> tuple[str, ...]:
