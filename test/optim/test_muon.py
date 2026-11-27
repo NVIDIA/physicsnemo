@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import copy
+import gc
 import io
 import math
 import pickle
@@ -432,12 +433,13 @@ def _assert_no_capture_open(opt, stream, params, grads):
     "where", ["capture_begin", "step", "out_of_memory", "capture_end"]
 )
 def test_cuda_graph_capture_failure(monkeypatch, where):
-    """A capture that fails at its start (as capture_begin does under
-    torch.cuda.set_sync_debug_mode("error")), in the step (a host sync, which
-    cannot be captured, or running out of memory) or at its end warns once,
-    naming the first error, leaves no capture open, and leaves the user's
-    gradients and current stream in place. That step and every later one run
-    eagerly, equal to an eager optimizer's bit for bit."""
+    """A capture that fails at its start (as under
+    torch.cuda.set_sync_debug_mode("error")), in the step (a host sync, or
+    running out of memory) or at its end warns once, naming the first error
+    even while the caller handles another. It leaves no capture open, frees
+    the capture's memory, and keeps the caller's gradients and current stream.
+    That step and every later one run eagerly, equal to an eager optimizer's
+    bit for bit."""
     import physicsnemo.optim.muon as muon_module
 
     params = _make_params(_GRAPH_SHAPES, "cuda", seed=6)
@@ -463,24 +465,34 @@ def test_cuda_graph_capture_failure(monkeypatch, where):
         )
     else:
         _fail_once(monkeypatch, where, after=where == "capture_begin")
-    causes = {
+    cause = {
         "capture_begin": "capture_begin failed",
+        "step": "stream is capturing",
         "out_of_memory": "OutOfMemoryError",
         "capture_end": "capture_end failed",
-    }
+    }[where]
     stream = torch.cuda.current_stream()
     for seed in (1, 2, 3):
         _set_grads(params, seed=seed)
         _set_grads(eager_params, seed=seed)
         grads = [p.grad for p in params]
         if seed == 1:
-            with pytest.warns(RuntimeWarning, match="steps eagerly") as record:
-                opt.step()
+            gc.disable()  # the cyclic GC must not be what frees the capture
+            try:
+                allocated = torch.cuda.memory_allocated()
+                with pytest.warns(RuntimeWarning, match="steps eagerly") as record:
+                    try:
+                        raise KeyError("the caller's own error")
+                    except KeyError:
+                        opt.step()
+                assert torch.cuda.memory_allocated() == allocated
+            finally:
+                gc.enable()
             assert len(record) == 1
-            # It names the first error, not capture_end's follow-on one.
-            message = str(record[0].message)
-            assert causes.get(where, "") in message
-            assert "previous error" not in message
+            # It names the first error, not capture_end's follow-on one, nor
+            # the one the caller handles.
+            assert cause in str(record[0].message)
+            assert "previous error" not in str(record[0].message)
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
@@ -489,6 +501,23 @@ def test_cuda_graph_capture_failure(monkeypatch, where):
         _assert_no_capture_open(opt, stream, params, grads)
         assert not opt.cuda_graph
         assert all(torch.equal(p, q) for p, q in zip(params, eager_params))
+
+
+@_requires_cuda
+def test_cuda_graph_capture_failure_with_warnings_as_errors(monkeypatch):
+    """With warnings as errors, a failed capture raises its warning, and the
+    later steps still run eagerly rather than trying to capture again."""
+    params = _make_params(_GRAPH_SHAPES[:5], "cuda", seed=13)
+    opt = Muon(params, lr=0.02, cuda_graph=True)
+    _set_grads(params, seed=0)
+    opt.step()  # the next step captures
+    _fail_once(monkeypatch, "capture_end", after=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(RuntimeWarning, match="steps eagerly"):
+            opt.step()
+        assert not opt.cuda_graph
+        opt.step()
 
 
 @_requires_cuda

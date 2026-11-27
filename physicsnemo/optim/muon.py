@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import sys
 import warnings
 from collections import defaultdict
 from typing import Callable
@@ -377,6 +378,7 @@ class Muon(_TorchMuon):
             stream = self._graph_stream
             graph = torch.cuda.CUDAGraph()
             updates: list = []
+            outer = sys.exception()  # the caller's error, if it steps in an except
             try:
                 for p, g in zip(params, graph_grads):
                     p.grad = g
@@ -404,19 +406,22 @@ class Muon(_TorchMuon):
                 # Name the first error: one in the step makes capture_end
                 # raise again, about "a previous error during capture".
                 cause = e
-                while (c := cause.__cause__ or cause.__context__) is not None:
+                while (c := cause.__cause__ or cause.__context__) not in (None, outer):
                     cause = c
+                reason = f"{type(cause).__name__}: {cause}"
+                # Its traceback holds the capture's tensors: free them for the
+                # eager step.
+                del cause
                 # A capture launches nothing, so the step that failed to
                 # capture runs eagerly below, and so do all later steps.
+                self.cuda_graph = False
                 warnings.warn(
                     "Muon(cuda_graph=True) could not capture its step as a CUDA "
-                    f"graph on torch {torch.__version__} "
-                    f"({type(cause).__name__}: {cause}); it steps eagerly from "
-                    "now on (the same update, more launches)",
+                    f"graph on torch {torch.__version__}, so it steps eagerly from "
+                    f"now on (the same update, more launches). The first error: "
+                    f"{reason}",
                     RuntimeWarning,
-                    stacklevel=5,
                 )
-                self.cuda_graph = False
             finally:
                 for p, g in zip(params, grads):
                     p.grad = g
