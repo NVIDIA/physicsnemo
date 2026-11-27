@@ -84,13 +84,20 @@ def test_matches_torch_muon(device, nesterov, adjust_lr_fn):
 
 def test_adjust_lr_matches_torch():
     """The local learning-rate adjustment (the formulas of torch.optim.Muon's
-    documentation) equals torch's private helper, where torch has it, bit for bit."""
+    documentation) equals torch's private helper, where torch has it, bit for
+    bit, for every adjust_lr_fn this torch accepts, and raises for others."""
     from physicsnemo.optim.muon import _adjust_lr
 
+    with pytest.raises(ValueError, match="adjust_lr_fn"):
+        _adjust_lr(0.02, "unknown", torch.Size((8, 8)))
     private = getattr(pytest.importorskip("torch.optim._muon"), "_adjust_lr", None)
     if private is None:
         pytest.skip("this torch has no torch.optim._muon._adjust_lr")
-    for fn in (None, "original", "match_rms_adamw", "unknown"):
+    for fn in (None, "original", "match_rms_adamw", "spectral_unclamped"):
+        try:
+            _TORCH_MUON([torch.nn.Parameter(torch.zeros(2, 2))], adjust_lr_fn=fn)
+        except ValueError:
+            continue  # an option this torch does not offer
         for shape in ((8, 8), (8, 24), (96, 16), (3, 7, 5)):
             for lr in (0.02, 1e-3, 0.1):
                 assert _adjust_lr(lr, fn, torch.Size(shape)) == private(

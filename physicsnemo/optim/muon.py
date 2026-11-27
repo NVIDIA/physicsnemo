@@ -61,14 +61,18 @@ def _adjust_lr(lr: float, adjust_lr_fn: str | None, shape: torch.Size) -> float:
 
     Uses the formulas of its documentation in its own arithmetic, rather than
     its private helper: ``sqrt(max(1, A / B))`` for ``"original"`` or ``None``,
-    and ``0.2 * sqrt(max(A, B))`` for ``"match_rms_adamw"``.
+    ``0.2 * sqrt(max(A, B))`` for ``"match_rms_adamw"``, and ``sqrt(A / B)``
+    for ``"spectral_unclamped"`` (torch 2.14 and later). It raises for any
+    other name, so an option that a later torch adds cannot change the step
+    silently.
 
     Parameters
     ----------
     lr : float
         Learning rate of the parameter group.
     adjust_lr_fn : str or None
-        One of ``"original"``, ``"match_rms_adamw"`` or None.
+        One of ``"original"``, ``"match_rms_adamw"``, ``"spectral_unclamped"``
+        or None.
     shape : torch.Size
         Shape ``(A, B, ...)`` of the parameter.
 
@@ -82,8 +86,10 @@ def _adjust_lr(lr: float, adjust_lr_fn: str | None, shape: torch.Size) -> float:
         ratio = math.sqrt(max(1, a / b))
     elif adjust_lr_fn == "match_rms_adamw":
         ratio = 0.2 * math.sqrt(max(a, b))
+    elif adjust_lr_fn == "spectral_unclamped":
+        ratio = math.sqrt(a / b)
     else:
-        ratio = 1.0
+        raise ValueError(f"Muon does not implement adjust_lr_fn={adjust_lr_fn!r}")
     return lr * ratio
 
 
@@ -190,8 +196,9 @@ class Muon(_TorchMuon):
     ns_steps : int, optional
         Number of Newton-Schulz iterations. Default 5.
     adjust_lr_fn : str, optional
-        One of ``"original"`` or ``"match_rms_adamw"``. Default None
-        (treated as ``"original"``).
+        One of ``"original"``, ``"match_rms_adamw"`` or, with torch 2.14 and
+        later, ``"spectral_unclamped"``. Default None (treated as
+        ``"original"``).
     cuda_graph : bool, optional
         Replay the momentum update and the Newton-Schulz orthogonalization as
         one CUDA graph instead of launching their kernels one by one from
