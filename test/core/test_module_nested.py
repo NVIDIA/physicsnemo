@@ -214,6 +214,17 @@ def test_save_overwrites_existing_checkpoint(tmp_path, legacy_format):
     assert [p.name for p in tmp_path.iterdir()] == ["checkpoint.mdlus"]
 
 
+def test_save_compiled_module(tmp_path, monkeypatch):
+    """``save`` on a compiled module writes the module it wraps."""
+    compiled = torch.compile(M1(3.0), backend="eager")
+    # ``save`` must not depend on where torch keeps its private wrapper class
+    monkeypatch.delattr(torch._dynamo.eval_frame, "OptimizedModule")
+    compiled.save(tmp_path / "bound.mdlus")
+    physicsnemo.core.Module.save(compiled, tmp_path / "unbound.mdlus")
+    for name in ("bound", "unbound"):
+        assert M1.from_checkpoint(str(tmp_path / f"{name}.mdlus")).b == 3.0
+
+
 @pytest.mark.parametrize("legacy_format", [False, True], ids=["zip", "tar"])
 def test_save_failure_leaves_destination_intact(tmp_path, monkeypatch, legacy_format):
     from fsspec.implementations.local import LocalFileSystem
