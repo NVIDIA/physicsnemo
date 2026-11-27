@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `save_checkpoint` and `load_checkpoint` accept a single `torch.compile`d
   model, where they raised a `TypeError`. They and `Module.save` now find the
   compiled model's wrapped module without torch's private `OptimizedModule`
-  class.
+  class, so a torch release that moves it cannot break saving.
 
 ### Security
 
