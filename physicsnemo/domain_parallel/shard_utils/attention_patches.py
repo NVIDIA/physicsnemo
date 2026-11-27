@@ -960,7 +960,7 @@ class ReplicatedQSDPA(torch.autograd.Function):
         valid_lse = log_sumexp[..., :s_q]
 
         mesh_size = mesh.size(0)
-        gathered_lse = funcol.all_gather_tensor(
+        gathered_lse = funcol.all_gather_single(
             valid_lse.contiguous(), gather_dim=0, group=(mesh, 0)
         )
         if isinstance(gathered_lse, funcol.AsyncCollectiveTensor):

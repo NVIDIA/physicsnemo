@@ -106,7 +106,7 @@ def _to_replicate_tensor(
     # Gather with funcol rather than dist.all_gather so a captured graph
     # holds a DeviceMesh reference instead of a c10d ProcessGroup
     # ScriptObject: AOTAutograd deepcopies the backward GraphModule during
-    # caching, and ProcessGroup has no __getstate__. funcol.all_gather_tensor
+    # caching, and ProcessGroup has no __getstate__. funcol.all_gather_single
     # requires equal shapes across ranks, so pad the flattened shard to the
     # largest shard's numel and slice per-rank afterwards.
     numels = [prod(s) for s in base_shapes]
@@ -114,7 +114,7 @@ def _to_replicate_tensor(
     send = local_tensor.reshape(-1)
     if send.numel() < max_numel:
         send = torch.nn.functional.pad(send, (0, max_numel - send.numel()))
-    gathered = funcol.all_gather_tensor(send, gather_dim=0, group=(mesh, mesh_dim))
+    gathered = funcol.all_gather_single(send, gather_dim=0, group=(mesh, mesh_dim))
     if isinstance(gathered, funcol.AsyncCollectiveTensor):
         gathered = gathered.wait()
 
